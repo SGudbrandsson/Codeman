@@ -19,9 +19,9 @@ class ClaudemanApp {
     this.pendingCloseSessionId = null; // Session pending close confirmation
     this.screenSessions = []; // Screen sessions for process monitor
 
-    // Inner loop/todo state per session
-    this.innerStates = new Map(); // Map<sessionId, { loop, todos }>
-    this.innerStatePanelCollapsed = true; // Default to collapsed
+    // Ralph loop/todo state per session
+    this.ralphStates = new Map(); // Map<sessionId, { loop, todos }>
+    this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Terminal write batching
     this.pendingWrites = '';
@@ -29,7 +29,7 @@ class ClaudemanApp {
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
-    this.renderInnerStatePanelTimeout = null;
+    this.renderRalphStatePanelTimeout = null;
     this.renderTaskPanelTimeout = null;
     this.renderScreenSessionsTimeout = null;
 
@@ -302,14 +302,14 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
-      this.innerStates.delete(data.id);  // Clean up inner state for this session
+      this.ralphStates.delete(data.id);  // Clean up ralph state for this session
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
         this.terminal.clear();
         this.showWelcome();
       }
       this.renderSessionTabs();
-      this.renderInnerStatePanel();  // Update inner panel after session deleted
+      this.renderRalphStatePanel();  // Update ralph panel after session deleted
     });
 
     this.eventSource.addEventListener('session:terminal', (e) => {
@@ -543,18 +543,18 @@ class ClaudemanApp {
       }
     });
 
-    // Inner loop/todo events
-    this.eventSource.addEventListener('session:innerLoopUpdate', (e) => {
+    // Ralph loop/todo events
+    this.eventSource.addEventListener('session:ralphLoopUpdate', (e) => {
       const data = JSON.parse(e.data);
-      this.updateInnerState(data.sessionId, { loop: data.state });
+      this.updateRalphState(data.sessionId, { loop: data.state });
     });
 
-    this.eventSource.addEventListener('session:innerTodoUpdate', (e) => {
+    this.eventSource.addEventListener('session:ralphTodoUpdate', (e) => {
       const data = JSON.parse(e.data);
-      this.updateInnerState(data.sessionId, { todos: data.todos });
+      this.updateRalphState(data.sessionId, { todos: data.todos });
     });
 
-    this.eventSource.addEventListener('session:innerCompletionDetected', (e) => {
+    this.eventSource.addEventListener('session:ralphCompletionDetected', (e) => {
       const data = JSON.parse(e.data);
       // Prevent duplicate notifications for the same completion
       const completionKey = `${data.sessionId}:${data.phrase}`;
@@ -568,11 +568,11 @@ class ClaudemanApp {
       // Clear after 30 seconds to allow re-notification if loop restarts
       setTimeout(() => this._shownCompletions?.delete(completionKey), 30000);
 
-      // Update inner state to mark loop as inactive
-      const existing = this.innerStates.get(data.sessionId) || {};
+      // Update ralph state to mark loop as inactive
+      const existing = this.ralphStates.get(data.sessionId) || {};
       if (existing.loop) {
         existing.loop.active = false;
-        this.updateInnerState(data.sessionId, existing);
+        this.updateRalphState(data.sessionId, existing);
       }
     });
   }
@@ -586,14 +586,14 @@ class ClaudemanApp {
 
   handleInit(data) {
     this.sessions.clear();
-    this.innerStates.clear();
+    this.ralphStates.clear();
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
-      // Load inner state from session data
-      if (s.innerLoop || s.innerTodos) {
-        this.innerStates.set(s.id, {
-          loop: s.innerLoop || null,
-          todos: s.innerTodos || []
+      // Load ralph state from session data
+      if (s.ralphLoop || s.ralphTodos) {
+        this.ralphStates.set(s.id, {
+          loop: s.ralphLoop || null,
+          todos: s.ralphTodos || []
         });
       }
     });
@@ -807,15 +807,15 @@ class ClaudemanApp {
         this.renderTaskPanel();
       }
 
-      // Update inner state panel for this session
+      // Update ralph state panel for this session
       const session = this.sessions.get(sessionId);
-      if (session && (session.innerLoop || session.innerTodos)) {
-        this.updateInnerState(sessionId, {
-          loop: session.innerLoop,
-          todos: session.innerTodos
+      if (session && (session.ralphLoop || session.ralphTodos)) {
+        this.updateRalphState(sessionId, {
+          loop: session.ralphLoop,
+          todos: session.ralphTodos
         });
       }
-      this.renderInnerStatePanel();
+      this.renderRalphStatePanel();
 
       this.terminal.focus();
     } catch (err) {
@@ -828,7 +828,7 @@ class ClaudemanApp {
       await fetch(`/api/sessions/${sessionId}?killScreen=${killScreen}`, { method: 'DELETE' });
       this.sessions.delete(sessionId);
       this.terminalBuffers.delete(sessionId);
-      this.innerStates.delete(sessionId);
+      this.ralphStates.delete(sessionId);
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
@@ -839,7 +839,7 @@ class ClaudemanApp {
         } else {
           this.terminal.clear();
           this.showWelcome();
-          this.renderInnerStatePanel();  // Clear inner panel when no sessions
+          this.renderRalphStatePanel();  // Clear ralph panel when no sessions
         }
       }
 
@@ -1088,7 +1088,7 @@ class ClaudemanApp {
         // Apply global Ralph tracker setting
         // If enabled: enable the tracker
         // If disabled: disable auto-enable to prevent pattern-based activation
-        await fetch(`/api/sessions/${createData.session.id}/inner-config`, {
+        await fetch(`/api/sessions/${createData.session.id}/ralph-config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1518,13 +1518,13 @@ class ClaudemanApp {
     this.selectDurationPreset('');
 
     // Populate Ralph Wiggum form with current session values
-    const innerState = this.innerStates.get(sessionId);
+    const ralphState = this.ralphStates.get(sessionId);
     this.populateRalphForm({
-      enabled: innerState?.loop?.enabled ?? session.innerConfig?.enabled ?? false,
-      completionPhrase: innerState?.loop?.completionPhrase || session.innerLoop?.completionPhrase || '',
-      maxIterations: innerState?.loop?.maxIterations || session.innerLoop?.maxIterations || 0,
-      maxTodos: session.innerConfig?.maxTodos || 50,
-      todoExpirationMinutes: session.innerConfig?.todoExpirationMinutes || 60
+      enabled: ralphState?.loop?.enabled ?? session.ralphConfig?.enabled ?? false,
+      completionPhrase: ralphState?.loop?.completionPhrase || session.ralphLoop?.completionPhrase || '',
+      maxIterations: ralphState?.loop?.maxIterations || session.ralphLoop?.maxIterations || 0,
+      maxTodos: session.ralphConfig?.maxTodos || 50,
+      todoExpirationMinutes: session.ralphConfig?.todoExpirationMinutes || 60
     });
 
     document.getElementById('sessionOptionsModal').classList.add('active');
@@ -1728,7 +1728,7 @@ class ClaudemanApp {
     const config = this.getRalphConfig();
 
     try {
-      const res = await fetch(`/api/sessions/${this.editingSessionId}/inner-config`, {
+      const res = await fetch(`/api/sessions/${this.editingSessionId}/ralph-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
@@ -2177,24 +2177,24 @@ class ClaudemanApp {
 
   // ========== Enhanced Ralph Wiggum Loop Panel ==========
 
-  updateInnerState(sessionId, updates) {
-    const existing = this.innerStates.get(sessionId) || { loop: null, todos: [] };
+  updateRalphState(sessionId, updates) {
+    const existing = this.ralphStates.get(sessionId) || { loop: null, todos: [] };
     const updated = { ...existing, ...updates };
-    this.innerStates.set(sessionId, updated);
+    this.ralphStates.set(sessionId, updated);
 
     // Re-render if this is the active session
     if (sessionId === this.activeSessionId) {
-      this.renderInnerStatePanel();
+      this.renderRalphStatePanel();
     }
   }
 
-  toggleInnerStatePanel() {
+  toggleRalphStatePanel() {
     // Preserve xterm scroll position to prevent jump when panel height changes
     const xtermViewport = this.terminal?.element?.querySelector('.xterm-viewport');
     const scrollTop = xtermViewport?.scrollTop;
 
-    this.innerStatePanelCollapsed = !this.innerStatePanelCollapsed;
-    this.renderInnerStatePanel();
+    this.ralphStatePanelCollapsed = !this.ralphStatePanelCollapsed;
+    this.renderRalphStatePanel();
 
     // Restore scroll position and refit terminal after layout change
     requestAnimationFrame(() => {
@@ -2213,19 +2213,19 @@ class ClaudemanApp {
     if (!this.activeSessionId) return;
 
     // Disable tracker via API
-    await fetch(`/api/sessions/${this.activeSessionId}/inner-config`, {
+    await fetch(`/api/sessions/${this.activeSessionId}/ralph-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: false })
     });
 
     // Clear local state and hide panel
-    this.innerStates.delete(this.activeSessionId);
-    this.renderInnerStatePanel();
+    this.ralphStates.delete(this.activeSessionId);
+    this.renderRalphStatePanel();
   }
 
   toggleRalphDetach() {
-    const panel = this.$('innerStatePanel');
+    const panel = this.$('ralphStatePanel');
     const detachBtn = this.$('ralphDetachBtn');
 
     if (!panel) return;
@@ -2245,7 +2245,7 @@ class ClaudemanApp {
       // Detach as floating window
       panel.classList.add('detached');
       // Expand when detaching for better visibility
-      this.innerStatePanelCollapsed = false;
+      this.ralphStatePanelCollapsed = false;
       panel.classList.remove('collapsed');
       if (detachBtn) {
         detachBtn.innerHTML = '&#x229E;'; // Attach icon (squared plus - dock back)
@@ -2254,11 +2254,11 @@ class ClaudemanApp {
       // Setup drag functionality
       this.setupRalphDrag();
     }
-    this.renderInnerStatePanel();
+    this.renderRalphStatePanel();
   }
 
   setupRalphDrag() {
-    const panel = this.$('innerStatePanel');
+    const panel = this.$('ralphStatePanel');
     const header = this.$('ralphSummary');
 
     if (!panel || !header) return;
@@ -2313,23 +2313,23 @@ class ClaudemanApp {
     header.addEventListener('mousedown', onMouseDown);
   }
 
-  renderInnerStatePanel() {
+  renderRalphStatePanel() {
     // Debounce renders at 50ms to prevent excessive DOM updates
-    if (this.renderInnerStatePanelTimeout) {
-      clearTimeout(this.renderInnerStatePanelTimeout);
+    if (this.renderRalphStatePanelTimeout) {
+      clearTimeout(this.renderRalphStatePanelTimeout);
     }
-    this.renderInnerStatePanelTimeout = setTimeout(() => {
-      this._renderInnerStatePanelImmediate();
+    this.renderRalphStatePanelTimeout = setTimeout(() => {
+      this._renderRalphStatePanelImmediate();
     }, 50);
   }
 
-  _renderInnerStatePanelImmediate() {
-    const panel = this.$('innerStatePanel');
+  _renderRalphStatePanelImmediate() {
+    const panel = this.$('ralphStatePanel');
     const toggle = this.$('ralphToggle');
 
     if (!panel) return;
 
-    const state = this.innerStates.get(this.activeSessionId);
+    const state = this.ralphStates.get(this.activeSessionId);
 
     // Check if there's anything to show
     // Only show panel if tracker is enabled OR there's active state to display
@@ -2360,7 +2360,7 @@ class ClaudemanApp {
     this.updateRalphStats(state?.loop, completed, total);
 
     // Handle collapsed/expanded state
-    if (this.innerStatePanelCollapsed) {
+    if (this.ralphStatePanelCollapsed) {
       panel.classList.add('collapsed');
       if (toggle) toggle.innerHTML = '&#x25BC;'; // Down arrow when collapsed (click to expand)
     } else {
@@ -2510,8 +2510,8 @@ class ClaudemanApp {
     if (!grid) return;
 
     if (todos.length === 0) {
-      if (grid.children.length !== 1 || !grid.querySelector('.inner-state-empty')) {
-        grid.innerHTML = '<div class="inner-state-empty">No tasks detected</div>';
+      if (grid.children.length !== 1 || !grid.querySelector('.ralph-state-empty')) {
+        grid.innerHTML = '<div class="ralph-state-empty">No tasks detected</div>';
       }
       return;
     }

@@ -475,8 +475,8 @@ export interface ScreenSession {
   name?: string;
   /** Persisted respawn controller configuration (restored on server restart) */
   respawnConfig?: PersistedRespawnConfig;
-  /** Whether inner loop (Ralph Wiggum) tracking is enabled */
-  innerLoopEnabled?: boolean;
+  /** Whether Ralph / Todo tracking is enabled */
+  ralphEnabled?: boolean;
 }
 
 /**
@@ -533,12 +533,12 @@ export const DEFAULT_CONFIG: AppConfig = {
  */
 
 /** Status of a detected todo item */
-export type InnerTodoStatus = 'pending' | 'in_progress' | 'completed';
+export type RalphTodoStatus = 'pending' | 'in_progress' | 'completed';
 
 /**
- * State of an inner loop (Ralph Wiggum loop inside Claude Code)
+ * State of per-session Ralph / Todo tracking (detected from Claude output)
  */
-export interface InnerLoopState {
+export interface RalphTrackerState {
   /** Whether the tracker is actively monitoring (disabled by default) */
   enabled: boolean;
   /** Whether a loop is currently active */
@@ -560,27 +560,27 @@ export interface InnerLoopState {
 /**
  * A detected todo item from Claude Code output
  */
-export interface InnerTodoItem {
+export interface RalphTodoItem {
   /** Unique identifier based on content hash */
   id: string;
   /** Todo item text content */
   content: string;
   /** Current status */
-  status: InnerTodoStatus;
+  status: RalphTodoStatus;
   /** Timestamp when detected */
   detectedAt: number;
 }
 
 /**
- * Complete inner state for a session
+ * Complete Ralph/todo state for a session
  */
-export interface InnerSessionState {
+export interface RalphSessionState {
   /** Session this state belongs to */
   sessionId: string;
   /** Loop tracking state */
-  loop: InnerLoopState;
+  loop: RalphTrackerState;
   /** Detected todo items */
-  todos: InnerTodoItem[];
+  todos: RalphTodoItem[];
   /** Timestamp of last update */
   lastUpdated: number;
 }
@@ -588,15 +588,15 @@ export interface InnerSessionState {
 /**
  * Map of session ID to inner state
  */
-export interface InnerStateRecord {
-  [sessionId: string]: InnerSessionState;
+export interface RalphStateRecord {
+  [sessionId: string]: RalphSessionState;
 }
 
 /**
- * Creates initial inner loop state
- * @returns Fresh inner loop state with defaults
+ * Creates initial Ralph tracker state
+ * @returns Fresh Ralph tracker state with defaults
  */
-export function createInitialInnerLoopState(): InnerLoopState {
+export function createInitialRalphTrackerState(): RalphTrackerState {
   return {
     enabled: false,  // Disabled by default, auto-enables when Ralph patterns detected
     active: false,
@@ -610,14 +610,14 @@ export function createInitialInnerLoopState(): InnerLoopState {
 }
 
 /**
- * Creates initial inner session state
+ * Creates initial Ralph session state
  * @param sessionId Session ID this state belongs to
- * @returns Fresh inner session state
+ * @returns Fresh Ralph session state
  */
-export function createInitialInnerSessionState(sessionId: string): InnerSessionState {
+export function createInitialRalphSessionState(sessionId: string): RalphSessionState {
   return {
     sessionId,
-    loop: createInitialInnerLoopState(),
+    loop: createInitialRalphTrackerState(),
     todos: [],
     lastUpdated: Date.now(),
   };

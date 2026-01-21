@@ -125,9 +125,10 @@ describe('Interactive Session Lifecycle', () => {
       const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/output`);
       const data = await response.json();
 
-      expect(data).toHaveProperty('textOutput');
-      expect(data).toHaveProperty('messages');
-      expect(data).toHaveProperty('errorBuffer');
+      expect(data.success).toBe(true);
+      expect(data.data).toHaveProperty('textOutput');
+      expect(data.data).toHaveProperty('messages');
+      expect(data.data).toHaveProperty('errorBuffer');
     });
   });
 

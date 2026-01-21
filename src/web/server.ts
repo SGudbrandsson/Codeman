@@ -17,11 +17,12 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { Session, ClaudeMessage, type BackgroundTask, type InnerLoopState, type InnerTodoItem } from '../session.js';
+import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem } from '../session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
+import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   getErrorMessage,
@@ -73,59 +74,53 @@ const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 // Maximum concurrent sessions to prevent resource exhaustion
 const MAX_CONCURRENT_SESSIONS = 50;
 
-// Pattern to extract completion phrase from CLAUDE.md
-// Matches <promise>PHRASE</promise> with optional whitespace
-const CLAUDE_MD_PROMISE_PATTERN = /<promise>\s*([A-Z0-9_]+)\s*<\/promise>/gi;
-
 /**
- * Extract completion phrase from CLAUDE.md content.
- * Looks for <promise>PHRASE</promise> pattern.
+ * Auto-configure Ralph tracker for a session.
  *
- * Handles multiple variations:
- * - Raw text: <promise>PHRASE</promise>
- * - In backticks: `<promise>PHRASE</promise>`
- * - With whitespace: <promise> PHRASE </promise>
- * - Multiple occurrences: returns the first one
+ * Priority order:
+ * 1. .claude/ralph-loop.local.md (official Ralph Wiggum plugin state)
+ * 2. CLAUDE.md <promise> tags (fallback)
  *
- * @param claudeMdPath - Path to CLAUDE.md file
- * @returns The completion phrase (uppercase), or null if not found
+ * The ralph-loop.local.md file has priority because it contains
+ * the exact configuration from an active Ralph loop session.
  */
-function extractCompletionPhrase(claudeMdPath: string): string | null {
-  try {
-    if (!existsSync(claudeMdPath)) return null;
-    const content = readFileSync(claudeMdPath, 'utf-8');
+function autoConfigureRalph(session: Session, workingDir: string, broadcast: (event: string, data: unknown) => void): void {
+  // First, try to read the official Ralph Wiggum plugin state file
+  const ralphConfig = parseRalphLoopConfig(workingDir);
 
-    // Reset regex state (global flag)
-    CLAUDE_MD_PROMISE_PATTERN.lastIndex = 0;
+  if (ralphConfig && ralphConfig.completionPromise) {
+    session.ralphTracker.enable();
+    session.ralphTracker.startLoop(
+      ralphConfig.completionPromise,
+      ralphConfig.maxIterations ?? undefined
+    );
 
-    // Find all matches and return the first one
-    const match = CLAUDE_MD_PROMISE_PATTERN.exec(content);
-    if (match && match[1]) {
-      const phrase = match[1].trim().toUpperCase();
-      console.log(`[auto-detect] Found completion phrase in CLAUDE.md: ${phrase}`);
-      return phrase;
+    // Restore iteration count if available
+    if (ralphConfig.iteration > 0) {
+      // The tracker's cycleCount will be updated when we detect iteration patterns
+      // in the terminal output, but we can set maxIterations now
+      console.log(`[auto-detect] Ralph loop at iteration ${ralphConfig.iteration}/${ralphConfig.maxIterations ?? '∞'}`);
     }
-    return null;
-  } catch (err) {
-    console.error(`[auto-detect] Error reading CLAUDE.md: ${err}`);
-    return null;
-  }
-}
 
-/**
- * Auto-configure inner loop tracker for a session based on CLAUDE.md
- */
-function autoConfigureInnerLoop(session: Session, workingDir: string, broadcast: (event: string, data: unknown) => void): void {
+    console.log(`[auto-detect] Configured Ralph loop for session ${session.id} from ralph-loop.local.md: ${ralphConfig.completionPromise}`);
+    broadcast('session:ralphLoopUpdate', {
+      sessionId: session.id,
+      state: session.ralphTracker.loopState,
+    });
+    return;
+  }
+
+  // Fallback: try CLAUDE.md
   const claudeMdPath = join(workingDir, 'CLAUDE.md');
   const completionPhrase = extractCompletionPhrase(claudeMdPath);
 
   if (completionPhrase) {
-    session.innerLoopTracker.enable();
-    session.innerLoopTracker.startLoop(completionPhrase);
-    console.log(`[auto-detect] Configured inner loop for session ${session.id} with phrase: ${completionPhrase}`);
-    broadcast('session:innerLoopUpdate', {
+    session.ralphTracker.enable();
+    session.ralphTracker.startLoop(completionPhrase);
+    console.log(`[auto-detect] Configured Ralph loop for session ${session.id} from CLAUDE.md: ${completionPhrase}`);
+    broadcast('session:ralphLoopUpdate', {
       sessionId: session.id,
-      state: session.innerLoopTracker.loopState,
+      state: session.ralphTracker.loopState,
     });
   }
 }
@@ -280,7 +275,7 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       return session.toDetailedState();
@@ -291,18 +286,21 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       return {
-        textOutput: session.textOutput,
-        messages: session.messages,
-        errorBuffer: session.errorBuffer,
+        success: true,
+        data: {
+          textOutput: session.textOutput,
+          messages: session.messages,
+          errorBuffer: session.errorBuffer,
+        }
       };
     });
 
-    // Get inner state (Ralph loop + todos) for a session
-    this.app.get('/api/sessions/:id/inner-state', async (req) => {
+    // Get Ralph state (Ralph loop + todos) for a session
+    this.app.get('/api/sessions/:id/ralph-state', async (req) => {
       const { id } = req.params as { id: string };
       const session = this.sessions.get(id);
 
@@ -313,15 +311,15 @@ export class WebServer extends EventEmitter {
       return {
         success: true,
         data: {
-          loop: session.innerLoopState,
-          todos: session.innerTodos,
-          todoStats: session.innerTodoStats,
+          loop: session.ralphLoopState,
+          todos: session.ralphTodos,
+          todoStats: session.ralphTodoStats,
         }
       };
     });
 
-    // Configure inner loop (Ralph Wiggum) settings
-    this.app.post('/api/sessions/:id/inner-config', async (req) => {
+    // Configure Ralph (Ralph Wiggum) settings
+    this.app.post('/api/sessions/:id/ralph-config', async (req) => {
       const { id } = req.params as { id: string };
       const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes, reset, disableAutoEnable } = req.body as {
         enabled?: boolean;
@@ -335,53 +333,53 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { success: false, error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       // Handle reset first (before other config)
       if (reset) {
         if (reset === 'full') {
-          session.innerLoopTracker.fullReset();
+          session.ralphTracker.fullReset();
         } else {
-          session.innerLoopTracker.reset();
+          session.ralphTracker.reset();
         }
       }
 
       // Configure auto-enable behavior
       if (disableAutoEnable !== undefined) {
         if (disableAutoEnable) {
-          session.innerLoopTracker.disableAutoEnable();
+          session.ralphTracker.disableAutoEnable();
         } else {
-          session.innerLoopTracker.enableAutoEnable();
+          session.ralphTracker.enableAutoEnable();
         }
       }
 
       // Enable/disable the tracker
       if (enabled !== undefined) {
         if (enabled) {
-          session.innerLoopTracker.enable();
+          session.ralphTracker.enable();
         } else {
-          session.innerLoopTracker.disable();
+          session.ralphTracker.disable();
         }
-        // Persist inner loop enabled state
-        this.screenManager.updateInnerLoopEnabled(id, enabled);
+        // Persist Ralph enabled state
+        this.screenManager.updateRalphEnabled(id, enabled);
       }
 
-      // Configure the inner loop tracker
+      // Configure the Ralph tracker
       if (completionPhrase !== undefined) {
         // Start loop with completion phrase to set it up for watching
         if (completionPhrase) {
-          session.innerLoopTracker.startLoop(completionPhrase, maxIterations || undefined);
+          session.ralphTracker.startLoop(completionPhrase, maxIterations || undefined);
         }
       }
 
       if (maxIterations !== undefined) {
-        session.innerLoopTracker.setMaxIterations(maxIterations || null);
+        session.ralphTracker.setMaxIterations(maxIterations || null);
       }
 
       // Store additional config on session for reference
-      (session as any).innerConfig = {
-        enabled: enabled ?? session.innerLoopTracker.enabled,
+      (session as any).ralphConfig = {
+        enabled: enabled ?? session.ralphTracker.enabled,
         completionPhrase: completionPhrase || '',
         maxIterations: maxIterations || 0,
         maxTodos: maxTodos || 50,
@@ -389,9 +387,9 @@ export class WebServer extends EventEmitter {
       };
 
       // Broadcast the update
-      this.broadcast('session:innerLoopUpdate', {
+      this.broadcast('session:ralphLoopUpdate', {
         sessionId: id,
-        state: session.innerLoopState
+        state: session.ralphLoopState
       });
 
       return { success: true };
@@ -435,7 +433,7 @@ export class WebServer extends EventEmitter {
 
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting
-        autoConfigureInnerLoop(session, session.workingDir, () => {});
+        autoConfigureRalph(session, session.workingDir, () => {});
 
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
@@ -512,7 +510,7 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       // Clean the buffer: remove junk before actual Claude content
@@ -566,7 +564,7 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       // Create or get existing controller
@@ -595,7 +593,7 @@ export class WebServer extends EventEmitter {
       const controller = this.respawnControllers.get(id);
 
       if (!controller) {
-        return { error: 'Respawn controller not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Respawn controller not found');
       }
 
       controller.stop();
@@ -615,7 +613,7 @@ export class WebServer extends EventEmitter {
       const controller = this.respawnControllers.get(id);
 
       if (!controller) {
-        return { error: 'Respawn controller not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Respawn controller not found');
       }
 
       controller.updateConfig(config);
@@ -635,16 +633,16 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       if (session.isBusy()) {
-        return { error: 'Session is busy' };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
       }
 
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting
-        autoConfigureInnerLoop(session, session.workingDir, () => {});
+        autoConfigureRalph(session, session.workingDir, () => {});
 
         // Start interactive session
         await session.startInteractive();
@@ -666,11 +664,13 @@ export class WebServer extends EventEmitter {
 
         return {
           success: true,
-          message: 'Interactive session with respawn started',
-          respawnStatus: controller.getStatus(),
+          data: {
+            message: 'Interactive session with respawn started',
+            respawnStatus: controller.getStatus(),
+          },
         };
       } catch (err) {
-        return { error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
@@ -681,12 +681,12 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       // Check if session is running (has a PID)
       if (!session.pid) {
-        return { error: 'Session is not running. Start it first.' };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is not running. Start it first.');
       }
 
       // Stop existing controller if any
@@ -725,7 +725,15 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (body.enabled === undefined) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
+      }
+
+      if (body.threshold !== undefined && (typeof body.threshold !== 'number' || body.threshold < 0)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'threshold must be a positive number');
       }
 
       session.setAutoClear(body.enabled, body.threshold);
@@ -733,9 +741,11 @@ export class WebServer extends EventEmitter {
 
       return {
         success: true,
-        autoClear: {
-          enabled: session.autoClearEnabled,
-          threshold: session.autoClearThreshold,
+        data: {
+          autoClear: {
+            enabled: session.autoClearEnabled,
+            threshold: session.autoClearThreshold,
+          },
         },
       };
     });
@@ -747,7 +757,15 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (body.enabled === undefined) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
+      }
+
+      if (body.threshold !== undefined && (typeof body.threshold !== 'number' || body.threshold < 0)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'threshold must be a positive number');
       }
 
       session.setAutoCompact(body.enabled, body.threshold, body.prompt);
@@ -755,10 +773,12 @@ export class WebServer extends EventEmitter {
 
       return {
         success: true,
-        autoCompact: {
-          enabled: session.autoCompactEnabled,
-          threshold: session.autoCompactThreshold,
-          prompt: session.autoCompactPrompt,
+        data: {
+          autoCompact: {
+            enabled: session.autoCompactEnabled,
+            threshold: session.autoCompactThreshold,
+            prompt: session.autoCompactPrompt,
+          },
         },
       };
     });
@@ -767,10 +787,14 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/run', async (req) => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
       }
 
       const { prompt, workingDir } = req.body as QuickRunRequest;
+
+      if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'prompt is required');
+      }
       const dir = workingDir || process.cwd();
 
       const session = new Session({ workingDir: dir });
@@ -1052,7 +1076,7 @@ export class WebServer extends EventEmitter {
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
       // so the initial state already has the phrase configured
       if (mode === 'claude') {
-        autoConfigureInnerLoop(session, casePath, () => {}); // no broadcast yet
+        autoConfigureRalph(session, casePath, () => {}); // no broadcast yet
       }
 
       this.sessions.set(session.id, session);
@@ -1240,20 +1264,20 @@ export class WebServer extends EventEmitter {
     this.outputBatches.delete(sessionId);
     this.taskUpdateBatches.delete(sessionId);
 
-    // Reset inner loop tracker on the session before cleanup
+    // Reset Ralph tracker on the session before cleanup
     if (session) {
-      session.innerLoopTracker.fullReset();
+      session.ralphTracker.fullReset();
     }
 
-    // Clear inner state from store
-    this.store.removeInnerState(sessionId);
+    // Clear Ralph state from store
+    this.store.removeRalphState(sessionId);
 
-    // Broadcast inner loop cleared to update UI
-    this.broadcast('session:innerLoopUpdate', {
+    // Broadcast Ralph cleared to update UI
+    this.broadcast('session:ralphLoopUpdate', {
       sessionId,
       state: { enabled: false, active: false, completionPhrase: null, startedAt: null, cycleCount: 0, maxIterations: null, lastActivity: Date.now(), elapsedHours: null }
     });
-    this.broadcast('session:innerTodoUpdate', {
+    this.broadcast('session:ralphTodoUpdate', {
       sessionId,
       todos: [],
       stats: { total: 0, pending: 0, inProgress: 0, completed: 0 }
@@ -1361,21 +1385,21 @@ export class WebServer extends EventEmitter {
       this.broadcastSessionStateDebounced(session.id);
     });
 
-    // Inner loop tracking events
-    session.on('innerLoopUpdate', (state: InnerLoopState) => {
-      this.broadcast('session:innerLoopUpdate', { sessionId: session.id, state });
-      // Persist inner state
-      this.store.updateInnerState(session.id, { loop: state });
+    // Ralph tracking events
+    session.on('ralphLoopUpdate', (state: RalphTrackerState) => {
+      this.broadcast('session:ralphLoopUpdate', { sessionId: session.id, state });
+      // Persist Ralph state
+      this.store.updateRalphState(session.id, { loop: state });
     });
 
-    session.on('innerTodoUpdate', (todos: InnerTodoItem[]) => {
-      this.broadcast('session:innerTodoUpdate', { sessionId: session.id, todos });
-      // Persist inner state
-      this.store.updateInnerState(session.id, { todos });
+    session.on('ralphTodoUpdate', (todos: RalphTodoItem[]) => {
+      this.broadcast('session:ralphTodoUpdate', { sessionId: session.id, todos });
+      // Persist Ralph state
+      this.store.updateRalphState(session.id, { todos });
     });
 
-    session.on('innerCompletionDetected', (phrase: string) => {
-      this.broadcast('session:innerCompletionDetected', { sessionId: session.id, phrase });
+    session.on('ralphCompletionDetected', (phrase: string) => {
+      this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
     });
   }
 
@@ -1788,25 +1812,25 @@ export class WebServer extends EventEmitter {
             this.sessions.set(session.id, session);
             this.setupSessionListeners(session);
 
-            // Restore inner loop tracking state (Ralph Wiggum settings) if it was saved
-            const innerState = this.store.getInnerState(screen.sessionId);
-            if (innerState) {
-              session.innerLoopTracker.restoreState(innerState.loop, innerState.todos);
-              console.log(`[Server] Restored inner loop state for session ${session.id} (enabled: ${innerState.loop.enabled})`);
+            // Restore Ralph tracking state (Ralph Wiggum settings) if it was saved
+            const ralphState = this.store.getRalphState(screen.sessionId);
+            if (ralphState) {
+              session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
+              console.log(`[Server] Restored Ralph state for session ${session.id} (enabled: ${ralphState.loop.enabled})`);
             }
-            // Also check screen.innerLoopEnabled as a fallback
-            if (screen.innerLoopEnabled && !session.innerLoopTracker.enabled) {
-              session.innerLoopTracker.enable();
-              console.log(`[Server] Enabled inner loop tracker for session ${session.id} from screen config`);
+            // Also check screen.ralphEnabled as a fallback
+            if (screen.ralphEnabled && !session.ralphTracker.enabled) {
+              session.ralphTracker.enable();
+              console.log(`[Server] Enabled Ralph tracker for session ${session.id} from screen config`);
             }
 
             // Auto-detect completion phrase from CLAUDE.md if not already set
-            if (!session.innerLoopTracker.loopState.completionPhrase) {
+            if (!session.ralphTracker.loopState.completionPhrase) {
               const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
               const completionPhrase = extractCompletionPhrase(claudeMdPath);
               if (completionPhrase) {
-                session.innerLoopTracker.enable();
-                session.innerLoopTracker.startLoop(completionPhrase);
+                session.ralphTracker.enable();
+                session.ralphTracker.startLoop(completionPhrase);
                 console.log(`[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`);
               }
             }

@@ -18,13 +18,13 @@
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, ScreenSession, InnerLoopState, InnerTodoItem } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem } from './types.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
-import { InnerLoopTracker } from './inner-loop-tracker.js';
+import { RalphTracker } from './ralph-tracker.js';
 import { ScreenManager } from './screen-manager.js';
 
 export type { BackgroundTask } from './task-tracker.js';
-export type { InnerLoopState, InnerTodoItem } from './types.js';
+export type { RalphTrackerState, RalphTodoItem } from './types.js';
 export { withTimeout };
 
 // ============================================================================
@@ -219,12 +219,12 @@ export interface SessionEvents {
   autoClear: (data: { tokens: number; threshold: number }) => void;
   /** Auto-compact triggered due to token threshold */
   autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => void;
-  /** Inner loop (Ralph Wiggum) state changed */
-  innerLoopUpdate: (state: InnerLoopState) => void;
-  /** Inner loop todo list updated */
-  innerTodoUpdate: (todos: InnerTodoItem[]) => void;
-  /** Inner loop completion phrase detected */
-  innerCompletionDetected: (phrase: string) => void;
+  /** Ralph loop state changed */
+  ralphLoopUpdate: (state: RalphTrackerState) => void;
+  /** Ralph todo list updated */
+  ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
+  /** Ralph completion phrase detected */
+  ralphCompletionDetected: (phrase: string) => void;
 }
 
 /**
@@ -320,8 +320,8 @@ export class Session extends EventEmitter {
   private _screenSession: ScreenSession | null = null;
   private _useScreen: boolean = false;
 
-  // Inner loop tracking (Ralph Wiggum loops and todo lists inside Claude Code)
-  private _innerLoopTracker: InnerLoopTracker;
+  // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
+  private _ralphTracker: RalphTracker;
 
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
@@ -331,9 +331,9 @@ export class Session extends EventEmitter {
     taskFailed: (task: BackgroundTask, error: string) => void;
   } | null = null;
 
-  private _innerLoopHandlers: {
-    loopUpdate: (state: InnerLoopState) => void;
-    todoUpdate: (todos: InnerTodoItem[]) => void;
+  private _ralphHandlers: {
+    loopUpdate: (state: RalphTrackerState) => void;
+    todoUpdate: (todos: RalphTodoItem[]) => void;
     completionDetected: (phrase: string) => void;
   } | null = null;
 
@@ -369,16 +369,16 @@ export class Session extends EventEmitter {
     this._taskTracker.on('taskCompleted', this._taskTrackerHandlers.taskCompleted);
     this._taskTracker.on('taskFailed', this._taskTrackerHandlers.taskFailed);
 
-    // Initialize inner loop tracker and forward events (store handlers for cleanup)
-    this._innerLoopTracker = new InnerLoopTracker();
-    this._innerLoopHandlers = {
-      loopUpdate: (state) => this.emit('innerLoopUpdate', state),
-      todoUpdate: (todos) => this.emit('innerTodoUpdate', todos),
-      completionDetected: (phrase) => this.emit('innerCompletionDetected', phrase),
+    // Initialize Ralph tracker and forward events (store handlers for cleanup)
+    this._ralphTracker = new RalphTracker();
+    this._ralphHandlers = {
+      loopUpdate: (state) => this.emit('ralphLoopUpdate', state),
+      todoUpdate: (todos) => this.emit('ralphTodoUpdate', todos),
+      completionDetected: (phrase) => this.emit('ralphCompletionDetected', phrase),
     };
-    this._innerLoopTracker.on('loopUpdate', this._innerLoopHandlers.loopUpdate);
-    this._innerLoopTracker.on('todoUpdate', this._innerLoopHandlers.todoUpdate);
-    this._innerLoopTracker.on('completionDetected', this._innerLoopHandlers.completionDetected);
+    this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
+    this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
+    this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
   }
 
   get status(): SessionStatus {
@@ -449,21 +449,21 @@ export class Session extends EventEmitter {
     return this._taskTracker.getStats();
   }
 
-  // Inner loop tracking getters
-  get innerLoopTracker(): InnerLoopTracker {
-    return this._innerLoopTracker;
+  // Ralph tracking getters
+  get ralphTracker(): RalphTracker {
+    return this._ralphTracker;
   }
 
-  get innerLoopState(): InnerLoopState {
-    return this._innerLoopTracker.loopState;
+  get ralphLoopState(): RalphTrackerState {
+    return this._ralphTracker.loopState;
   }
 
-  get innerTodos(): InnerTodoItem[] {
-    return this._innerLoopTracker.todos;
+  get ralphTodos(): RalphTodoItem[] {
+    return this._ralphTracker.todos;
   }
 
-  get innerTodoStats(): { total: number; pending: number; inProgress: number; completed: number } {
-    return this._innerLoopTracker.getTodoStats();
+  get ralphTodoStats(): { total: number; pending: number; inProgress: number; completed: number } {
+    return this._ralphTracker.getTodoStats();
   }
 
   // Token tracking getters and setters
@@ -582,10 +582,10 @@ export class Session extends EventEmitter {
         enabled: this._autoClearEnabled,
         threshold: this._autoClearThreshold,
       },
-      // Inner loop tracking state
-      innerLoop: this._innerLoopTracker.loopState,
-      innerTodos: this._innerLoopTracker.todos,
-      innerTodoStats: this._innerLoopTracker.getTodoStats(),
+      // Ralph tracking state
+      ralphLoop: this._ralphTracker.loopState,
+      ralphTodos: this._ralphTracker.todos,
+      ralphTodoStats: this._ralphTracker.getTodoStats(),
     };
   }
 
@@ -726,8 +726,8 @@ export class Session extends EventEmitter {
       this.emit('terminal', data);
       this.emit('output', data);
 
-      // Forward to inner loop tracker to detect Ralph loops and todos
-      this._innerLoopTracker.processTerminalData(data);
+      // Forward to Ralph tracker to detect Ralph loops and todos
+      this._ralphTracker.processTerminalData(data);
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(data);
@@ -1344,7 +1344,7 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Remove event listeners from TaskTracker and InnerLoopTracker.
+   * Remove event listeners from TaskTracker and RalphTracker.
    * Prevents memory leaks by ensuring handlers don't persist after session stop.
    */
   private cleanupTrackerListeners(): void {
@@ -1357,12 +1357,12 @@ export class Session extends EventEmitter {
       this._taskTrackerHandlers = null;
     }
 
-    // Remove InnerLoopTracker handlers
-    if (this._innerLoopHandlers) {
-      this._innerLoopTracker.off('loopUpdate', this._innerLoopHandlers.loopUpdate);
-      this._innerLoopTracker.off('todoUpdate', this._innerLoopHandlers.todoUpdate);
-      this._innerLoopTracker.off('completionDetected', this._innerLoopHandlers.completionDetected);
-      this._innerLoopHandlers = null;
+    // Remove RalphTracker handlers
+    if (this._ralphHandlers) {
+      this._ralphTracker.off('loopUpdate', this._ralphHandlers.loopUpdate);
+      this._ralphTracker.off('todoUpdate', this._ralphHandlers.todoUpdate);
+      this._ralphTracker.off('completionDetected', this._ralphHandlers.completionDetected);
+      this._ralphHandlers = null;
     }
   }
 
@@ -1527,6 +1527,6 @@ export class Session extends EventEmitter {
     this._errorBuffer = '';
     this._messages = [];
     this._taskTracker.clear();
-    this._innerLoopTracker.clear();
+    this._ralphTracker.clear();
   }
 }

@@ -11,17 +11,17 @@
  * - Progress through todos with visual indicators
  * - Cycle count and elapsed time tracking
  *
- * @see {@link file://./../../inner-loop-tracker.ts} for detection logic
+ * @see {@link file://./../../ralph-tracker.ts} for detection logic
  * @see {@link file://./../../../docs/ralph-wiggum-guide.md} for full documentation
  */
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import type { InnerLoopState, InnerTodoItem } from '../../types.js';
+import type { RalphTrackerState, RalphTodoItem } from '../../types.js';
 
 interface RalphPanelProps {
-  loopState: InnerLoopState | null;
-  todos: InnerTodoItem[];
+  loopState: RalphTrackerState | null;
+  todos: RalphTodoItem[];
   visible?: boolean;
 }
 
@@ -70,7 +70,7 @@ function formatElapsed(hours: number | null): string {
  * Only renders when loop is enabled and has relevant data to show.
  *
  * @param props - Component props
- * @param props.loopState - Current loop state from InnerLoopTracker
+ * @param props.loopState - Current loop state from RalphTracker
  * @param props.todos - Array of todo items being tracked
  * @param props.visible - Whether the panel should be visible (default: true)
  * @returns The panel element or null if hidden/disabled

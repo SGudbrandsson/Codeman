@@ -1,26 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { InnerLoopTracker } from '../src/inner-loop-tracker.js';
-import { InnerLoopState, InnerTodoItem } from '../src/types.js';
+import { RalphTracker } from '../src/ralph-tracker.js';
+import { RalphTrackerState, RalphTodoItem } from '../src/types.js';
 
 /**
- * InnerLoopTracker Tests
+ * RalphTracker Tests
  *
  * Tests the detection of Ralph Wiggum loops and todo lists from terminal output
  * running inside Claude Code sessions.
  */
 
-describe('InnerLoopTracker', () => {
-  let tracker: InnerLoopTracker;
+describe('RalphTracker', () => {
+  let tracker: RalphTracker;
 
   beforeEach(() => {
-    tracker = new InnerLoopTracker();
+    tracker = new RalphTracker();
     // Enable tracker by default for most tests (testing detection logic)
     tracker.enable();
   });
 
   describe('Initialization', () => {
     it('should start with inactive loop state', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       const state = freshTracker.loopState;
       expect(state.active).toBe(false);
       expect(state.completionPhrase).toBeNull();
@@ -33,7 +33,7 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should start disabled by default', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       expect(freshTracker.enabled).toBe(false);
       expect(freshTracker.loopState.enabled).toBe(false);
     });
@@ -41,7 +41,7 @@ describe('InnerLoopTracker', () => {
 
   describe('Auto-Enable Behavior', () => {
     it('should not process data when disabled', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       // This pattern doesn't trigger auto-enable
       freshTracker.processTerminalData('Elapsed: 2.5 hours\n');
 
@@ -49,7 +49,7 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should auto-enable on /ralph-loop:ralph-loop command', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       const enableHandler = vi.fn();
       freshTracker.on('enabled', enableHandler);
 
@@ -60,21 +60,21 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should auto-enable on completion phrase', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('<promise>COMPLETE</promise>\n');
 
       expect(freshTracker.enabled).toBe(true);
     });
 
     it('should auto-enable on TodoWrite detection', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('TodoWrite: Todos have been modified\n');
 
       expect(freshTracker.enabled).toBe(true);
     });
 
     it('should auto-enable on todo checkboxes', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('- [ ] New task\n');
 
       expect(freshTracker.enabled).toBe(true);
@@ -82,21 +82,21 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should auto-enable on iteration patterns', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('Iteration 5/50\n');
 
       expect(freshTracker.enabled).toBe(true);
     });
 
     it('should auto-enable on loop start patterns', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('Loop started at 2024-01-15\n');
 
       expect(freshTracker.enabled).toBe(true);
     });
 
     it('should allow manual enable/disable', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       expect(freshTracker.enabled).toBe(false);
 
       freshTracker.enable();
@@ -149,6 +149,28 @@ describe('InnerLoopTracker', () => {
 
       expect(completionHandler).toHaveBeenCalledWith('MY_CUSTOM_PHRASE_123');
       expect(tracker.loopState.completionPhrase).toBe('MY_CUSTOM_PHRASE_123');
+    });
+
+    it('should detect completion phrases with hyphens', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop();
+      tracker.processTerminalData('<promise>TESTS-PASS</promise>\n');
+
+      expect(completionHandler).toHaveBeenCalledWith('TESTS-PASS');
+      expect(tracker.loopState.completionPhrase).toBe('TESTS-PASS');
+    });
+
+    it('should detect completion phrases with mixed characters', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop();
+      tracker.processTerminalData('<promise>TASK-123_COMPLETE</promise>\n');
+
+      expect(completionHandler).toHaveBeenCalledWith('TASK-123_COMPLETE');
+      expect(tracker.loopState.completionPhrase).toBe('TASK-123_COMPLETE');
     });
 
     it('should mark loop as inactive when completion detected', () => {
@@ -357,7 +379,7 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should auto-enable on native todo pattern', () => {
-      const freshTracker = new InnerLoopTracker();
+      const freshTracker = new RalphTracker();
       freshTracker.processTerminalData('☐ New task\n');
 
       expect(freshTracker.enabled).toBe(true);
@@ -427,8 +449,10 @@ describe('InnerLoopTracker', () => {
     });
 
     it('should clear all state', () => {
-      tracker.startLoop('TEST');
-      tracker.processTerminalData('- [ ] Test task to clear\n');
+      // Use unique phrase that won't appear in the todo content
+      // (bare phrase detection would trigger on common words like 'TEST')
+      tracker.startLoop('XYZZY_COMPLETE');
+      tracker.processTerminalData('- [ ] Sample task to clear\n');
 
       expect(tracker.loopState.active).toBe(true);
       expect(tracker.todos).toHaveLength(1);
@@ -443,7 +467,7 @@ describe('InnerLoopTracker', () => {
 
   describe('State Restoration', () => {
     it('should restore state from persisted data', () => {
-      const loopState: InnerLoopState = {
+      const loopState: RalphTrackerState = {
         enabled: true,
         active: true,
         completionPhrase: 'RESTORED',
@@ -454,7 +478,7 @@ describe('InnerLoopTracker', () => {
         elapsedHours: 1.5,
       };
 
-      const todos: InnerTodoItem[] = [
+      const todos: RalphTodoItem[] = [
         { id: 'todo-1', content: 'Task 1', status: 'completed', detectedAt: Date.now() },
         { id: 'todo-2', content: 'Task 2', status: 'in_progress', detectedAt: Date.now() },
       ];
@@ -479,7 +503,7 @@ describe('InnerLoopTracker', () => {
         maxIterations: null,
         lastActivity: Date.now(),
         elapsedHours: null,
-      } as InnerLoopState;
+      } as RalphTrackerState;
 
       tracker.restoreState(loopState, []);
 

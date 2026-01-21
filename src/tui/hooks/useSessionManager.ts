@@ -7,7 +7,7 @@
  * This hook provides a complete interface for managing Claude sessions:
  * - Session discovery from ~/.claudeman/screens.json
  * - Terminal output polling via GNU screen hardcopy
- * - Inner loop state tracking for Ralph Wiggum loops
+ * - Ralph state tracking for Ralph Wiggum loops
  * - Respawn status monitoring via the Claudeman API
  *
  * @example
@@ -29,12 +29,12 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { execSync, exec } from 'child_process';
 import { promisify } from 'util';
-import type { ScreenSession, InnerLoopState, InnerTodoItem, InnerSessionState } from '../../types.js';
+import type { ScreenSession, RalphTrackerState, RalphTodoItem, RalphSessionState } from '../../types.js';
 
 const execAsync = promisify(exec);
 
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
-const INNER_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
+const RALPH_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
 const SETTINGS_FILE = join(homedir(), '.claudeman', 'settings.json');
 const OUTPUT_POLL_INTERVAL = 300; // Poll terminal output every 300ms (faster refresh)
 
@@ -149,8 +149,8 @@ interface SessionManagerState {
   activeSessionId: string | null;
   activeSession: ScreenSession | null;
   terminalOutput: string;
-  innerLoopState: InnerLoopState | null;
-  innerTodos: InnerTodoItem[];
+  ralphLoopState: RalphTrackerState | null;
+  ralphTodos: RalphTodoItem[];
   respawnStatus: RespawnStatus | null;
   cases: CaseInfo[];
   lastUsedCase: string | null;
@@ -237,18 +237,18 @@ function loadSessions(): ScreenSession[] {
  *
  * @description
  * Reads ~/.claudeman/state-inner.json which contains per-session
- * tracking of inner loops, todos, and completion phrases.
+ * tracking of Ralph loops, todos, and completion phrases.
  *
  * @param sessionId - The UUID of the session to load state for
- * @returns The inner session state or null if not found
+ * @returns The Ralph session state or null if not found
  */
-function loadInnerState(sessionId: string): InnerSessionState | null {
+function loadRalphState(sessionId: string): RalphSessionState | null {
   try {
-    if (!existsSync(INNER_STATE_FILE)) {
+    if (!existsSync(RALPH_STATE_FILE)) {
       return null;
     }
-    const data = readFileSync(INNER_STATE_FILE, 'utf-8');
-    const allStates = JSON.parse(data) as Record<string, InnerSessionState>;
+    const data = readFileSync(RALPH_STATE_FILE, 'utf-8');
+    const allStates = JSON.parse(data) as Record<string, RalphSessionState>;
     return allStates[sessionId] || null;
   } catch {
     return null;
@@ -284,7 +284,7 @@ function loadLastUsedCase(): string | null {
  * Provides complete session lifecycle management:
  * - Automatic session discovery and status monitoring
  * - Terminal output polling (500ms interval)
- * - Inner loop state tracking (500ms interval)
+ * - Ralph state tracking (500ms interval)
  * - Respawn status polling via API (2000ms interval)
  * - Session CRUD operations via Claudeman API
  *
@@ -311,8 +311,8 @@ export function useSessionManager(): SessionManagerState {
   const [sessions, setSessions] = useState<ScreenSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [terminalOutput, setTerminalOutput] = useState<string>('');
-  const [innerLoopState, setInnerLoopState] = useState<InnerLoopState | null>(null);
-  const [innerTodos, setInnerTodos] = useState<InnerTodoItem[]>([]);
+  const [ralphLoopState, setRalphTrackerState] = useState<RalphTrackerState | null>(null);
+  const [ralphTodos, setInnerTodos] = useState<RalphTodoItem[]>([]);
   const [respawnStatus, setRespawnStatus] = useState<RespawnStatus | null>(null);
   const [cases, setCases] = useState<CaseInfo[]>([]);
   const [lastUsedCase, setLastUsedCase] = useState<string | null>(loadLastUsedCase);
@@ -346,30 +346,30 @@ export function useSessionManager(): SessionManagerState {
   // Get active session
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId) || null;
 
-  // Poll inner state for active session
+  // Poll Ralph state for active session
   useEffect(() => {
     if (!activeSessionId) {
-      setInnerLoopState(null);
+      setRalphTrackerState(null);
       setInnerTodos([]);
       return;
     }
 
-    const pollInnerState = () => {
-      const state = loadInnerState(activeSessionId);
+    const pollRalphState = () => {
+      const state = loadRalphState(activeSessionId);
       if (state) {
-        setInnerLoopState(state.loop);
+        setRalphTrackerState(state.loop);
         setInnerTodos(state.todos);
       } else {
-        setInnerLoopState(null);
+        setRalphTrackerState(null);
         setInnerTodos([]);
       }
     };
 
     // Initial poll
-    pollInnerState();
+    pollRalphState();
 
     // Set up polling interval (same as output polling)
-    const intervalId = setInterval(pollInnerState, OUTPUT_POLL_INTERVAL);
+    const intervalId = setInterval(pollRalphState, OUTPUT_POLL_INTERVAL);
 
     return () => {
       clearInterval(intervalId);
@@ -809,8 +809,8 @@ export function useSessionManager(): SessionManagerState {
     activeSessionId,
     activeSession,
     terminalOutput,
-    innerLoopState,
-    innerTodos,
+    ralphLoopState,
+    ralphTodos,
     respawnStatus,
     cases,
     lastUsedCase,

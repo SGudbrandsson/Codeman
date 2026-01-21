@@ -588,11 +588,11 @@ export class ScreenManager extends EventEmitter {
     }
   }
 
-  // Update inner loop (Ralph Wiggum) enabled state
-  updateInnerLoopEnabled(sessionId: string, enabled: boolean): void {
+  // Update Ralph enabled state
+  updateRalphEnabled(sessionId: string, enabled: boolean): void {
     const screen = this.screens.get(sessionId);
     if (screen) {
-      screen.innerLoopEnabled = enabled;
+      screen.ralphEnabled = enabled;
       this.saveScreens();
     }
   }

@@ -9,8 +9,8 @@ import { describe, it, expect } from 'vitest';
 import {
   createErrorResponse,
   createSuccessResponse,
-  createInitialInnerLoopState,
-  createInitialInnerSessionState,
+  createInitialRalphTrackerState,
+  createInitialRalphSessionState,
   createInitialState,
   ErrorMessages,
 } from '../src/types.js';
@@ -69,9 +69,9 @@ describe('types utility functions', () => {
     });
   });
 
-  describe('createInitialInnerLoopState', () => {
-    it('should create initial inner loop state', () => {
-      const state = createInitialInnerLoopState();
+  describe('createInitialRalphTrackerState', () => {
+    it('should create initial Ralph tracker state', () => {
+      const state = createInitialRalphTrackerState();
 
       expect(state.enabled).toBe(false);
       expect(state.active).toBe(false);
@@ -84,9 +84,9 @@ describe('types utility functions', () => {
     });
   });
 
-  describe('createInitialInnerSessionState', () => {
-    it('should create initial inner session state with session ID', () => {
-      const state = createInitialInnerSessionState('session-123');
+  describe('createInitialRalphSessionState', () => {
+    it('should create initial Ralph session state with session ID', () => {
+      const state = createInitialRalphSessionState('session-123');
 
       expect(state.sessionId).toBe('session-123');
       expect(state.loop).toBeDefined();

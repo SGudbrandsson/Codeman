@@ -9,7 +9,7 @@
  * - **Main view**: Active session management with:
  *   - TabBar: Session tabs with switching
  *   - TerminalView: Live terminal output display
- *   - RalphPanel: Inner loop tracking (conditional)
+ *   - RalphPanel: Ralph loop tracking (conditional)
  *   - StatusBar: Session info and keyboard hints
  *
  * Keyboard shortcuts are handled globally via Ink's useInput hook.
@@ -116,8 +116,8 @@ export function App(): React.ReactElement {
     prevSession,
     sendInput,
     terminalOutput,
-    innerLoopState,
-    innerTodos,
+    ralphLoopState,
+    ralphTodos,
     respawnStatus,
     cases,
     lastUsedCase,
@@ -427,7 +427,7 @@ export function App(): React.ReactElement {
   }
 
   // Check if Ralph panel should be visible (enabled and has data)
-  const showRalphPanel = innerLoopState?.enabled && (innerLoopState.active || innerTodos.length > 0);
+  const showRalphPanel = ralphLoopState?.enabled && (ralphLoopState.active || ralphTodos.length > 0);
 
   // Adjust terminal height if Ralph panel is shown
   const adjustedTerminalHeight = showRalphPanel ? terminalHeight - 6 : terminalHeight;
@@ -449,8 +449,8 @@ export function App(): React.ReactElement {
 
       {showRalphPanel && (
         <RalphPanel
-          loopState={innerLoopState}
-          todos={innerTodos}
+          loopState={ralphLoopState}
+          todos={ralphTodos}
         />
       )}
 

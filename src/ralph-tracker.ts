@@ -1,5 +1,5 @@
 /**
- * @fileoverview Inner Loop Tracker for Ralph Wiggum detection
+ * @fileoverview Ralph Tracker - Detects Ralph Wiggum loops, todos, and completion phrases
  *
  * This module parses terminal output from Claude Code sessions to detect:
  * - Ralph Wiggum loop state (active, completion phrase, iteration count)
@@ -10,15 +10,15 @@
  * patterns are detected in the output stream, reducing overhead for
  * sessions not using autonomous loops.
  *
- * @module inner-loop-tracker
+ * @module ralph-tracker
  */
 
 import { EventEmitter } from 'node:events';
 import {
-  InnerLoopState,
-  InnerTodoItem,
-  InnerTodoStatus,
-  createInitialInnerLoopState,
+  RalphTrackerState,
+  RalphTodoItem,
+  RalphTodoStatus,
+  createInitialRalphTrackerState,
 } from './types.js';
 
 // ========== Configuration Constants ==========
@@ -56,6 +56,12 @@ const EVENT_DEBOUNCE_MS = 50;
  * Matches completion phrase tags: `<promise>PHRASE</promise>`
  * Used to detect when Claude signals task completion.
  * Capture group 1: The completion phrase text
+ *
+ * Supports any characters between tags including:
+ * - Uppercase letters: COMPLETE, DONE
+ * - Numbers: TASK_123
+ * - Underscores: ALL_TASKS_DONE
+ * - Hyphens: TESTS-PASS, TIME-COMPLETE
  */
 const PROMISE_PATTERN = /<promise>([^<]+)<\/promise>/;
 
@@ -194,17 +200,17 @@ const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
 // ========== Event Types ==========
 
 /**
- * Events emitted by InnerLoopTracker
+ * Events emitted by RalphTracker
  * @event loopUpdate - Fired when loop state changes (active, iteration, completion phrase)
  * @event todoUpdate - Fired when todo list changes (items added, status changed)
  * @event completionDetected - Fired when completion phrase is detected (task complete)
  * @event enabled - Fired when tracker auto-enables due to Ralph pattern detection
  */
-export interface InnerLoopTrackerEvents {
+export interface RalphTrackerEvents {
   /** Emitted when loop state changes */
-  loopUpdate: (state: InnerLoopState) => void;
+  loopUpdate: (state: RalphTrackerState) => void;
   /** Emitted when todo list is modified */
-  todoUpdate: (todos: InnerTodoItem[]) => void;
+  todoUpdate: (todos: RalphTodoItem[]) => void;
   /** Emitted when completion phrase detected (loop finished) */
   completionDetected: (phrase: string) => void;
   /** Emitted when tracker auto-enables from disabled state */
@@ -212,7 +218,7 @@ export interface InnerLoopTrackerEvents {
 }
 
 /**
- * InnerLoopTracker - Parses terminal output to detect Ralph Wiggum loops and todos
+ * RalphTracker - Parses terminal output to detect Ralph Wiggum loops and todos
  *
  * This class monitors Claude Code session output to detect:
  * 1. **Ralph Wiggum loop state** - Active loops, completion phrases, iteration counts
@@ -242,19 +248,19 @@ export interface InnerLoopTrackerEvents {
  * @extends EventEmitter
  * @example
  * ```typescript
- * const tracker = new InnerLoopTracker();
+ * const tracker = new RalphTracker();
  * tracker.on('completionDetected', (phrase) => {
  *   console.log('Loop completed with phrase:', phrase);
  * });
  * tracker.processTerminalData(ptyOutput);
  * ```
  */
-export class InnerLoopTracker extends EventEmitter {
+export class RalphTracker extends EventEmitter {
   /** Current state of the detected loop */
-  private _loopState: InnerLoopState;
+  private _loopState: RalphTrackerState;
 
   /** Map of todo items by ID for O(1) lookup */
-  private _todos: Map<string, InnerTodoItem> = new Map();
+  private _todos: Map<string, RalphTodoItem> = new Map();
 
   /** Buffer for incomplete lines from terminal data */
   private _lineBuffer: string = '';
@@ -284,12 +290,12 @@ export class InnerLoopTracker extends EventEmitter {
   private _autoEnableDisabled: boolean = false;
 
   /**
-   * Creates a new InnerLoopTracker instance.
+   * Creates a new RalphTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
    */
   constructor() {
     super();
-    this._loopState = createInitialInnerLoopState();
+    this._loopState = createInitialRalphTrackerState();
   }
 
   /**
@@ -373,7 +379,7 @@ export class InnerLoopTracker extends EventEmitter {
     this.clearDebounceTimers();
 
     const wasEnabled = this._loopState.enabled;
-    this._loopState = createInitialInnerLoopState();
+    this._loopState = createInitialRalphTrackerState();
     this._loopState.enabled = wasEnabled;  // Keep enabled status
     this._todos.clear();
     this._completionPhraseCount.clear();
@@ -394,7 +400,7 @@ export class InnerLoopTracker extends EventEmitter {
     // Clear debounce timers
     this.clearDebounceTimers();
 
-    this._loopState = createInitialInnerLoopState();
+    this._loopState = createInitialRalphTrackerState();
     this._todos.clear();
     this._completionPhraseCount.clear();
     this._lineBuffer = '';
@@ -489,7 +495,7 @@ export class InnerLoopTracker extends EventEmitter {
    * Get a copy of the current loop state.
    * @returns Shallow copy of loop state (safe to modify)
    */
-  get loopState(): InnerLoopState {
+  get loopState(): RalphTrackerState {
     return { ...this._loopState };
   }
 
@@ -497,7 +503,7 @@ export class InnerLoopTracker extends EventEmitter {
    * Get all tracked todo items as an array.
    * @returns Array of todo items (copy, safe to modify)
    */
-  get todos(): InnerTodoItem[] {
+  get todos(): RalphTodoItem[] {
     return Array.from(this._todos.values());
   }
 
@@ -1032,7 +1038,7 @@ export class InnerLoopTracker extends EventEmitter {
       while ((match = TODO_CHECKBOX_PATTERN.exec(line)) !== null) {
         const checked = match[1].toLowerCase() === 'x';
         const content = match[2].trim();
-        const status: InnerTodoStatus = checked ? 'completed' : 'pending';
+        const status: RalphTodoStatus = checked ? 'completed' : 'pending';
         this.upsertTodo(content, status);
         updated = true;
       }
@@ -1057,7 +1063,7 @@ export class InnerLoopTracker extends EventEmitter {
       TODO_STATUS_PATTERN.lastIndex = 0;
       while ((match = TODO_STATUS_PATTERN.exec(line)) !== null) {
         const content = match[1].trim();
-        const status = match[2] as InnerTodoStatus;
+        const status = match[2] as RalphTodoStatus;
         this.upsertTodo(content, status);
         updated = true;
       }
@@ -1099,9 +1105,9 @@ export class InnerLoopTracker extends EventEmitter {
    * - Pending: `☐`, `○`, and anything else (default)
    *
    * @param icon - Single character icon
-   * @returns Corresponding InnerTodoStatus
+   * @returns Corresponding RalphTodoStatus
    */
-  private iconToStatus(icon: string): InnerTodoStatus {
+  private iconToStatus(icon: string): RalphTodoStatus {
     switch (icon) {
       case '✓':
       case '✅':
@@ -1134,7 +1140,7 @@ export class InnerLoopTracker extends EventEmitter {
    * @param content - Raw todo content text
    * @param status - Status to set
    */
-  private upsertTodo(content: string, status: InnerTodoStatus): void {
+  private upsertTodo(content: string, status: RalphTodoStatus): void {
     // Skip empty or whitespace-only content
     if (!content || !content.trim()) return;
 
@@ -1225,8 +1231,8 @@ export class InnerLoopTracker extends EventEmitter {
    * Used for LRU eviction when at MAX_TODO_ITEMS limit.
    * @returns Oldest todo item, or undefined if map is empty
    */
-  private findOldestTodo(): InnerTodoItem | undefined {
-    let oldest: InnerTodoItem | undefined;
+  private findOldestTodo(): RalphTodoItem | undefined {
+    let oldest: RalphTodoItem | undefined;
     for (const todo of this._todos.values()) {
       if (!oldest || todo.detectedAt < oldest.detectedAt) {
         oldest = todo;
@@ -1334,7 +1340,7 @@ export class InnerLoopTracker extends EventEmitter {
    * @fires todoUpdate - With empty array
    */
   clear(): void {
-    this._loopState = createInitialInnerLoopState(); // This sets enabled: false
+    this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
     this._lineBuffer = '';
     this._completionPhraseCount.clear();
@@ -1389,7 +1395,7 @@ export class InnerLoopTracker extends EventEmitter {
    * @param loopState - Persisted loop state object
    * @param todos - Persisted todo items array
    */
-  restoreState(loopState: InnerLoopState, todos: InnerTodoItem[]): void {
+  restoreState(loopState: RalphTrackerState, todos: RalphTodoItem[]): void {
     // Ensure enabled flag exists (backwards compatibility)
     this._loopState = {
       ...loopState,

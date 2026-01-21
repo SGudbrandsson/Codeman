@@ -72,11 +72,11 @@
       <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
     </div>
 
-    <!-- Enhanced Ralph Wiggum Loop Panel -->
-    <div class="ralph-panel collapsed" id="innerStatePanel" style="display: none;">
+    <!-- Ralph / Todo Tracker Panel -->
+    <div class="ralph-panel collapsed" id="ralphStatePanel" style="display: none;">
       <!-- Collapsed Summary Bar -->
       <div class="ralph-summary" id="ralphSummary">
-        <div class="ralph-summary-content" onclick="app.toggleInnerStatePanel()">
+        <div class="ralph-summary-content" onclick="app.toggleRalphStatePanel()">
           <div class="ralph-ring-mini" id="ralphRingMini">
             <svg viewBox="0 0 36 36" class="ralph-ring-svg">
               <defs>
@@ -91,7 +91,7 @@
             <span class="ralph-ring-text" id="ralphRingMiniText">0%</span>
           </div>
           <div class="ralph-summary-info">
-            <span class="ralph-title">Ralph Wiggum Tracker</span>
+            <span class="ralph-title">Ralph / Todo Tracker</span>
             <span class="ralph-status-badge" id="ralphStatusBadge">
               <span class="ralph-status-dot"></span>
               <span class="ralph-status-text">Idle</span>
@@ -268,7 +268,7 @@
         <!-- Modal Tabs -->
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="respawn" onclick="app.switchOptionsTab('respawn')">Respawn</button>
-          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph Wiggum</button>
+          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph / Todo Tracker</button>
         </div>
         <div class="modal-body">
           <!-- Respawn Tab Content -->
@@ -374,7 +374,7 @@
                 <input type="checkbox" id="modalRalphEnabled">
                 <span class="slider"></span>
               </label>
-              <span class="form-hint">Enable Ralph Wiggum tracker for this session (auto-detects loops and todos)</span>
+              <span class="form-hint">Enable Ralph / Todo tracker for this session (auto-detects loops and todos)</span>
             </div>
 
             <div class="form-row">
@@ -505,7 +505,7 @@
               <span class="form-hint">Comma-separated list of tools to allow</span>
             </div>
             <div class="form-row form-row-switch">
-              <label>Enable Ralph Tracker</label>
+              <label>Enable Ralph / Todo Tracker</label>
               <label class="switch">
                 <input type="checkbox" id="appSettingsRalphEnabled">
                 <span class="slider"></span>

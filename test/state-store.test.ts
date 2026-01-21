@@ -2,7 +2,7 @@
  * @fileoverview Tests for StateStore
  *
  * Tests the persistent JSON state storage including
- * debounced saves, state CRUD operations, and inner state management.
+ * debounced saves, state CRUD operations, and Ralph state management.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // Import types before mocking
-import type { AppState, SessionState, TaskState, InnerSessionState } from '../src/types.js';
+import type { AppState, SessionState, TaskState, RalphSessionState } from '../src/types.js';
 
 // We need to import without mocking to test the actual implementation
 import { StateStore, getStore } from '../src/state-store.js';
@@ -231,7 +231,7 @@ describe('StateStore', () => {
 
       expect(store.getSession('session-1')).toBeNull();
       expect(store.getTask('task-1')).toBeNull();
-      expect(store.getAllInnerStates().size).toBe(0);
+      expect(store.getAllRalphStates().size).toBe(0);
     });
 
     it('should preserve state file path in config', () => {
@@ -243,27 +243,27 @@ describe('StateStore', () => {
     });
   });
 
-  describe('inner state operations', () => {
-    it('should get and set inner state', () => {
+  describe('ralph state operations', () => {
+    it('should get and set ralph state', () => {
       const store = new StateStore(testFilePath);
-      const innerState = createMockInnerState('session-1');
+      const ralphState = createMockRalphState('session-1');
 
-      store.setInnerState('session-1', innerState);
+      store.setRalphState('session-1', ralphState);
 
-      expect(store.getInnerState('session-1')).toEqual(innerState);
+      expect(store.getRalphState('session-1')).toEqual(ralphState);
     });
 
-    it('should return null for non-existent inner state', () => {
+    it('should return null for non-existent ralph state', () => {
       const store = new StateStore(testFilePath);
 
-      expect(store.getInnerState('non-existent')).toBeNull();
+      expect(store.getRalphState('non-existent')).toBeNull();
     });
 
-    it('should update inner state with partial merge', () => {
+    it('should update ralph state with partial merge', () => {
       const store = new StateStore(testFilePath);
 
-      store.setInnerState('session-1', createMockInnerState('session-1'));
-      const updated = store.updateInnerState('session-1', { totalTodos: 10 });
+      store.setRalphState('session-1', createMockRalphState('session-1'));
+      const updated = store.updateRalphState('session-1', { totalTodos: 10 });
 
       expect(updated.totalTodos).toBe(10);
       expect(updated.sessionId).toBe('session-1');
@@ -272,27 +272,27 @@ describe('StateStore', () => {
     it('should create initial state on update if none exists', () => {
       const store = new StateStore(testFilePath);
 
-      const state = store.updateInnerState('new-session', { totalTodos: 5 });
+      const state = store.updateRalphState('new-session', { totalTodos: 5 });
 
       expect(state.sessionId).toBe('new-session');
       expect(state.totalTodos).toBe(5);
     });
 
-    it('should remove inner state', () => {
+    it('should remove ralph state', () => {
       const store = new StateStore(testFilePath);
-      store.setInnerState('session-1', createMockInnerState('session-1'));
+      store.setRalphState('session-1', createMockRalphState('session-1'));
 
-      store.removeInnerState('session-1');
+      store.removeRalphState('session-1');
 
-      expect(store.getInnerState('session-1')).toBeNull();
+      expect(store.getRalphState('session-1')).toBeNull();
     });
 
-    it('should get all inner states', () => {
+    it('should get all ralph states', () => {
       const store = new StateStore(testFilePath);
-      store.setInnerState('session-1', createMockInnerState('session-1'));
-      store.setInnerState('session-2', createMockInnerState('session-2'));
+      store.setRalphState('session-1', createMockRalphState('session-1'));
+      store.setRalphState('session-2', createMockRalphState('session-2'));
 
-      const allStates = store.getAllInnerStates();
+      const allStates = store.getAllRalphStates();
 
       expect(allStates.size).toBe(2);
       expect(allStates.has('session-1')).toBe(true);
@@ -301,11 +301,11 @@ describe('StateStore', () => {
   });
 
   describe('flushAll', () => {
-    it('should flush both main and inner state', () => {
+    it('should flush both main and ralph state', () => {
       const store = new StateStore(testFilePath);
 
       store.setSession('session-1', createMockSessionState('session-1'));
-      store.setInnerState('session-1', createMockInnerState('session-1'));
+      store.setRalphState('session-1', createMockRalphState('session-1'));
 
       store.flushAll();
 
@@ -320,7 +320,7 @@ describe('StateStore', () => {
       const store1 = new StateStore(testFilePath);
       store1.setSession('session-1', createMockSessionState('session-1'));
       store1.setTask('task-1', createMockTaskState('task-1'));
-      store1.setInnerState('session-1', createMockInnerState('session-1'));
+      store1.setRalphState('session-1', createMockRalphState('session-1'));
       store1.flushAll();
 
       // Create new instance and verify state is loaded
@@ -328,7 +328,7 @@ describe('StateStore', () => {
 
       expect(store2.getSession('session-1')).toBeDefined();
       expect(store2.getTask('task-1')).toBeDefined();
-      expect(store2.getInnerState('session-1')).toBeDefined();
+      expect(store2.getRalphState('session-1')).toBeDefined();
     });
   });
 });
@@ -363,7 +363,7 @@ function createMockTaskState(id: string): TaskState {
   };
 }
 
-function createMockInnerState(sessionId: string): InnerSessionState {
+function createMockRalphState(sessionId: string): RalphSessionState {
   return {
     sessionId,
     enabled: true,

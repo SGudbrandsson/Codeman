@@ -962,8 +962,8 @@ body {
   color: var(--text-dim);
 }
 
-/* Empty state (legacy support) */
-.inner-state-empty {
+/* Empty state */
+.ralph-state-empty {
   color: var(--text-muted);
   font-style: italic;
   padding: 0.5rem;

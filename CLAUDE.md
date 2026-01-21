@@ -65,8 +65,9 @@ npx vitest run -t "should create session" # By pattern
 # 3110: edge-cases.test.ts
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
-# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates
-# Next available: 3122+
+# 3125: ralph-integration.test.ts
+# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config
+# Next available: 3127+
 
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
@@ -82,7 +83,7 @@ screen -r <name>                          # Attach to screen session (Ctrl+A D t
 curl localhost:3000/api/sessions          # Check active sessions
 curl localhost:3000/api/status | jq .     # Full app state including respawn
 cat ~/.claudeman/state.json | jq .        # View main state
-cat ~/.claudeman/state-inner.json | jq .  # View inner loop state
+cat ~/.claudeman/state-inner.json | jq .  # View Ralph loop state
 
 # Kill stuck screen sessions
 screen -X -S <name> quit                  # Graceful quit
@@ -98,7 +99,8 @@ pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
 | `src/session.ts` | Core PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/respawn-controller.ts` | State machine for autonomous session cycling |
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
-| `src/inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
+| `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
+| `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
 | `src/task-tracker.ts` | Parses background task output (agent IDs, status) from Claude CLI |
 | `src/session-manager.ts` | Manages session lifecycle, task assignment, and cleanup |
 | `src/state-store.ts` | JSON persistence to `~/.claudeman/` with debounced writes |
@@ -259,18 +261,35 @@ curl -X POST localhost:3000/api/sessions/:id/input \
 
 Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoClear()`.
 
-### Inner Loop Tracking
+### Ralph / Todo Tracking
 
 Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when any of these patterns are detected in terminal output:
 - `/ralph-loop:ralph-loop` command
-- `<promise>PHRASE</promise>` completion phrases
+- `<promise>PHRASE</promise>` completion phrases (supports hyphens: `TESTS-PASS`, underscores: `ALL_DONE`, numbers: `TASK_123`)
 - `TodoWrite` tool usage
 - Iteration patterns (`Iteration 5/50`, `[5/50]`)
 - Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
 - "All tasks complete" messages
 - Individual task completion signals (`Task 8 is done`)
 
-See `inner-loop-tracker.ts:shouldAutoEnable()` for detection logic.
+See `ralph-tracker.ts:shouldAutoEnable()` for detection logic.
+
+**Auto-Configuration from Ralph Plugin State**: When a session starts, Claudeman reads `.claude/ralph-loop.local.md` (the official Ralph Wiggum plugin state file) to auto-configure the tracker:
+
+```yaml
+---
+enabled: true
+iteration: 5
+max-iterations: 50
+completion-promise: "COMPLETE"
+---
+```
+
+Priority order for configuration:
+1. `.claude/ralph-loop.local.md` (official Ralph plugin state)
+2. `CLAUDE.md` `<promise>` tags (fallback)
+
+See `src/ralph-config.ts` for parsing logic.
 
 **Completion Detection**: Uses multi-strategy detection:
 - 1st occurrence of `<promise>PHRASE</promise>`: Stores as expected phrase (likely in prompt)
@@ -287,8 +306,8 @@ See `inner-loop-tracker.ts:shouldAutoEnable()` for detection logic.
 - `tracker.fullReset()` → Complete reset to initial state
 
 **API**:
-- `GET /api/sessions/:id/inner-state` - Get loop state and todos
-- `POST /api/sessions/:id/inner-config` - Configure tracker:
+- `GET /api/sessions/:id/ralph-state` - Get loop state and todos
+- `POST /api/sessions/:id/ralph-config` - Configure tracker:
   - `{ enabled: boolean }` - Enable/disable
   - `{ reset: true }` - Soft reset (keep enabled)
   - `{ reset: "full" }` - Full reset
@@ -309,7 +328,7 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `session:idle`, `session:working` - Status indicator updates
 - `session:terminal`, `session:clearTerminal` - Terminal content
 - `session:completion`, `session:autoClear`, `session:autoCompact` - Lifecycle events
-- `session:innerLoopUpdate`, `session:innerTodoUpdate`, `session:innerCompletionDetected` - Ralph tracking
+- `session:ralphLoopUpdate`, `session:ralphTodoUpdate`, `session:ralphCompletionDetected` - Ralph tracking
 
 ### Frontend (app.js)
 
@@ -337,9 +356,9 @@ Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
 | Terminal batch interval | 16ms | `server.ts` (60fps) |
 | Output batch interval | 50ms | `server.ts` |
 | Task update batch interval | 100ms | `server.ts` |
-| Inner loop event debounce | 50ms | `inner-loop-tracker.ts` |
+| Ralph loop event debounce | 50ms | `ralph-tracker.ts` |
 | Session tabs render debounce | 100ms | `app.js` |
-| Inner panel render debounce | 50ms | `app.js` |
+| Ralph panel render debounce | 50ms | `app.js` |
 | Task panel render debounce | 100ms | `app.js` |
 | Input batch interval | 16ms | `app.js` (60fps) |
 | Idle activity timeout | 2s | `session.ts` |
@@ -354,8 +373,10 @@ Module resolution: NodeNext. Target: ES2022. Strict mode with additional checks:
 | `noUnusedLocals` | Error on unused local variables |
 | `noUnusedParameters` | Error on unused function parameters |
 | `noImplicitReturns` | All code paths must return a value |
+| `noImplicitOverride` | Require `override` keyword for overridden methods |
 | `noFallthroughCasesInSwitch` | Require break/return in switch cases |
 | `allowUnreachableCode: false` | Error on unreachable code |
+| `allowUnusedLabels: false` | Error on unused labels |
 
 TUI uses React JSX (`jsxImportSource: react`) for Ink components.
 
@@ -386,6 +407,32 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 - **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
 - **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen
 
+## TUI Architecture (Ink/React)
+
+The TUI (`claudeman tui`) is built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals).
+
+**Component Hierarchy:**
+```
+App.tsx
+├── StartScreen.tsx         # Session/case list, navigation
+│   ├── List navigation (↑/↓, Enter, a/d/D)
+│   ├── Case creation flow
+│   └── Tab switcher menu
+├── TabBar.tsx              # Session tabs (when attached)
+├── TerminalView.tsx        # Viewport into screen session
+├── StatusBar.tsx           # Bottom bar with status/tokens
+├── RalphPanel.tsx          # Ralph loop progress display
+└── HelpOverlay.tsx         # Keyboard shortcuts modal
+```
+
+**Key Hook:** `useSessionManager.ts` handles:
+- API polling for sessions/screens
+- Screen attach/detach flow
+- Keyboard input routing
+- State synchronization with web server
+
+**TUI ↔ Web Server:** The TUI is a client to the web server. It doesn't manage sessions directly - it uses `/api/*` endpoints and attaches to screens via GNU screen commands.
+
 ## Buffer Limits
 
 Long-running sessions are supported with automatic trimming:
@@ -413,8 +460,8 @@ Long-running sessions are supported with automatic trimming:
 | POST | `/api/sessions/:id/respawn/stop` | Stop respawn controller |
 | POST | `/api/sessions/:id/respawn/enable` | Enable respawn with config + optional timer |
 | PUT | `/api/sessions/:id/respawn/config` | Update config on running respawn |
-| POST | `/api/sessions/:id/inner-config` | Configure Ralph Wiggum loop settings |
-| GET | `/api/sessions/:id/inner-state` | Get Ralph loop state + todos |
+| POST | `/api/sessions/:id/ralph-config` | Configure Ralph / Todo Tracker settings |
+| GET | `/api/sessions/:id/ralph-state` | Get Ralph loop state + todos |
 | POST | `/api/sessions/:id/auto-compact` | Configure auto-compact threshold |
 | POST | `/api/sessions/:id/auto-clear` | Configure auto-clear threshold |
 | POST | `/api/quick-start` | Create case + start session. Body: `{mode?: 'claude'\|'shell'}` |
@@ -478,7 +525,7 @@ Long-running sessions are supported with automatic trimming:
 | File | Purpose |
 |------|---------|
 | `~/.claudeman/state.json` | Sessions, tasks, config |
-| `~/.claudeman/state-inner.json` | Inner loop/todo state (separate to reduce writes) |
+| `~/.claudeman/state-inner.json` | Ralph loop/todo state per session (separate to reduce writes) |
 | `~/.claudeman/screens.json` | Screen session metadata |
 
 Cases created in `~/claudeman-cases/` by default.
@@ -540,6 +587,6 @@ Extended documentation is available in the `docs/` directory:
 /ralph-loop:help          # Show help and usage
 ```
 
-**Claudeman Implementation**: The `InnerLoopTracker` class (`src/inner-loop-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
+**Claudeman Implementation**: The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
 
 See [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) for full documentation on best practices, prompt templates, and troubleshooting.
