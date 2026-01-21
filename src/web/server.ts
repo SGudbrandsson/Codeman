@@ -25,6 +25,8 @@ import { generateClaudeMd } from '../templates/claude-md.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   getErrorMessage,
+  ApiErrorCode,
+  createErrorResponse,
   type CreateSessionRequest,
   type RunPromptRequest,
   type SessionInputRequest,
@@ -411,10 +413,14 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { success: false, error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      session.write(input);
+      if (input === undefined || input === null) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Input is required');
+      }
+
+      session.write(String(input));
       return { success: true };
     });
 
@@ -425,7 +431,11 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { success: false, error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'cols and rows must be positive integers');
       }
 
       session.resize(cols, rows);
