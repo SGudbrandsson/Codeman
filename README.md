@@ -1,6 +1,6 @@
-<h1 align="center">
-  🤖 <span style="color: #60a5fa;">Claudeman</span>
-</h1>
+<p align="center">
+  <img src="docs/images/claudeman-title.svg" alt="Claudeman" height="40">
+</p>
 
 <h3 align="center">Track Claude Code Sessions Better Than Ever</h3>
 
