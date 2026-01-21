@@ -275,5 +275,5 @@ MIT — see [LICENSE](LICENSE)
 ---
 
 <p align="center">
-  <strong>Track sessions. Control respawn. Ship while you sleep.</strong>
+  <strong>Track sessions. Control respawn. Let it run while you sleep.</strong>
 </p>
