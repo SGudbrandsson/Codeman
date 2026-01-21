@@ -319,6 +319,8 @@ export class Session extends EventEmitter {
   private _screenManager: ScreenManager | null = null;
   private _screenSession: ScreenSession | null = null;
   private _useScreen: boolean = false;
+  // Flag to prevent new timers after session is stopped
+  private _isStopped: boolean = false;
 
   // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _ralphTracker: RalphTracker;
@@ -1071,10 +1073,10 @@ export class Session extends EventEmitter {
     }
 
     // Start flush timer if not running (handles partial lines after 100ms)
-    if (!this._lineBufferFlushTimer && this._lineBuffer.length > 0) {
+    if (!this._lineBufferFlushTimer && this._lineBuffer.length > 0 && !this._isStopped) {
       this._lineBufferFlushTimer = setTimeout(() => {
         this._lineBufferFlushTimer = null;
-        if (this._lineBuffer.length > 0) {
+        if (this._lineBuffer.length > 0 && !this._isStopped) {
           // Flush partial line as text output
           this._textOutput.append(this._lineBuffer);
           this._lineBuffer = '';
@@ -1188,7 +1190,7 @@ export class Session extends EventEmitter {
 
   // Check if we should auto-compact based on token threshold
   private checkAutoCompact(): void {
-    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
+    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing || this._isStopped) return;
 
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoCompactThreshold) {
@@ -1198,7 +1200,7 @@ export class Session extends EventEmitter {
       // Wait for Claude to be idle before compacting
       const checkAndCompact = () => {
         // Check if session is still valid (not stopped)
-        if (!this._isCompacting) return;
+        if (!this._isCompacting || this._isStopped) return;
 
         if (!this._isWorking) {
           // Send /compact command with optional prompt
@@ -1213,24 +1215,30 @@ export class Session extends EventEmitter {
           });
 
           // Wait a moment then re-enable (longer than clear since compact takes time)
-          this._autoCompactTimer = setTimeout(() => {
-            this._autoCompactTimer = null;
-            this._isCompacting = false;
-          }, 10000);
+          if (!this._isStopped) {
+            this._autoCompactTimer = setTimeout(() => {
+              this._autoCompactTimer = null;
+              this._isCompacting = false;
+            }, 10000);
+          }
         } else {
           // Check again in 2 seconds
-          this._autoCompactTimer = setTimeout(checkAndCompact, 2000);
+          if (!this._isStopped) {
+            this._autoCompactTimer = setTimeout(checkAndCompact, 2000);
+          }
         }
       };
 
       // Start checking after a short delay
-      this._autoCompactTimer = setTimeout(checkAndCompact, 1000);
+      if (!this._isStopped) {
+        this._autoCompactTimer = setTimeout(checkAndCompact, 1000);
+      }
     }
   }
 
   // Check if we should auto-clear based on token threshold
   private checkAutoClear(): void {
-    if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
+    if (!this._autoClearEnabled || this._isClearing || this._isCompacting || this._isStopped) return;
 
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoClearThreshold) {
@@ -1240,7 +1248,7 @@ export class Session extends EventEmitter {
       // Wait for Claude to be idle before clearing
       const checkAndClear = () => {
         // Check if session is still valid (not stopped)
-        if (!this._isClearing) return;
+        if (!this._isClearing || this._isStopped) return;
 
         if (!this._isWorking) {
           // Send /clear command
@@ -1251,18 +1259,24 @@ export class Session extends EventEmitter {
           this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
 
           // Wait a moment then re-enable
-          this._autoClearTimer = setTimeout(() => {
-            this._autoClearTimer = null;
-            this._isClearing = false;
-          }, 5000);
+          if (!this._isStopped) {
+            this._autoClearTimer = setTimeout(() => {
+              this._autoClearTimer = null;
+              this._isClearing = false;
+            }, 5000);
+          }
         } else {
           // Check again in 2 seconds
-          this._autoClearTimer = setTimeout(checkAndClear, 2000);
+          if (!this._isStopped) {
+            this._autoClearTimer = setTimeout(checkAndClear, 2000);
+          }
         }
       };
 
       // Start checking after a short delay
-      this._autoClearTimer = setTimeout(checkAndClear, 1000);
+      if (!this._isStopped) {
+        this._autoClearTimer = setTimeout(checkAndClear, 1000);
+      }
     }
   }
 
@@ -1384,6 +1398,9 @@ export class Session extends EventEmitter {
    * ```
    */
   async stop(killScreen: boolean = true): Promise<void> {
+    // Set stopped flag first to prevent new timers from being created
+    this._isStopped = true;
+
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);

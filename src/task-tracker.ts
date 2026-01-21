@@ -30,6 +30,19 @@ import { EventEmitter } from 'node:events';
  */
 const MAX_COMPLETED_TASKS = 100;
 
+/**
+ * Maximum age for pending tool uses (in milliseconds).
+ * Entries older than this are cleaned up to prevent unbounded growth.
+ * Default: 1 hour
+ */
+const PENDING_TOOL_USE_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Maximum number of pending tool uses to allow.
+ * Prevents unbounded growth if tool_results never arrive.
+ */
+const MAX_PENDING_TOOL_USES = 100;
+
 // ========== Pre-compiled Regex Patterns ==========
 
 /**
@@ -155,8 +168,8 @@ export class TaskTracker extends EventEmitter {
   /** Stack of active task IDs for tracking nesting depth */
   private taskStack: string[] = [];
 
-  /** Pending tool_use blocks waiting for results */
-  private pendingToolUses: Map<string, { description: string; subagentType: string; parentId: string | null }> = new Map();
+  /** Pending tool_use blocks waiting for results (with timestamp for cleanup) */
+  private pendingToolUses: Map<string, { description: string; subagentType: string; parentId: string | null; createdAt: number }> = new Map();
 
   /**
    * Creates a new TaskTracker instance.
@@ -254,7 +267,10 @@ export class TaskTracker extends EventEmitter {
     const parentId = this.taskStack.length > 0 ? this.taskStack[this.taskStack.length - 1] : null;
 
     // Store pending tool use - task starts when we see activity
-    this.pendingToolUses.set(toolUseId, { description, subagentType, parentId });
+    this.pendingToolUses.set(toolUseId, { description, subagentType, parentId, createdAt: Date.now() });
+
+    // Clean up old pending entries to prevent unbounded growth
+    this.cleanupOldPendingToolUses();
 
     // Create the task immediately
     const task: BackgroundTask = {
@@ -318,6 +334,38 @@ export class TaskTracker extends EventEmitter {
 
     // Clean up pending
     this.pendingToolUses.delete(toolUseId);
+  }
+
+  /**
+   * Remove old pending tool uses that never received results.
+   * Prevents unbounded growth if tool_results never arrive.
+   */
+  private cleanupOldPendingToolUses(): void {
+    const now = Date.now();
+    const toDelete: string[] = [];
+
+    // Remove entries older than PENDING_TOOL_USE_MAX_AGE_MS
+    for (const [id, entry] of this.pendingToolUses) {
+      if (now - entry.createdAt > PENDING_TOOL_USE_MAX_AGE_MS) {
+        toDelete.push(id);
+      }
+    }
+
+    // If still over limit after age-based cleanup, remove oldest entries
+    if (this.pendingToolUses.size - toDelete.length > MAX_PENDING_TOOL_USES) {
+      const entries = Array.from(this.pendingToolUses.entries())
+        .filter(([id]) => !toDelete.includes(id))
+        .sort((a, b) => a[1].createdAt - b[1].createdAt);
+
+      const removeCount = entries.length - MAX_PENDING_TOOL_USES;
+      for (let i = 0; i < removeCount; i++) {
+        toDelete.push(entries[i][0]);
+      }
+    }
+
+    for (const id of toDelete) {
+      this.pendingToolUses.delete(id);
+    }
   }
 
   /**

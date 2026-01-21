@@ -49,6 +49,17 @@ const CLEANUP_THROTTLE_MS = 30 * 1000;
  */
 const EVENT_DEBOUNCE_MS = 50;
 
+/**
+ * Maximum number of completion phrase entries to track.
+ * Prevents unbounded growth if many unique phrases are seen.
+ */
+const MAX_COMPLETION_PHRASE_ENTRIES = 50;
+
+/**
+ * Maximum line buffer size to prevent unbounded growth from long lines.
+ */
+const MAX_LINE_BUFFER_SIZE = 64 * 1024;
+
 // ========== Pre-compiled Regex Patterns ==========
 // Pre-compiled for performance (avoid re-compilation on each call)
 
@@ -546,6 +557,12 @@ export class RalphTracker extends EventEmitter {
     // Buffer data for line-based processing
     this._lineBuffer += cleanData;
 
+    // Prevent unbounded line buffer growth from very long lines
+    if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
+      // Truncate to last portion to preserve recent data
+      this._lineBuffer = this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+    }
+
     // Process complete lines
     const lines = this._lineBuffer.split('\n');
     this._lineBuffer = lines.pop() || ''; // Keep incomplete line in buffer
@@ -869,6 +886,23 @@ export class RalphTracker extends EventEmitter {
   private handleCompletionPhrase(phrase: string): void {
     const count = (this._completionPhraseCount.get(phrase) || 0) + 1;
     this._completionPhraseCount.set(phrase, count);
+
+    // Trim completion phrase map if it exceeds the limit
+    if (this._completionPhraseCount.size > MAX_COMPLETION_PHRASE_ENTRIES) {
+      // Keep only the most important entries (current expected phrase and highest counts)
+      const entries = Array.from(this._completionPhraseCount.entries());
+      entries.sort((a, b) => b[1] - a[1]); // Sort by count descending
+      this._completionPhraseCount.clear();
+      // Keep top half of entries
+      const keepCount = Math.floor(MAX_COMPLETION_PHRASE_ENTRIES / 2);
+      for (let i = 0; i < Math.min(keepCount, entries.length); i++) {
+        this._completionPhraseCount.set(entries[i][0], entries[i][1]);
+      }
+      // Always keep the expected phrase if set
+      if (this._loopState.completionPhrase && !this._completionPhraseCount.has(this._loopState.completionPhrase)) {
+        this._completionPhraseCount.set(this._loopState.completionPhrase, 1);
+      }
+    }
 
     // Store phrase on first occurrence
     if (!this._loopState.completionPhrase) {
@@ -1340,6 +1374,8 @@ export class RalphTracker extends EventEmitter {
    * @fires todoUpdate - With empty array
    */
   clear(): void {
+    // Clear debounce timers to prevent stale emissions after clear
+    this.clearDebounceTimers();
     this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
     this._lineBuffer = '';

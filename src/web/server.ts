@@ -73,6 +73,8 @@ const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 // Maximum concurrent sessions to prevent resource exhaustion
 const MAX_CONCURRENT_SESSIONS = 50;
+// SSE client health check interval (every 30 seconds)
+const SSE_HEALTH_CHECK_INTERVAL = 30 * 1000;
 
 /**
  * Auto-configure Ralph tracker for a session.
@@ -148,6 +150,10 @@ export class WebServer extends EventEmitter {
   // State update batching (reduce expensive toDetailedState() serialization)
   private stateUpdatePending: Set<string> = new Set();
   private stateUpdateTimer: NodeJS.Timeout | null = null;
+  // SSE client health check timer
+  private sseHealthCheckTimer: NodeJS.Timeout | null = null;
+  // Flag to prevent new timers during shutdown
+  private _isStopping: boolean = false;
 
   constructor(port: number = 3000) {
     super();
@@ -1683,6 +1689,9 @@ export class WebServer extends EventEmitter {
   // Batch terminal data for better performance (60fps)
   // Flushes immediately if batch > 1KB for snappier response to large outputs
   private batchTerminalData(sessionId: string, data: string): void {
+    // Skip if server is stopping
+    if (this._isStopping) return;
+
     const existing = this.terminalBatches.get(sessionId) || '';
     const newBatch = existing + data;
     this.terminalBatches.set(sessionId, newBatch);
@@ -1717,6 +1726,9 @@ export class WebServer extends EventEmitter {
 
   // Batch session:output events at 50ms for better performance
   private batchOutputData(sessionId: string, data: string): void {
+    // Skip if server is stopping
+    if (this._isStopping) return;
+
     const existing = this.outputBatches.get(sessionId) || '';
     this.outputBatches.set(sessionId, existing + data);
 
@@ -1739,6 +1751,9 @@ export class WebServer extends EventEmitter {
 
   // Batch task:updated events at 100ms - only send latest update per session
   private batchTaskUpdate(sessionId: string, task: BackgroundTask): void {
+    // Skip if server is stopping
+    if (this._isStopping) return;
+
     this.taskUpdateBatches.set(sessionId, task);
 
     if (!this.taskUpdateBatchTimer) {
@@ -1762,6 +1777,9 @@ export class WebServer extends EventEmitter {
    * and only serialize once per STATE_UPDATE_DEBOUNCE_INTERVAL.
    */
   private broadcastSessionStateDebounced(sessionId: string): void {
+    // Skip if server is stopping
+    if (this._isStopping) return;
+
     this.stateUpdatePending.add(sessionId);
 
     if (!this.stateUpdateTimer) {
@@ -1783,6 +1801,36 @@ export class WebServer extends EventEmitter {
     this.stateUpdatePending.clear();
   }
 
+  /**
+   * Clean up dead SSE clients that may not have properly disconnected.
+   * This prevents memory leaks from abruptly terminated connections.
+   */
+  private cleanupDeadSSEClients(): void {
+    const deadClients: FastifyReply[] = [];
+
+    for (const client of this.sseClients) {
+      try {
+        // Check if the underlying socket is still writable
+        const socket = client.raw.socket || (client.raw as any).connection;
+        if (!socket || socket.destroyed || !socket.writable) {
+          deadClients.push(client);
+        }
+      } catch {
+        // Error accessing socket means client is dead
+        deadClients.push(client);
+      }
+    }
+
+    // Remove dead clients
+    for (const client of deadClients) {
+      this.sseClients.delete(client);
+    }
+
+    if (deadClients.length > 0) {
+      console.log(`[Server] Cleaned up ${deadClients.length} dead SSE client(s)`);
+    }
+  }
+
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
@@ -1792,6 +1840,11 @@ export class WebServer extends EventEmitter {
     this.scheduledCleanupTimer = setInterval(() => {
       this.cleanupScheduledRuns();
     }, SCHEDULED_CLEANUP_INTERVAL);
+
+    // Start SSE client health check timer (prevents memory leaks from dead connections)
+    this.sseHealthCheckTimer = setInterval(() => {
+      this.cleanupDeadSSEClients();
+    }, SSE_HEALTH_CHECK_INTERVAL);
 
     // Restore screen sessions from previous run
     await this.restoreScreenSessions();
@@ -1895,6 +1948,18 @@ export class WebServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    // Set stopping flag to prevent new timer creation during shutdown
+    this._isStopping = true;
+
+    // Clear SSE health check timer
+    if (this.sseHealthCheckTimer) {
+      clearInterval(this.sseHealthCheckTimer);
+      this.sseHealthCheckTimer = null;
+    }
+
+    // Clear all SSE clients
+    this.sseClients.clear();
+
     // Clear batch timers
     if (this.terminalBatchTimer) {
       clearTimeout(this.terminalBatchTimer);
