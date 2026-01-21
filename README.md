@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="docs/images/claudeman-title.svg" alt="Claudeman" height="40">
+  <img src="docs/images/claudeman-title.svg" alt="Claudeman" height="60">
 </p>
 
-<h3 align="center">Track Claude Code Sessions Better Than Ever</h3>
+<h2 align="center">Autonomous work while you sleep</h2>
 
 <p align="center">
-  <em>Persistent sessions. Ralph Loop tracking. Respawn agents. Autonomous work while you sleep.</em>
+  Track Claude Code Sessions Better Than Ever<br>
+  <em>Persistent sessions. Ralph Loop tracking. Respawn agents.</em>
 </p>
 
 <p align="center">
