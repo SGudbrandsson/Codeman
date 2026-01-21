@@ -2,10 +2,10 @@
   <img src="docs/images/claudeman-title.svg" alt="Claudeman" height="60">
 </p>
 
-<h2 align="center">Autonomous Claude Code work while you sleep</h2>
+<h2 align="center">Manage Claude Code sessions better than ever</h2>
 
 <p align="center">
-  Manage Claude Code sessions better than ever<br>
+  Autonomous Claude Code work while you sleep<br>
   <em>Persistent sessions. Ralph Loop tracking. Respawn agents. Multi-Session Dashboards. Monitor Panel.</em>
 </p>
 
