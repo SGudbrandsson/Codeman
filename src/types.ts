@@ -433,6 +433,29 @@ export interface CaseInfo {
  *
  * Claudeman uses GNU screen for session persistence across server restarts.
  */
+/**
+ * Persisted respawn configuration for screen sessions.
+ * Subset of RespawnConfig that gets saved to disk.
+ */
+export interface PersistedRespawnConfig {
+  /** Whether respawn was enabled */
+  enabled: boolean;
+  /** How long to wait after seeing prompt before considering truly idle (ms) */
+  idleTimeoutMs: number;
+  /** The prompt to send for updating docs */
+  updatePrompt: string;
+  /** Delay between sending steps (ms) */
+  interStepDelayMs: number;
+  /** Whether to send /clear after update prompt */
+  sendClear: boolean;
+  /** Whether to send /init after /clear */
+  sendInit: boolean;
+  /** Optional prompt to send if /init doesn't trigger work */
+  kickstartPrompt?: string;
+  /** Duration in minutes if timed respawn was set */
+  durationMinutes?: number;
+}
+
 export interface ScreenSession {
   /** Claudeman session ID */
   sessionId: string;
@@ -450,6 +473,10 @@ export interface ScreenSession {
   attached: boolean;
   /** Session display name (tab name) */
   name?: string;
+  /** Persisted respawn controller configuration (restored on server restart) */
+  respawnConfig?: PersistedRespawnConfig;
+  /** Whether inner loop (Ralph Wiggum) tracking is enabled */
+  innerLoopEnabled?: boolean;
 }
 
 /**

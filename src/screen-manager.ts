@@ -19,7 +19,7 @@ import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ScreenSession, ProcessStats, ScreenSessionWithStats, getErrorMessage } from './types.js';
+import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage } from './types.js';
 
 /** Path to persisted screen session metadata */
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
@@ -566,6 +566,33 @@ export class ScreenManager extends EventEmitter {
     const screen = this.screens.get(sessionId);
     if (screen) {
       screen.attached = attached;
+      this.saveScreens();
+    }
+  }
+
+  // Update respawn config for a screen session (persisted across restarts)
+  updateRespawnConfig(sessionId: string, config: PersistedRespawnConfig | undefined): void {
+    const screen = this.screens.get(sessionId);
+    if (screen) {
+      screen.respawnConfig = config;
+      this.saveScreens();
+    }
+  }
+
+  // Clear respawn config when respawn is stopped
+  clearRespawnConfig(sessionId: string): void {
+    const screen = this.screens.get(sessionId);
+    if (screen && screen.respawnConfig) {
+      delete screen.respawnConfig;
+      this.saveScreens();
+    }
+  }
+
+  // Update inner loop (Ralph Wiggum) enabled state
+  updateInnerLoopEnabled(sessionId: string, enabled: boolean): void {
+    const screen = this.screens.get(sessionId);
+    if (screen) {
+      screen.innerLoopEnabled = enabled;
       this.saveScreens();
     }
   }

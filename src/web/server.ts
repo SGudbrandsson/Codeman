@@ -39,6 +39,7 @@ import {
   type SessionResponse,
   type QuickStartResponse,
   type CaseInfo,
+  type PersistedRespawnConfig,
 } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -305,6 +306,8 @@ export class WebServer extends EventEmitter {
         } else {
           session.innerLoopTracker.disable();
         }
+        // Persist inner loop enabled state
+        this.screenManager.updateInnerLoopEnabled(id, enabled);
       }
 
       // Configure the inner loop tracker
@@ -516,6 +519,10 @@ export class WebServer extends EventEmitter {
       }
 
       controller.start();
+
+      // Persist respawn config to screen session
+      this.saveRespawnConfig(id, controller.getConfig());
+
       this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
       return { success: true, status: controller.getStatus() };
@@ -531,6 +538,10 @@ export class WebServer extends EventEmitter {
       }
 
       controller.stop();
+
+      // Clear persisted respawn config
+      this.screenManager.clearRespawnConfig(id);
+
       this.broadcast('respawn:stopped', { sessionId: id });
 
       return { success: true };
@@ -547,6 +558,10 @@ export class WebServer extends EventEmitter {
       }
 
       controller.updateConfig(config);
+
+      // Persist updated config
+      this.saveRespawnConfig(id, controller.getConfig());
+
       this.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
 
       return { success: true, config: controller.getConfig() };
@@ -626,6 +641,9 @@ export class WebServer extends EventEmitter {
       if (body?.durationMinutes && body.durationMinutes > 0) {
         this.setupTimedRespawn(id, body.durationMinutes);
       }
+
+      // Persist respawn config to screen session
+      this.saveRespawnConfig(id, controller.getConfig(), body?.durationMinutes);
 
       this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
@@ -1081,6 +1099,21 @@ export class WebServer extends EventEmitter {
     this.app.get('/api/system/stats', async () => {
       return this.getSystemStats();
     });
+  }
+
+  // Helper to save respawn config to screen session for persistence
+  private saveRespawnConfig(sessionId: string, config: RespawnConfig, durationMinutes?: number): void {
+    const persistedConfig: PersistedRespawnConfig = {
+      enabled: config.enabled,
+      idleTimeoutMs: config.idleTimeoutMs,
+      updatePrompt: config.updatePrompt,
+      interStepDelayMs: config.interStepDelayMs,
+      sendClear: config.sendClear,
+      sendInit: config.sendInit,
+      kickstartPrompt: config.kickstartPrompt,
+      durationMinutes,
+    };
+    this.screenManager.updateRespawnConfig(sessionId, persistedConfig);
   }
 
   // Get system CPU and memory usage
@@ -1689,6 +1722,38 @@ export class WebServer extends EventEmitter {
             if (innerState) {
               session.innerLoopTracker.restoreState(innerState.loop, innerState.todos);
               console.log(`[Server] Restored inner loop state for session ${session.id} (enabled: ${innerState.loop.enabled})`);
+            }
+            // Also check screen.innerLoopEnabled as a fallback
+            if (screen.innerLoopEnabled && !session.innerLoopTracker.enabled) {
+              session.innerLoopTracker.enable();
+              console.log(`[Server] Enabled inner loop tracker for session ${session.id} from screen config`);
+            }
+
+            // Restore respawn controller if it was enabled
+            if (screen.respawnConfig?.enabled) {
+              try {
+                const controller = new RespawnController(session, {
+                  idleTimeoutMs: screen.respawnConfig.idleTimeoutMs,
+                  updatePrompt: screen.respawnConfig.updatePrompt,
+                  interStepDelayMs: screen.respawnConfig.interStepDelayMs,
+                  enabled: screen.respawnConfig.enabled,
+                  sendClear: screen.respawnConfig.sendClear,
+                  sendInit: screen.respawnConfig.sendInit,
+                  kickstartPrompt: screen.respawnConfig.kickstartPrompt,
+                });
+                this.respawnControllers.set(session.id, controller);
+                this.setupRespawnListeners(session.id, controller);
+                controller.start();
+
+                // Set up timed respawn if duration was configured
+                if (screen.respawnConfig.durationMinutes && screen.respawnConfig.durationMinutes > 0) {
+                  this.setupTimedRespawn(session.id, screen.respawnConfig.durationMinutes);
+                }
+
+                console.log(`[Server] Restored respawn controller for session ${session.id}`);
+              } catch (err) {
+                console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
+              }
             }
 
             // Mark it as restored (not started yet - user needs to attach)
