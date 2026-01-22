@@ -1612,11 +1612,11 @@ class ClaudemanApp {
     this.loadSavedRespawnConfig(sessionId);
 
     // Populate auto-compact/clear from session state
-    document.getElementById('modalAutoCompactEnabled').checked = session.autoClear?.autoCompact?.enabled ?? false;
-    document.getElementById('modalAutoCompactThreshold').value = session.autoClear?.autoCompact?.threshold ?? 110000;
-    document.getElementById('modalAutoCompactPrompt').value = session.autoClear?.autoCompact?.prompt ?? '';
-    document.getElementById('modalAutoClearEnabled').checked = session.autoClear?.enabled ?? false;
-    document.getElementById('modalAutoClearThreshold').value = session.autoClear?.threshold ?? 140000;
+    document.getElementById('modalAutoCompactEnabled').checked = session.autoCompactEnabled ?? false;
+    document.getElementById('modalAutoCompactThreshold').value = session.autoCompactThreshold ?? 110000;
+    document.getElementById('modalAutoCompactPrompt').value = session.autoCompactPrompt ?? '';
+    document.getElementById('modalAutoClearEnabled').checked = session.autoClearEnabled ?? false;
+    document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
 
     // Populate Ralph Wiggum form with current session values
     const ralphState = this.ralphStates.get(sessionId);
