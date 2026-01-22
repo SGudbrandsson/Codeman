@@ -285,6 +285,8 @@ curl -X POST localhost:3000/api/sessions/:id/input \
 
 Uses `confirming_idle` state to prevent false positives. Fallback: `noOutputTimeoutMs` (30s) if no output at all.
 
+**Step Confirmation**: After sending each respawn step (update, init, kickstart), the controller waits for the same `completionConfirmMs` silence before proceeding. This ensures Claude finishes processing each prompt before the next command is sent.
+
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
 ### Token Tracking

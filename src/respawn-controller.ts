@@ -410,6 +410,12 @@ export class RespawnController extends EventEmitter {
   /** Timer for /clear step fallback (sends /init if no prompt detected) */
   private clearFallbackTimer: NodeJS.Timeout | null = null;
 
+  /** Timer for step completion confirmation (waits for silence after completion) */
+  private stepConfirmTimer: NodeJS.Timeout | null = null;
+
+  /** Which step is pending confirmation */
+  private pendingStepConfirm: 'update' | 'init' | 'kickstart' | null = null;
+
   /** Fallback timeout for /clear step (ms) - sends /init without waiting for prompt */
   private static readonly CLEAR_FALLBACK_TIMEOUT_MS = 10000;
 
@@ -753,6 +759,9 @@ export class RespawnController extends EventEmitter {
       // Cancel any pending completion confirmation
       this.cancelCompletionConfirm();
 
+      // Cancel any pending step confirmation (Claude is still working)
+      this.cancelStepConfirm();
+
       // If we're monitoring init and work started, go to watching (no kickstart needed)
       if (this._state === 'monitoring_init') {
         this.log('/init triggered work, skipping kickstart');
@@ -774,19 +783,20 @@ export class RespawnController extends EventEmitter {
         return;
       }
 
-      // In waiting states, treat completion message as step completion
+      // In waiting states, also use confirmation timer (same detection logic)
+      // This ensures we wait for Claude to finish before proceeding
       switch (this._state) {
         case 'waiting_update':
-          this.checkUpdateComplete();
+          this.startStepConfirmTimer('update');
           break;
         case 'waiting_clear':
-          this.checkClearComplete();
+          this.checkClearComplete(); // /clear is quick, no need to wait
           break;
         case 'waiting_init':
-          this.checkInitComplete();
+          this.startStepConfirmTimer('init');
           break;
         case 'waiting_kickstart':
-          this.checkKickstartComplete();
+          this.startStepConfirmTimer('kickstart');
           break;
       }
       return;
@@ -809,22 +819,22 @@ export class RespawnController extends EventEmitter {
       this.promptDetected = true;
       this.workingDetected = false;
 
-      // Handle legacy detection in waiting states
+      // Handle legacy detection in waiting states - also use confirmation timers
       switch (this._state) {
         case 'waiting_update':
-          this.checkUpdateComplete();
+          this.startStepConfirmTimer('update');
           break;
         case 'waiting_clear':
-          this.checkClearComplete();
+          this.checkClearComplete(); // /clear is quick, no need to wait
           break;
         case 'waiting_init':
-          this.checkInitComplete();
+          this.startStepConfirmTimer('init');
           break;
         case 'monitoring_init':
           this.checkMonitoringInitIdle();
           break;
         case 'waiting_kickstart':
-          this.checkKickstartComplete();
+          this.startStepConfirmTimer('kickstart');
           break;
       }
     }
@@ -968,7 +978,7 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle, step, completion confirm, no-output, and clear fallback) */
+  /** Clear all timers (idle, step, completion confirm, no-output, step confirm, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
@@ -982,6 +992,11 @@ export class RespawnController extends EventEmitter {
     if (this.completionConfirmTimer) {
       clearTimeout(this.completionConfirmTimer);
       this.completionConfirmTimer = null;
+    }
+    if (this.stepConfirmTimer) {
+      clearTimeout(this.stepConfirmTimer);
+      this.stepConfirmTimer = null;
+      this.pendingStepConfirm = null;
     }
     if (this.noOutputTimer) {
       clearTimeout(this.noOutputTimer);
@@ -1084,6 +1099,60 @@ export class RespawnController extends EventEmitter {
       this.setState('watching');
       this.completionMessageTime = null;
     }
+  }
+
+  /**
+   * Start step confirmation timer for waiting states.
+   * Waits for output silence before proceeding to next step.
+   * This ensures Claude has finished processing before we send the next command.
+   */
+  private startStepConfirmTimer(step: 'update' | 'init' | 'kickstart'): void {
+    // Clear any existing step confirm timer
+    if (this.stepConfirmTimer) {
+      clearTimeout(this.stepConfirmTimer);
+    }
+
+    this.pendingStepConfirm = step;
+    this.log(`Step '${step}' completion detected, waiting ${this.config.completionConfirmMs}ms for silence...`);
+
+    this.stepConfirmTimer = setTimeout(() => {
+      const msSinceOutput = Date.now() - this.lastOutputTime;
+
+      if (msSinceOutput >= this.config.completionConfirmMs) {
+        this.log(`Step '${step}' confirmed: ${msSinceOutput}ms silence`);
+        this.stepConfirmTimer = null;
+        this.pendingStepConfirm = null;
+
+        // Proceed with the step completion
+        switch (step) {
+          case 'update':
+            this.checkUpdateComplete();
+            break;
+          case 'init':
+            this.checkInitComplete();
+            break;
+          case 'kickstart':
+            this.checkKickstartComplete();
+            break;
+        }
+      } else {
+        // Output received during wait, restart timer
+        this.log(`Output during step confirmation, resetting timer`);
+        this.startStepConfirmTimer(step);
+      }
+    }, this.config.completionConfirmMs);
+  }
+
+  /**
+   * Cancel step confirmation if working patterns detected.
+   */
+  private cancelStepConfirm(): void {
+    if (this.stepConfirmTimer) {
+      clearTimeout(this.stepConfirmTimer);
+      this.stepConfirmTimer = null;
+      this.log(`Step confirmation cancelled (working detected)`);
+    }
+    this.pendingStepConfirm = null;
   }
 
   /**
