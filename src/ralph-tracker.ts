@@ -113,6 +113,18 @@ const TODO_STATUS_PATTERN = /[-*]\s*(.+?)\s+\((pending|in_progress|completed)\)/
 const TODO_NATIVE_PATTERN = /^[\s⎿]*(☐|☒|◐)\s+([^☐☒◐\n]{3,})/gm;
 
 /**
+ * Format 5: Claude Code checkmark-based TodoWrite output
+ * Matches task creation: "✔ Task #1 created: Fix the bug"
+ * Matches task summary: "✔ #1 Fix the bug"
+ * Matches status update: "✔ Task #1 updated: status → completed"
+ *
+ * These are the primary output format of Claude Code's TodoWrite tool.
+ */
+const TODO_TASK_CREATED_PATTERN = /✔\s*Task\s*#(\d+)\s*created:\s*(.+)/g;
+const TODO_TASK_SUMMARY_PATTERN = /✔\s*#(\d+)\s+(.+)/g;
+const TODO_TASK_STATUS_PATTERN = /✔\s*Task\s*#(\d+)\s*updated:\s*status\s*→\s*(in progress|completed|pending)/g;
+
+/**
  * Patterns to exclude from todo detection
  * Prevents false positives from tool invocations and Claude commentary
  */
@@ -300,6 +312,9 @@ export class RalphTracker extends EventEmitter {
   /** When true, prevents auto-enable on pattern detection */
   private _autoEnableDisabled: boolean = false;
 
+  /** Maps task numbers from "✔ Task #N" format to their content for status updates */
+  private _taskNumberToContent: Map<number, string> = new Map();
+
   /**
    * Creates a new RalphTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
@@ -394,6 +409,7 @@ export class RalphTracker extends EventEmitter {
     this._loopState.enabled = wasEnabled;  // Keep enabled status
     this._todos.clear();
     this._completionPhraseCount.clear();
+    this._taskNumberToContent.clear();
     this._lineBuffer = '';
     // Emit immediately on reset (no debounce)
     this.emit('loopUpdate', this.loopState);
@@ -414,6 +430,7 @@ export class RalphTracker extends EventEmitter {
     this._loopState = createInitialRalphTrackerState();
     this._todos.clear();
     this._completionPhraseCount.clear();
+    this._taskNumberToContent.clear();
     this._lineBuffer = '';
     // Emit immediately on reset (no debounce)
     this.emit('loopUpdate', this.loopState);
@@ -632,6 +649,16 @@ export class RalphTracker extends EventEmitter {
     // Claude Code native todo format: "☐ Task", "☒ Task"
     TODO_NATIVE_PATTERN.lastIndex = 0;
     if (TODO_NATIVE_PATTERN.test(data)) {
+      return true;
+    }
+
+    // Claude Code checkmark-based TodoWrite: "✔ Task #N created:", "✔ Task #N updated:"
+    TODO_TASK_CREATED_PATTERN.lastIndex = 0;
+    if (TODO_TASK_CREATED_PATTERN.test(data)) {
+      return true;
+    }
+    TODO_TASK_STATUS_PATTERN.lastIndex = 0;
+    if (TODO_TASK_STATUS_PATTERN.test(data)) {
       return true;
     }
 
@@ -1056,9 +1083,10 @@ export class RalphTracker extends EventEmitter {
     const hasTodoIndicator = line.includes('Todo:');
     const hasNativeCheckbox = line.includes('☐') || line.includes('☒') || line.includes('◐');
     const hasStatus = line.includes('(pending)') || line.includes('(in_progress)') || line.includes('(completed)');
+    const hasCheckmark = line.includes('✔');
 
     // Quick check: skip lines that can't possibly contain todos
-    if (!hasCheckbox && !hasTodoIndicator && !hasNativeCheckbox && !hasStatus) {
+    if (!hasCheckbox && !hasTodoIndicator && !hasNativeCheckbox && !hasStatus && !hasCheckmark) {
       return;
     }
 
@@ -1121,6 +1149,52 @@ export class RalphTracker extends EventEmitter {
         const status = this.iconToStatus(icon);
         this.upsertTodo(content, status);
         updated = true;
+      }
+    }
+
+    // Format 5: Claude Code checkmark-based TodoWrite output (✔ Task #N)
+    // Handles: "✔ Task #N created: content", "✔ #N content", "✔ Task #N updated: status → X"
+    if (hasCheckmark) {
+      // Task creation: "✔ Task #1 created: Fix the bug"
+      TODO_TASK_CREATED_PATTERN.lastIndex = 0;
+      while ((match = TODO_TASK_CREATED_PATTERN.exec(line)) !== null) {
+        const taskNum = parseInt(match[1], 10);
+        const content = match[2].trim();
+        if (content.length >= 5) {
+          this._taskNumberToContent.set(taskNum, content);
+          this.upsertTodo(content, 'pending');
+          updated = true;
+        }
+      }
+
+      // Task summary: "✔ #1 Fix the bug"
+      TODO_TASK_SUMMARY_PATTERN.lastIndex = 0;
+      while ((match = TODO_TASK_SUMMARY_PATTERN.exec(line)) !== null) {
+        const taskNum = parseInt(match[1], 10);
+        const content = match[2].trim();
+        if (content.length >= 5) {
+          // Only register if not already known from a "created" line
+          if (!this._taskNumberToContent.has(taskNum)) {
+            this._taskNumberToContent.set(taskNum, content);
+          }
+          this.upsertTodo(this._taskNumberToContent.get(taskNum) || content, 'pending');
+          updated = true;
+        }
+      }
+
+      // Status update: "✔ Task #1 updated: status → completed"
+      TODO_TASK_STATUS_PATTERN.lastIndex = 0;
+      while ((match = TODO_TASK_STATUS_PATTERN.exec(line)) !== null) {
+        const taskNum = parseInt(match[1], 10);
+        const statusStr = match[2].trim();
+        const status: RalphTodoStatus = statusStr === 'completed' ? 'completed'
+          : statusStr === 'in progress' ? 'in_progress'
+          : 'pending';
+        const content = this._taskNumberToContent.get(taskNum);
+        if (content) {
+          this.upsertTodo(content, status);
+          updated = true;
+        }
       }
     }
 
@@ -1378,6 +1452,7 @@ export class RalphTracker extends EventEmitter {
     this.clearDebounceTimers();
     this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
+    this._taskNumberToContent.clear();
     this._lineBuffer = '';
     this._completionPhraseCount.clear();
     this.emit('loopUpdate', this.loopState);
