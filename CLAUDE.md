@@ -311,7 +311,7 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when any of these patterns are detected in terminal output:
 - `/ralph-loop:ralph-loop` command
 - `<promise>PHRASE</promise>` completion phrases (supports hyphens: `TESTS-PASS`, underscores: `ALL_DONE`, numbers: `TASK_123`)
-- `TodoWrite` tool usage
+- `TodoWrite` tool usage (including checkmark format: `✔ Task #N created:`, `✔ Task #N updated: status →`)
 - Iteration patterns (`Iteration 5/50`, `[5/50]`)
 - Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
 - "All tasks complete" messages

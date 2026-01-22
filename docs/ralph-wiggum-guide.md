@@ -222,6 +222,23 @@ Todo: ✓ Completed task
 - Task name (completed)
 ```
 
+**Format 4: Native Checkboxes (without "Todo:" prefix)**
+```
+☐ Pending task
+◐ In progress task
+☒ Completed task
+```
+
+**Format 5: Claude Code Checkmark-Based TodoWrite Output**
+```
+✔ Task #1 created: Fix the authentication bug
+✔ #1 Fix the authentication bug
+✔ Task #1 updated: status → in progress
+✔ Task #1 updated: status → completed
+```
+
+This is the primary output format used by Claude Code's TodoWrite tool in CLI sessions. The tracker maps task numbers to content, allowing status updates to reference tasks by number.
+
 ### System Reminder Integration
 
 From official Claude Code documentation:
