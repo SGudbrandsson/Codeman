@@ -1990,7 +1990,6 @@ export class WebServer extends EventEmitter {
             }
 
             this.sessions.set(session.id, session);
-            this.persistSessionState(session);
             this.setupSessionListeners(session);
 
             // Restore Ralph tracking state (Ralph Wiggum settings) if it was saved
@@ -2042,6 +2041,9 @@ export class WebServer extends EventEmitter {
                 console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
               }
             }
+
+            // Persist full state after all restorations are applied
+            this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
             console.log(`[Server] Restored session ${session.id} from screen ${screen.screenName}`);
