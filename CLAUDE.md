@@ -74,6 +74,8 @@ npx vitest run -t "should create session" # By pattern
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
 # Global test utilities (describe/it/expect) available without imports (globals: true)
+# Tests run sequentially (fileParallelism: false) to respect screen session limits
+# Global setup (test/setup.ts) enforces max 10 concurrent screens + orphan cleanup
 
 # TypeScript checking
 npm run typecheck                         # Type check without building (or: npx tsc --noEmit)

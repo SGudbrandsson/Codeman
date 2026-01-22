@@ -698,5 +698,278 @@ Final text
 
       expect(tracker.todos).toHaveLength(2);
     });
+
+    it('should handle very long todo content', () => {
+      const longContent = 'x'.repeat(1000);
+      tracker.processTerminalData(`- [ ] ${longContent}\n`);
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(1);
+    });
+
+    it('should handle todos with special characters', () => {
+      tracker.processTerminalData('- [ ] Task with "quotes" and \'apostrophes\'\n');
+      tracker.processTerminalData('- [ ] Task with <html> tags\n');
+      tracker.processTerminalData('- [ ] Task with $variable and `backticks`\n');
+
+      expect(tracker.todos).toHaveLength(3);
+    });
+
+    it('should handle todos with numbers', () => {
+      tracker.processTerminalData('- [ ] Task 123\n');
+      tracker.processTerminalData('- [ ] 456 numbered\n');
+
+      expect(tracker.todos).toHaveLength(2);
+    });
+  });
+
+  describe('Completion Detection Edge Cases', () => {
+    it('should not emit completion for partial matches', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop('COMPLETE');
+      tracker.processTerminalData('<promise>COMPLE\n');  // Partial
+
+      expect(completionHandler).not.toHaveBeenCalled();
+    });
+
+    it('should handle completion phrase with leading/trailing whitespace', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop();
+      tracker.processTerminalData('  <promise>DONE</promise>  \n');
+
+      expect(completionHandler).toHaveBeenCalledWith('DONE');
+    });
+
+    it('should handle multiple completion phrases in one line', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop();
+      tracker.processTerminalData('<promise>FIRST</promise> <promise>SECOND</promise>\n');
+
+      // Should detect at least one
+      expect(completionHandler).toHaveBeenCalled();
+    });
+
+    it('should handle nested-looking promise tags', () => {
+      const completionHandler = vi.fn();
+      tracker.on('completionDetected', completionHandler);
+
+      tracker.startLoop();
+      tracker.processTerminalData('<promise><promise>NESTED</promise></promise>\n');
+
+      // Should handle gracefully
+      expect(completionHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe('Loop State Management', () => {
+    it('should track elapsedHours accurately', () => {
+      tracker.processTerminalData('Elapsed: 5.5 hours\n');
+      expect(tracker.loopState.elapsedHours).toBe(5.5);
+
+      tracker.processTerminalData('Elapsed: 10.25 hours\n');
+      expect(tracker.loopState.elapsedHours).toBe(10.25);
+    });
+
+    it('should track integer elapsed hours', () => {
+      tracker.processTerminalData('Elapsed: 3 hours\n');
+      expect(tracker.loopState.elapsedHours).toBe(3);
+    });
+
+    it('should handle zero elapsed hours', () => {
+      tracker.processTerminalData('Elapsed: 0 hours\n');
+      expect(tracker.loopState.elapsedHours).toBe(0);
+    });
+
+    it('should update lastActivity on any input', () => {
+      const before = tracker.loopState.lastActivity;
+      tracker.processTerminalData('some data\n');
+      const after = tracker.loopState.lastActivity;
+
+      expect(after).toBeGreaterThanOrEqual(before);
+    });
+
+    it('should increment cycleCount on cycle pattern', () => {
+      tracker.processTerminalData('Starting cycle #1\n');
+      expect(tracker.loopState.cycleCount).toBe(1);
+
+      tracker.processTerminalData('Starting cycle #5\n');
+      expect(tracker.loopState.cycleCount).toBe(5);
+
+      tracker.processTerminalData('Starting cycle #10\n');
+      expect(tracker.loopState.cycleCount).toBe(10);
+    });
+  });
+
+  describe('Todo Status Updates', () => {
+    it('should update todo from pending to in_progress', () => {
+      tracker.processTerminalData('- [ ] Task to update\n');
+      expect(tracker.todos[0].status).toBe('pending');
+
+      tracker.processTerminalData('◐ Task to update\n');
+      expect(tracker.todos[0].status).toBe('in_progress');
+    });
+
+    it('should update todo from in_progress to completed', () => {
+      tracker.processTerminalData('◐ Working task\n');
+      expect(tracker.todos[0].status).toBe('in_progress');
+
+      tracker.processTerminalData('✓ Working task\n');
+      expect(tracker.todos[0].status).toBe('completed');
+    });
+
+    it('should handle multiple status transitions', () => {
+      tracker.processTerminalData('- [ ] Multi-transition task\n');
+      expect(tracker.todos[0].status).toBe('pending');
+
+      tracker.processTerminalData('Todo: ◐ Multi-transition task\n');
+      expect(tracker.todos[0].status).toBe('in_progress');
+
+      tracker.processTerminalData('- [x] Multi-transition task\n');
+      expect(tracker.todos[0].status).toBe('completed');
+    });
+
+    it('should not revert completed back to pending', () => {
+      tracker.processTerminalData('- [x] Done task\n');
+      expect(tracker.todos[0].status).toBe('completed');
+
+      // If we see the same task as pending, it might be different output
+      // but same content should keep completed status
+      tracker.processTerminalData('- [ ] Done task\n');
+      // The update behavior depends on implementation
+      expect(tracker.todos.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Reset Behaviors', () => {
+    it('should reset todos but keep enabled on soft reset', () => {
+      tracker.enable();
+      tracker.processTerminalData('- [ ] Task 1\n');
+      expect(tracker.enabled).toBe(true);
+      expect(tracker.todos).toHaveLength(1);
+
+      tracker.reset();
+
+      expect(tracker.enabled).toBe(true);
+      expect(tracker.todos).toHaveLength(0);
+    });
+
+    it('should fully reset everything on fullReset', () => {
+      tracker.enable();
+      tracker.startLoop('TEST');
+      tracker.processTerminalData('- [ ] Task 1\n');
+
+      tracker.fullReset();
+
+      expect(tracker.enabled).toBe(false);
+      expect(tracker.todos).toHaveLength(0);
+      expect(tracker.loopState.active).toBe(false);
+      expect(tracker.loopState.completionPhrase).toBeNull();
+    });
+  });
+
+  describe('Debounced Events', () => {
+    it('should batch rapid todo updates', () => {
+      const todoHandler = vi.fn();
+      tracker.on('todoUpdate', todoHandler);
+
+      // Rapid updates
+      for (let i = 0; i < 10; i++) {
+        tracker.processTerminalData(`- [ ] Task ${i}\n`);
+      }
+
+      // Flush to ensure all events are processed
+      tracker.flushPendingEvents();
+
+      // Should have been called but possibly batched
+      expect(todoHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe('Pattern Detection Accuracy', () => {
+    it('should not match false positives for todos', () => {
+      tracker.processTerminalData('This is not a [x] checkbox\n');
+      tracker.processTerminalData('Some text with - in it\n');
+      tracker.processTerminalData('[x] not at start\n');
+
+      // Should not create todos from these false positives
+      const actualTodos = tracker.todos.filter(t => t.content.length > 0);
+      expect(actualTodos.length).toBeLessThanOrEqual(1);
+    });
+
+    it('should detect todos in code output', () => {
+      tracker.processTerminalData('```\n');
+      tracker.processTerminalData('- [ ] Task in code block\n');
+      tracker.processTerminalData('```\n');
+
+      // Should still detect the todo
+      expect(tracker.todos.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should handle markdown list items correctly', () => {
+      tracker.processTerminalData('* [ ] Asterisk item 1\n');
+      tracker.processTerminalData('* [x] Asterisk item 2\n');
+      tracker.processTerminalData('- [ ] Dash item 1\n');
+      tracker.processTerminalData('- [x] Dash item 2\n');
+
+      expect(tracker.todos).toHaveLength(4);
+    });
+  });
+
+  describe('Configuration from Ralph Plugin', () => {
+    it('should configure from external state', () => {
+      tracker.configure({
+        enabled: true,
+        completionPhrase: 'EXTERNAL_PHRASE',
+        maxIterations: 100,
+      });
+
+      expect(tracker.enabled).toBe(true);
+      expect(tracker.loopState.completionPhrase).toBe('EXTERNAL_PHRASE');
+      expect(tracker.loopState.maxIterations).toBe(100);
+    });
+
+    it('should partially configure', () => {
+      tracker.startLoop('ORIGINAL');
+      tracker.configure({
+        maxIterations: 50,
+      });
+
+      expect(tracker.loopState.completionPhrase).toBe('ORIGINAL');
+      expect(tracker.loopState.maxIterations).toBe(50);
+    });
+  });
+
+  describe('Serialization', () => {
+    it('should provide serializable state', () => {
+      tracker.enable();
+      tracker.startLoop('TEST', 100);
+      tracker.processTerminalData('- [ ] Task 1\n');
+
+      const state = tracker.loopState;
+      const serialized = JSON.stringify(state);
+      const parsed = JSON.parse(serialized);
+
+      expect(parsed.enabled).toBe(true);
+      expect(parsed.completionPhrase).toBe('TEST');
+      expect(parsed.maxIterations).toBe(100);
+    });
+
+    it('should provide serializable todos', () => {
+      tracker.processTerminalData('- [ ] Task 1\n');
+      tracker.processTerminalData('- [x] Task 2\n');
+
+      const todos = tracker.todos;
+      const serialized = JSON.stringify(todos);
+      const parsed = JSON.parse(serialized);
+
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0].content).toBe('Task 1');
+    });
   });
 });

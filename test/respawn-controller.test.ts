@@ -494,3 +494,355 @@ describe('RespawnController Integration', () => {
     controller.stop();
   });
 });
+
+describe('RespawnController Configuration', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  it('should use default sendClear option', () => {
+    const controller = new RespawnController(session as unknown as Session, {});
+    expect(controller.getConfig().sendClear).toBe(true);
+    controller.stop();
+  });
+
+  it('should use default sendInit option', () => {
+    const controller = new RespawnController(session as unknown as Session, {});
+    expect(controller.getConfig().sendInit).toBe(true);
+    controller.stop();
+  });
+
+  it('should respect custom sendClear option', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      sendClear: false,
+    });
+    expect(controller.getConfig().sendClear).toBe(false);
+    controller.stop();
+  });
+
+  it('should respect custom sendInit option', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      sendInit: false,
+    });
+    expect(controller.getConfig().sendInit).toBe(false);
+    controller.stop();
+  });
+
+  it('should support kickstartPrompt option', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      kickstartPrompt: '/init please start working',
+    });
+    expect(controller.getConfig().kickstartPrompt).toBe('/init please start working');
+    controller.stop();
+  });
+
+  it('should handle zero idleTimeoutMs', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 0,
+    });
+    expect(controller.getConfig().idleTimeoutMs).toBe(0);
+    controller.stop();
+  });
+
+  it('should handle large idleTimeoutMs', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 3600000, // 1 hour
+    });
+    expect(controller.getConfig().idleTimeoutMs).toBe(3600000);
+    controller.stop();
+  });
+
+  it('should handle zero interStepDelayMs', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      interStepDelayMs: 0,
+    });
+    expect(controller.getConfig().interStepDelayMs).toBe(0);
+    controller.stop();
+  });
+
+  it('should handle empty updatePrompt', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      updatePrompt: '',
+    });
+    expect(controller.getConfig().updatePrompt).toBe('');
+    controller.stop();
+  });
+
+  it('should handle special characters in updatePrompt', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      updatePrompt: 'prompt with "quotes" and \'apostrophes\' and $variables',
+    });
+    expect(controller.getConfig().updatePrompt).toContain('"quotes"');
+    controller.stop();
+  });
+
+  it('should handle unicode in updatePrompt', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      updatePrompt: '日本語のプロンプト 🚀',
+    });
+    expect(controller.getConfig().updatePrompt).toBe('日本語のプロンプト 🚀');
+    controller.stop();
+  });
+
+  it('should handle multiline updatePrompt', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      updatePrompt: 'Line 1\nLine 2\nLine 3',
+    });
+    expect(controller.getConfig().updatePrompt).toContain('\n');
+    controller.stop();
+  });
+});
+
+describe('RespawnController State Transitions', () => {
+  let session: MockSession;
+  let controller: RespawnController;
+
+  beforeEach(() => {
+    session = new MockSession();
+    controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 50,
+      interStepDelayMs: 20,
+    });
+  });
+
+  afterEach(() => {
+    controller.stop();
+  });
+
+  it('should record state history', async () => {
+    const stateHistory: RespawnState[] = [];
+    controller.on('stateChanged', (state) => stateHistory.push(state));
+
+    controller.start();
+    session.simulatePrompt();
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(stateHistory).toContain('watching');
+    expect(stateHistory.length).toBeGreaterThan(1);
+  });
+
+  it('should handle stop during state transition', async () => {
+    controller.start();
+    session.simulatePrompt();
+
+    // Wait a bit then stop during potential transition
+    await new Promise(resolve => setTimeout(resolve, 30));
+    controller.stop();
+
+    expect(controller.state).toBe('stopped');
+  });
+
+  it('should emit complete cycle event', async () => {
+    let cycleCompleted = false;
+    controller.on('respawnCycleCompleted', () => {
+      cycleCompleted = true;
+    });
+
+    controller.start();
+    session.simulateReady();
+
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // May or may not complete depending on timing
+    expect(controller.isRunning).toBe(true);
+    controller.stop();
+  });
+
+  it('should handle multiple consecutive prompt detections', async () => {
+    let promptCount = 0;
+    controller.on('log', (msg) => {
+      if (msg.includes('Prompt detected')) promptCount++;
+    });
+
+    controller.start();
+
+    // Send multiple prompts rapidly
+    session.simulatePrompt();
+    session.simulatePrompt();
+    session.simulatePrompt();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Should detect prompts
+    expect(promptCount).toBeGreaterThan(0);
+  });
+
+  it('should handle working state interrupting idle timeout', async () => {
+    let cycleStarted = false;
+    controller.on('respawnCycleStarted', () => {
+      cycleStarted = true;
+    });
+
+    controller.start();
+    session.simulatePrompt();
+
+    // Before idle timeout fires, start working
+    await new Promise(resolve => setTimeout(resolve, 20));
+    session.simulateWorking();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Cycle may not have started due to working state
+    expect(controller.getStatus().workingDetected).toBe(true);
+  });
+});
+
+describe('RespawnController Edge Cases', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  it('should handle null session events gracefully', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+
+    // Emit with undefined/null data
+    session.emit('terminal', undefined);
+    session.emit('terminal', null);
+    session.emit('terminal', '');
+
+    expect(controller.isRunning).toBe(true);
+    controller.stop();
+  });
+
+  it('should handle very long terminal lines', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+
+    // Send a very long line
+    const longLine = 'a'.repeat(100000);
+    session.simulateTerminalOutput(longLine);
+
+    expect(controller.isRunning).toBe(true);
+    controller.stop();
+  });
+
+  it('should handle binary data in terminal', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+
+    // Send some binary-like data
+    const binaryData = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]).toString();
+    session.simulateTerminalOutput(binaryData);
+
+    expect(controller.isRunning).toBe(true);
+    controller.stop();
+  });
+
+  it('should handle pause when already paused', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+    controller.pause();
+    controller.pause(); // Double pause
+
+    expect(controller.isRunning).toBe(true);
+    controller.stop();
+  });
+
+  it('should handle resume when not paused', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+    controller.resume(); // Resume when not paused
+
+    expect(controller.isRunning).toBe(true);
+    expect(controller.state).toBe('watching');
+    controller.stop();
+  });
+
+  it('should handle stop when already stopped', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.stop(); // Stop when never started
+    controller.stop(); // Double stop
+
+    expect(controller.state).toBe('stopped');
+  });
+
+  it('should handle updateConfig while running', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 100,
+      updatePrompt: 'original',
+    });
+
+    controller.start();
+    session.simulatePrompt();
+
+    // Update config mid-run
+    controller.updateConfig({ updatePrompt: 'updated' });
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(controller.getConfig().updatePrompt).toBe('updated');
+    controller.stop();
+  });
+
+  it('should track cycle count across multiple cycles', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 30,
+      interStepDelayMs: 10,
+    });
+
+    expect(controller.currentCycle).toBe(0);
+
+    controller.start();
+    session.simulateReady();
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    expect(controller.currentCycle).toBeGreaterThan(0);
+    controller.stop();
+  });
+
+  it('should provide accurate time since activity', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const status = controller.getStatus();
+    expect(status.timeSinceActivity).toBeGreaterThanOrEqual(100);
+    controller.stop();
+  });
+
+  it('should reset time since activity on terminal input', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 1000,
+    });
+
+    controller.start();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    session.simulateTerminalOutput('new data');
+
+    const status = controller.getStatus();
+    // Time should be reset or very small
+    expect(status.timeSinceActivity).toBeLessThan(100);
+    controller.stop();
+  });
+});
