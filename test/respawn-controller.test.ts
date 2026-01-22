@@ -31,14 +31,20 @@ class MockSession extends EventEmitter {
     this.emit('terminal', data);
   }
 
-  // Simulate prompt appearing (basic prompt character)
+  // Simulate prompt appearing (basic prompt character) - legacy fallback
   simulatePrompt(): void {
     this.emit('terminal', '❯ ');
   }
 
-  // Simulate ready state with the definitive indicator
+  // Simulate ready state with the definitive indicator - legacy fallback
   simulateReady(): void {
     this.emit('terminal', '↵ send');
+  }
+
+  // Simulate completion message (NEW - primary idle detection in Claude Code 2024+)
+  // This pattern triggers the multi-layer detection: "for Xm Xs" indicates work finished
+  simulateCompletionMessage(): void {
+    this.emit('terminal', '✻ Worked for 2m 46s');
   }
 
   // Simulate working state
@@ -46,16 +52,16 @@ class MockSession extends EventEmitter {
     this.emit('terminal', 'Thinking... ⠋');
   }
 
-  // Simulate clear completion (followed by ready indicator)
+  // Simulate clear completion (followed by completion message)
   simulateClearComplete(): void {
     this.emit('terminal', 'conversation cleared');
-    setTimeout(() => this.simulateReady(), 50);
+    setTimeout(() => this.simulateCompletionMessage(), 50);
   }
 
-  // Simulate init completion (followed by ready indicator)
+  // Simulate init completion (followed by completion message)
   simulateInitComplete(): void {
     this.emit('terminal', 'Analyzing CLAUDE.md...');
-    setTimeout(() => this.simulateReady(), 100);
+    setTimeout(() => this.simulateCompletionMessage(), 100);
   }
 }
 
@@ -68,6 +74,8 @@ describe('RespawnController', () => {
     controller = new RespawnController(session as unknown as Session, {
       idleTimeoutMs: 100, // Short timeout for testing
       interStepDelayMs: 50,
+      completionConfirmMs: 50, // Short confirmation delay for testing
+      noOutputTimeoutMs: 500, // Short fallback timeout for testing
     });
   });
 
@@ -133,24 +141,24 @@ describe('RespawnController', () => {
   });
 
   describe('Idle Detection', () => {
-    it('should detect prompt pattern', async () => {
+    it('should detect completion message pattern', async () => {
       const logMessages: string[] = [];
       controller.on('log', (msg) => logMessages.push(msg));
 
       controller.start();
-      session.simulatePrompt();
+      session.simulateCompletionMessage();
 
       // Wait for log
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      const hasPromptLog = logMessages.some(msg => msg.includes('Prompt detected'));
-      expect(hasPromptLog).toBe(true);
+      const hasCompletionLog = logMessages.some(msg => msg.includes('Completion message detected'));
+      expect(hasCompletionLog).toBe(true);
     });
 
-    it('should detect multiple prompt patterns', () => {
+    it('should detect multiple prompt patterns (legacy fallback)', () => {
       controller.start();
 
-      // All these should trigger prompt detection
+      // All these should trigger prompt detection (legacy)
       const promptPatterns = ['❯', '\u276f', '⏵', '> ', 'tokens'];
 
       for (const pattern of promptPatterns) {
@@ -163,9 +171,9 @@ describe('RespawnController', () => {
 
     it('should detect working patterns and clear prompt state', () => {
       controller.start();
-      session.simulatePrompt();
+      session.simulateCompletionMessage();
 
-      // Simulate working - should clear prompt detected
+      // Simulate working - should clear completion state and cancel confirmation
       session.simulateWorking();
 
       const status = controller.getStatus();
@@ -175,16 +183,16 @@ describe('RespawnController', () => {
   });
 
   describe('Respawn Cycle', () => {
-    it('should start cycle when idle timeout fires', async () => {
+    it('should start cycle when completion message detected and confirmed', async () => {
       let cycleStarted = false;
       controller.on('respawnCycleStarted', () => {
         cycleStarted = true;
       });
 
       controller.start();
-      session.simulatePrompt();
+      session.simulateCompletionMessage();
 
-      // Wait for idle timeout
+      // Wait for completion confirmation (completionConfirmMs=50) + processing
       await new Promise(resolve => setTimeout(resolve, 200));
 
       expect(cycleStarted).toBe(true);
@@ -198,9 +206,9 @@ describe('RespawnController', () => {
       });
 
       controller.start();
-      session.simulatePrompt();
+      session.simulateCompletionMessage();
 
-      // Wait for idle timeout and step
+      // Wait for completion confirmation + step delay
       await new Promise(resolve => setTimeout(resolve, 300));
 
       expect(stepSent).toBe('update');
@@ -213,12 +221,12 @@ describe('RespawnController', () => {
       controller.on('stateChanged', (state) => states.push(state));
 
       controller.start();
-      session.simulatePrompt();
+      session.simulateCompletionMessage();
 
-      // Wait for initial state change
+      // Wait for state transitions
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      // Should have transitioned through multiple states
+      // Should have transitioned through multiple states (watching -> confirming_idle -> sending_update)
       expect(states).toContain('watching');
       expect(states.length).toBeGreaterThan(1);
     });
@@ -604,6 +612,8 @@ describe('RespawnController State Transitions', () => {
     controller = new RespawnController(session as unknown as Session, {
       idleTimeoutMs: 50,
       interStepDelayMs: 20,
+      completionConfirmMs: 50, // Short confirmation for testing
+      noOutputTimeoutMs: 300, // Short fallback for testing
     });
   });
 
@@ -616,7 +626,7 @@ describe('RespawnController State Transitions', () => {
     controller.on('stateChanged', (state) => stateHistory.push(state));
 
     controller.start();
-    session.simulatePrompt();
+    session.simulateCompletionMessage();
 
     await new Promise(resolve => setTimeout(resolve, 200));
 
@@ -626,7 +636,7 @@ describe('RespawnController State Transitions', () => {
 
   it('should handle stop during state transition', async () => {
     controller.start();
-    session.simulatePrompt();
+    session.simulateCompletionMessage();
 
     // Wait a bit then stop during potential transition
     await new Promise(resolve => setTimeout(resolve, 30));
@@ -642,7 +652,7 @@ describe('RespawnController State Transitions', () => {
     });
 
     controller.start();
-    session.simulateReady();
+    session.simulateCompletionMessage();
 
     await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -651,41 +661,41 @@ describe('RespawnController State Transitions', () => {
     controller.stop();
   });
 
-  it('should handle multiple consecutive prompt detections', async () => {
-    let promptCount = 0;
+  it('should handle multiple consecutive completion messages', async () => {
+    let completionCount = 0;
     controller.on('log', (msg) => {
-      if (msg.includes('Prompt detected')) promptCount++;
+      if (msg.includes('Completion message detected')) completionCount++;
     });
 
     controller.start();
 
-    // Send multiple prompts rapidly
-    session.simulatePrompt();
-    session.simulatePrompt();
-    session.simulatePrompt();
+    // Send multiple completion messages rapidly
+    session.simulateCompletionMessage();
+    session.simulateCompletionMessage();
+    session.simulateCompletionMessage();
 
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Should detect prompts
-    expect(promptCount).toBeGreaterThan(0);
+    // Should detect completion messages
+    expect(completionCount).toBeGreaterThan(0);
   });
 
-  it('should handle working state interrupting idle timeout', async () => {
+  it('should handle working state interrupting idle confirmation', async () => {
     let cycleStarted = false;
     controller.on('respawnCycleStarted', () => {
       cycleStarted = true;
     });
 
     controller.start();
-    session.simulatePrompt();
+    session.simulateCompletionMessage();
 
-    // Before idle timeout fires, start working
+    // Before confirmation timer fires, start working
     await new Promise(resolve => setTimeout(resolve, 20));
     session.simulateWorking();
 
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Cycle may not have started due to working state
+    // Cycle should not have started due to working state canceling confirmation
     expect(controller.getStatus().workingDetected).toBe(true);
   });
 });
@@ -802,14 +812,16 @@ describe('RespawnController Edge Cases', () => {
     const controller = new RespawnController(session as unknown as Session, {
       idleTimeoutMs: 30,
       interStepDelayMs: 10,
+      completionConfirmMs: 30, // Short confirmation for testing
+      noOutputTimeoutMs: 200, // Short fallback for testing
     });
 
     expect(controller.currentCycle).toBe(0);
 
     controller.start();
-    session.simulateReady();
+    session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     expect(controller.currentCycle).toBeGreaterThan(0);
     controller.stop();

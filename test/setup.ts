@@ -3,11 +3,15 @@
  *
  * Provides:
  * - Screen session concurrency limiter (max 10)
- * - Orphaned Claude/screen process cleanup
+ * - Tracked resource cleanup (only kills what tests create)
  * - Global beforeAll/afterAll hooks
+ *
+ * SAFETY: This setup ONLY cleans up resources that the test suite itself creates.
+ * It will NEVER kill Claude processes or screens that weren't spawned by tests.
+ * This makes it safe to run tests from within a Claudeman-managed session.
  */
 
-import { execSync, exec } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { beforeAll, afterAll, afterEach } from 'vitest';
 
 /** Maximum concurrent screen sessions allowed during tests */
@@ -16,69 +20,32 @@ const MAX_CONCURRENT_SCREENS = 10;
 /** Track active screen sessions created during tests */
 const activeTestScreens = new Set<string>();
 
+/** Track Claude PIDs spawned by tests (for cleanup) */
+const activeTestClaudePids = new Set<number>();
+
 /** Semaphore for controlling concurrent screen creation */
 let currentScreenCount = 0;
 const screenWaiters: Array<() => void> = [];
 
 /**
- * Get list of claudeman screen sessions
+ * Kill only the screens that tests have registered via registerTestScreen()
  */
-function getClaudemanScreens(): string[] {
-  try {
-    const output = execSync('screen -ls 2>/dev/null || true', { encoding: 'utf-8' });
-    const lines = output.split('\n');
-    const screens: string[] = [];
-    for (const line of lines) {
-      const match = line.match(/\d+\.(claudeman-[^\s]+)/);
-      if (match) {
-        screens.push(match[1]);
-      }
-    }
-    return screens;
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Get list of Claude CLI processes
- */
-function getClaudeProcesses(): number[] {
-  try {
-    const output = execSync('pgrep -f "claude.*--dangerously-skip-permissions" 2>/dev/null || true', {
-      encoding: 'utf-8',
-    });
-    return output
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map(pid => parseInt(pid, 10))
-      .filter(pid => !isNaN(pid));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Kill orphaned claudeman screen sessions
- */
-function killOrphanedScreens(): void {
-  const screens = getClaudemanScreens();
-  for (const screenName of screens) {
+function killTrackedTestScreens(): void {
+  for (const screenName of activeTestScreens) {
     try {
       execSync(`screen -S ${screenName} -X quit 2>/dev/null || true`, { encoding: 'utf-8' });
     } catch {
       // Ignore errors
     }
   }
+  activeTestScreens.clear();
 }
 
 /**
- * Kill orphaned Claude CLI processes
+ * Kill only the Claude processes that tests have registered via registerTestClaudePid()
  */
-function killOrphanedClaudeProcesses(): void {
-  const pids = getClaudeProcesses();
-  for (const pid of pids) {
+function killTrackedTestClaudeProcesses(): void {
+  for (const pid of activeTestClaudePids) {
     try {
       process.kill(pid, 'SIGTERM');
     } catch {
@@ -87,16 +54,19 @@ function killOrphanedClaudeProcesses(): void {
   }
 
   // Wait a bit, then SIGKILL any remaining
-  if (pids.length > 0) {
+  if (activeTestClaudePids.size > 0) {
     setTimeout(() => {
-      for (const pid of pids) {
+      for (const pid of activeTestClaudePids) {
         try {
           process.kill(pid, 'SIGKILL');
         } catch {
           // Process may already be gone
         }
       }
+      activeTestClaudePids.clear();
     }, 500);
+  } else {
+    activeTestClaudePids.clear();
   }
 }
 
@@ -144,6 +114,20 @@ export function unregisterTestScreen(screenName: string): void {
 }
 
 /**
+ * Register a Claude PID for tracking (so it gets cleaned up after tests)
+ */
+export function registerTestClaudePid(pid: number): void {
+  activeTestClaudePids.add(pid);
+}
+
+/**
+ * Unregister a Claude PID
+ */
+export function unregisterTestClaudePid(pid: number): void {
+  activeTestClaudePids.delete(pid);
+}
+
+/**
  * Get current screen count for debugging
  */
 export function getScreenStats(): { current: number; max: number; waiting: number } {
@@ -155,21 +139,15 @@ export function getScreenStats(): { current: number; max: number; waiting: numbe
 }
 
 /**
- * Force cleanup all test screens (emergency cleanup)
+ * Force cleanup all test-created resources (emergency cleanup)
+ * Only kills resources that tests have registered - never kills external processes
  */
-export function forceCleanupAllScreens(): void {
+export function forceCleanupAllTestResources(): void {
   // Kill all tracked test screens
-  for (const screenName of activeTestScreens) {
-    try {
-      execSync(`screen -S ${screenName} -X quit 2>/dev/null || true`);
-    } catch {
-      // Ignore
-    }
-  }
-  activeTestScreens.clear();
+  killTrackedTestScreens();
 
-  // Also kill any orphaned claudeman screens
-  killOrphanedScreens();
+  // Kill all tracked Claude processes
+  killTrackedTestClaudeProcesses();
 
   // Reset semaphore
   currentScreenCount = 0;
@@ -181,64 +159,27 @@ export function forceCleanupAllScreens(): void {
 // =============================================================================
 
 beforeAll(async () => {
-  // Clean up any orphaned processes from previous test runs
-  console.log('[Test Setup] Cleaning up orphaned processes...');
-
-  killOrphanedScreens();
-  killOrphanedClaudeProcesses();
-
-  // Wait for cleanup to complete
-  await new Promise(resolve => setTimeout(resolve, 1000));
-
-  const remainingScreens = getClaudemanScreens();
-  const remainingClaude = getClaudeProcesses();
-
-  if (remainingScreens.length > 0) {
-    console.log(`[Test Setup] Warning: ${remainingScreens.length} screen sessions still exist`);
-  }
-  if (remainingClaude.length > 0) {
-    console.log(`[Test Setup] Warning: ${remainingClaude.length} Claude processes still exist`);
-  }
-
-  console.log('[Test Setup] Cleanup complete, starting tests...');
+  // Initialize test environment
+  console.log('[Test Setup] Initializing test environment...');
+  console.log('[Test Setup] Only test-created resources will be cleaned up (safe for Claudeman sessions)');
+  console.log('[Test Setup] Starting tests...');
 });
 
 afterAll(async () => {
-  console.log('[Test Setup] Final cleanup...');
+  console.log('[Test Setup] Final cleanup of test-created resources...');
 
-  // Force cleanup all screens
-  forceCleanupAllScreens();
-
-  // Kill any remaining Claude processes
-  killOrphanedClaudeProcesses();
+  // Only cleanup resources that tests have registered
+  forceCleanupAllTestResources();
 
   // Wait for cleanup
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 500));
 
-  const remainingScreens = getClaudemanScreens();
-  const remainingClaude = getClaudeProcesses();
-
-  if (remainingScreens.length > 0) {
-    console.warn(`[Test Setup] Warning: ${remainingScreens.length} orphaned screens after tests`);
-    // Force kill them
-    for (const screen of remainingScreens) {
-      try {
-        execSync(`screen -S ${screen} -X quit 2>/dev/null || true`);
-      } catch {
-        // Ignore
-      }
-    }
+  // Report any tracked resources that weren't cleaned up
+  if (activeTestScreens.size > 0) {
+    console.warn(`[Test Setup] Warning: ${activeTestScreens.size} test screens weren't properly unregistered`);
   }
-
-  if (remainingClaude.length > 0) {
-    console.warn(`[Test Setup] Warning: ${remainingClaude.length} orphaned Claude processes after tests`);
-    for (const pid of remainingClaude) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // Ignore
-      }
-    }
+  if (activeTestClaudePids.size > 0) {
+    console.warn(`[Test Setup] Warning: ${activeTestClaudePids.size} test Claude PIDs weren't properly unregistered`);
   }
 
   console.log('[Test Setup] Final cleanup complete');
@@ -246,9 +187,7 @@ afterAll(async () => {
 
 // Export utilities for tests that need them
 export {
-  getClaudemanScreens,
-  getClaudeProcesses,
-  killOrphanedScreens,
-  killOrphanedClaudeProcesses,
+  killTrackedTestScreens,
+  killTrackedTestClaudeProcesses,
   MAX_CONCURRENT_SCREENS,
 };

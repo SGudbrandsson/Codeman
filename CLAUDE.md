@@ -76,6 +76,11 @@ npx vitest run -t "should create session" # By pattern
 # Global test utilities (describe/it/expect) available without imports (globals: true)
 # Tests run sequentially (fileParallelism: false) to respect screen session limits
 # Global setup (test/setup.ts) enforces max 10 concurrent screens + orphan cleanup
+#
+# ✅ TEST SAFETY: test/setup.ts protects its own process tree during cleanup.
+# You can safely run tests from within a Claudeman-managed session - the cleanup
+# will not kill your own Claude instance. The respawn-controller tests use
+# MockSession (not real screens).
 
 # TypeScript checking
 npm run typecheck                         # Type check without building (or: npx tsc --noEmit)
@@ -153,21 +158,18 @@ claudeman reset                    # Reset all state
 ### Respawn State Machine
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                 │
-▼                                                                                                 │
-WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR                       │
-                                                    │                                             │
-                                                    ▼                                             │
-                              SENDING_INIT → WAITING_INIT → MONITORING_INIT ──┬──────────────────┘
-                                                                              │
-                                                                              ▼ (if no work triggered)
-                                                            SENDING_KICKSTART → WAITING_KICKSTART
+WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
+    ↑         │ (new output)                                                         │
+    │         ↓                                                                      ▼
+    │       (reset)                         SENDING_INIT → WAITING_INIT → MONITORING_INIT
+    │                                                                              │
+    │                                                         (if no work triggered) ▼
+    └────────────────────────────────────── SENDING_KICKSTART ← WAITING_KICKSTART ◄┘
 ```
 
-**States**: `watching`, `sending_update`, `waiting_update`, `sending_clear`, `waiting_clear`, `sending_init`, `waiting_init`, `monitoring_init`, `sending_kickstart`, `waiting_kickstart`, `stopped`
+**States**: `watching`, `confirming_idle`, `sending_update`, `waiting_update`, `sending_clear`, `waiting_clear`, `sending_init`, `waiting_init`, `monitoring_init`, `sending_kickstart`, `waiting_kickstart`, `stopped`
 
-Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Idle detection triggers state transitions.
+Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Multi-layer idle detection triggers state transitions.
 
 ### Session Modes
 
@@ -275,7 +277,14 @@ curl -X POST localhost:3000/api/sessions/:id/input \
 
 ### Idle Detection
 
-**RespawnController**: Primary `↵ send` indicator, fallback prompt chars (`❯`, `⏵`) + 10s timeout. Working patterns: `Thinking`, `Writing`, `Running`.
+**RespawnController (Claude Code 2024+)**: Multi-layer detection with confidence scoring:
+1. **Completion message**: Primary signal - detects "for Xm Xs" time patterns (e.g., "Worked for 2m 46s")
+2. **Output silence**: Confirms idle after `completionConfirmMs` (5s) of no new output
+3. **Token stability**: Tokens haven't changed
+4. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
+
+Uses `confirming_idle` state to prevent false positives. Fallback: `noOutputTimeoutMs` (30s) if no output at all.
+
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
 ### Token Tracking
@@ -360,6 +369,7 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `session:terminal`, `session:clearTerminal` - Terminal content
 - `session:completion`, `session:autoClear`, `session:autoCompact` - Lifecycle events
 - `session:ralphLoopUpdate`, `session:ralphTodoUpdate`, `session:ralphCompletionDetected` - Ralph tracking
+- `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
 
 ### Frontend (app.js)
 
@@ -393,7 +403,9 @@ Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
 | Task panel render debounce | 100ms | `app.js` |
 | Input batch interval | 16ms | `app.js` (60fps) |
 | Idle activity timeout | 2s | `session.ts` |
-| Respawn idle timeout | 5s default | `RespawnConfig.idleTimeoutMs` |
+| Respawn idle timeout | 10s default | `RespawnConfig.idleTimeoutMs` |
+| Respawn completion confirm | 5s | `RespawnConfig.completionConfirmMs` |
+| Respawn no-output fallback | 30s | `RespawnConfig.noOutputTimeoutMs` |
 
 ### TypeScript Config
 

@@ -503,6 +503,16 @@ class ClaudemanApp {
       }
     });
 
+    this.eventSource.addEventListener('respawn:detectionUpdate', (e) => {
+      const data = JSON.parse(e.data);
+      if (this.respawnStatus[data.sessionId]) {
+        this.respawnStatus[data.sessionId].detection = data.detection;
+      }
+      if (data.sessionId === this.activeSessionId) {
+        this.updateDetectionDisplay(data.detection);
+      }
+    });
+
     // Respawn timer events
     this.eventSource.addEventListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
@@ -1285,6 +1295,39 @@ class ClaudemanApp {
 
   updateRespawnBanner(state) {
     this.$('respawnState').textContent = state.replace(/_/g, ' ');
+  }
+
+  updateDetectionDisplay(detection) {
+    if (!detection) return;
+
+    const statusEl = this.$('detectionStatus');
+    const waitingEl = this.$('detectionWaiting');
+    const confidenceEl = this.$('detectionConfidence');
+
+    // Update status text
+    statusEl.textContent = detection.statusText || '';
+
+    // Update waiting for text
+    if (detection.waitingFor) {
+      waitingEl.textContent = `→ ${detection.waitingFor}`;
+    } else {
+      waitingEl.textContent = '';
+    }
+
+    // Update confidence level
+    const confidence = detection.confidenceLevel || 0;
+    if (confidence > 0) {
+      confidenceEl.textContent = `${confidence}%`;
+      confidenceEl.style.display = '';
+      confidenceEl.className = 'detection-confidence';
+      if (confidence >= 60) {
+        confidenceEl.classList.add('high');
+      } else if (confidence >= 30) {
+        confidenceEl.classList.add('medium');
+      }
+    } else {
+      confidenceEl.style.display = 'none';
+    }
   }
 
   showRespawnTimer() {

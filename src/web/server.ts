@@ -1271,6 +1271,8 @@ export class WebServer extends EventEmitter {
       controller.stop();
       controller.removeAllListeners();
       this.respawnControllers.delete(sessionId);
+      // Notify UI that respawn is stopped for this session
+      this.broadcast('respawn:stopped', { sessionId, reason: 'session_cleanup' });
     }
 
     // Clear respawn timer
@@ -1443,6 +1445,10 @@ export class WebServer extends EventEmitter {
 
     controller.on('stepCompleted', (step: string) => {
       this.broadcast('respawn:stepCompleted', { sessionId, step });
+    });
+
+    controller.on('detectionUpdate', (detection: unknown) => {
+      this.broadcast('respawn:detectionUpdate', { sessionId, detection });
     });
 
     controller.on('log', (message: string) => {

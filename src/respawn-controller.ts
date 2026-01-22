@@ -2,26 +2,34 @@
  * @fileoverview Respawn Controller for autonomous Claude Code session cycling
  *
  * The RespawnController manages automatic respawning of Claude Code sessions.
- * When Claude finishes working (detected by idle prompt), it automatically
- * cycles through update → clear → init steps to keep the session productive.
+ * When Claude finishes working (detected by completion message + output silence),
+ * it automatically cycles through update → clear → init steps to keep the session productive.
  *
  * ## State Machine
  *
  * ```
- * WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
- *    ↑                                                               │
- *    │                                                               ▼
- *    │         SENDING_INIT → WAITING_INIT → MONITORING_INIT ───────┘
- *    │                                            │
- *    │                                            ▼ (if no work triggered)
- *    └── SENDING_KICKSTART → WAITING_KICKSTART ──┘
+ * WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR
+ *    ↑          │                                                                      │
+ *    │          │ (new output)                                                         ▼
+ *    │          └─────────────► SENDING_INIT → WAITING_INIT → MONITORING_INIT ────────┘
+ *    │                                                             │
+ *    │                                                             ▼ (if no work triggered)
+ *    └──────────────────────── SENDING_KICKSTART → WAITING_KICKSTART ──┘
  * ```
+ *
+ * ## Idle Detection (Updated for Claude Code 2024+)
+ *
+ * Primary detection: Completion message pattern "for Xm Xs" (e.g., "✻ Worked for 2m 46s")
+ * Confirmation: No new output for configurable duration (default 5s)
+ * Fallback: No output at all for extended period (default 30s)
  *
  * ## Configuration
  *
  * - `sendClear`: Whether to send /clear after update (default: true)
  * - `sendInit`: Whether to send /init after clear (default: true)
  * - `kickstartPrompt`: Optional prompt if /init doesn't trigger work
+ * - `completionConfirmMs`: Time to wait after completion message (default: 5000)
+ * - `noOutputTimeoutMs`: Fallback timeout with no output at all (default: 30000)
  *
  * @module respawn-controller
  */
@@ -46,10 +54,59 @@ const RESPAWN_BUFFER_TRIM_SIZE = 512 * 1024; // 512KB
 // ========== Constants ==========
 
 /**
- * The definitive "ready for input" indicator.
- * When Claude shows a suggestion, this appears and indicates idle state.
+ * Pattern to detect completion messages from Claude.
+ * Matches "for Xh Xm Xs" time duration patterns that appear at end of work.
+ * Examples: "for 2m 46s", "for 46s", "for 1h 2m 3s", "for 5m"
  */
-const READY_INDICATOR = '↵ send';
+const COMPLETION_TIME_PATTERN = /\bfor\s+\d+[hms](\s*\d+[hms])*/i;
+
+/**
+ * Pattern to extract token count from Claude's status line.
+ * Matches: "123.4k tokens", "5234 tokens", "1.2M tokens"
+ */
+const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+
+// Note: The old '↵ send' indicator is no longer reliable in Claude Code 2024+
+// Detection now uses completion message patterns ("for Xm Xs") instead.
+
+// ========== Detection Layer Types ==========
+
+/**
+ * Detection layers for multi-signal idle detection.
+ * Each layer provides a confidence signal that Claude has finished working.
+ */
+export interface DetectionStatus {
+  /** Layer 1: Completion message detected ("for Xm Xs") */
+  completionMessageDetected: boolean;
+  /** Timestamp when completion message was last seen */
+  completionMessageTime: number | null;
+
+  /** Layer 2: Output silence - no new output for threshold duration */
+  outputSilent: boolean;
+  /** Milliseconds since last output */
+  msSinceLastOutput: number;
+
+  /** Layer 3: Token count stability - tokens haven't changed */
+  tokensStable: boolean;
+  /** Last observed token count */
+  lastTokenCount: number;
+  /** Milliseconds since token count changed */
+  msSinceTokenChange: number;
+
+  /** Layer 4: Working patterns absent - no spinners/activity words */
+  workingPatternsAbsent: boolean;
+  /** Milliseconds since last working pattern */
+  msSinceLastWorking: number;
+
+  /** Overall confidence level (0-100) */
+  confidenceLevel: number;
+
+  /** Human-readable status for UI */
+  statusText: string;
+
+  /** What the controller is currently waiting for */
+  waitingFor: string;
+}
 
 // ========== Buffer Accumulator ==========
 
@@ -121,6 +178,8 @@ class BufferAccumulator {
 export type RespawnState =
   /** Watching for idle, ready to start respawn sequence */
   | 'watching'
+  /** Completion message detected, waiting for output silence to confirm */
+  | 'confirming_idle'
   /** About to send the update docs prompt */
   | 'sending_update'
   /** Waiting for update to complete */
@@ -194,6 +253,20 @@ export interface RespawnConfig {
    * @default undefined
    */
   kickstartPrompt?: string;
+
+  /**
+   * Time to wait after completion message before confirming idle (ms).
+   * After seeing "for Xm Xs" pattern, waits this long with no new output.
+   * @default 5000 (5 seconds)
+   */
+  completionConfirmMs: number;
+
+  /**
+   * Fallback timeout when no output received at all (ms).
+   * If no terminal output for this duration, assumes idle even without completion message.
+   * @default 30000 (30 seconds)
+   */
+  noOutputTimeoutMs: number;
 }
 
 /**
@@ -204,6 +277,7 @@ export interface RespawnConfig {
  * @event respawnCycleCompleted - Fired when a cycle finishes
  * @event stepSent - Fired when a command is sent to the session
  * @event stepCompleted - Fired when a step finishes (ready indicator detected)
+ * @event detectionUpdate - Fired when detection status changes (for UI)
  * @event error - Fired on errors
  * @event log - Fired for debug logging
  */
@@ -218,6 +292,8 @@ export interface RespawnEvents {
   stepSent: (step: string, input: string) => void;
   /** Step completed (ready indicator detected) */
   stepCompleted: (step: string) => void;
+  /** Detection status update for UI display */
+  detectionUpdate: (status: DetectionStatus) => void;
   /** Error occurred */
   error: (error: Error) => void;
   /** Debug log message */
@@ -226,12 +302,14 @@ export interface RespawnEvents {
 
 /** Default configuration values */
 const DEFAULT_CONFIG: RespawnConfig = {
-  idleTimeoutMs: 10000,          // 10 seconds of no activity after prompt
+  idleTimeoutMs: 10000,          // 10 seconds of no activity after prompt (legacy, still used as fallback)
   updatePrompt: 'update all the docs and CLAUDE.md',
   interStepDelayMs: 1000,        // 1 second between steps
   enabled: true,
   sendClear: true,               // send /clear after update prompt
   sendInit: true,                // send /init after /clear
+  completionConfirmMs: 5000,     // 5 seconds of silence after completion message
+  noOutputTimeoutMs: 30000,      // 30 seconds fallback if no output at all
 };
 
 /**
@@ -242,19 +320,25 @@ const DEFAULT_CONFIG: RespawnConfig = {
  *
  * ## How It Works
  *
- * 1. **Idle Detection**: Watches terminal output for `↵ send` indicator
- * 2. **Update**: Sends configured prompt (e.g., "update all docs")
- * 3. **Clear**: Sends `/clear` to reset context (optional)
- * 4. **Init**: Sends `/init` to re-initialize with CLAUDE.md (optional)
- * 5. **Kickstart**: If /init doesn't trigger work, sends fallback prompt (optional)
- * 6. **Repeat**: Returns to watching state for next cycle
+ * 1. **Idle Detection**: Watches for completion message ("for Xm Xs" pattern)
+ * 2. **Confirmation**: Waits for output silence (no new tokens for 5s)
+ * 3. **Update**: Sends configured prompt (e.g., "update all docs")
+ * 4. **Clear**: Sends `/clear` to reset context (optional)
+ * 5. **Init**: Sends `/init` to re-initialize with CLAUDE.md (optional)
+ * 6. **Kickstart**: If /init doesn't trigger work, sends fallback prompt (optional)
+ * 7. **Repeat**: Returns to watching state for next cycle
  *
- * ## Idle Detection
+ * ## Idle Detection (Updated for Claude Code 2024+)
  *
- * Primary indicator: `↵ send` - Claude's suggestion prompt
- * Fallback indicators: Various prompt characters (❯, ⏵, etc.)
+ * Primary: Completion message with time duration (e.g., "✻ Worked for 2m 46s")
+ * The pattern "for Xm Xs" indicates Claude finished work and reports duration.
  *
- * Working indicators: Thinking, Writing, spinner characters, etc.
+ * Confirmation: After seeing completion message, waits for output silence.
+ * If no new output for `completionConfirmMs` (default 5s), confirms idle.
+ *
+ * Fallback: If no output at all for `noOutputTimeoutMs` (default 30s), assumes idle.
+ *
+ * Working indicators: Thinking, Writing, spinner characters, etc. reset detection.
  *
  * ## Events
  *
@@ -270,7 +354,7 @@ const DEFAULT_CONFIG: RespawnConfig = {
  * ```typescript
  * const respawn = new RespawnController(session, {
  *   updatePrompt: 'continue working on the task',
- *   idleTimeoutMs: 5000,
+ *   completionConfirmMs: 5000,  // Wait 5s after completion message
  * });
  *
  * respawn.on('respawnCycleCompleted', (cycle) => {
@@ -296,6 +380,15 @@ export class RespawnController extends EventEmitter {
   /** Timer for step delays */
   private stepTimer: NodeJS.Timeout | null = null;
 
+  /** Timer for completion confirmation (Layer 2) */
+  private completionConfirmTimer: NodeJS.Timeout | null = null;
+
+  /** Timer for no-output fallback (Layer 5) */
+  private noOutputTimer: NodeJS.Timeout | null = null;
+
+  /** Timer for periodic detection status updates */
+  private detectionUpdateTimer: NodeJS.Timeout | null = null;
+
   /** Number of completed respawn cycles */
   private cycleCount: number = 0;
 
@@ -320,30 +413,43 @@ export class RespawnController extends EventEmitter {
   /** Fallback timeout for /clear step (ms) - sends /init without waiting for prompt */
   private static readonly CLEAR_FALLBACK_TIMEOUT_MS = 10000;
 
+  // ========== Multi-Layer Detection State ==========
+
+  /** Layer 1: Timestamp when completion message was detected */
+  private completionMessageTime: number | null = null;
+
+  /** Layer 2: Timestamp of last terminal output received */
+  private lastOutputTime: number = 0;
+
+  /** Layer 3: Last observed token count */
+  private lastTokenCount: number = 0;
+
+  /** Layer 3: Timestamp when token count last changed */
+  private lastTokenChangeTime: number = 0;
+
+  /** Layer 4: Timestamp when last working pattern was seen */
+  private lastWorkingPatternTime: number = 0;
+
   /**
-   * Patterns indicating Claude is ready for input.
-   * Primary: `↵ send` (suggestion prompt)
-   * Fallback: Various prompt characters
+   * Patterns indicating Claude is ready for input (legacy fallback).
+   * Used as secondary signals, not primary detection.
    */
   private readonly PROMPT_PATTERNS = [
-    '↵ send',   // Suggestion ready to send (strongest indicator of idle)
     '❯',        // Standard prompt
     '\u276f',   // Unicode variant
     '⏵',        // Claude Code prompt variant
-    '> ',       // Fallback
-    'tokens',   // The status line shows "X tokens" when at prompt
   ];
 
   /**
    * Patterns indicating Claude is actively working.
-   * When detected, resets idle detection.
+   * When detected, resets all idle detection timers.
+   * Note: ✻ and ✽ removed - they appear in completion messages too.
    */
   private readonly WORKING_PATTERNS = [
     'Thinking', 'Writing', 'Reading', 'Running', 'Searching',
     'Editing', 'Creating', 'Deleting', 'Analyzing', 'Executing',
     'Synthesizing', 'Brewing',  // Claude's processing indicators
     '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',  // Spinner chars
-    '✻', '✽',  // Activity indicators (spinning star)
   ];
 
   /**
@@ -381,6 +487,97 @@ export class RespawnController extends EventEmitter {
    */
   get isRunning(): boolean {
     return this._state !== 'stopped';
+  }
+
+  /**
+   * Get current detection status for UI display.
+   * Shows all detection layers and their current state.
+   * @returns DetectionStatus object
+   */
+  getDetectionStatus(): DetectionStatus {
+    const now = Date.now();
+    const msSinceLastOutput = now - this.lastOutputTime;
+    const msSinceTokenChange = now - this.lastTokenChangeTime;
+    const msSinceLastWorking = now - this.lastWorkingPatternTime;
+
+    const completionMessageDetected = this.completionMessageTime !== null;
+    const outputSilent = msSinceLastOutput >= this.config.completionConfirmMs;
+    const tokensStable = msSinceTokenChange >= this.config.completionConfirmMs;
+    const workingPatternsAbsent = msSinceLastWorking >= 3000; // 3s without working patterns
+
+    // Calculate confidence level (0-100)
+    let confidence = 0;
+    if (completionMessageDetected) confidence += 40;
+    if (outputSilent) confidence += 25;
+    if (tokensStable) confidence += 20;
+    if (workingPatternsAbsent) confidence += 15;
+
+    // Determine status text and what we're waiting for
+    let statusText: string;
+    let waitingFor: string;
+
+    if (this._state === 'stopped') {
+      statusText = 'Controller stopped';
+      waitingFor = 'Start to begin monitoring';
+    } else if (this._state === 'confirming_idle') {
+      statusText = `Confirming idle (${confidence}% confidence)`;
+      waitingFor = `${Math.max(0, Math.ceil((this.config.completionConfirmMs - msSinceLastOutput) / 1000))}s more silence`;
+    } else if (this._state === 'watching') {
+      if (completionMessageDetected) {
+        statusText = 'Completion detected, confirming...';
+        waitingFor = 'Output silence to confirm';
+      } else if (workingPatternsAbsent && msSinceLastOutput > 5000) {
+        statusText = 'No activity detected';
+        waitingFor = 'Completion message or timeout';
+      } else {
+        statusText = 'Watching for completion';
+        waitingFor = 'Completion message (for Xm Xs)';
+      }
+    } else if (this._state.startsWith('waiting_') || this._state.startsWith('sending_')) {
+      statusText = `Respawn step: ${this._state}`;
+      waitingFor = 'Step completion';
+    } else {
+      statusText = `State: ${this._state}`;
+      waitingFor = 'Next event';
+    }
+
+    return {
+      completionMessageDetected,
+      completionMessageTime: this.completionMessageTime,
+      outputSilent,
+      msSinceLastOutput,
+      tokensStable,
+      lastTokenCount: this.lastTokenCount,
+      msSinceTokenChange,
+      workingPatternsAbsent,
+      msSinceLastWorking,
+      confidenceLevel: confidence,
+      statusText,
+      waitingFor,
+    };
+  }
+
+  /**
+   * Start periodic detection status updates for UI.
+   * Emits 'detectionUpdate' event every 500ms while running.
+   */
+  private startDetectionUpdates(): void {
+    this.stopDetectionUpdates();
+    this.detectionUpdateTimer = setInterval(() => {
+      if (this._state !== 'stopped') {
+        this.emit('detectionUpdate', this.getDetectionStatus());
+      }
+    }, 500);
+  }
+
+  /**
+   * Stop periodic detection status updates.
+   */
+  private stopDetectionUpdates(): void {
+    if (this.detectionUpdateTimer) {
+      clearInterval(this.detectionUpdateTimer);
+      this.detectionUpdateTimer = null;
+    }
   }
 
   /**
@@ -433,10 +630,20 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    this.log('Starting respawn controller');
+    this.log('Starting respawn controller (multi-layer detection)');
+
+    // Initialize all timestamps
+    const now = Date.now();
+    this.lastActivityTime = now;
+    this.lastOutputTime = now;
+    this.lastTokenChangeTime = now;
+    this.lastWorkingPatternTime = now;
+    this.completionMessageTime = null;
+
     this.setState('watching');
     this.setupTerminalListener();
-    this.lastActivityTime = Date.now();
+    this.startDetectionUpdates();
+    this.startNoOutputTimer();
   }
 
   /**
@@ -450,6 +657,7 @@ export class RespawnController extends EventEmitter {
   stop(): void {
     this.log('Stopping respawn controller');
     this.clearTimers();
+    this.stopDetectionUpdates();
     this.setState('stopped');
     if (this.terminalHandler) {
       this.session.off('terminal', this.terminalHandler);
@@ -500,29 +708,50 @@ export class RespawnController extends EventEmitter {
   }
 
   /**
-   * Process terminal data for idle/working detection.
+   * Process terminal data for idle/working detection using multi-layer approach.
    *
-   * 1. Buffers data (with size limit)
-   * 2. Detects working indicators → resets idle
-   * 3. Detects ready indicator → triggers state-specific action
-   * 4. Detects prompt indicators → starts idle timer
+   * Detection Layers:
+   * 1. Completion message ("for Xm Xs") - PRIMARY signal
+   * 2. Output silence - confirms completion
+   * 3. Token stability - additional confirmation
+   * 4. Working pattern absence - supports idle detection
+   * 5. No-output fallback - catches edge cases
    *
    * @param data - Raw terminal output data
    */
   private handleTerminalData(data: string): void {
+    // Guard against null/undefined/empty data
+    if (!data || typeof data !== 'string') {
+      return;
+    }
+
+    const now = Date.now();
+
     // BufferAccumulator handles auto-trimming when max size exceeded
     this.terminalBuffer.append(data);
 
-    // Check for the definitive "ready for input" indicator
-    const isReady = data.includes(READY_INDICATOR);
+    // Track output time (Layer 2)
+    this.lastOutputTime = now;
+    this.lastActivityTime = now;
+    this.resetNoOutputTimer();
 
-    // Detect working state
-    const isWorking = this.WORKING_PATTERNS.some(pattern => data.includes(pattern));
+    // Track token count (Layer 3)
+    const tokenCount = this.extractTokenCount(data);
+    if (tokenCount !== null && tokenCount !== this.lastTokenCount) {
+      this.lastTokenCount = tokenCount;
+      this.lastTokenChangeTime = now;
+    }
+
+    // Detect working patterns (Layer 4)
+    const isWorking = this.hasWorkingPattern(data);
     if (isWorking) {
       this.workingDetected = true;
       this.promptDetected = false;
-      this.lastActivityTime = Date.now();
+      this.lastWorkingPatternTime = now;
       this.clearIdleTimer();
+
+      // Cancel any pending completion confirmation
+      this.cancelCompletionConfirm();
 
       // If we're monitoring init and work started, go to watching (no kickstart needed)
       if (this._state === 'monitoring_init') {
@@ -533,19 +762,55 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    // Detect ready state (↵ send indicator)
-    if (isReady) {
+    // Detect completion message (Layer 1) - PRIMARY DETECTION
+    if (this.isCompletionMessage(data)) {
+      this.completionMessageTime = now;
+      this.workingDetected = false;
+      this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
+
+      // In watching state, start completion confirmation timer
+      if (this._state === 'watching') {
+        this.startCompletionConfirmTimer();
+        return;
+      }
+
+      // In waiting states, treat completion message as step completion
+      switch (this._state) {
+        case 'waiting_update':
+          this.checkUpdateComplete();
+          break;
+        case 'waiting_clear':
+          this.checkClearComplete();
+          break;
+        case 'waiting_init':
+          this.checkInitComplete();
+          break;
+        case 'waiting_kickstart':
+          this.checkKickstartComplete();
+          break;
+      }
+      return;
+    }
+
+    // In confirming_idle state, any output (except completion) resets confirmation
+    if (this._state === 'confirming_idle') {
+      // Check if enough time has passed since completion message
+      const msSinceCompletion = this.completionMessageTime ? now - this.completionMessageTime : 0;
+      if (msSinceCompletion > 1000) {
+        // New output more than 1s after completion message - might be new work
+        this.log('New output during confirmation, checking if work resumed...');
+        // Don't immediately cancel - the confirmation timer will handle it
+      }
+    }
+
+    // Legacy fallback: detect prompt characters (still useful for waiting_* states)
+    const hasPrompt = this.PROMPT_PATTERNS.some(pattern => data.includes(pattern));
+    if (hasPrompt) {
       this.promptDetected = true;
       this.workingDetected = false;
-      this.lastActivityTime = Date.now();
-      this.log('Ready indicator detected (↵ send)');
 
-      // Handle based on current state
+      // Handle legacy detection in waiting states
       switch (this._state) {
-        case 'watching':
-          // Start idle timer instead of immediate action - gives user time to type
-          this.startIdleTimer();
-          break;
         case 'waiting_update':
           this.checkUpdateComplete();
           break;
@@ -561,24 +826,6 @@ export class RespawnController extends EventEmitter {
         case 'waiting_kickstart':
           this.checkKickstartComplete();
           break;
-      }
-      return;
-    }
-
-    // Fallback: detect prompt characters - start timeout-based check
-    const hasPrompt = this.PROMPT_PATTERNS.some(pattern => data.includes(pattern));
-    if (hasPrompt) {
-      const wasPromptDetected = this.promptDetected;
-      this.promptDetected = true;
-      this.workingDetected = false;
-      this.lastActivityTime = Date.now();
-
-      if (!wasPromptDetected) {
-        this.log('Prompt detected');
-        // Start fallback timeout for watching state
-        if (this._state === 'watching') {
-          this.startIdleTimer();
-        }
       }
     }
   }
@@ -710,24 +957,10 @@ export class RespawnController extends EventEmitter {
     this.completeCycle();
   }
 
-  /**
-   * Start the idle detection timer.
-   * After idleTimeoutMs, triggers onIdleDetected if still idle.
-   */
-  private startIdleTimer(): void {
-    this.clearIdleTimer();
+  // Note: Legacy startIdleTimer removed - now using completion-based detection
+  // with startCompletionConfirmTimer() and startNoOutputTimer() instead.
 
-    this.idleTimer = setTimeout(() => {
-      // Double-check we're still idle and in watching state
-      if (this._state === 'watching' && this.promptDetected && !this.workingDetected) {
-        const timeSinceActivity = Date.now() - this.lastActivityTime;
-        this.log(`Idle timeout fired (${timeSinceActivity}ms since last activity)`);
-        this.onIdleDetected();
-      }
-    }, this.config.idleTimeoutMs);
-  }
-
-  /** Clear the idle detection timer if running */
+  /** Clear the idle detection timer if running (legacy cleanup) */
   private clearIdleTimer(): void {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
@@ -735,7 +968,7 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle, step, and clear fallback) */
+  /** Clear all timers (idle, step, completion confirm, no-output, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
@@ -746,6 +979,132 @@ export class RespawnController extends EventEmitter {
       clearTimeout(this.clearFallbackTimer);
       this.clearFallbackTimer = null;
     }
+    if (this.completionConfirmTimer) {
+      clearTimeout(this.completionConfirmTimer);
+      this.completionConfirmTimer = null;
+    }
+    if (this.noOutputTimer) {
+      clearTimeout(this.noOutputTimer);
+      this.noOutputTimer = null;
+    }
+  }
+
+  // ========== Multi-Layer Detection Methods ==========
+
+  /**
+   * Check if data contains a completion message pattern.
+   * Matches "for Xh Xm Xs" time duration patterns.
+   */
+  private isCompletionMessage(data: string): boolean {
+    return COMPLETION_TIME_PATTERN.test(data);
+  }
+
+  /**
+   * Check if data contains working patterns.
+   */
+  private hasWorkingPattern(data: string): boolean {
+    return this.WORKING_PATTERNS.some(pattern => data.includes(pattern));
+  }
+
+  /**
+   * Extract token count from data if present.
+   * Returns null if no token pattern found.
+   */
+  private extractTokenCount(data: string): number | null {
+    const match = data.match(TOKEN_PATTERN);
+    if (!match) return null;
+
+    let count = parseFloat(match[1]);
+    const suffix = match[2]?.toLowerCase();
+    if (suffix === 'k') count *= 1000;
+    else if (suffix === 'm') count *= 1000000;
+
+    return Math.round(count);
+  }
+
+  /**
+   * Start the no-output fallback timer.
+   * If no output for noOutputTimeoutMs, triggers idle detection.
+   */
+  private startNoOutputTimer(): void {
+    if (this.noOutputTimer) {
+      clearTimeout(this.noOutputTimer);
+    }
+    this.noOutputTimer = setTimeout(() => {
+      if (this._state === 'watching' || this._state === 'confirming_idle') {
+        const msSinceOutput = Date.now() - this.lastOutputTime;
+        this.log(`No-output fallback triggered (${msSinceOutput}ms since last output)`);
+        this.onIdleConfirmed('no-output fallback');
+      }
+    }, this.config.noOutputTimeoutMs);
+  }
+
+  /**
+   * Reset the no-output fallback timer.
+   * Called whenever output is received.
+   */
+  private resetNoOutputTimer(): void {
+    this.startNoOutputTimer();
+  }
+
+  /**
+   * Start completion confirmation timer.
+   * After completion message, waits for output silence.
+   */
+  private startCompletionConfirmTimer(): void {
+    if (this.completionConfirmTimer) {
+      clearTimeout(this.completionConfirmTimer);
+    }
+
+    this.setState('confirming_idle');
+    this.log(`Completion message detected, waiting ${this.config.completionConfirmMs}ms for silence...`);
+
+    this.completionConfirmTimer = setTimeout(() => {
+      const msSinceOutput = Date.now() - this.lastOutputTime;
+      if (msSinceOutput >= this.config.completionConfirmMs) {
+        this.log(`Idle confirmed: ${msSinceOutput}ms silence after completion message`);
+        this.onIdleConfirmed('completion + silence');
+      } else {
+        // Output received during wait, stay in confirming state and re-check
+        this.log(`Output received during confirmation, resetting timer`);
+        this.startCompletionConfirmTimer();
+      }
+    }, this.config.completionConfirmMs);
+  }
+
+  /**
+   * Cancel completion confirmation if new activity detected.
+   */
+  private cancelCompletionConfirm(): void {
+    if (this.completionConfirmTimer) {
+      clearTimeout(this.completionConfirmTimer);
+      this.completionConfirmTimer = null;
+    }
+    if (this._state === 'confirming_idle') {
+      this.setState('watching');
+      this.completionMessageTime = null;
+    }
+  }
+
+  /**
+   * Called when idle is confirmed through any detection layer.
+   * @param reason - What triggered the confirmation
+   */
+  private onIdleConfirmed(reason: string): void {
+    this.log(`Idle confirmed via: ${reason}`);
+    const status = this.getDetectionStatus();
+    this.log(`Detection status: confidence=${status.confidenceLevel}%, ` +
+      `completion=${status.completionMessageDetected}, ` +
+      `silent=${status.outputSilent}, ` +
+      `tokensStable=${status.tokensStable}, ` +
+      `noWorking=${status.workingPatternsAbsent}`);
+
+    // Reset detection state
+    this.completionMessageTime = null;
+    this.cancelCompletionConfirm();
+
+    // Trigger the respawn cycle
+    this.onIdleDetected();
   }
 
   /**
@@ -754,7 +1113,8 @@ export class RespawnController extends EventEmitter {
    * @fires respawnCycleStarted
    */
   private onIdleDetected(): void {
-    if (this._state !== 'watching') {
+    // Accept both watching and confirming_idle states
+    if (this._state !== 'watching' && this._state !== 'confirming_idle') {
       return;
     }
 
@@ -897,6 +1257,7 @@ export class RespawnController extends EventEmitter {
    *   - timeSinceActivity: Milliseconds since last activity
    *   - promptDetected: Whether prompt indicator seen
    *   - workingDetected: Whether working indicator seen
+   *   - detection: Multi-layer detection status
    *   - config: Current configuration
    */
   getStatus() {
@@ -907,6 +1268,7 @@ export class RespawnController extends EventEmitter {
       timeSinceActivity: Date.now() - this.lastActivityTime,
       promptDetected: this.promptDetected,
       workingDetected: this.workingDetected,
+      detection: this.getDetectionStatus(),
       config: this.config,
     };
   }
