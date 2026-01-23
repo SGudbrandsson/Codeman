@@ -310,7 +310,7 @@ export class RalphTracker extends EventEmitter {
   private _loopUpdatePending: boolean = false;
 
   /** When true, prevents auto-enable on pattern detection */
-  private _autoEnableDisabled: boolean = false;
+  private _autoEnableDisabled: boolean = true;
 
   /** Maps task numbers from "✔ Task #N" format to their content for status updates */
   private _taskNumberToContent: Map<number, string> = new Map();

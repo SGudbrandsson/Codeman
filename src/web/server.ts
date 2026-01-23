@@ -213,6 +213,19 @@ export class WebServer extends EventEmitter {
     // API Routes
     this.app.get('/api/status', async () => this.getFullState());
 
+    this.app.get('/api/config', async () => {
+      return { success: true, config: this.store.getConfig() };
+    });
+
+    this.app.put('/api/config', async (req) => {
+      const body = req.body as Record<string, unknown> | null;
+      if (!body || typeof body !== 'object') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Request body must be a JSON object');
+      }
+      this.store.setConfig(body as Partial<ReturnType<typeof this.store.getConfig>>);
+      return { success: true, config: this.store.getConfig() };
+    });
+
     // Session management
     this.app.get('/api/sessions', async () => this.getSessionsState());
 
@@ -449,8 +462,13 @@ export class WebServer extends EventEmitter {
       }
 
       try {
-        // Auto-detect completion phrase from CLAUDE.md BEFORE starting
-        autoConfigureRalph(session, session.workingDir, () => {});
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled)
+        if (this.store.getConfig().ralphEnabled) {
+          autoConfigureRalph(session, session.workingDir, () => {});
+          if (!session.ralphTracker.enabled) {
+            session.ralphTracker.enable();
+          }
+        }
 
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
@@ -723,8 +741,13 @@ export class WebServer extends EventEmitter {
       }
 
       try {
-        // Auto-detect completion phrase from CLAUDE.md BEFORE starting
-        autoConfigureRalph(session, session.workingDir, () => {});
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled)
+        if (this.store.getConfig().ralphEnabled) {
+          autoConfigureRalph(session, session.workingDir, () => {});
+          if (!session.ralphTracker.enabled) {
+            session.ralphTracker.enable();
+          }
+        }
 
         // Start interactive session
         await session.startInteractive();
@@ -1165,9 +1188,12 @@ export class WebServer extends EventEmitter {
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
-      // so the initial state already has the phrase configured
-      if (mode === 'claude') {
+      // so the initial state already has the phrase configured (only if globally enabled)
+      if (mode === 'claude' && this.store.getConfig().ralphEnabled) {
         autoConfigureRalph(session, casePath, () => {}); // no broadcast yet
+        if (!session.ralphTracker.enabled) {
+          session.ralphTracker.enable();
+        }
       }
 
       this.sessions.set(session.id, session);

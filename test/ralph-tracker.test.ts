@@ -48,10 +48,40 @@ describe('RalphTracker', () => {
       expect(freshTracker.loopState.elapsedHours).toBeNull();
     });
 
-    it('should auto-enable on /ralph-loop:ralph-loop command', () => {
+    it('should not auto-enable by default (auto-enable disabled)', () => {
+      const freshTracker = new RalphTracker();
+      freshTracker.processTerminalData('/ralph-loop:ralph-loop\n');
+
+      expect(freshTracker.enabled).toBe(false);
+    });
+
+    it('should not auto-enable on completion phrase by default', () => {
+      const freshTracker = new RalphTracker();
+      freshTracker.processTerminalData('<promise>COMPLETE</promise>\n');
+
+      expect(freshTracker.enabled).toBe(false);
+    });
+
+    it('should not auto-enable on TodoWrite by default', () => {
+      const freshTracker = new RalphTracker();
+      freshTracker.processTerminalData('TodoWrite: Todos have been modified\n');
+
+      expect(freshTracker.enabled).toBe(false);
+    });
+
+    it('should not auto-enable on todo checkboxes by default', () => {
+      const freshTracker = new RalphTracker();
+      freshTracker.processTerminalData('- [ ] New task\n');
+
+      expect(freshTracker.enabled).toBe(false);
+      expect(freshTracker.todos).toHaveLength(0);
+    });
+
+    it('should auto-enable when enableAutoEnable() is called', () => {
       const freshTracker = new RalphTracker();
       const enableHandler = vi.fn();
       freshTracker.on('enabled', enableHandler);
+      freshTracker.enableAutoEnable();
 
       freshTracker.processTerminalData('/ralph-loop:ralph-loop\n');
 
@@ -59,37 +89,17 @@ describe('RalphTracker', () => {
       expect(enableHandler).toHaveBeenCalled();
     });
 
-    it('should auto-enable on completion phrase', () => {
+    it('should auto-enable on iteration patterns when auto-enable allowed', () => {
       const freshTracker = new RalphTracker();
-      freshTracker.processTerminalData('<promise>COMPLETE</promise>\n');
-
-      expect(freshTracker.enabled).toBe(true);
-    });
-
-    it('should auto-enable on TodoWrite detection', () => {
-      const freshTracker = new RalphTracker();
-      freshTracker.processTerminalData('TodoWrite: Todos have been modified\n');
-
-      expect(freshTracker.enabled).toBe(true);
-    });
-
-    it('should auto-enable on todo checkboxes', () => {
-      const freshTracker = new RalphTracker();
-      freshTracker.processTerminalData('- [ ] New task\n');
-
-      expect(freshTracker.enabled).toBe(true);
-      expect(freshTracker.todos).toHaveLength(1);
-    });
-
-    it('should auto-enable on iteration patterns', () => {
-      const freshTracker = new RalphTracker();
+      freshTracker.enableAutoEnable();
       freshTracker.processTerminalData('Iteration 5/50\n');
 
       expect(freshTracker.enabled).toBe(true);
     });
 
-    it('should auto-enable on loop start patterns', () => {
+    it('should auto-enable on loop start patterns when auto-enable allowed', () => {
       const freshTracker = new RalphTracker();
+      freshTracker.enableAutoEnable();
       freshTracker.processTerminalData('Loop started at 2024-01-15\n');
 
       expect(freshTracker.enabled).toBe(true);
@@ -378,8 +388,16 @@ describe('RalphTracker', () => {
       expect(todos.filter(t => t.status === 'completed')).toHaveLength(1);
     });
 
-    it('should auto-enable on native todo pattern', () => {
+    it('should not auto-enable on native todo pattern by default', () => {
       const freshTracker = new RalphTracker();
+      freshTracker.processTerminalData('☐ New task\n');
+
+      expect(freshTracker.enabled).toBe(false);
+    });
+
+    it('should auto-enable on native todo pattern when auto-enable allowed', () => {
+      const freshTracker = new RalphTracker();
+      freshTracker.enableAutoEnable();
       freshTracker.processTerminalData('☐ New task\n');
 
       expect(freshTracker.enabled).toBe(true);

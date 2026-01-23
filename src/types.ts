@@ -229,6 +229,8 @@ export interface AppConfig {
   respawn: RespawnConfig;
   /** Last used case name (for default selection) */
   lastUsedCase: string | null;
+  /** Whether Ralph/Todo tracker is globally enabled for all new sessions */
+  ralphEnabled: boolean;
 }
 
 // ========== Output Types ==========
@@ -564,6 +566,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     sendInit: true,                // send /init after /clear
   },
   lastUsedCase: null,
+  ralphEnabled: false,
 };
 
 // ========== Inner Loop Tracking Types ==========
