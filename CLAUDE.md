@@ -293,6 +293,8 @@ Uses `confirming_idle` state to prevent false positives. Fallback: `noOutputTime
 
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
+**Auto-Accept Prompts** (enabled by default): When Claude enters plan mode or asks a question (AskUserQuestion), output stops without a completion message. After `autoAcceptDelayMs` (8s) of silence with no completion message detected, sends Enter to accept the plan/default option. Safety: only fires once per silence period, requires prior output, won't fire during active respawn cycles.
+
 ### Token Tracking
 
 - **One-shot mode**: Uses `--output-format stream-json` for detailed token usage from JSON
@@ -429,6 +431,7 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | Idle activity timeout | 2s | `session.ts` |
 | Respawn idle timeout | 10s default | `RespawnConfig.idleTimeoutMs` |
 | Respawn completion confirm | 5s | `RespawnConfig.completionConfirmMs` |
+| Respawn auto-accept delay | 8s | `RespawnConfig.autoAcceptDelayMs` |
 | Respawn no-output fallback | 30s | `RespawnConfig.noOutputTimeoutMs` |
 
 ### TypeScript Config
