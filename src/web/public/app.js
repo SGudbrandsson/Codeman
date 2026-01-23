@@ -1122,11 +1122,11 @@ class ClaudemanApp {
       if (!workingDir) throw new Error('Case path not found');
       let firstSessionId = null;
 
-      // Find the highest existing w-number for this case to avoid duplicates
+      // Find the highest existing w-number for THIS case to avoid duplicates
       let startNumber = 1;
       for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^w(\d+)-/);
-        if (match) {
+        const match = session.name && session.name.match(/^w(\d+)-(.+)$/);
+        if (match && match[2] === caseName) {
           const num = parseInt(match[1]);
           if (num >= startNumber) {
             startNumber = num + 1;
@@ -1202,11 +1202,11 @@ class ClaudemanApp {
       const workingDir = caseData.path;
       if (!workingDir) throw new Error('Case path not found');
 
-      // Find the highest existing s-number for shells to avoid duplicates
+      // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
       for (const [, session] of this.sessions) {
-        const match = session.name && session.name.match(/^s(\d+)-/);
-        if (match) {
+        const match = session.name && session.name.match(/^s(\d+)-(.+)$/);
+        if (match && match[2] === caseName) {
           const num = parseInt(match[1]);
           if (num >= startNumber) {
             startNumber = num + 1;
