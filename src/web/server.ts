@@ -19,6 +19,8 @@ import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem } from '../session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
+import { SpawnOrchestrator, type SessionCreator } from '../spawn-orchestrator.js';
+import type { SpawnOrchestratorConfig } from '../spawn-types.js';
 import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
@@ -154,6 +156,8 @@ export class WebServer extends EventEmitter {
   private sseHealthCheckTimer: NodeJS.Timeout | null = null;
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
+  // Spawn1337 agent orchestrator
+  private spawnOrchestrator: SpawnOrchestrator;
 
   constructor(port: number = 3000) {
     super();
@@ -174,6 +178,10 @@ export class WebServer extends EventEmitter {
     this.screenManager.on('statsUpdated', (screens) => {
       this.broadcast('screen:statsUpdated', screens);
     });
+
+    // Initialize spawn orchestrator
+    this.spawnOrchestrator = new SpawnOrchestrator();
+    this.setupSpawnOrchestratorListeners();
   }
 
   private async setupRoutes(): Promise<void> {
@@ -1278,6 +1286,93 @@ export class WebServer extends EventEmitter {
     this.app.get('/api/system/stats', async () => {
       return this.getSystemStats();
     });
+
+    // ========== Spawn1337 Agent Protocol Endpoints ==========
+
+    this.app.get('/api/spawn/agents', async () => {
+      return { success: true, data: this.spawnOrchestrator.getAllAgentStatuses() };
+    });
+
+    this.app.get('/api/spawn/agents/:agentId', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const status = this.spawnOrchestrator.getAgentStatus(agentId);
+      if (!status) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Agent ${agentId} not found`);
+      }
+      return { success: true, data: status };
+    });
+
+    this.app.get('/api/spawn/agents/:agentId/result', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const result = this.spawnOrchestrator.readAgentResult(agentId);
+      if (!result) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `No result found for agent ${agentId}`);
+      }
+      return { success: true, data: result };
+    });
+
+    this.app.get('/api/spawn/agents/:agentId/progress', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const progress = this.spawnOrchestrator.readAgentProgress(agentId);
+      return { success: true, data: progress };
+    });
+
+    this.app.get('/api/spawn/agents/:agentId/messages', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const messages = this.spawnOrchestrator.readAgentMessages(agentId);
+      return { success: true, data: messages };
+    });
+
+    this.app.post('/api/spawn/agents/:agentId/message', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const { content } = req.body as { content: string };
+      if (!content) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Message content is required');
+      }
+      await this.spawnOrchestrator.sendMessageToAgent(agentId, content);
+      return { success: true };
+    });
+
+    this.app.post('/api/spawn/agents/:agentId/cancel', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const { reason } = (req.body as { reason?: string }) || {};
+      await this.spawnOrchestrator.cancelAgent(agentId, reason || 'Cancelled via API');
+      return { success: true };
+    });
+
+    this.app.delete('/api/spawn/agents/:agentId', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      await this.spawnOrchestrator.cancelAgent(agentId, 'Force killed via API');
+      return { success: true };
+    });
+
+    this.app.get('/api/spawn/status', async () => {
+      return { success: true, data: this.spawnOrchestrator.getState() };
+    });
+
+    this.app.put('/api/spawn/config', async (req) => {
+      const config = req.body as Partial<SpawnOrchestratorConfig>;
+      this.spawnOrchestrator.updateConfig(config);
+      return { success: true, data: this.spawnOrchestrator.config };
+    });
+
+    this.app.post('/api/spawn/trigger', async (req) => {
+      const { taskContent, parentSessionId, parentWorkingDir } = req.body as {
+        taskContent: string;
+        parentSessionId: string;
+        parentWorkingDir?: string;
+      };
+      if (!taskContent || !parentSessionId) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'taskContent and parentSessionId are required');
+      }
+      const session = this.sessions.get(parentSessionId);
+      const workingDir = parentWorkingDir || session?.workingDir || process.cwd();
+      const agentId = await this.spawnOrchestrator.triggerSpawn(taskContent, parentSessionId, workingDir);
+      if (!agentId) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse task spec');
+      }
+      return { success: true, data: { agentId } };
+    });
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -1514,6 +1609,35 @@ export class WebServer extends EventEmitter {
     session.on('ralphCompletionDetected', (phrase: string) => {
       this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
     });
+
+    // Spawn1337 protocol events
+    session.on('spawnRequested', (filePath: string) => {
+      this.spawnOrchestrator.handleSpawnRequest(
+        filePath,
+        session.id,
+        session.workingDir,
+        session.parentAgentId ? 1 : 0 // Simple depth tracking
+      ).catch(err => {
+        console.error(`[Server] Spawn request failed for session ${session.id}:`, getErrorMessage(err));
+      });
+    });
+
+    session.on('spawnStatusRequested', (agentId: string) => {
+      const status = this.spawnOrchestrator.getAgentStatus(agentId);
+      this.broadcast('spawn:statusResponse', { sessionId: session.id, agentId, status });
+    });
+
+    session.on('spawnCancelRequested', (agentId: string) => {
+      this.spawnOrchestrator.cancelAgent(agentId, 'Cancelled by parent session').catch(err => {
+        console.error(`[Server] Spawn cancel failed:`, getErrorMessage(err));
+      });
+    });
+
+    session.on('spawnMessageToChild', (agentId: string, content: string) => {
+      this.spawnOrchestrator.sendMessageToAgent(agentId, content).catch(err => {
+        console.error(`[Server] Spawn message failed:`, getErrorMessage(err));
+      });
+    });
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -1552,6 +1676,84 @@ export class WebServer extends EventEmitter {
     controller.on('error', (error: Error) => {
       this.broadcast('respawn:error', { sessionId, error: error.message });
     });
+  }
+
+  private setupSpawnOrchestratorListeners(): void {
+    const sessionCreator: SessionCreator = {
+      createAgentSession: async (workingDir: string, name: string) => {
+        const session = new Session({
+          workingDir,
+          screenManager: this.screenManager,
+          useScreen: true,
+          mode: 'claude',
+          name: `spawn:${name}`,
+        });
+
+        this.sessions.set(session.id, session);
+        this.setupSessionListeners(session);
+        session.parentAgentId = name;
+
+        await session.startInteractive();
+        this.broadcast('session:created', session.toDetailedState());
+        this.broadcast('session:interactive', { id: session.id });
+        this.persistSessionState(session);
+
+        // Configure ralph tracker for completion detection
+        session.ralphTracker.enable();
+
+        return { sessionId: session.id };
+      },
+      writeToSession: (sessionId: string, data: string) => {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.writeViaScreen(data);
+        }
+      },
+      getSessionTokens: (sessionId: string) => {
+        const session = this.sessions.get(sessionId);
+        return session ? session.totalTokens : 0;
+      },
+      getSessionCost: (sessionId: string) => {
+        const session = this.sessions.get(sessionId);
+        return session ? session.totalCost : 0;
+      },
+      stopSession: async (sessionId: string) => {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          await session.stop();
+          this.sessions.delete(sessionId);
+          this.broadcast('session:deleted', { id: sessionId });
+          this.persistSessionState(session);
+        }
+      },
+      onSessionCompletion: (sessionId: string, handler: (phrase: string) => void) => {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.on('ralphCompletionDetected', handler);
+        }
+      },
+      removeSessionCompletionHandler: (sessionId: string, handler: (phrase: string) => void) => {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.off('ralphCompletionDetected', handler);
+        }
+      },
+    };
+
+    this.spawnOrchestrator.setSessionCreator(sessionCreator);
+
+    // Forward orchestrator events as SSE broadcasts
+    this.spawnOrchestrator.on('queued', (data) => this.broadcast('spawn:queued', data));
+    this.spawnOrchestrator.on('initializing', (data) => this.broadcast('spawn:initializing', data));
+    this.spawnOrchestrator.on('started', (data) => this.broadcast('spawn:started', data));
+    this.spawnOrchestrator.on('progress', (data) => this.broadcast('spawn:progress', data));
+    this.spawnOrchestrator.on('message', (data) => this.broadcast('spawn:message', data));
+    this.spawnOrchestrator.on('completed', (data) => this.broadcast('spawn:completed', data));
+    this.spawnOrchestrator.on('failed', (data) => this.broadcast('spawn:failed', data));
+    this.spawnOrchestrator.on('timeout', (data) => this.broadcast('spawn:timeout', data));
+    this.spawnOrchestrator.on('cancelled', (data) => this.broadcast('spawn:cancelled', data));
+    this.spawnOrchestrator.on('budgetWarning', (data) => this.broadcast('spawn:budgetWarning', data));
+    this.spawnOrchestrator.on('stateUpdate', (data) => this.broadcast('spawn:stateUpdate', data));
   }
 
   private setupTimedRespawn(sessionId: string, durationMinutes: number): void {
@@ -2155,6 +2357,10 @@ export class WebServer extends EventEmitter {
       controller.removeAllListeners();
     }
     this.respawnControllers.clear();
+
+    // Stop spawn orchestrator and all agents
+    await this.spawnOrchestrator.stopAll();
+    this.spawnOrchestrator.removeAllListeners();
 
     // Stop all scheduled runs first (they have their own session cleanup)
     for (const [id] of this.scheduledRuns) {

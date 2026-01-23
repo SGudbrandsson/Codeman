@@ -68,7 +68,7 @@ npx vitest run -t "should create session" # By pattern
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
 # 3125: ralph-integration.test.ts
-# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config
+# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator
 # Next available: 3127+
 
 # Tests mock PTY - no real Claude CLI spawned
@@ -148,6 +148,10 @@ claudeman reset                    # Reset all state
 | `src/types.ts` | All TypeScript interfaces |
 | `src/templates/claude-md.ts` | CLAUDE.md template generation with placeholder support |
 | `src/templates/case-template.md` | Default CLAUDE.md template for new cases (with placeholders) |
+| `src/spawn-types.ts` | Types, YAML parser, factory functions for spawn1337 protocol |
+| `src/spawn-detector.ts` | Detects `<spawn1337>` tags in terminal output (like ralph-tracker.ts) |
+| `src/spawn-orchestrator.ts` | Full agent lifecycle: spawn, monitor, budget, queue, cleanup |
+| `src/spawn-claude-md.ts` | Generates CLAUDE.md for spawned agent sessions |
 
 ### Data Flow
 
@@ -174,6 +178,72 @@ WATCHING → CONFIRMING_IDLE → SENDING_UPDATE → WAITING_UPDATE → SENDING_C
 Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optional `kickstartPrompt` triggers if `/init` doesn't start work. Multi-layer idle detection triggers state transitions.
 
 **Step confirmation**: After sending each step (update, clear, init, kickstart), the controller waits for `completionConfirmMs` (5s) of output silence before proceeding to the next step. This prevents sending commands while Claude is still processing.
+
+### Spawn1337 Protocol (Autonomous Agents)
+
+Spawned agents are full-power Claude sessions running in their own screen sessions. They communicate via a filesystem-based message bus and signal completion via RalphTracker's `<promise>` mechanism.
+
+**Protocol Flow:**
+```
+Parent outputs <spawn1337>task.md</spawn1337>
+  → SpawnDetector parses tag
+  → SpawnOrchestrator reads + parses task spec file (YAML frontmatter)
+  → Creates agent directory: ~/claudeman-cases/spawn-<agentId>/
+  → Spawns interactive Claude session in screen
+  → Injects initial prompt via writeViaScreen()
+  → Agent works autonomously, writes progress to spawn-comms/
+  → RalphTracker detects <promise>PHRASE</promise> on child
+  → Orchestrator reads result.md, notifies parent via SSE
+```
+
+**Tag Patterns** (detected by `SpawnDetector`):
+- `<spawn1337>path/to/task.md</spawn1337>` - Spawn request
+- `<spawn1337-status agentId="id"/>` - Status query
+- `<spawn1337-cancel agentId="id"/>` - Cancel request
+- `<spawn1337-message agentId="id">content</spawn1337-message>` - Message to child
+
+**Agent Communication Directory:**
+```
+~/claudeman-cases/spawn-<agentId>/
+├── CLAUDE.md              # Auto-generated agent instructions
+├── spawn-comms/
+│   ├── task.md            # Copy of original task spec
+│   ├── progress.json      # Agent updates periodically
+│   ├── result.md          # Final result (YAML frontmatter + body)
+│   └── messages/          # Bidirectional message files (NNN-parent.md, NNN-agent.md)
+└── workspace/             # Symlinked context files
+```
+
+**Task Spec Format** (YAML frontmatter in .md file):
+```yaml
+---
+agentId: my-agent-001
+name: My Agent
+type: explore          # explore|implement|test|review|refactor|research|generate|fix|general
+priority: high         # low|normal|high|critical
+maxTokens: 150000
+maxCost: 0.50
+timeoutMinutes: 15
+canModifyParentFiles: false
+contextFiles: [src/auth.ts, src/types.ts]
+dependsOn: [other-agent-id]
+completionPhrase: MY_AGENT_DONE
+outputFormat: structured  # markdown|json|code|structured|freeform
+---
+Task instructions here...
+```
+
+**Resource Governance:**
+- Budget warning at 80% of token/cost limit
+- Graceful shutdown message at 100%
+- Force kill at 110% (or timeout + 60s grace)
+- Max concurrent agents: 5 (configurable)
+- Max spawn depth: 3 (prevents infinite recursion)
+- Default timeout: 30 minutes (max: 120)
+
+**Session Integration:** Each session has a `SpawnDetector` (alongside RalphTracker) that forwards terminal data. Spawn events (`spawnRequested`, `spawnStatusRequested`, `spawnCancelRequested`, `spawnMessageToChild`) are emitted on the session and wired to the orchestrator in server.ts.
+
+**Agent Tree:** Agents can spawn children (up to `maxSpawnDepth`). Sessions track `parentAgentId` and `childAgentIds`. Cancelling a parent cascades to all children.
 
 ### Session Modes
 
@@ -370,7 +440,7 @@ Tab switch/new session fix: clear xterm → write buffer → resize PTY → Ctrl
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`.
+Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `scheduled:`, `case:`, `screen:`, `init`.
 
 Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `session:idle`, `session:working` - Status indicator updates
@@ -378,6 +448,8 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `session:completion`, `session:autoClear`, `session:autoCompact` - Lifecycle events
 - `session:ralphLoopUpdate`, `session:ralphTodoUpdate`, `session:ralphCompletionDetected` - Ralph tracking
 - `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
+- `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed`, `spawn:timeout`, `spawn:cancelled` - Agent lifecycle
+- `spawn:progress`, `spawn:message`, `spawn:budgetWarning`, `spawn:stateUpdate` - Agent monitoring
 
 ### Frontend (app.js)
 
@@ -410,6 +482,7 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | `respawnEnabled` | Whether respawn controller is currently running |
 | `respawnConfig` | Full respawn config including `durationMinutes` |
 | `totalCost`, `inputTokens`, `outputTokens` | Token and cost tracking |
+| `parentAgentId`, `childAgentIds` | Spawn agent tree relationships |
 
 **CLI visibility**: The `claudeman status` and `claudeman session list` commands read from `state.json` to display web server-managed sessions, even though they run in a separate process.
 
@@ -433,6 +506,15 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | Respawn completion confirm | 5s | `RespawnConfig.completionConfirmMs` |
 | Respawn auto-accept delay | 8s | `RespawnConfig.autoAcceptDelayMs` |
 | Respawn no-output fallback | 30s | `RespawnConfig.noOutputTimeoutMs` |
+| Spawn event debounce | 50ms | `spawn-detector.ts` |
+| Spawn line buffer max | 64KB | `spawn-detector.ts` |
+| Spawn progress poll | 5s | `spawn-orchestrator.ts` |
+| Spawn default timeout | 30 min | `spawn-orchestrator.ts` |
+| Spawn max timeout | 120 min | `spawn-orchestrator.ts` |
+| Spawn max concurrent | 5 agents | `spawn-orchestrator.ts` |
+| Spawn max depth | 3 levels | `spawn-orchestrator.ts` |
+| Spawn budget warning | 80% | `spawn-orchestrator.ts` |
+| Spawn budget grace | 60s | `spawn-orchestrator.ts` |
 
 ### TypeScript Config
 
@@ -547,6 +629,16 @@ Long-running sessions are supported with automatic trimming:
 | GET | `/api/cases` | List available cases |
 | POST | `/api/cases` | Create new case |
 | GET | `/api/screens` | List screen sessions with stats |
+| GET | `/api/spawn/agents` | List all spawn agents (active + completed + queued) |
+| GET | `/api/spawn/agents/:agentId` | Detailed agent status + progress |
+| GET | `/api/spawn/agents/:agentId/result` | Read agent's result.md |
+| GET | `/api/spawn/agents/:agentId/messages` | List messages in channel |
+| POST | `/api/spawn/agents/:agentId/message` | Send message to agent |
+| POST | `/api/spawn/agents/:agentId/cancel` | Cancel agent (graceful stop) |
+| DELETE | `/api/spawn/agents/:agentId` | Force kill + cleanup |
+| GET | `/api/spawn/status` | Orchestrator status (counts, config) |
+| PUT | `/api/spawn/config` | Update orchestrator config |
+| POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
 
 ## Keyboard Shortcuts (Web UI)
 

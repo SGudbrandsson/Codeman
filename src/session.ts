@@ -21,6 +21,7 @@ import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem } from './types.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
+import { SpawnDetector } from './spawn-detector.js';
 import { ScreenManager } from './screen-manager.js';
 
 export type { BackgroundTask } from './task-tracker.js';
@@ -225,6 +226,14 @@ export interface SessionEvents {
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   /** Ralph completion phrase detected */
   ralphCompletionDetected: (phrase: string) => void;
+  /** Spawn1337 agent spawn requested */
+  spawnRequested: (filePath: string, rawLine: string) => void;
+  /** Spawn1337 agent status query */
+  spawnStatusRequested: (agentId: string) => void;
+  /** Spawn1337 agent cancel request */
+  spawnCancelRequested: (agentId: string) => void;
+  /** Spawn1337 message to child agent */
+  spawnMessageToChild: (agentId: string, content: string) => void;
 }
 
 /**
@@ -325,6 +334,13 @@ export class Session extends EventEmitter {
   // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _ralphTracker: RalphTracker;
 
+  // Spawn1337 detection (agent spawning protocol)
+  private _spawnDetector: SpawnDetector;
+
+  // Agent tree tracking
+  private _parentAgentId: string | null = null;
+  private _childAgentIds: string[] = [];
+
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
     taskCreated: (task: BackgroundTask) => void;
@@ -337,6 +353,13 @@ export class Session extends EventEmitter {
     loopUpdate: (state: RalphTrackerState) => void;
     todoUpdate: (todos: RalphTodoItem[]) => void;
     completionDetected: (phrase: string) => void;
+  } | null = null;
+
+  private _spawnHandlers: {
+    spawnRequested: (filePath: string, rawLine: string) => void;
+    statusRequested: (agentId: string) => void;
+    cancelRequested: (agentId: string) => void;
+    messageToChild: (agentId: string, content: string) => void;
   } | null = null;
 
   constructor(config: Partial<SessionConfig> & {
@@ -381,6 +404,19 @@ export class Session extends EventEmitter {
     this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
     this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
     this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
+
+    // Initialize Spawn detector and forward events (store handlers for cleanup)
+    this._spawnDetector = new SpawnDetector();
+    this._spawnHandlers = {
+      spawnRequested: (filePath, rawLine) => this.emit('spawnRequested', filePath, rawLine),
+      statusRequested: (agentId) => this.emit('spawnStatusRequested', agentId),
+      cancelRequested: (agentId) => this.emit('spawnCancelRequested', agentId),
+      messageToChild: (agentId, content) => this.emit('spawnMessageToChild', agentId, content),
+    };
+    this._spawnDetector.on('spawnRequested', this._spawnHandlers.spawnRequested);
+    this._spawnDetector.on('statusRequested', this._spawnHandlers.statusRequested);
+    this._spawnDetector.on('cancelRequested', this._spawnHandlers.cancelRequested);
+    this._spawnDetector.on('messageToChild', this._spawnHandlers.messageToChild);
   }
 
   get status(): SessionStatus {
@@ -466,6 +502,34 @@ export class Session extends EventEmitter {
 
   get ralphTodoStats(): { total: number; pending: number; inProgress: number; completed: number } {
     return this._ralphTracker.getTodoStats();
+  }
+
+  // Spawn1337 tracking getters
+  get spawnDetector(): SpawnDetector {
+    return this._spawnDetector;
+  }
+
+  get parentAgentId(): string | null {
+    return this._parentAgentId;
+  }
+
+  set parentAgentId(value: string | null) {
+    this._parentAgentId = value;
+  }
+
+  get childAgentIds(): string[] {
+    return [...this._childAgentIds];
+  }
+
+  addChildAgentId(agentId: string): void {
+    if (!this._childAgentIds.includes(agentId)) {
+      this._childAgentIds.push(agentId);
+    }
+  }
+
+  removeChildAgentId(agentId: string): void {
+    const idx = this._childAgentIds.indexOf(agentId);
+    if (idx >= 0) this._childAgentIds.splice(idx, 1);
   }
 
   // Token tracking getters and setters
@@ -559,6 +623,8 @@ export class Session extends EventEmitter {
       outputTokens: this._totalOutputTokens,
       ralphEnabled: this._ralphTracker.enabled,
       ralphCompletionPhrase: this._ralphTracker.loopState.completionPhrase || undefined,
+      parentAgentId: this._parentAgentId || undefined,
+      childAgentIds: this._childAgentIds.length > 0 ? this._childAgentIds : undefined,
     };
   }
 
@@ -742,6 +808,9 @@ export class Session extends EventEmitter {
 
       // Forward to Ralph tracker to detect Ralph loops and todos
       this._ralphTracker.processTerminalData(data);
+
+      // Forward to Spawn detector to detect spawn1337 protocol tags
+      this._spawnDetector.processTerminalData(data);
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(data);
@@ -1389,6 +1458,15 @@ export class Session extends EventEmitter {
       this._ralphTracker.off('todoUpdate', this._ralphHandlers.todoUpdate);
       this._ralphTracker.off('completionDetected', this._ralphHandlers.completionDetected);
       this._ralphHandlers = null;
+    }
+
+    // Remove SpawnDetector handlers
+    if (this._spawnHandlers) {
+      this._spawnDetector.off('spawnRequested', this._spawnHandlers.spawnRequested);
+      this._spawnDetector.off('statusRequested', this._spawnHandlers.statusRequested);
+      this._spawnDetector.off('cancelRequested', this._spawnHandlers.cancelRequested);
+      this._spawnDetector.off('messageToChild', this._spawnHandlers.messageToChild);
+      this._spawnHandlers = null;
     }
   }
 

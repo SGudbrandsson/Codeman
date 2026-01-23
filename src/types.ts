@@ -82,6 +82,10 @@ export interface SessionState {
   ralphEnabled?: boolean;
   /** Ralph completion phrase (if set) */
   ralphCompletionPhrase?: string;
+  /** Parent agent ID if this session is a spawned agent */
+  parentAgentId?: string;
+  /** Child agent IDs spawned by this session */
+  childAgentIds?: string[];
 }
 
 // ========== Task Types ==========
@@ -722,3 +726,21 @@ export function getErrorMessage(error: unknown): string {
   }
   return 'An unknown error occurred';
 }
+
+// ========== Spawn1337 Protocol Re-exports ==========
+
+export type {
+  SpawnPriority,
+  SpawnResultDelivery,
+  SpawnStatus,
+  SpawnTaskSpec,
+  SpawnTask,
+  AgentProgress,
+  SpawnResult,
+  SpawnMessage,
+  AgentStatusReport,
+  SpawnTrackerState,
+  SpawnOrchestratorConfig,
+  AgentContext,
+  SpawnPersistedState,
+} from './spawn-types.js';
