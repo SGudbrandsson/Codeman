@@ -158,11 +158,57 @@ export function forceCleanupAllTestResources(): void {
 // Global Hooks
 // =============================================================================
 
+/** Screens that existed before tests started (never killed by cleanup) */
+const preExistingScreens = new Set<string>();
+
+/**
+ * List all current claudeman-* screen session names
+ */
+function listClaudemanScreens(): string[] {
+  try {
+    const output = execSync('screen -ls 2>/dev/null || true', { encoding: 'utf-8' });
+    const screens: string[] = [];
+    for (const line of output.split('\n')) {
+      const match = line.match(/\d+\.(claudeman-\S+)/);
+      if (match) screens.push(match[1]);
+    }
+    return screens;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Kill detached claudeman screens that were created during the test run
+ */
+function killOrphanedTestScreens(): number {
+  let killed = 0;
+  try {
+    const output = execSync('screen -ls 2>/dev/null || true', { encoding: 'utf-8' });
+    for (const line of output.split('\n')) {
+      // Only kill detached screens (never attached/user sessions)
+      if (!line.includes('Detached')) continue;
+      const match = line.match(/(\d+\.(claudeman-\S+))/);
+      if (!match) continue;
+      const fullName = match[1];
+      const screenName = match[2];
+      // Skip screens that existed before tests started
+      if (preExistingScreens.has(screenName)) continue;
+      try {
+        execSync(`screen -S ${fullName} -X quit 2>/dev/null || true`, { encoding: 'utf-8' });
+        killed++;
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return killed;
+}
+
 beforeAll(async () => {
-  // Initialize test environment
-  console.log('[Test Setup] Initializing test environment...');
-  console.log('[Test Setup] Only test-created resources will be cleaned up (safe for Claudeman sessions)');
-  console.log('[Test Setup] Starting tests...');
+  // Record pre-existing screens so we never kill them
+  for (const name of listClaudemanScreens()) {
+    preExistingScreens.add(name);
+  }
+  console.log(`[Test Setup] ${preExistingScreens.size} pre-existing screens preserved`);
 });
 
 afterAll(async () => {
@@ -170,6 +216,12 @@ afterAll(async () => {
 
   // Only cleanup resources that tests have registered
   forceCleanupAllTestResources();
+
+  // Kill orphaned screens created during the test run (not registered but detached)
+  const orphansKilled = killOrphanedTestScreens();
+  if (orphansKilled > 0) {
+    console.log(`[Test Setup] Killed ${orphansKilled} orphaned test screens`);
+  }
 
   // Wait for cleanup
   await new Promise(resolve => setTimeout(resolve, 500));
