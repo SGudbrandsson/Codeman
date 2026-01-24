@@ -382,6 +382,8 @@ export interface HookEventRequest {
   event: HookEventType;
   /** Session ID from CLAUDEMAN_SESSION_ID env var */
   sessionId: string;
+  /** Additional event data (tool name, command, question, etc.) */
+  data?: Record<string, unknown>;
 }
 
 // ========== API Response Types ==========

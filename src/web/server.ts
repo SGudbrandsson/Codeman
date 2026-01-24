@@ -1459,7 +1459,7 @@ export class WebServer extends EventEmitter {
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
-      const { event, sessionId } = req.body as HookEventRequest;
+      const { event, sessionId, data } = req.body as HookEventRequest;
       const validEvents = ['idle_prompt', 'permission_prompt', 'elicitation_dialog', 'stop'] as const;
       if (!event || !validEvents.includes(event as typeof validEvents[number])) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid event type');
@@ -1476,7 +1476,7 @@ export class WebServer extends EventEmitter {
         }
       }
 
-      this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now() });
+      this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...data });
       return { success: true };
     });
   }

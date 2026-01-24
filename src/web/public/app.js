@@ -1135,7 +1135,7 @@ class ClaudemanApp {
         sessionId: data.sessionId,
         sessionName: session?.name || data.sessionId,
         title: 'Waiting for Input',
-        message: 'Claude is idle and waiting for a prompt',
+        message: data.message || 'Claude is idle and waiting for a prompt',
       });
     });
 
@@ -1146,13 +1146,14 @@ class ClaudemanApp {
         this.tabAlerts.set(data.sessionId, 'action');
         this.renderSessionTabs();
       }
+      const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
       this.notificationManager?.notify({
         urgency: 'critical',
         category: 'hook-permission',
         sessionId: data.sessionId,
         sessionName: session?.name || data.sessionId,
         title: 'Permission Required',
-        message: 'Claude needs tool approval to continue',
+        message: toolInfo || 'Claude needs tool approval to continue',
       });
     });
 
@@ -1169,7 +1170,7 @@ class ClaudemanApp {
         sessionId: data.sessionId,
         sessionName: session?.name || data.sessionId,
         title: 'Question Asked',
-        message: 'Claude is asking a question and waiting for your answer',
+        message: data.question || 'Claude is asking a question and waiting for your answer',
       });
     });
 
@@ -1182,7 +1183,7 @@ class ClaudemanApp {
         sessionId: data.sessionId,
         sessionName: session?.name || data.sessionId,
         title: 'Response Complete',
-        message: 'Claude has finished responding',
+        message: data.reason || 'Claude has finished responding',
       });
     });
   }
