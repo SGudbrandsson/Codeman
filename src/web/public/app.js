@@ -2,6 +2,329 @@
 // Default terminal scrollback (can be changed via settings)
 const DEFAULT_SCROLLBACK = 5000;
 
+// Notification Manager - Multi-layer browser notification system
+class NotificationManager {
+  constructor(app) {
+    this.app = app;
+    this.notifications = [];
+    this.unreadCount = 0;
+    this.isTabVisible = !document.hidden;
+    this.isDrawerOpen = false;
+    this.originalTitle = document.title;
+    this.titleFlashInterval = null;
+    this.titleFlashState = false;
+    this.lastBrowserNotifTime = 0;
+    this.audioCtx = null;
+    this.renderScheduled = false;
+
+    // Debounce grouping: Map<key, {notification, timeout}>
+    this.groupingMap = new Map();
+
+    // Load preferences
+    this.preferences = this.loadPreferences();
+
+    // Visibility tracking
+    document.addEventListener('visibilitychange', () => {
+      this.isTabVisible = !document.hidden;
+      if (this.isTabVisible) {
+        this.onTabVisible();
+      }
+    });
+  }
+
+  loadPreferences() {
+    try {
+      const saved = localStorage.getItem('claudeman-notification-prefs');
+      if (saved) return JSON.parse(saved);
+    } catch (_e) { /* ignore */ }
+    return {
+      enabled: true,
+      browserNotifications: false,
+      audioAlerts: false,
+      stuckThresholdMs: 600000,
+      muteCritical: false,
+      muteWarning: false,
+      muteInfo: false,
+    };
+  }
+
+  savePreferences() {
+    localStorage.setItem('claudeman-notification-prefs', JSON.stringify(this.preferences));
+  }
+
+  notify({ urgency, category, sessionId, sessionName, title, message }) {
+    if (!this.preferences.enabled) return;
+
+    // Check urgency muting
+    if (urgency === 'critical' && this.preferences.muteCritical) return;
+    if (urgency === 'warning' && this.preferences.muteWarning) return;
+    if (urgency === 'info' && this.preferences.muteInfo) return;
+
+    // Grouping: same category+session within 5s updates count instead of new entry
+    const groupKey = `${category}:${sessionId || 'global'}`;
+    const existing = this.groupingMap.get(groupKey);
+    if (existing) {
+      existing.notification.count = (existing.notification.count || 1) + 1;
+      existing.notification.message = message;
+      existing.notification.timestamp = Date.now();
+      clearTimeout(existing.timeout);
+      existing.timeout = setTimeout(() => this.groupingMap.delete(groupKey), 5000);
+      this.scheduleRender();
+      return;
+    }
+
+    const notification = {
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      urgency,
+      category,
+      sessionId,
+      sessionName,
+      title,
+      message,
+      timestamp: Date.now(),
+      read: false,
+      count: 1,
+    };
+
+    // Add to log (cap at 100)
+    this.notifications.unshift(notification);
+    if (this.notifications.length > 100) this.notifications.pop();
+
+    // Track for grouping
+    const timeout = setTimeout(() => this.groupingMap.delete(groupKey), 5000);
+    this.groupingMap.set(groupKey, { notification, timeout });
+
+    // Update unread
+    this.unreadCount++;
+    this.updateBadge();
+    this.scheduleRender();
+
+    // Layer 2: Tab title (when tab unfocused)
+    if (!this.isTabVisible) {
+      this.updateTabTitle();
+    }
+
+    // Layer 3: Browser notification (when tab hidden, critical/warning only)
+    if (!this.isTabVisible && (urgency === 'critical' || urgency === 'warning')) {
+      this.sendBrowserNotif(title, message, category);
+    }
+
+    // Layer 4: Audio alert (critical only)
+    if (urgency === 'critical' && this.preferences.audioAlerts) {
+      this.playAudioAlert();
+    }
+  }
+
+  // Layer 1: Drawer rendering
+  scheduleRender() {
+    if (this.renderScheduled) return;
+    this.renderScheduled = true;
+    requestAnimationFrame(() => {
+      this.renderScheduled = false;
+      this.renderDrawer();
+    });
+  }
+
+  renderDrawer() {
+    const list = document.getElementById('notifList');
+    const empty = document.getElementById('notifEmpty');
+    if (!list || !empty) return;
+
+    if (this.notifications.length === 0) {
+      list.style.display = 'none';
+      empty.style.display = 'flex';
+      return;
+    }
+
+    list.style.display = 'block';
+    empty.style.display = 'none';
+
+    list.innerHTML = this.notifications.map(n => {
+      const urgencyClass = `notif-item-${n.urgency}`;
+      const readClass = n.read ? '' : ' unread';
+      const countLabel = n.count > 1 ? `<span class="notif-item-count">&times;${n.count}</span>` : '';
+      const sessionChip = n.sessionName ? `<span class="notif-item-session">${this.escapeHtml(n.sessionName)}</span>` : '';
+      return `<div class="notif-item ${urgencyClass}${readClass}" data-notif-id="${n.id}" data-session-id="${n.sessionId || ''}" onclick="app.notificationManager.clickNotification('${n.id}')">
+        <div class="notif-item-header">
+          <span class="notif-item-title">${this.escapeHtml(n.title)}${countLabel}</span>
+          <span class="notif-item-time">${this.relativeTime(n.timestamp)}</span>
+        </div>
+        <div class="notif-item-message">${this.escapeHtml(n.message)}</div>
+        ${sessionChip}
+      </div>`;
+    }).join('');
+  }
+
+  // Layer 2: Tab title with unread count
+  updateTabTitle() {
+    if (this.unreadCount > 0 && !this.isTabVisible) {
+      if (!this.titleFlashInterval) {
+        this.titleFlashInterval = setInterval(() => {
+          this.titleFlashState = !this.titleFlashState;
+          document.title = this.titleFlashState
+            ? `\u26A0\uFE0F (${this.unreadCount}) Claudeman`
+            : this.originalTitle;
+        }, 1500);
+        // Set immediately
+        document.title = `\u26A0\uFE0F (${this.unreadCount}) Claudeman`;
+      }
+    }
+  }
+
+  stopTitleFlash() {
+    if (this.titleFlashInterval) {
+      clearInterval(this.titleFlashInterval);
+      this.titleFlashInterval = null;
+      this.titleFlashState = false;
+      document.title = this.originalTitle;
+    }
+  }
+
+  // Layer 3: Web Notification API
+  sendBrowserNotif(title, body, tag) {
+    if (!this.preferences.browserNotifications) return;
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+
+    // Rate limit: max 1 per 3 seconds
+    const now = Date.now();
+    if (now - this.lastBrowserNotifTime < 3000) return;
+    this.lastBrowserNotifTime = now;
+
+    const notif = new Notification(`Claudeman: ${title}`, {
+      body,
+      tag, // Groups same-tag notifications
+      icon: '/favicon.ico',
+      silent: true, // We handle audio ourselves
+    });
+
+    notif.onclick = () => {
+      window.focus();
+      notif.close();
+    };
+
+    // Auto-close after 8s
+    setTimeout(() => notif.close(), 8000);
+  }
+
+  async requestPermission() {
+    if (typeof Notification === 'undefined') {
+      this.app.showToast('Browser notifications not supported', 'warning');
+      return;
+    }
+    const result = await Notification.requestPermission();
+    const statusEl = document.getElementById('notifPermissionStatus');
+    if (statusEl) statusEl.textContent = `Status: ${result}`;
+    if (result === 'granted') {
+      this.preferences.browserNotifications = true;
+      this.savePreferences();
+      this.app.showToast('Notifications enabled', 'success');
+    } else {
+      this.app.showToast(`Permission ${result}`, 'warning');
+    }
+  }
+
+  // Layer 4: Audio alert via Web Audio API
+  playAudioAlert() {
+    try {
+      if (!this.audioCtx) {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const ctx = this.audioCtx;
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(660, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.15);
+    } catch (_e) { /* Audio not available */ }
+  }
+
+  // UI interactions
+  toggleDrawer() {
+    const drawer = document.getElementById('notifDrawer');
+    if (!drawer) return;
+    this.isDrawerOpen = !this.isDrawerOpen;
+    drawer.classList.toggle('open', this.isDrawerOpen);
+    if (this.isDrawerOpen) {
+      this.renderDrawer();
+    }
+  }
+
+  clickNotification(notifId) {
+    const notif = this.notifications.find(n => n.id === notifId);
+    if (!notif) return;
+
+    // Mark as read
+    if (!notif.read) {
+      notif.read = true;
+      this.unreadCount = Math.max(0, this.unreadCount - 1);
+      this.updateBadge();
+    }
+
+    // Switch to session if available
+    if (notif.sessionId && this.app.sessions.has(notif.sessionId)) {
+      this.app.switchToSession(notif.sessionId);
+      this.toggleDrawer();
+    }
+
+    this.scheduleRender();
+  }
+
+  markAllRead() {
+    this.notifications.forEach(n => { n.read = true; });
+    this.unreadCount = 0;
+    this.updateBadge();
+    this.stopTitleFlash();
+    this.scheduleRender();
+  }
+
+  clearAll() {
+    this.notifications = [];
+    this.unreadCount = 0;
+    this.updateBadge();
+    this.stopTitleFlash();
+    this.scheduleRender();
+  }
+
+  updateBadge() {
+    const badge = document.getElementById('notifBadge');
+    if (!badge) return;
+    if (this.unreadCount > 0) {
+      badge.style.display = 'flex';
+      badge.textContent = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  onTabVisible() {
+    this.stopTitleFlash();
+    // If drawer is open, mark all as read
+    if (this.isDrawerOpen) {
+      this.markAllRead();
+    }
+  }
+
+  // Utilities
+  relativeTime(ts) {
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    if (diff < 60) return 'now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  }
+}
+
 class ClaudemanApp {
   constructor() {
     this.sessions = new Map();
@@ -35,6 +358,10 @@ class ClaudemanApp {
 
     // System stats polling
     this.systemStatsInterval = null;
+
+    // Notification system
+    this.notificationManager = new NotificationManager(this);
+    this.idleTimers = new Map(); // Map<sessionId, timeout> for stuck detection
 
     // DOM element cache for performance (avoid repeated getElementById calls)
     this._elemCache = {};
@@ -345,6 +672,12 @@ class ClaudemanApp {
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
+      // Clean up idle timer for this session
+      const idleTimer = this.idleTimers.get(data.id);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        this.idleTimers.delete(data.id);
+      }
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
         this.terminal.clear();
@@ -405,6 +738,15 @@ class ClaudemanApp {
       if (data.id === this.activeSessionId) {
         this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
       }
+      const session = this.sessions.get(data.id);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'session-error',
+        sessionId: data.id,
+        sessionName: session?.name || data.id?.slice(0, 8),
+        title: 'Session Error',
+        message: data.error || 'Unknown error',
+      });
     });
 
     this.eventSource.addEventListener('session:exit', (e) => {
@@ -413,6 +755,17 @@ class ClaudemanApp {
       if (session) {
         session.status = 'stopped';
         this.renderSessionTabs();
+      }
+      // Notify on unexpected exit (non-zero code)
+      if (data.code && data.code !== 0) {
+        this.notificationManager?.notify({
+          urgency: 'critical',
+          category: 'session-crash',
+          sessionId: data.id,
+          sessionName: session?.name || data.id?.slice(0, 8),
+          title: 'Session Crashed',
+          message: `Exited with code ${data.code}`,
+        });
       }
     });
 
@@ -425,6 +778,23 @@ class ClaudemanApp {
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
       }
+      // Start stuck detection timer (only if no respawn running)
+      if (!this.respawnStatus[data.id]?.enabled) {
+        const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
+        clearTimeout(this.idleTimers.get(data.id));
+        this.idleTimers.set(data.id, setTimeout(() => {
+          const s = this.sessions.get(data.id);
+          this.notificationManager?.notify({
+            urgency: 'warning',
+            category: 'session-stuck',
+            sessionId: data.id,
+            sessionName: s?.name || data.id?.slice(0, 8),
+            title: 'Session Idle',
+            message: `Idle for ${Math.round(threshold / 60000)}+ minutes`,
+          });
+          this.idleTimers.delete(data.id);
+        }, threshold));
+      }
     });
 
     this.eventSource.addEventListener('session:working', (e) => {
@@ -435,6 +805,12 @@ class ClaudemanApp {
         session.status = 'busy';
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
+      }
+      // Clear stuck detection timer
+      const timer = this.idleTimers.get(data.id);
+      if (timer) {
+        clearTimeout(timer);
+        this.idleTimers.delete(data.id);
       }
     });
 
@@ -509,6 +885,15 @@ class ClaudemanApp {
       if (data.sessionId === this.activeSessionId) {
         document.getElementById('respawnStep').textContent = '⏎ Auto-accepted prompt';
       }
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'auto-accept',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title: 'Auto-Accepted',
+        message: `Accepted prompt for ${session?.name || 'session'}`,
+      });
     });
 
     this.eventSource.addEventListener('respawn:detectionUpdate', (e) => {
@@ -541,6 +926,15 @@ class ClaudemanApp {
         this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
         this.updateRespawnTokens(0);
       }
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'auto-clear',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title: 'Auto-Cleared',
+        message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
+      });
     });
 
     // Background task events
@@ -633,6 +1027,65 @@ class ClaudemanApp {
         existing.loop.active = false;
         this.updateRalphState(data.sessionId, existing);
       }
+
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'warning',
+        category: 'ralph-complete',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title: 'Loop Complete',
+        message: `Completion: ${data.phrase || 'unknown'}`,
+      });
+    });
+
+    // Spawn agent notification events
+    this.eventSource.addEventListener('spawn:failed', (e) => {
+      const data = JSON.parse(e.data);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'spawn-failed',
+        sessionId: data.sessionId,
+        sessionName: data.agentId || 'agent',
+        title: 'Agent Failed',
+        message: `Agent "${data.agentId}" failed: ${data.reason || 'unknown'}`,
+      });
+    });
+
+    this.eventSource.addEventListener('spawn:timeout', (e) => {
+      const data = JSON.parse(e.data);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'spawn-timeout',
+        sessionId: data.sessionId,
+        sessionName: data.agentId || 'agent',
+        title: 'Agent Timeout',
+        message: `Agent "${data.agentId}" exceeded time limit`,
+      });
+    });
+
+    this.eventSource.addEventListener('spawn:budgetWarning', (e) => {
+      const data = JSON.parse(e.data);
+      this.notificationManager?.notify({
+        urgency: 'warning',
+        category: 'spawn-budget',
+        sessionId: data.sessionId,
+        sessionName: data.agentId || 'agent',
+        title: 'Budget Warning',
+        message: `Agent "${data.agentId}" at ${data.percent || 80}% budget`,
+      });
+    });
+
+    this.eventSource.addEventListener('spawn:completed', (e) => {
+      const data = JSON.parse(e.data);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'spawn-completed',
+        sessionId: data.sessionId,
+        sessionName: data.agentId || 'agent',
+        title: 'Agent Complete',
+        message: `Agent "${data.agentId}" finished successfully`,
+      });
     });
   }
 
@@ -2007,6 +2460,20 @@ class ClaudemanApp {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
+    // Notification settings
+    const notifPrefs = this.notificationManager?.preferences || {};
+    document.getElementById('appSettingsNotifEnabled').checked = notifPrefs.enabled ?? true;
+    document.getElementById('appSettingsNotifBrowser').checked = notifPrefs.browserNotifications ?? false;
+    document.getElementById('appSettingsNotifAudio').checked = notifPrefs.audioAlerts ?? false;
+    document.getElementById('appSettingsNotifStuckMins').value = Math.round((notifPrefs.stuckThresholdMs || 600000) / 60000);
+    document.getElementById('appSettingsNotifCritical').checked = !notifPrefs.muteCritical;
+    document.getElementById('appSettingsNotifWarning').checked = !notifPrefs.muteWarning;
+    document.getElementById('appSettingsNotifInfo').checked = !notifPrefs.muteInfo;
+    // Update permission status display
+    const permStatus = document.getElementById('notifPermissionStatus');
+    if (permStatus && typeof Notification !== 'undefined') {
+      permStatus.textContent = `Status: ${Notification.permission}`;
+    }
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
     const modal = document.getElementById('appSettingsModal');
@@ -2049,6 +2516,20 @@ class ClaudemanApp {
 
     // Save to localStorage
     localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+
+    // Save notification preferences separately
+    if (this.notificationManager) {
+      this.notificationManager.preferences = {
+        enabled: document.getElementById('appSettingsNotifEnabled').checked,
+        browserNotifications: document.getElementById('appSettingsNotifBrowser').checked,
+        audioAlerts: document.getElementById('appSettingsNotifAudio').checked,
+        stuckThresholdMs: (parseInt(document.getElementById('appSettingsNotifStuckMins').value) || 10) * 60000,
+        muteCritical: !document.getElementById('appSettingsNotifCritical').checked,
+        muteWarning: !document.getElementById('appSettingsNotifWarning').checked,
+        muteInfo: !document.getElementById('appSettingsNotifInfo').checked,
+      };
+      this.notificationManager.savePreferences();
+    }
 
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();
@@ -3055,6 +3536,10 @@ class ClaudemanApp {
 
   // Cached toast container for performance
   _toastContainer = null;
+
+  toggleNotifications() {
+    this.notificationManager?.toggleDrawer();
+  }
 
   // Alias for showToast
   toast(message, type = 'info') {

@@ -46,6 +46,10 @@
             <span class="stat-value" id="statMem">--</span>
           </div>
         </div>
+        <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications">
+          &#x1F514;
+          <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
+        </button>
         <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings">&#x2699;</button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
@@ -467,6 +471,7 @@
           <button class="modal-tab-btn active" data-tab="settings-display">Display</button>
           <button class="modal-tab-btn" data-tab="settings-claude">Claude CLI</button>
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
+          <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -540,6 +545,66 @@
               <label>Default Working Directory</label>
               <input type="text" id="appSettingsDefaultDir" placeholder="~/projects">
               <span class="form-hint">Default directory for new sessions.</span>
+            </div>
+          </div>
+          <!-- Notifications Tab -->
+          <div class="modal-tab-content hidden" id="settings-notifications">
+            <div class="form-row form-row-switch">
+              <label>Enable Notifications</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifEnabled" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Master toggle for all notification layers</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Browser Notifications</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifBrowser">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Show OS-level notifications when tab is hidden</span>
+            </div>
+            <div class="form-row">
+              <button class="btn-toolbar btn-sm" onclick="app.notificationManager?.requestPermission()">Request Permission</button>
+              <span class="form-hint" id="notifPermissionStatus">Status: unknown</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Audio Alerts</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifAudio">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Play a short beep for critical events</span>
+            </div>
+            <div class="form-row">
+              <label>Idle Threshold (minutes)</label>
+              <input type="number" id="appSettingsNotifStuckMins" value="10" min="1" max="120" style="width: 80px;">
+              <span class="form-hint">Notify when a session is idle longer than this</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Critical Notifications</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifCritical" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Errors, crashes, agent failures</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Warning Notifications</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifWarning" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Completions, budget warnings, stuck sessions</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Info Notifications</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsNotifInfo" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Auto-accepts, auto-clears, agent completions</span>
             </div>
           </div>
         </div>
@@ -621,6 +686,20 @@
           <button class="btn-toolbar btn-sm" onclick="app.closeKillAllModal()">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <!-- Notification Drawer -->
+    <div class="notification-drawer" id="notifDrawer">
+      <div class="notif-drawer-header">
+        <span class="notif-drawer-title">Notifications</span>
+        <div class="notif-drawer-actions">
+          <button class="btn-notif-action" onclick="app.notificationManager?.markAllRead()" title="Mark all read">&#x2713;</button>
+          <button class="btn-notif-action" onclick="app.notificationManager?.clearAll()" title="Clear all">&#x1F5D1;</button>
+          <button class="btn-notif-action" onclick="app.toggleNotifications()" title="Close">&times;</button>
+        </div>
+      </div>
+      <div class="notif-drawer-list" id="notifList"></div>
+      <div class="notif-drawer-empty" id="notifEmpty">No notifications</div>
     </div>
 
     <!-- Help Button -->
