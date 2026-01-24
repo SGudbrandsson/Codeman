@@ -106,7 +106,7 @@ class NotificationManager {
 
     // Layer 3: Browser notification (when tab hidden, critical/warning only)
     if (!this.isTabVisible && (urgency === 'critical' || urgency === 'warning')) {
-      this.sendBrowserNotif(title, message, category);
+      this.sendBrowserNotif(title, message, category, sessionId);
     }
 
     // Layer 4: Audio alert (critical only)
@@ -181,7 +181,7 @@ class NotificationManager {
   }
 
   // Layer 3: Web Notification API
-  sendBrowserNotif(title, body, tag) {
+  sendBrowserNotif(title, body, tag, sessionId) {
     if (!this.preferences.browserNotifications) return;
     if (typeof Notification === 'undefined') return;
     if (Notification.permission !== 'granted') return;
@@ -200,6 +200,9 @@ class NotificationManager {
 
     notif.onclick = () => {
       window.focus();
+      if (sessionId && this.app.sessions.has(sessionId)) {
+        this.app.selectSession(sessionId);
+      }
       notif.close();
     };
 
@@ -268,7 +271,7 @@ class NotificationManager {
 
     // Switch to session if available
     if (notif.sessionId && this.app.sessions.has(notif.sessionId)) {
-      this.app.switchToSession(notif.sessionId);
+      this.app.selectSession(notif.sessionId);
       this.toggleDrawer();
     }
 
