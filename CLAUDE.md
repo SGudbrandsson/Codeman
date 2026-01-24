@@ -387,7 +387,7 @@ Uses `confirming_idle` state to prevent false positives. Fallback: `noOutputTime
 
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
-**Auto-Accept Prompts** (enabled by default): When Claude enters plan mode or asks a question (AskUserQuestion), output stops without a completion message. After `autoAcceptDelayMs` (8s) of silence with no completion message detected, sends Enter to accept the plan/default option. Safety: only fires once per silence period, requires prior output, won't fire during active respawn cycles.
+**Auto-Accept Plan Mode** (enabled by default): When Claude enters plan mode and presents a plan for approval, output stops without a completion message. After `autoAcceptDelayMs` (8s) of silence with no completion message and no `elicitation_dialog` hook signal detected, sends Enter to accept the plan. Does NOT auto-accept AskUserQuestion prompts — those are blocked via the `elicitation_dialog` notification hook which signals the respawn controller to skip auto-accept. Safety: only fires once per silence period, requires prior output, won't fire during active respawn cycles.
 
 ### Token Tracking
 

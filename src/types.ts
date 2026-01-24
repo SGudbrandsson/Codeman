@@ -207,9 +207,9 @@ export interface RespawnConfig {
   completionConfirmMs?: number;
   /** Fallback timeout when no output received at all (ms) */
   noOutputTimeoutMs?: number;
-  /** Whether to auto-accept prompts (plan mode approvals, question selections) by pressing Enter */
+  /** Whether to auto-accept plan mode prompts by pressing Enter (not questions) */
   autoAcceptPrompts?: boolean;
-  /** Delay before auto-accepting prompts when no output and no completion message (ms) */
+  /** Delay before auto-accepting plan mode prompts when no output and no completion message (ms) */
   autoAcceptDelayMs?: number;
 }
 
@@ -372,7 +372,7 @@ export interface QuickRunRequest {
 /**
  * Hook event types triggered by Claude Code's hooks system
  */
-export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'stop';
+export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'elicitation_dialog' | 'stop';
 
 /**
  * Request body for the hook-event API endpoint
@@ -509,7 +509,7 @@ export interface PersistedRespawnConfig {
   sendInit: boolean;
   /** Optional prompt to send if /init doesn't trigger work */
   kickstartPrompt?: string;
-  /** Whether to auto-accept prompts (plan mode, questions) by pressing Enter */
+  /** Whether to auto-accept plan mode prompts by pressing Enter (not questions) */
   autoAcceptPrompts?: boolean;
   /** Delay before auto-accepting prompts (ms) */
   autoAcceptDelayMs?: number;

@@ -1460,13 +1460,22 @@ export class WebServer extends EventEmitter {
 
     this.app.post('/api/hook-event', async (req) => {
       const { event, sessionId } = req.body as HookEventRequest;
-      const validEvents = ['idle_prompt', 'permission_prompt', 'stop'] as const;
+      const validEvents = ['idle_prompt', 'permission_prompt', 'elicitation_dialog', 'stop'] as const;
       if (!event || !validEvents.includes(event as typeof validEvents[number])) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid event type');
       }
       if (!sessionId || !this.sessions.has(sessionId)) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
+
+      // Signal the respawn controller to block auto-accept for question prompts
+      if (event === 'elicitation_dialog') {
+        const controller = this.respawnControllers.get(sessionId);
+        if (controller) {
+          controller.signalElicitation();
+        }
+      }
+
       this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now() });
       return { success: true };
     });

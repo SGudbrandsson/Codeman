@@ -1055,5 +1055,64 @@ describe('RespawnController Edge Cases', () => {
       expect(autoAcceptFired).toBe(false);
       autoAcceptController.stop();
     });
+
+    it('should NOT auto-accept when elicitation dialog is signaled', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+      session.simulateTerminalOutput('Which option do you prefer?');
+
+      // Signal that an elicitation dialog (AskUserQuestion) was detected
+      autoAcceptController.signalElicitation();
+
+      // Wait for autoAcceptDelayMs to expire
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Auto-accept should NOT fire because elicitation was signaled
+      expect(autoAcceptFired).toBe(false);
+      autoAcceptController.stop();
+    });
+
+    it('should clear elicitation flag when working patterns detected', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+      session.simulateTerminalOutput('Question output');
+
+      // Signal elicitation
+      autoAcceptController.signalElicitation();
+
+      // Working pattern clears the elicitation flag (new turn started)
+      session.simulateTerminalOutput('Thinking');
+
+      // New silence after work - plan mode approval
+      session.simulateTerminalOutput('Plan: Here is the plan...');
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Auto-accept should fire now (elicitation cleared by working pattern)
+      expect(autoAcceptFired).toBe(true);
+      autoAcceptController.stop();
+    });
   });
 });

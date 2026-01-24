@@ -20,7 +20,7 @@ describe('generateHooksConfig', () => {
   it('should have Notification hooks array', () => {
     const config = generateHooksConfig();
     expect(config.hooks.Notification).toBeInstanceOf(Array);
-    expect(config.hooks.Notification).toHaveLength(2);
+    expect(config.hooks.Notification).toHaveLength(3);
   });
 
   it('should have Stop hooks array', () => {
@@ -41,6 +41,13 @@ describe('generateHooksConfig', () => {
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
     const permHook = notifHooks.find(h => h.matcher === 'permission_prompt');
     expect(permHook).toBeDefined();
+  });
+
+  it('should configure elicitation_dialog matcher', () => {
+    const config = generateHooksConfig();
+    const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
+    const elicitHook = notifHooks.find(h => h.matcher === 'elicitation_dialog');
+    expect(elicitHook).toBeDefined();
   });
 
   it('should use env vars in curl commands (not hardcoded URLs)', () => {
@@ -69,6 +76,7 @@ describe('generateHooksConfig', () => {
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
     expect(notifHooks[0].hooks[0].command).toContain('"idle_prompt"');
     expect(notifHooks[1].hooks[0].command).toContain('"permission_prompt"');
+    expect(notifHooks[2].hooks[0].command).toContain('"elicitation_dialog"');
     const stopHooks = config.hooks.Stop as Array<{ hooks: Array<{ command: string }> }>;
     expect(stopHooks[0].hooks[0].command).toContain('"stop"');
   });
@@ -118,7 +126,7 @@ describe('writeHooksConfig', () => {
     const settingsPath = join(testDir, '.claude', 'settings.local.json');
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(parsed.hooks).toBeDefined();
-    expect(parsed.hooks.Notification).toHaveLength(2);
+    expect(parsed.hooks.Notification).toHaveLength(3);
     expect(parsed.hooks.Stop).toHaveLength(1);
   });
 

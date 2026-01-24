@@ -888,7 +888,7 @@ class ClaudemanApp {
     this.eventSource.addEventListener('respawn:autoAcceptSent', (e) => {
       const data = JSON.parse(e.data);
       if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnStep').textContent = '⏎ Auto-accepted prompt';
+        document.getElementById('respawnStep').textContent = '⏎ Auto-accepted plan';
       }
       const session = this.sessions.get(data.sessionId);
       this.notificationManager?.notify({
@@ -896,8 +896,8 @@ class ClaudemanApp {
         category: 'auto-accept',
         sessionId: data.sessionId,
         sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title: 'Auto-Accepted',
-        message: `Accepted prompt for ${session?.name || 'session'}`,
+        title: 'Plan Accepted',
+        message: `Accepted plan mode for ${session?.name || 'session'}`,
       });
     });
 

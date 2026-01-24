@@ -36,6 +36,10 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
           matcher: 'permission_prompt',
           hooks: [{ type: 'command', command: curlCmd('permission_prompt'), timeout: 10000 }],
         },
+        {
+          matcher: 'elicitation_dialog',
+          hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: 10000 }],
+        },
       ],
       Stop: [
         {
