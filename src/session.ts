@@ -18,6 +18,7 @@
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem } from './types.js';
@@ -64,58 +65,62 @@ const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
 const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
 
 // ============================================================================
-// Claude CLI Path Resolution
+// Claude CLI PATH Resolution
 // ============================================================================
 
-/** Common installation paths for the Claude CLI binary */
-const CLAUDE_COMMON_PATHS = [
-  `${process.env.HOME}/.local/bin/claude`,
-  `${process.env.HOME}/.claude/local/claude`,
-  '/usr/local/bin/claude',
-  '/usr/bin/claude',
-  `${process.env.HOME}/.npm-global/bin/claude`,
-  `${process.env.HOME}/bin/claude`,
+/** Common directories where the Claude CLI binary may be installed */
+const CLAUDE_SEARCH_DIRS = [
+  `${process.env.HOME}/.local/bin`,
+  `${process.env.HOME}/.claude/local`,
+  '/usr/local/bin',
+  `${process.env.HOME}/.npm-global/bin`,
+  `${process.env.HOME}/bin`,
 ];
 
-/** Cached resolved path to the claude binary */
-let _resolvedClaudePath: string | null = null;
+/** Cached PATH string with claude's directory prepended */
+let _augmentedPath: string | null = null;
 
 /**
- * Resolves the absolute path to the `claude` CLI binary.
+ * Returns a PATH string that includes the directory containing `claude`.
  *
- * Uses `which` to find the binary in PATH first, then falls back to common
- * installation locations. The result is cached for subsequent calls.
- *
- * @throws {Error} If claude CLI cannot be found in PATH or common locations
+ * Finds the claude binary (via `which` or common install locations), then
+ * prepends its directory to the current PATH if not already present.
+ * Result is cached for subsequent calls.
  */
-function resolveClaudePath(): string {
-  if (_resolvedClaudePath) return _resolvedClaudePath;
+function getAugmentedPath(): string {
+  if (_augmentedPath) return _augmentedPath;
 
-  // Try `which` first (respects PATH)
+  const currentPath = process.env.PATH || '';
+  let claudeDir: string | null = null;
+
+  // Try `which` first (respects current PATH)
   try {
     const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
     if (result && existsSync(result)) {
-      _resolvedClaudePath = result;
-      console.log('[Session] Resolved claude CLI path:', _resolvedClaudePath);
-      return _resolvedClaudePath;
+      claudeDir = dirname(result);
     }
   } catch {
-    // `which` failed, try common paths
+    // not in PATH, check common locations
   }
 
-  // Check common installation paths
-  for (const p of CLAUDE_COMMON_PATHS) {
-    if (existsSync(p)) {
-      _resolvedClaudePath = p;
-      console.log('[Session] Found claude CLI at common path:', _resolvedClaudePath);
-      return _resolvedClaudePath;
+  // Fallback: check common installation directories
+  if (!claudeDir) {
+    for (const dir of CLAUDE_SEARCH_DIRS) {
+      if (existsSync(`${dir}/claude`)) {
+        claudeDir = dir;
+        break;
+      }
     }
   }
 
-  throw new Error(
-    'Claude CLI not found. Ensure `claude` is installed and available in PATH. ' +
-    'Checked: PATH lookup and common paths: ' + CLAUDE_COMMON_PATHS.join(', ')
-  );
+  if (claudeDir && !currentPath.split(':').includes(claudeDir)) {
+    _augmentedPath = `${claudeDir}:${currentPath}`;
+    console.log('[Session] Augmented PATH with claude directory:', claudeDir);
+  } else {
+    _augmentedPath = currentPath;
+  }
+
+  return _augmentedPath;
 }
 
 // ============================================================================
@@ -793,8 +798,7 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if screen is not used
     if (!this.ptyProcess) {
-      const claudePath = resolveClaudePath();
-      this.ptyProcess = pty.spawn(claudePath, [
+      this.ptyProcess = pty.spawn('claude', [
         '--dangerously-skip-permissions'
       ], {
         name: 'xterm-256color',
@@ -803,6 +807,7 @@ export class Session extends EventEmitter {
         cwd: this.workingDir,
         env: {
           ...process.env,
+          PATH: getAugmentedPath(),
           TERM: 'xterm-256color',
           // Inform Claude it's running within Claudeman (helps prevent self-termination)
           CLAUDEMAN_SCREEN: '1',
@@ -1072,8 +1077,7 @@ export class Session extends EventEmitter {
         // Spawn claude in a real PTY
         console.log('[Session] Spawning PTY for claude with prompt:', prompt.substring(0, 50));
 
-        const claudePath = resolveClaudePath();
-        this.ptyProcess = pty.spawn(claudePath, [
+        this.ptyProcess = pty.spawn('claude', [
           '-p',
           '--dangerously-skip-permissions',
           '--output-format', 'stream-json',
@@ -1085,6 +1089,7 @@ export class Session extends EventEmitter {
           cwd: this.workingDir,
           env: {
             ...process.env,
+            PATH: getAugmentedPath(),
             TERM: 'xterm-256color',
             // Inform Claude it's running within Claudeman
             CLAUDEMAN_SCREEN: '1',

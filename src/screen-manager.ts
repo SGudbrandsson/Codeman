@@ -22,50 +22,47 @@ import { homedir } from 'node:os';
 import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage } from './types.js';
 
 // ============================================================================
-// Claude CLI Path Resolution
+// Claude CLI PATH Resolution
 // ============================================================================
 
-/** Common installation paths for the Claude CLI binary */
-const CLAUDE_COMMON_PATHS = [
-  `${homedir()}/.local/bin/claude`,
-  `${homedir()}/.claude/local/claude`,
-  '/usr/local/bin/claude',
-  '/usr/bin/claude',
-  `${homedir()}/.npm-global/bin/claude`,
-  `${homedir()}/bin/claude`,
+/** Common directories where the Claude CLI binary may be installed */
+const CLAUDE_SEARCH_DIRS = [
+  `${homedir()}/.local/bin`,
+  `${homedir()}/.claude/local`,
+  '/usr/local/bin',
+  `${homedir()}/.npm-global/bin`,
+  `${homedir()}/bin`,
 ];
 
-/** Cached resolved path to the claude binary */
-let _resolvedClaudePath: string | null = null;
+/** Cached directory containing the claude binary */
+let _claudeDir: string | null = null;
 
 /**
- * Resolves the absolute path to the `claude` CLI binary.
- * Uses `which` first, then falls back to common installation locations.
+ * Finds the directory containing the `claude` binary.
+ * Returns null if not found (will rely on PATH as-is).
  */
-function resolveClaudePath(): string {
-  if (_resolvedClaudePath) return _resolvedClaudePath;
+function findClaudeDir(): string | null {
+  if (_claudeDir !== null) return _claudeDir;
 
   try {
     const result = execSync('which claude', { encoding: 'utf-8', timeout: 5000 }).trim();
     if (result && existsSync(result)) {
-      _resolvedClaudePath = result;
-      return _resolvedClaudePath;
+      _claudeDir = dirname(result);
+      return _claudeDir;
     }
   } catch {
-    // `which` failed, try common paths
+    // not in PATH
   }
 
-  for (const p of CLAUDE_COMMON_PATHS) {
-    if (existsSync(p)) {
-      _resolvedClaudePath = p;
-      return _resolvedClaudePath;
+  for (const dir of CLAUDE_SEARCH_DIRS) {
+    if (existsSync(`${dir}/claude`)) {
+      _claudeDir = dir;
+      return _claudeDir;
     }
   }
 
-  throw new Error(
-    'Claude CLI not found. Ensure `claude` is installed and available in PATH. ' +
-    'Checked: PATH lookup and common paths: ' + CLAUDE_COMMON_PATHS.join(', ')
-  );
+  _claudeDir = '';  // mark as searched, not found
+  return null;
 }
 
 /** Path to persisted screen session metadata */
@@ -215,10 +212,11 @@ export class ScreenManager extends EventEmitter {
     // Create screen in detached mode with the appropriate command
     // Set CLAUDEMAN_SCREEN=1 so Claude sessions know they're running in Claudeman
     // This helps prevent Claude from attempting to kill its own screen session
+    const claudeDir = findClaudeDir();
+    const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
     const envVars = `CLAUDEMAN_SCREEN=1 CLAUDEMAN_SESSION_ID=${sessionId} CLAUDEMAN_SCREEN_NAME=${screenName} CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`;
-    const claudePath = resolveClaudePath();
     const cmd = mode === 'claude'
-      ? `${envVars} ${claudePath} --dangerously-skip-permissions`
+      ? `${envVars} claude --dangerously-skip-permissions`
       : `${envVars} $SHELL`;
 
     try {
@@ -226,7 +224,7 @@ export class ScreenManager extends EventEmitter {
       const screenProcess = spawn('screen', [
         '-dmS', screenName,
         '-c', '/dev/null', // Use empty config
-        'bash', '-c', `cd "${workingDir}" && ${cmd}`
+        'bash', '-c', `${pathExport}cd "${workingDir}" && ${cmd}`
       ], {
         cwd: workingDir,
         detached: true,
