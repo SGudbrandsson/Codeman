@@ -385,12 +385,12 @@ curl -X POST localhost:3000/api/sessions/:id/input \
 ### Idle Detection
 
 **RespawnController (Claude Code 2024+)**: Multi-layer detection with confidence scoring:
-1. **Completion message**: Primary signal - detects "for Xm Xs" time patterns (e.g., "Worked for 2m 46s")
+1. **Completion message**: Primary signal - detects "Worked for Xm Xs" time patterns (requires "Worked" prefix to avoid false positives)
 2. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
 3. **Token stability**: Tokens haven't changed
 4. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
 
-Uses `confirming_idle` state to prevent false positives. Fallback: `noOutputTimeoutMs` (30s) if no output at all.
+Uses `confirming_idle` state to prevent false positives. Cancels idle confirmation if substantial output (>2 chars after ANSI stripping) arrives during the wait. Fallback: `noOutputTimeoutMs` (30s) if no output at all.
 
 **Step Confirmation**: After sending each respawn step (update, init, kickstart), the controller waits for the same `completionConfirmMs` silence before proceeding. This ensures Claude finishes processing each prompt before the next command is sent.
 
@@ -455,6 +455,7 @@ See `src/ralph-config.ts` for parsing logic.
 - Switch tabs → Panel shows tracker for active session
 - `tracker.reset()` → Clears todos/state, keeps enabled status
 - `tracker.fullReset()` → Complete reset to initial state
+- `tracker.configure({ enabled?, completionPhrase?, maxIterations? })` → Partial config update from external state
 
 **API**:
 - `GET /api/sessions/:id/ralph-state` - Get loop state and todos
@@ -715,6 +716,16 @@ Long-running sessions are supported with automatic trimming:
 | PUT | `/api/spawn/config` | Update orchestrator config |
 | POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
 | POST | `/api/hook-event` | Receive Claude Code hook callbacks. Body: `{event, sessionId, data?}`. Data fields forwarded to SSE broadcast |
+
+### API Input Limits
+
+| Limit | Value | Endpoint |
+|-------|-------|----------|
+| Input length | 64KB | `/api/sessions/:id/input` |
+| Terminal cols | 500 | `/api/sessions/:id/resize` |
+| Terminal rows | 200 | `/api/sessions/:id/resize` |
+| Session name | 128 chars | Session rename |
+| Hook data | 8KB | `/api/hook-event` (sanitized + truncated) |
 
 ## Keyboard Shortcuts (Web UI)
 

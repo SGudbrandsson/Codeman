@@ -2,7 +2,7 @@
 
 > This document consolidates official Anthropic documentation, community best practices, and implementation details for autonomous Claude Code loops.
 
-**Last Updated**: 2026-01-23
+**Last Updated**: 2026-01-24
 **Sources**: [Official Anthropic Plugin](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum), [Claude Code Docs](https://code.claude.com/docs/en/hooks), [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices)
 
 ---
@@ -670,6 +670,7 @@ Each session has its **own independent tracker**:
 | Switch tabs | Panel shows tracker for active session |
 | `tracker.reset()` | Clears todos/state, keeps enabled status |
 | `tracker.fullReset()` | Complete reset to initial state |
+| `tracker.configure({...})` | Partial config update (enabled, completionPhrase, maxIterations) |
 
 ### State Structure
 
