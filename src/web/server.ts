@@ -26,6 +26,7 @@ import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
+import { writeHooksConfig } from '../hooks-config.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   getErrorMessage,
@@ -39,6 +40,7 @@ import {
   type QuickStartRequest,
   type CreateScheduledRunRequest,
   type QuickRunRequest,
+  type HookEventRequest,
   type ApiResponse,
   type SessionResponse,
   type QuickStartResponse,
@@ -1081,6 +1083,9 @@ export class WebServer extends EventEmitter {
         // Write .mcp.json for Claude Code to discover spawn tools
         this.writeMcpConfig(casePath);
 
+        // Write .claude/settings.local.json with hooks for desktop notifications
+        writeHooksConfig(casePath);
+
         this.broadcast('case:created', { name, path: casePath });
 
         return { success: true, case: { name, path: casePath } };
@@ -1220,6 +1225,9 @@ export class WebServer extends EventEmitter {
 
           // Write .mcp.json for Claude Code to discover spawn tools
           this.writeMcpConfig(casePath);
+
+          // Write .claude/settings.local.json with hooks for desktop notifications
+          writeHooksConfig(casePath);
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
@@ -1446,6 +1454,21 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse task spec');
       }
       return { success: true, data: { agentId } };
+    });
+
+    // ========== Hook Events ==========
+
+    this.app.post('/api/hook-event', async (req) => {
+      const { event, sessionId } = req.body as HookEventRequest;
+      const validEvents = ['idle_prompt', 'permission_prompt', 'stop'] as const;
+      if (!event || !validEvents.includes(event as typeof validEvents[number])) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid event type');
+      }
+      if (!sessionId || !this.sessions.has(sessionId)) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+      this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now() });
+      return { success: true };
     });
   }
 

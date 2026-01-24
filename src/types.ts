@@ -369,6 +369,21 @@ export interface QuickRunRequest {
   workingDir?: string;
 }
 
+/**
+ * Hook event types triggered by Claude Code's hooks system
+ */
+export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'stop';
+
+/**
+ * Request body for the hook-event API endpoint
+ */
+export interface HookEventRequest {
+  /** Type of hook event that fired */
+  event: HookEventType;
+  /** Session ID from CLAUDEMAN_SESSION_ID env var */
+  sessionId: string;
+}
+
 // ========== API Response Types ==========
 
 /**

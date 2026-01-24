@@ -19,7 +19,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
-**Key Dependencies**: fastify (REST API), node-pty (PTY spawning), ink/react (TUI), xterm.js (web terminal)
+**Key Dependencies**: fastify (REST API), node-pty (PTY spawning), ink/react (TUI), xterm.js (web terminal), @modelcontextprotocol/sdk (MCP server for spawn protocol)
 
 **Requirements**: Node.js 18+, Claude CLI (`claude`) in PATH, GNU Screen (`apt install screen` / `brew install screen`)
 
@@ -34,12 +34,13 @@ npm install
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
 
 ```bash
-npm run build          # Compile TypeScript + copy static files to dist/web/
+npm run build          # Compile TS + copy static files + templates + make bins executable
 npm run clean          # Remove dist/
 
 # Start web server (pick one):
 npx tsx src/index.ts web           # Dev mode - no build needed (RECOMMENDED)
 npx tsx src/index.ts web -p 8080   # Dev mode with custom port
+npx tsx src/index.ts web --https   # Dev mode with self-signed TLS (enables browser notifications)
 npm run web                        # After npm run build (shorthand)
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
@@ -68,7 +69,7 @@ npx vitest run -t "should create session" # By pattern
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
 # 3125: ralph-integration.test.ts
-# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator
+# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config
 # Next available: 3127+
 
 # Tests mock PTY - no real Claude CLI spawned
@@ -85,6 +86,12 @@ npx vitest run -t "should create session" # By pattern
 # TypeScript checking
 npm run typecheck                         # Type check without building (or: npx tsc --noEmit)
 # Note: No ESLint/Prettier configured - rely on TypeScript strict mode
+
+# MCP Server (for Claude Code to call spawn tools directly):
+# Configure in Claude Code's MCP settings:
+#   command: "node", args: ["dist/mcp-server.js"]
+#   env: { CLAUDEMAN_API_URL: "http://localhost:3000", CLAUDEMAN_SESSION_ID: "<id>" }
+npx tsx src/mcp-server.ts                 # Dev mode (stdio transport)
 
 # Debugging
 screen -ls                                # List GNU screen sessions
@@ -145,13 +152,16 @@ claudeman reset                    # Reset all state
 | `src/tui/App.tsx` | TUI main component: tabs, terminal viewport, status bar (Ink/React) |
 | `src/tui/components/*.tsx` | TUI components: StartScreen, TabBar, TerminalView, StatusBar, RalphPanel, HelpOverlay |
 | `src/tui/hooks/useSessionManager.ts` | TUI session state, screen polling, input handling |
+| `src/hooks-config.ts` | Generates .claude/settings.local.json with Claude Code hooks for desktop notifications |
 | `src/types.ts` | All TypeScript interfaces |
 | `src/templates/claude-md.ts` | CLAUDE.md template generation with placeholder support |
 | `src/templates/case-template.md` | Default CLAUDE.md template for new cases (with placeholders) |
 | `src/spawn-types.ts` | Types, YAML parser, factory functions for spawn1337 protocol |
-| `src/spawn-detector.ts` | Detects `<spawn1337>` tags in terminal output (like ralph-tracker.ts) |
+| `src/spawn-detector.ts` | Detects `<spawn1337>` tags in terminal output (legacy, replaced by MCP) |
 | `src/spawn-orchestrator.ts` | Full agent lifecycle: spawn, monitor, budget, queue, cleanup |
 | `src/spawn-claude-md.ts` | Generates CLAUDE.md for spawned agent sessions |
+| `src/mcp-server.ts` | MCP server binary (`claudeman-mcp`) exposing spawn tools to Claude Code |
+| `src/tui/DirectAttach.ts` | Full-screen console attach with tab switching between sessions |
 
 ### Data Flow
 
@@ -183,12 +193,26 @@ Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optiona
 
 Spawned agents are full-power Claude sessions running in their own screen sessions. They communicate via a filesystem-based message bus and signal completion via RalphTracker's `<promise>` mechanism.
 
-**Protocol Flow:**
+**Primary Interface: MCP Server** (`claudeman-mcp` binary). Claude Code calls spawn tools directly via MCP protocol, replacing the legacy terminal-tag-parsing approach (SpawnDetector).
+
+**MCP Tools:**
+- `spawn_agent` - Spawn a new autonomous agent (builds task spec from parameters)
+- `list_agents` - List all agents (active + completed + queued)
+- `get_agent_status` - Get detailed agent status + progress
+- `get_agent_result` - Read a completed agent's result
+- `send_agent_message` - Send a message to a running agent
+- `cancel_agent` - Cancel a running agent
+
+**MCP Environment Variables:**
+- `CLAUDEMAN_API_URL` - Base URL for the Claudeman API (default: `http://localhost:3000`)
+- `CLAUDEMAN_SESSION_ID` - Session ID of the calling Claude session
+
+**Protocol Flow (via MCP):**
 ```
-Parent outputs <spawn1337>task.md</spawn1337>
-  → SpawnDetector parses tag
-  → SpawnOrchestrator reads + parses task spec file (YAML frontmatter)
-  → Creates agent directory: ~/claudeman-cases/spawn-<agentId>/
+Claude calls spawn_agent MCP tool
+  → MCP server builds task spec YAML
+  → POST /api/spawn/trigger with task spec
+  → SpawnOrchestrator creates agent directory: ~/claudeman-cases/spawn-<agentId>/
   → Spawns interactive Claude session in screen
   → Injects initial prompt via writeViaScreen()
   → Agent works autonomously, writes progress to spawn-comms/
@@ -196,7 +220,7 @@ Parent outputs <spawn1337>task.md</spawn1337>
   → Orchestrator reads result.md, notifies parent via SSE
 ```
 
-**Tag Patterns** (detected by `SpawnDetector`):
+**Legacy Tag Patterns** (detected by `SpawnDetector`, still functional but superseded by MCP):
 - `<spawn1337>path/to/task.md</spawn1337>` - Spawn request
 - `<spawn1337-status agentId="id"/>` - Status query
 - `<spawn1337-cancel agentId="id"/>` - Cancel request
@@ -241,7 +265,7 @@ Task instructions here...
 - Max spawn depth: 3 (prevents infinite recursion)
 - Default timeout: 30 minutes (max: 120)
 
-**Session Integration:** Each session has a `SpawnDetector` (alongside RalphTracker) that forwards terminal data. Spawn events (`spawnRequested`, `spawnStatusRequested`, `spawnCancelRequested`, `spawnMessageToChild`) are emitted on the session and wired to the orchestrator in server.ts.
+**Session Integration:** The MCP server communicates with the Claudeman API over HTTP. Legacy SpawnDetector (alongside RalphTracker) can still forward terminal data for tag-based spawning. Spawn events (`spawnRequested`, `spawnStatusRequested`, `spawnCancelRequested`, `spawnMessageToChild`) are emitted on the session and wired to the orchestrator in server.ts.
 
 **Agent Tree:** Agents can spawn children (up to `maxSpawnDepth`). Sessions track `parentAgentId` and `childAgentIds`. Cancelling a parent cascades to all children.
 
@@ -440,7 +464,7 @@ Tab switch/new session fix: clear xterm → write buffer → resize PTY → Ctrl
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `scheduled:`, `case:`, `screen:`, `init`.
+Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `hook:`, `scheduled:`, `case:`, `screen:`, `init`.
 
 Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `session:idle`, `session:working` - Status indicator updates
@@ -450,6 +474,7 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
 - `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed`, `spawn:timeout`, `spawn:cancelled` - Agent lifecycle
 - `spawn:progress`, `spawn:message`, `spawn:budgetWarning`, `spawn:stateUpdate` - Agent monitoring
+- `hook:idle_prompt`, `hook:permission_prompt`, `hook:stop` - Claude Code hooks (desktop notifications)
 
 ### Frontend (app.js)
 
@@ -462,6 +487,18 @@ Vanilla JS + xterm.js. Key functions:
 - Server batches terminal data every 16ms before broadcasting via SSE
 - Client uses `requestAnimationFrame` to batch xterm.js writes
 - Prevents UI jank during high-throughput Claude output
+
+### HTTPS & Browser Notifications
+
+**HTTPS**: The `--https` flag generates/reuses self-signed certificates in `~/.claudeman/certs/` (`server.key`, `server.crt`). Required for the Web Notification API in browsers.
+
+**Notification Layers** (in `app.js`, `NotificationManager` class):
+1. In-app drawer with notification list
+2. Tab title flashing with unread count (when tab unfocused)
+3. Web Notification API (browser push notifications)
+4. Audio alerts (critical level only)
+
+Notifications triggered for: session events, respawn updates, spawn agent lifecycle. Preferences persist to server-side `state.json` per session.
 
 ### State Store
 
@@ -538,6 +575,7 @@ TUI uses React JSX (`jsxImportSource: react`) for Ink components.
 - **SSE event**: Emit via `broadcast()` in server.ts, handle in `app.js:handleSSEEvent()` switch
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
 - **Session setting**: Add field to `SessionState` in `types.ts`, include in `session.toState()`, call `this.persistSessionState(session)` in server.ts after the change
+- **MCP tool**: Add tool definition in `mcp-server.ts` using `server.tool()`, use `apiRequest()` to call Claudeman REST API
 - **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3127+), add to port allocation comment above
 
 ### API Error Codes
@@ -573,6 +611,7 @@ App.tsx
 │   ├── List navigation (↑/↓, Enter, a/d/D)
 │   ├── Case creation flow
 │   └── Tab switcher menu
+├── DirectAttach.ts         # Full-screen console attach with tab switching
 ├── TabBar.tsx              # Session tabs (when attached)
 ├── TerminalView.tsx        # Viewport into screen session
 ├── StatusBar.tsx           # Bottom bar with status/tokens
@@ -639,6 +678,7 @@ Long-running sessions are supported with automatic trimming:
 | GET | `/api/spawn/status` | Orchestrator status (counts, config) |
 | PUT | `/api/spawn/config` | Update orchestrator config |
 | POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
+| POST | `/api/hook-event` | Receive Claude Code hook callbacks (idle_prompt, permission_prompt, stop) |
 
 ## Keyboard Shortcuts (Web UI)
 
@@ -699,6 +739,7 @@ Long-running sessions are supported with automatic trimming:
 | `~/.claudeman/state-inner.json` | Ralph loop/todo state per session (separate to reduce writes) |
 | `~/.claudeman/screens.json` | Screen session metadata (for recovery after restart) |
 | `~/.claudeman/settings.json` | User preferences (lastUsedCase, custom template path) |
+| `~/.claudeman/certs/` | Self-signed TLS certificates for `--https` mode |
 
 **State lifecycle**:
 - Web server creates → session added to `state.json` + `screens.json`

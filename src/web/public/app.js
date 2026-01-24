@@ -1092,6 +1092,46 @@ class ClaudemanApp {
         message: `Agent "${data.agentId}" finished successfully`,
       });
     });
+
+    // Hook events (from Claude Code hooks system)
+    this.eventSource.addEventListener('hook:idle_prompt', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'warning',
+        category: 'hook-idle',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Waiting for Input',
+        message: 'Claude is idle and waiting for a prompt',
+      });
+    });
+
+    this.eventSource.addEventListener('hook:permission_prompt', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'hook-permission',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Permission Required',
+        message: 'Claude needs tool approval to continue',
+      });
+    });
+
+    this.eventSource.addEventListener('hook:stop', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'hook-stop',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Response Complete',
+        message: 'Claude has finished responding',
+      });
+    });
   }
 
   setConnectionStatus(status) {
