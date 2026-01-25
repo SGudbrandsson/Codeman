@@ -241,15 +241,10 @@
       </div>
     </div>
 
-    <!-- Monitor Panel (combined Process Monitor + Background Tasks + Subagents) -->
+    <!-- Monitor Panel (Screen Sessions + Background Tasks) -->
     <div class="monitor-panel" id="monitorPanel">
       <div class="monitor-panel-header" id="monitorPanelHeader">
-        <div class="monitor-tabs">
-          <button class="monitor-tab active" data-tab="monitor" onclick="app.switchMonitorTab('monitor')">Monitor</button>
-          <button class="monitor-tab" data-tab="subagents" onclick="app.switchMonitorTab('subagents')" id="subagentsTabBtn" style="display: none;">
-            Subagents <span id="subagentCountBadge" class="monitor-tab-badge"></span>
-          </button>
-        </div>
+        <div class="monitor-panel-title">Monitor</div>
         <div class="monitor-panel-actions">
           <button class="btn-toolbar btn-sm btn-danger" onclick="app.killAllSessions()" title="Kill all sessions and their screen processes">Kill All</button>
           <button class="btn-icon-sm" onclick="app.reconcileScreens()" title="Refresh screens">&#x21BB;</button>
@@ -259,8 +254,7 @@
         </div>
       </div>
       <div class="monitor-resize-handle" id="monitorResizeHandle"></div>
-      <!-- Monitor Tab Content -->
-      <div class="monitor-panel-body monitor-tab-content active" id="monitorTabContent">
+      <div class="monitor-panel-body" id="monitorTabContent">
         <div class="monitor-section">
           <div class="monitor-section-header">
             <span>Screen Sessions</span>
@@ -278,8 +272,20 @@
           </div>
         </div>
       </div>
-      <!-- Subagents Tab Content -->
-      <div class="monitor-panel-body monitor-tab-content" id="subagentsTabContent" style="display: none;">
+    </div>
+
+    <!-- Subagents Panel (separate from Monitor) -->
+    <div class="subagents-panel" id="subagentsPanel">
+      <div class="subagents-panel-header">
+        <div class="subagents-panel-title">
+          Subagents <span id="subagentCountBadge" class="subagent-badge"></span>
+        </div>
+        <div class="subagents-panel-actions">
+          <button class="btn-icon-sm" onclick="app.toggleSubagentsPanel()" title="Toggle panel" id="subagentsToggleBtn">&#x25B2;</button>
+          <button class="btn-icon-sm" onclick="app.closeSubagentsPanel()" title="Close">&times;</button>
+        </div>
+      </div>
+      <div class="subagents-panel-body" id="subagentsTabContent">
         <div class="subagent-container">
           <div class="subagent-list" id="subagentList">
             <div class="subagent-empty">No background agents detected</div>
