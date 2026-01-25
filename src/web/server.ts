@@ -1621,6 +1621,8 @@ export class WebServer extends EventEmitter {
       kickstartPrompt: config.kickstartPrompt,
       autoAcceptPrompts: config.autoAcceptPrompts,
       autoAcceptDelayMs: config.autoAcceptDelayMs,
+      completionConfirmMs: config.completionConfirmMs,
+      noOutputTimeoutMs: config.noOutputTimeoutMs,
       aiIdleCheckEnabled: config.aiIdleCheckEnabled,
       aiIdleCheckModel: config.aiIdleCheckModel,
       aiIdleCheckMaxContext: config.aiIdleCheckMaxContext,
@@ -2058,6 +2060,54 @@ export class WebServer extends EventEmitter {
 
     this.respawnTimers.set(sessionId, { timer, endAt, startedAt: now });
     this.broadcast('respawn:timerStarted', { sessionId, durationMinutes, endAt, startedAt: now });
+  }
+
+  /**
+   * Restore a RespawnController from persisted configuration.
+   * Creates the controller, sets up listeners, starts it, and optionally sets up a timed respawn.
+   *
+   * @param session - The session to attach the controller to
+   * @param config - The persisted respawn configuration
+   * @param source - Source of the config for logging (e.g., 'state.json' or 'screens.json')
+   */
+  private restoreRespawnController(
+    session: Session,
+    config: PersistedRespawnConfig,
+    source: string
+  ): void {
+    const controller = new RespawnController(session, {
+      idleTimeoutMs: config.idleTimeoutMs,
+      updatePrompt: config.updatePrompt,
+      interStepDelayMs: config.interStepDelayMs,
+      enabled: true,
+      sendClear: config.sendClear,
+      sendInit: config.sendInit,
+      kickstartPrompt: config.kickstartPrompt,
+      completionConfirmMs: config.completionConfirmMs,
+      noOutputTimeoutMs: config.noOutputTimeoutMs,
+      autoAcceptPrompts: config.autoAcceptPrompts,
+      autoAcceptDelayMs: config.autoAcceptDelayMs,
+      aiIdleCheckEnabled: config.aiIdleCheckEnabled,
+      aiIdleCheckModel: config.aiIdleCheckModel,
+      aiIdleCheckMaxContext: config.aiIdleCheckMaxContext,
+      aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs,
+      aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs,
+      aiPlanCheckEnabled: config.aiPlanCheckEnabled,
+      aiPlanCheckModel: config.aiPlanCheckModel,
+      aiPlanCheckMaxContext: config.aiPlanCheckMaxContext,
+      aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs,
+      aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs,
+    });
+
+    this.respawnControllers.set(session.id, controller);
+    this.setupRespawnListeners(session.id, controller);
+    controller.start();
+
+    if (config.durationMinutes && config.durationMinutes > 0) {
+      this.setupTimedRespawn(session.id, config.durationMinutes);
+    }
+
+    console.log(`[Server] Restored respawn controller for session ${session.id} from ${source}`);
   }
 
   // Helper to get custom CLAUDE.md template path from settings
@@ -2540,38 +2590,7 @@ export class WebServer extends EventEmitter {
               // Respawn controller
               if (savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
-                  const controller = new RespawnController(session, {
-                    idleTimeoutMs: savedState.respawnConfig.idleTimeoutMs,
-                    updatePrompt: savedState.respawnConfig.updatePrompt,
-                    interStepDelayMs: savedState.respawnConfig.interStepDelayMs,
-                    enabled: true,
-                    sendClear: savedState.respawnConfig.sendClear,
-                    sendInit: savedState.respawnConfig.sendInit,
-                    kickstartPrompt: savedState.respawnConfig.kickstartPrompt,
-                    completionConfirmMs: savedState.respawnConfig.completionConfirmMs,
-                    noOutputTimeoutMs: savedState.respawnConfig.noOutputTimeoutMs,
-                    autoAcceptPrompts: savedState.respawnConfig.autoAcceptPrompts ?? true,
-                    autoAcceptDelayMs: savedState.respawnConfig.autoAcceptDelayMs ?? 8000,
-                    aiIdleCheckEnabled: savedState.respawnConfig.aiIdleCheckEnabled ?? true,
-                    aiIdleCheckModel: savedState.respawnConfig.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
-                    aiIdleCheckMaxContext: savedState.respawnConfig.aiIdleCheckMaxContext ?? 16000,
-                    aiIdleCheckTimeoutMs: savedState.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
-                    aiIdleCheckCooldownMs: savedState.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
-                    aiPlanCheckEnabled: savedState.respawnConfig.aiPlanCheckEnabled ?? true,
-                    aiPlanCheckModel: savedState.respawnConfig.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
-                    aiPlanCheckMaxContext: savedState.respawnConfig.aiPlanCheckMaxContext ?? 8000,
-                    aiPlanCheckTimeoutMs: savedState.respawnConfig.aiPlanCheckTimeoutMs ?? 60000,
-                    aiPlanCheckCooldownMs: savedState.respawnConfig.aiPlanCheckCooldownMs ?? 30000,
-                  });
-                  this.respawnControllers.set(session.id, controller);
-                  this.setupRespawnListeners(session.id, controller);
-                  controller.start();
-
-                  if (savedState.respawnConfig.durationMinutes && savedState.respawnConfig.durationMinutes > 0) {
-                    this.setupTimedRespawn(session.id, savedState.respawnConfig.durationMinutes);
-                  }
-
-                  console.log(`[Server] Restored respawn controller for session ${session.id}`);
+                  this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
                 } catch (err) {
                   console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
                 }
@@ -2581,36 +2600,7 @@ export class WebServer extends EventEmitter {
             // Fallback: restore respawn from screens.json if state.json didn't have it
             if (!this.respawnControllers.has(session.id) && screen.respawnConfig?.enabled) {
               try {
-                const controller = new RespawnController(session, {
-                  idleTimeoutMs: screen.respawnConfig.idleTimeoutMs,
-                  updatePrompt: screen.respawnConfig.updatePrompt,
-                  interStepDelayMs: screen.respawnConfig.interStepDelayMs,
-                  enabled: true,
-                  sendClear: screen.respawnConfig.sendClear,
-                  sendInit: screen.respawnConfig.sendInit,
-                  kickstartPrompt: screen.respawnConfig.kickstartPrompt,
-                  autoAcceptPrompts: screen.respawnConfig.autoAcceptPrompts ?? true,
-                  autoAcceptDelayMs: screen.respawnConfig.autoAcceptDelayMs ?? 8000,
-                  aiIdleCheckEnabled: screen.respawnConfig.aiIdleCheckEnabled ?? true,
-                  aiIdleCheckModel: screen.respawnConfig.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
-                  aiIdleCheckMaxContext: screen.respawnConfig.aiIdleCheckMaxContext ?? 16000,
-                  aiIdleCheckTimeoutMs: screen.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
-                  aiIdleCheckCooldownMs: screen.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
-                  aiPlanCheckEnabled: screen.respawnConfig.aiPlanCheckEnabled ?? true,
-                  aiPlanCheckModel: screen.respawnConfig.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
-                  aiPlanCheckMaxContext: screen.respawnConfig.aiPlanCheckMaxContext ?? 8000,
-                  aiPlanCheckTimeoutMs: screen.respawnConfig.aiPlanCheckTimeoutMs ?? 60000,
-                  aiPlanCheckCooldownMs: screen.respawnConfig.aiPlanCheckCooldownMs ?? 30000,
-                });
-                this.respawnControllers.set(session.id, controller);
-                this.setupRespawnListeners(session.id, controller);
-                controller.start();
-
-                if (screen.respawnConfig.durationMinutes && screen.respawnConfig.durationMinutes > 0) {
-                  this.setupTimedRespawn(session.id, screen.respawnConfig.durationMinutes);
-                }
-
-                console.log(`[Server] Restored respawn controller from screens.json for session ${session.id}`);
+                this.restoreRespawnController(session, screen.respawnConfig, 'screens.json');
               } catch (err) {
                 console.error(`[Server] Failed to restore respawn from screens.json for session ${session.id}:`, err);
               }

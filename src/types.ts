@@ -558,6 +558,10 @@ export interface PersistedRespawnConfig {
   autoAcceptPrompts?: boolean;
   /** Delay before auto-accepting prompts (ms) */
   autoAcceptDelayMs?: number;
+  /** Time to wait after completion message before confirming idle (ms) */
+  completionConfirmMs?: number;
+  /** Fallback timeout when no output received at all (ms) */
+  noOutputTimeoutMs?: number;
   /** Whether AI idle check is enabled */
   aiIdleCheckEnabled?: boolean;
   /** Model to use for AI idle check */

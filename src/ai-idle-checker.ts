@@ -24,51 +24,25 @@
  * @module ai-idle-checker
  */
 
-import { execSync, spawn as childSpawn } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { EventEmitter } from 'node:events';
-import { getAugmentedPath } from './session.js';
+import {
+  AiCheckerBase,
+  type AiCheckerConfigBase,
+  type AiCheckerResultBase,
+  type AiCheckerStateBase,
+  type AiCheckerStatus,
+} from './ai-checker-base.js';
 
 // ========== Types ==========
 
-export interface AiIdleCheckConfig {
-  /** Whether AI idle check is enabled */
-  enabled: boolean;
-  /** Model to use for the check */
-  model: string;
-  /** Maximum characters of terminal buffer to send */
-  maxContextChars: number;
-  /** Timeout for the check in ms */
-  checkTimeoutMs: number;
-  /** Cooldown after WORKING verdict in ms */
-  cooldownMs: number;
-  /** Cooldown after errors in ms */
-  errorCooldownMs: number;
-  /** Max consecutive errors before disabling */
-  maxConsecutiveErrors: number;
-}
+export interface AiIdleCheckConfig extends AiCheckerConfigBase {}
 
-export type AiCheckStatus = 'ready' | 'checking' | 'cooldown' | 'disabled' | 'error';
+// Re-export the status type for backwards compatibility
+export type AiCheckStatus = AiCheckerStatus;
 export type AiCheckVerdict = 'IDLE' | 'WORKING' | 'ERROR';
 
-export interface AiCheckResult {
-  verdict: AiCheckVerdict;
-  reasoning: string;
-  durationMs: number;
-}
+export interface AiCheckResult extends AiCheckerResultBase<AiCheckVerdict> {}
 
-export interface AiCheckState {
-  status: AiCheckStatus;
-  lastVerdict: AiCheckVerdict | null;
-  lastReasoning: string | null;
-  lastCheckDurationMs: number | null;
-  cooldownEndsAt: number | null;
-  consecutiveErrors: number;
-  totalChecks: number;
-  disabledReason: string | null;
-}
+export interface AiCheckState extends AiCheckerStateBase<AiCheckVerdict> {}
 
 /** Events emitted by AiIdleChecker */
 export interface AiIdleCheckerEvents {
@@ -93,15 +67,6 @@ const DEFAULT_AI_CHECK_CONFIG: AiIdleCheckConfig = {
   maxConsecutiveErrors: 3,
 };
 
-/** ANSI escape code pattern for stripping terminal formatting */
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
-
-/** Poll interval for checking temp file completion */
-const POLL_INTERVAL_MS = 500;
-
-/** Marker written to temp file when check is complete */
-const DONE_MARKER = '__AICHECK_DONE__';
-
 /** Pattern to match IDLE or WORKING as the first word of output */
 const VERDICT_PATTERN = /^\s*(IDLE|WORKING)\b/i;
 
@@ -125,397 +90,54 @@ Then optionally explain briefly why.`;
  * Manages AI-powered idle detection by spawning a fresh Claude CLI session
  * to analyze terminal output and provide a definitive IDLE/WORKING verdict.
  */
-export class AiIdleChecker extends EventEmitter {
-  private config: AiIdleCheckConfig;
-  private sessionId: string;
-
-  // State
-  private _status: AiCheckStatus = 'ready';
-  private lastVerdict: AiCheckVerdict | null = null;
-  private lastReasoning: string | null = null;
-  private lastCheckDurationMs: number | null = null;
-  private cooldownEndsAt: number | null = null;
-  private cooldownTimer: NodeJS.Timeout | null = null;
-  private consecutiveErrors: number = 0;
-  private totalChecks: number = 0;
-  private disabledReason: string | null = null;
-
-  // Active check state
-  private checkScreenName: string | null = null;
-  private checkTempFile: string | null = null;
-  private checkPromptFile: string | null = null;
-  private checkPollTimer: NodeJS.Timeout | null = null;
-  private checkTimeoutTimer: NodeJS.Timeout | null = null;
-  private checkStartTime: number = 0;
-  private checkCancelled: boolean = false;
-  private checkResolve: ((result: AiCheckResult) => void) | null = null;
+export class AiIdleChecker extends AiCheckerBase<
+  AiCheckVerdict,
+  AiIdleCheckConfig,
+  AiCheckResult,
+  AiCheckState
+> {
+  protected readonly screenNamePrefix = 'claudeman-aicheck-';
+  protected readonly doneMarker = '__AICHECK_DONE__';
+  protected readonly tempFilePrefix = 'claudeman-aicheck';
+  protected readonly logPrefix = '[AiIdleChecker]';
+  protected readonly checkDescription = 'AI idle check';
 
   constructor(sessionId: string, config: Partial<AiIdleCheckConfig> = {}) {
-    super();
-    this.sessionId = sessionId;
-    // Filter out undefined values to prevent overwriting defaults
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<AiIdleCheckConfig>;
-    this.config = { ...DEFAULT_AI_CHECK_CONFIG, ...filteredConfig };
+    super(sessionId, DEFAULT_AI_CHECK_CONFIG, config);
   }
 
-  /** Get the current status */
-  get status(): AiCheckStatus {
-    return this._status;
+  protected buildPrompt(terminalBuffer: string): string {
+    return AI_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', terminalBuffer);
   }
 
-  /** Get comprehensive state for UI display */
-  getState(): AiCheckState {
-    return {
-      status: this._status,
-      lastVerdict: this.lastVerdict,
-      lastReasoning: this.lastReasoning,
-      lastCheckDurationMs: this.lastCheckDurationMs,
-      cooldownEndsAt: this.cooldownEndsAt,
-      consecutiveErrors: this.consecutiveErrors,
-      totalChecks: this.totalChecks,
-      disabledReason: this.disabledReason,
-    };
-  }
-
-  /** Check if the checker is on cooldown */
-  isOnCooldown(): boolean {
-    if (this.cooldownEndsAt === null) return false;
-    return Date.now() < this.cooldownEndsAt;
-  }
-
-  /** Get remaining cooldown time in ms */
-  getCooldownRemainingMs(): number {
-    if (this.cooldownEndsAt === null) return 0;
-    return Math.max(0, this.cooldownEndsAt - Date.now());
-  }
-
-  /**
-   * Run an AI idle check against the provided terminal buffer.
-   * Spawns a fresh Claude CLI in a screen, captures output to temp file.
-   *
-   * @param terminalBuffer - Raw terminal output to analyze
-   * @returns The verdict result
-   */
-  async check(terminalBuffer: string): Promise<AiCheckResult> {
-    if (this._status === 'disabled') {
-      return { verdict: 'ERROR', reasoning: `Disabled: ${this.disabledReason}`, durationMs: 0 };
-    }
-
-    if (this.isOnCooldown()) {
-      return { verdict: 'ERROR', reasoning: 'On cooldown', durationMs: 0 };
-    }
-
-    if (this._status === 'checking') {
-      return { verdict: 'ERROR', reasoning: 'Already checking', durationMs: 0 };
-    }
-
-    this._status = 'checking';
-    this.checkCancelled = false;
-    this.checkStartTime = Date.now();
-    this.totalChecks++;
-    this.emit('checkStarted');
-    this.log('Starting AI idle check');
-
-    try {
-      const result = await this.runCheck(terminalBuffer);
-
-      if (this.checkCancelled) {
-        return { verdict: 'ERROR', reasoning: 'Cancelled', durationMs: Date.now() - this.checkStartTime };
-      }
-
-      this.lastVerdict = result.verdict;
-      this.lastReasoning = result.reasoning;
-      this.lastCheckDurationMs = result.durationMs;
-
-      if (result.verdict === 'IDLE') {
-        this.consecutiveErrors = 0;
-        this._status = 'ready';
-        this.log(`AI check verdict: IDLE (${result.durationMs}ms) - ${result.reasoning}`);
-      } else if (result.verdict === 'WORKING') {
-        this.consecutiveErrors = 0;
-        this.startCooldown(this.config.cooldownMs);
-        this.log(`AI check verdict: WORKING (${result.durationMs}ms) - ${result.reasoning}`);
-      } else {
-        this.handleError('Unexpected verdict');
-      }
-
-      this.emit('checkCompleted', result);
-      return result;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.handleError(errorMsg);
-      const result: AiCheckResult = {
-        verdict: 'ERROR',
-        reasoning: errorMsg,
-        durationMs: Date.now() - this.checkStartTime,
-      };
-      this.emit('checkFailed', errorMsg);
-      return result;
-    } finally {
-      this.cleanupCheck();
-    }
-  }
-
-  /**
-   * Cancel an in-progress check.
-   * Kills the screen session and cleans up.
-   */
-  cancel(): void {
-    if (this._status !== 'checking') return;
-
-    this.log('Cancelling AI check');
-    this.checkCancelled = true;
-
-    // Clear poll/timeout timers first to prevent race condition where
-    // the poll timer fires between setting checkCancelled and cleanup
-    this.cleanupCheck();
-
-    // Resolve the pending promise after cleanup
-    if (this.checkResolve) {
-      this.checkResolve({ verdict: 'ERROR', reasoning: 'Cancelled', durationMs: Date.now() - this.checkStartTime });
-      this.checkResolve = null;
-    }
-
-    this._status = 'ready';
-  }
-
-  /** Reset all state for a new cycle */
-  reset(): void {
-    this.cancel();
-    this.clearCooldown();
-    this.lastVerdict = null;
-    this.lastReasoning = null;
-    this.lastCheckDurationMs = null;
-    this.consecutiveErrors = 0;
-    this._status = this.disabledReason ? 'disabled' : 'ready';
-  }
-
-  /** Update configuration at runtime */
-  updateConfig(config: Partial<AiIdleCheckConfig>): void {
-    // Filter out undefined values to prevent overwriting existing config
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<AiIdleCheckConfig>;
-    this.config = { ...this.config, ...filteredConfig };
-    if (config.enabled === false) {
-      this.disable('Disabled by config');
-    } else if (config.enabled === true && this._status === 'disabled') {
-      this.disabledReason = null;
-      this._status = 'ready';
-    }
-  }
-
-  /** Get current config */
-  getConfig(): AiIdleCheckConfig {
-    return { ...this.config };
-  }
-
-  // ========== Private Methods ==========
-
-  private async runCheck(terminalBuffer: string): Promise<AiCheckResult> {
-    // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
-    const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN, '');
-    const trimmed = stripped.length > this.config.maxContextChars
-      ? stripped.slice(-this.config.maxContextChars)
-      : stripped;
-
-    // Build the prompt
-    const prompt = AI_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', trimmed);
-
-    // Generate temp files and screen name
-    const shortId = this.sessionId.slice(0, 8);
-    const timestamp = Date.now();
-    this.checkTempFile = join(tmpdir(), `claudeman-aicheck-${shortId}-${timestamp}.txt`);
-    this.checkPromptFile = join(tmpdir(), `claudeman-aicheck-prompt-${shortId}-${timestamp}.txt`);
-    this.checkScreenName = `claudeman-aicheck-${shortId}`;
-
-    // Ensure output temp file exists (empty) so we can poll it
-    writeFileSync(this.checkTempFile, '');
-
-    // Write prompt to file to avoid E2BIG error (argument list too long)
-    // The prompt can be 16KB+ which exceeds shell argument limits
-    writeFileSync(this.checkPromptFile, prompt);
-
-    // Build the command - read prompt from file via stdin to avoid argument size limits
-    const modelArg = `--model ${this.config.model}`;
-    const augmentedPath = getAugmentedPath();
-    const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --output-format text`;
-    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${DONE_MARKER}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
-
-    // Spawn screen
-    try {
-      // Kill any leftover screen with this name first
-      try {
-        execSync(`screen -X -S ${this.checkScreenName} quit 2>/dev/null`, { timeout: 3000 });
-      } catch {
-        // No existing screen, that's fine
-      }
-
-      const screenProcess = childSpawn('screen', [
-        '-dmS', this.checkScreenName,
-        '-c', '/dev/null',
-        'bash', '-c', fullCmd
-      ], {
-        detached: true,
-        stdio: 'ignore',
-      });
-      screenProcess.unref();
-    } catch (err) {
-      throw new Error(`Failed to spawn AI check screen: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    // Poll the temp file for completion
-    return new Promise<AiCheckResult>((resolve, reject) => {
-      const startTime = this.checkStartTime;
-      this.checkResolve = resolve;
-
-      this.checkPollTimer = setInterval(() => {
-        if (this.checkCancelled) {
-          // Cancel was already handled by cancel() calling resolve
-          return;
-        }
-
-        try {
-          if (!this.checkTempFile || !existsSync(this.checkTempFile)) return;
-          const content = readFileSync(this.checkTempFile, 'utf-8');
-          if (content.includes(DONE_MARKER)) {
-            const durationMs = Date.now() - startTime;
-            const result = this.parseOutput(content, durationMs);
-            this.checkResolve = null;
-            resolve(result);
-          }
-        } catch {
-          // File might not be ready yet, keep polling
-        }
-      }, POLL_INTERVAL_MS);
-
-      // Set timeout
-      this.checkTimeoutTimer = setTimeout(() => {
-        if (this._status === 'checking' && !this.checkCancelled) {
-          this.checkResolve = null;
-          reject(new Error(`AI check timed out after ${this.config.checkTimeoutMs}ms`));
-        }
-      }, this.config.checkTimeoutMs);
-    });
-  }
-
-  private parseOutput(content: string, durationMs: number): AiCheckResult {
-    // Remove the done marker and trim
-    const output = content.replace(DONE_MARKER, '').trim();
-
-    if (!output) {
-      return { verdict: 'ERROR', reasoning: 'Empty output from AI check', durationMs };
-    }
-
-    // Look for IDLE or WORKING as the first word
+  protected parseVerdict(output: string): { verdict: AiCheckVerdict; reasoning: string } | null {
     const match = output.match(VERDICT_PATTERN);
-    if (!match) {
-      return { verdict: 'ERROR', reasoning: `Could not parse verdict from: "${output.substring(0, 100)}"`, durationMs };
-    }
+    if (!match) return null;
 
     const verdict = match[1].toUpperCase() as 'IDLE' | 'WORKING';
-    // Everything after the first line is the reasoning
     const lines = output.split('\n');
     const reasoning = lines.slice(1).join('\n').trim() || `AI determined: ${verdict}`;
 
+    return { verdict, reasoning };
+  }
+
+  protected getPositiveVerdict(): AiCheckVerdict {
+    return 'IDLE';
+  }
+
+  protected getNegativeVerdict(): AiCheckVerdict {
+    return 'WORKING';
+  }
+
+  protected getErrorVerdict(): AiCheckVerdict {
+    return 'ERROR';
+  }
+
+  protected createErrorResult(reasoning: string, durationMs: number): AiCheckResult {
+    return { verdict: 'ERROR', reasoning, durationMs };
+  }
+
+  protected createResult(verdict: AiCheckVerdict, reasoning: string, durationMs: number): AiCheckResult {
     return { verdict, reasoning, durationMs };
-  }
-
-  private cleanupCheck(): void {
-    // Clear poll timer
-    if (this.checkPollTimer) {
-      clearInterval(this.checkPollTimer);
-      this.checkPollTimer = null;
-    }
-
-    // Clear timeout timer
-    if (this.checkTimeoutTimer) {
-      clearTimeout(this.checkTimeoutTimer);
-      this.checkTimeoutTimer = null;
-    }
-
-    // Kill the screen
-    if (this.checkScreenName) {
-      try {
-        execSync(`screen -X -S ${this.checkScreenName} quit 2>/dev/null`, { timeout: 3000 });
-      } catch {
-        // Screen may already be dead
-      }
-      this.checkScreenName = null;
-    }
-
-    // Delete temp files
-    if (this.checkTempFile) {
-      try {
-        if (existsSync(this.checkTempFile)) {
-          unlinkSync(this.checkTempFile);
-        }
-      } catch {
-        // Best effort cleanup
-      }
-      this.checkTempFile = null;
-    }
-
-    if (this.checkPromptFile) {
-      try {
-        if (existsSync(this.checkPromptFile)) {
-          unlinkSync(this.checkPromptFile);
-        }
-      } catch {
-        // Best effort cleanup
-      }
-      this.checkPromptFile = null;
-    }
-  }
-
-  private handleError(errorMsg: string): void {
-    this.consecutiveErrors++;
-    this.log(`AI check error (${this.consecutiveErrors}/${this.config.maxConsecutiveErrors}): ${errorMsg}`);
-
-    if (this.consecutiveErrors >= this.config.maxConsecutiveErrors) {
-      this.disable(`${this.config.maxConsecutiveErrors} consecutive errors: ${errorMsg}`);
-    } else {
-      this.startCooldown(this.config.errorCooldownMs);
-    }
-  }
-
-  private startCooldown(durationMs: number): void {
-    this.clearCooldown();
-    this.cooldownEndsAt = Date.now() + durationMs;
-    this._status = 'cooldown';
-    this.emit('cooldownStarted', this.cooldownEndsAt);
-    this.log(`Cooldown started: ${Math.round(durationMs / 1000)}s`);
-
-    this.cooldownTimer = setTimeout(() => {
-      this.cooldownEndsAt = null;
-      this._status = 'ready';
-      this.emit('cooldownEnded');
-      this.log('Cooldown ended');
-    }, durationMs);
-  }
-
-  private clearCooldown(): void {
-    if (this.cooldownTimer) {
-      clearTimeout(this.cooldownTimer);
-      this.cooldownTimer = null;
-    }
-    this.cooldownEndsAt = null;
-    if (this._status === 'cooldown') {
-      this._status = 'ready';
-    }
-  }
-
-  private disable(reason: string): void {
-    this.disabledReason = reason;
-    this._status = 'disabled';
-    this.clearCooldown();
-    this.log(`AI check disabled: ${reason}`);
-    this.emit('disabled', reason);
-  }
-
-  private log(message: string): void {
-    this.emit('log', `[AiIdleChecker] ${message}`);
   }
 }
