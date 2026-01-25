@@ -2903,6 +2903,12 @@ kbd {
   flex-shrink: 0;
 }
 
+.monitor-panel-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
 .monitor-tabs {
   display: flex;
   gap: 0.25rem;
@@ -3090,130 +3096,21 @@ kbd {
   display: none;
 }
 
-/* Main subagents panel - positioned on left side */
-.subagents-panel {
-  position: fixed;
-  bottom: var(--toolbar-height);
-  left: 0.5rem;
-  width: 500px;
-  max-width: calc(100vw - 1rem);
-  max-height: 60vh;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
-  z-index: 100;
-  transform: translateY(100%);
-  transition: transform 0.2s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.subagents-panel.open {
-  transform: translateY(0);
-}
-
-/* Detached floating state */
-.subagents-panel.detached {
-  bottom: auto;
-  left: auto;
-  top: 100px;
-  left: 50px;
-  width: 600px;
-  height: 400px;
-  max-height: none;
-  border-radius: 8px;
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  transform: none;
-  resize: both;
-  overflow: hidden;
-  min-width: 400px;
-  min-height: 250px;
-}
-
-.subagents-panel.detached .subagents-panel-header {
-  cursor: move;
-  background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
-  user-select: none;
-}
-
-.subagents-panel.detached .subagents-resize-handle {
-  display: block;
-}
-
-.subagents-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.85rem;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.subagents-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.subagents-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
-}
-
-/* Resize handle for detached panel */
-.subagents-resize-handle {
-  display: none;
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 16px;
-  height: 16px;
-  cursor: nwse-resize;
-  background: linear-gradient(135deg, transparent 50%, var(--border-light) 50%);
-  border-radius: 0 0 8px 0;
-}
-
-.subagents-resize-handle::before {
-  content: '';
-  position: absolute;
-  bottom: 3px;
-  right: 3px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid var(--text-muted);
-  border-bottom: 2px solid var(--text-muted);
-}
-
-@media (max-width: 600px) {
-  .subagents-panel {
-    width: 100%;
-    max-width: 100%;
-    left: 0;
-    border-radius: 8px 8px 0 0;
-  }
-}
-
 /* ========== Separate Subagents Panel ========== */
 .subagents-panel {
   position: fixed;
   bottom: var(--toolbar-height);
-  right: 400px; /* Position to the left of monitor panel */
+  right: 0.5rem;
   width: 500px;
-  max-width: calc(100vw - 420px);
+  max-width: calc(100vw - 1rem);
   max-height: 50vh;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  z-index: 90;
+  z-index: 91; /* Above monitor panel */
   transform: translateY(calc(100% - 36px)); /* Collapsed by default, show header */
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, width 0.2s ease;
   display: flex;
   flex-direction: column;
 }
@@ -3224,6 +3121,35 @@ kbd {
 
 .subagents-panel.hidden {
   display: none;
+}
+
+/* Detached floating state for subagents panel */
+.subagents-panel.detached {
+  bottom: auto;
+  right: auto;
+  top: 80px;
+  left: calc(50% - 350px);
+  width: 700px;
+  height: 500px;
+  max-height: none;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  transform: none;
+  resize: both;
+  overflow: hidden;
+  min-width: 400px;
+  min-height: 300px;
+}
+
+.subagents-panel.detached .subagents-panel-header {
+  cursor: move;
+  background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
+  user-select: none;
+}
+
+.subagents-panel.detached .subagents-resize-handle {
+  display: block;
 }
 
 .subagents-panel-header {
@@ -3256,18 +3182,35 @@ kbd {
   padding: 0.5rem;
 }
 
-/* Adjust monitor panel position when subagents panel is visible */
-.subagents-panel:not(.hidden) ~ .monitor-panel {
-  /* Monitor stays in place */
+.subagents-resize-handle {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
 }
 
-/* Responsive: stack panels on small screens */
-@media (max-width: 900px) {
+.subagents-resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+}
+
+/* Responsive: full width on small screens */
+@media (max-width: 600px) {
   .subagents-panel {
-    right: 0.5rem;
-    width: calc(100vw - 1rem);
-    max-width: calc(100vw - 1rem);
-    bottom: calc(var(--toolbar-height) + 280px); /* Stack above monitor */
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    right: 0;
+    border-radius: 8px 8px 0 0;
   }
 }
 

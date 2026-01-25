@@ -276,15 +276,17 @@
 
     <!-- Subagents Panel (separate from Monitor) -->
     <div class="subagents-panel" id="subagentsPanel">
-      <div class="subagents-panel-header">
+      <div class="subagents-panel-header" id="subagentsPanelHeader">
         <div class="subagents-panel-title">
           Subagents <span id="subagentCountBadge" class="subagent-badge"></span>
         </div>
         <div class="subagents-panel-actions">
+          <button class="btn-icon-sm" onclick="app.toggleSubagentsDetach()" title="Detach panel" id="subagentsDetachBtn">&#x29C9;</button>
           <button class="btn-icon-sm" onclick="app.toggleSubagentsPanel()" title="Toggle panel" id="subagentsToggleBtn">&#x25B2;</button>
           <button class="btn-icon-sm" onclick="app.closeSubagentsPanel()" title="Close">&times;</button>
         </div>
       </div>
+      <div class="subagents-resize-handle" id="subagentsResizeHandle"></div>
       <div class="subagents-panel-body" id="subagentsTabContent">
         <div class="subagent-container">
           <div class="subagent-list" id="subagentList">

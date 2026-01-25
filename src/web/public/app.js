@@ -3235,7 +3235,12 @@ class ClaudemanApp {
     this.closeAppSettings();
     this.cancelCloseSession();
     document.getElementById('monitorPanel').classList.remove('open');
-    this.closeSubagentsPanel();
+    // Collapse subagents panel (don't hide it permanently)
+    const subagentsPanel = document.getElementById('subagentsPanel');
+    if (subagentsPanel) {
+      subagentsPanel.classList.remove('open');
+    }
+    this.subagentPanelVisible = false;
   }
 
   // ========== Monitor Panel (combined Screen Sessions + Background Tasks) ==========
@@ -3296,6 +3301,92 @@ class ClaudemanApp {
   setupMonitorDrag() {
     const panel = document.getElementById('monitorPanel');
     const header = document.getElementById('monitorPanelHeader');
+
+    if (!panel || !header) return;
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    const onMouseDown = (e) => {
+      // Only drag from header, not from buttons
+      if (e.target.closest('button')) return;
+      if (!panel.classList.contains('detached')) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+      if (!isDragging) return;
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      let newLeft = startLeft + dx;
+      let newTop = startTop + dy;
+
+      // Keep within viewport bounds
+      const rect = panel.getBoundingClientRect();
+      newLeft = Math.max(0, Math.min(window.innerWidth - rect.width, newLeft));
+      newTop = Math.max(0, Math.min(window.innerHeight - rect.height, newTop));
+
+      panel.style.left = newLeft + 'px';
+      panel.style.top = newTop + 'px';
+    };
+
+    const onMouseUp = () => {
+      isDragging = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    // Remove existing listeners before adding new ones
+    header.removeEventListener('mousedown', header._dragHandler);
+    header._dragHandler = onMouseDown;
+    header.addEventListener('mousedown', onMouseDown);
+  }
+
+  // ========== Subagents Panel Detach & Drag ==========
+
+  toggleSubagentsDetach() {
+    const panel = document.getElementById('subagentsPanel');
+    const detachBtn = document.getElementById('subagentsDetachBtn');
+
+    if (panel.classList.contains('detached')) {
+      // Re-attach to bottom
+      panel.classList.remove('detached');
+      panel.style.top = '';
+      panel.style.left = '';
+      panel.style.width = '';
+      panel.style.height = '';
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x29C9;'; // Detach icon
+        detachBtn.title = 'Detach panel';
+      }
+    } else {
+      // Detach as floating window
+      panel.classList.add('detached');
+      panel.classList.add('open'); // Ensure it's visible
+      if (detachBtn) {
+        detachBtn.innerHTML = '&#x229E;'; // Attach icon
+        detachBtn.title = 'Attach panel';
+      }
+      // Setup drag functionality
+      this.setupSubagentsDrag();
+    }
+  }
+
+  setupSubagentsDrag() {
+    const panel = document.getElementById('subagentsPanel');
+    const header = document.getElementById('subagentsPanelHeader');
 
     if (!panel || !header) return;
 
@@ -3874,8 +3965,8 @@ class ClaudemanApp {
     const list = this.$('subagentList');
     if (!list) return;
 
-    // Always update toolbar button visibility
-    this.updateSubagentTabButton();
+    // Always update badge count
+    this.updateSubagentBadge();
 
     // If panel is not visible, don't render content
     if (!this.subagentPanelVisible) {
