@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1339
+**Version**: 0.1340
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -39,7 +39,7 @@ npm install
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
 
-**COM Shorthand**: When user says "COM", perform: `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. If version bump requested, update BOTH `package.json` AND `CLAUDE.md` (Version field below).
+**COM Shorthand**: When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md`, 2) `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM.
 
 ### Build & Clean
 
