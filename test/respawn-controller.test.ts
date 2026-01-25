@@ -248,6 +248,31 @@ describe('RespawnController', () => {
       const config = controller.getConfig();
       expect(config.idleTimeoutMs).toBe(originalTimeout);
     });
+
+    it('should not override defaults with explicit undefined values in constructor', () => {
+      const configWithUndefined = {
+        idleTimeoutMs: 5000,
+        aiIdleCheckTimeoutMs: undefined,
+        aiIdleCheckModel: undefined,
+      } as Partial<RespawnConfig>;
+
+      const newController = new RespawnController(session as unknown as Session, configWithUndefined);
+      const config = newController.getConfig();
+
+      // Explicit undefined should not override defaults
+      expect(config.aiIdleCheckTimeoutMs).toBe(90000); // default value
+      expect(config.aiIdleCheckModel).toBe('claude-opus-4-5-20251101'); // default value
+      expect(config.idleTimeoutMs).toBe(5000); // explicit value should be preserved
+      newController.stop();
+    });
+
+    it('should not override existing config with explicit undefined in updateConfig', () => {
+      const originalTimeout = controller.getConfig().aiIdleCheckTimeoutMs;
+      controller.updateConfig({ aiIdleCheckTimeoutMs: undefined } as Partial<RespawnConfig>);
+
+      const config = controller.getConfig();
+      expect(config.aiIdleCheckTimeoutMs).toBe(originalTimeout);
+    });
   });
 
   describe('Status', () => {

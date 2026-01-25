@@ -331,6 +331,89 @@ describe('StateStore', () => {
       expect(store2.getRalphState('session-1')).toBeDefined();
     });
   });
+
+  describe('global stats', () => {
+    it('should initialize global stats with zero values', () => {
+      const store = new StateStore(testFilePath);
+      const stats = store.getGlobalStats();
+
+      expect(stats.totalInputTokens).toBe(0);
+      expect(stats.totalOutputTokens).toBe(0);
+      expect(stats.totalCost).toBe(0);
+      expect(stats.totalSessionsCreated).toBe(0);
+      expect(stats.firstRecordedAt).toBeDefined();
+      expect(stats.lastUpdatedAt).toBeDefined();
+    });
+
+    it('should add to global stats', () => {
+      const store = new StateStore(testFilePath);
+
+      store.addToGlobalStats(1000, 500, 0.05);
+
+      const stats = store.getGlobalStats();
+      expect(stats.totalInputTokens).toBe(1000);
+      expect(stats.totalOutputTokens).toBe(500);
+      expect(stats.totalCost).toBe(0.05);
+    });
+
+    it('should accumulate global stats across multiple calls', () => {
+      const store = new StateStore(testFilePath);
+
+      store.addToGlobalStats(1000, 500, 0.05);
+      store.addToGlobalStats(2000, 1000, 0.10);
+
+      const stats = store.getGlobalStats();
+      expect(stats.totalInputTokens).toBe(3000);
+      expect(stats.totalOutputTokens).toBe(1500);
+      expect(stats.totalCost).toBeCloseTo(0.15, 10);
+    });
+
+    it('should increment sessions created counter', () => {
+      const store = new StateStore(testFilePath);
+
+      store.incrementSessionsCreated();
+      store.incrementSessionsCreated();
+      store.incrementSessionsCreated();
+
+      const stats = store.getGlobalStats();
+      expect(stats.totalSessionsCreated).toBe(3);
+    });
+
+    it('should compute aggregate stats combining global and active sessions', () => {
+      const store = new StateStore(testFilePath);
+
+      // Add global stats (from deleted sessions)
+      store.addToGlobalStats(5000, 2500, 0.25);
+
+      // Simulate active sessions
+      const activeSessions = {
+        'session-1': { inputTokens: 1000, outputTokens: 500, totalCost: 0.05 },
+        'session-2': { inputTokens: 2000, outputTokens: 1000, totalCost: 0.10 },
+      };
+
+      const aggregate = store.getAggregateStats(activeSessions);
+
+      expect(aggregate.totalInputTokens).toBe(8000); // 5000 + 1000 + 2000
+      expect(aggregate.totalOutputTokens).toBe(4000); // 2500 + 500 + 1000
+      expect(aggregate.totalCost).toBeCloseTo(0.40, 10); // 0.25 + 0.05 + 0.10
+      expect(aggregate.activeSessionsCount).toBe(2);
+    });
+
+    it('should persist global stats across instances', () => {
+      const store1 = new StateStore(testFilePath);
+      store1.addToGlobalStats(10000, 5000, 0.50);
+      store1.incrementSessionsCreated();
+      store1.flushAll();
+
+      const store2 = new StateStore(testFilePath);
+      const stats = store2.getGlobalStats();
+
+      expect(stats.totalInputTokens).toBe(10000);
+      expect(stats.totalOutputTokens).toBe(5000);
+      expect(stats.totalCost).toBe(0.50);
+      expect(stats.totalSessionsCreated).toBe(1);
+    });
+  });
 });
 
 // Helper functions to create mock state objects

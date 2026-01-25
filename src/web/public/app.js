@@ -355,6 +355,7 @@ class ClaudemanApp {
     this.cases = [];
     this.currentRun = null;
     this.totalTokens = 0;
+    this.globalStats = null; // Global token/cost stats across all sessions
     this.eventSource = null;
     this.terminal = null;
     this.fitAddon = null;
@@ -1296,6 +1297,11 @@ class ClaudemanApp {
 
     if (data.respawnStatus) {
       this.respawnStatus = data.respawnStatus;
+    }
+
+    // Store global stats for aggregate tracking
+    if (data.globalStats) {
+      this.globalStats = data.globalStats;
     }
 
     this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
@@ -2404,15 +2410,30 @@ class ClaudemanApp {
   }
 
   updateTokens() {
+    // Use global stats if available (includes deleted sessions)
     let total = 0;
-    this.sessions.forEach(s => {
-      if (s.tokens) {
-        total += s.tokens.total || 0;
-      }
-    });
+    if (this.globalStats) {
+      total = this.globalStats.totalInputTokens + this.globalStats.totalOutputTokens;
+    } else {
+      // Fallback to active sessions only
+      this.sessions.forEach(s => {
+        if (s.tokens) {
+          total += s.tokens.total || 0;
+        }
+      });
+    }
     this.totalTokens = total;
     const display = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total;
-    this.$('headerTokens').textContent = `${display} tokens`;
+
+    // Show global cost if available
+    const costDisplay = this.globalStats ? `$${this.globalStats.totalCost.toFixed(2)}` : '';
+    const tokenEl = this.$('headerTokens');
+    if (tokenEl) {
+      tokenEl.textContent = costDisplay ? `${display} tokens · ${costDisplay}` : `${display} tokens`;
+      tokenEl.title = this.globalStats
+        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created`
+        : 'Token usage across active sessions';
+    }
   }
 
   // ========== Session Options Modal ==========

@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState } from './types.js';
+import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats } from './types.js';
 
 /** Debounce delay for batching state writes (ms) */
 const SAVE_DEBOUNCE_MS = 500;
@@ -206,6 +206,70 @@ export class StateStore {
     this.ralphStates.clear();
     this.saveNow(); // Immediate save for reset operations
     this.saveRalphStatesNow();
+  }
+
+  // ========== Global Stats Methods ==========
+
+  /** Returns global stats, creating initial stats if needed. */
+  getGlobalStats(): GlobalStats {
+    if (!this.state.globalStats) {
+      this.state.globalStats = createInitialGlobalStats();
+    }
+    return this.state.globalStats;
+  }
+
+  /**
+   * Adds tokens and cost to global stats.
+   * Call when a session is deleted to preserve its usage in lifetime stats.
+   */
+  addToGlobalStats(inputTokens: number, outputTokens: number, cost: number): void {
+    const stats = this.getGlobalStats();
+    stats.totalInputTokens += inputTokens;
+    stats.totalOutputTokens += outputTokens;
+    stats.totalCost += cost;
+    stats.lastUpdatedAt = Date.now();
+    this.save();
+  }
+
+  /** Increments the total sessions created counter. */
+  incrementSessionsCreated(): void {
+    const stats = this.getGlobalStats();
+    stats.totalSessionsCreated += 1;
+    stats.lastUpdatedAt = Date.now();
+    this.save();
+  }
+
+  /**
+   * Returns aggregate stats combining global (deleted sessions) + active sessions.
+   * @param activeSessions Map of active session states
+   */
+  getAggregateStats(activeSessions: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }>): {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCost: number;
+    totalSessionsCreated: number;
+    activeSessionsCount: number;
+  } {
+    const global = this.getGlobalStats();
+    let activeInput = 0;
+    let activeOutput = 0;
+    let activeCost = 0;
+    let activeCount = 0;
+
+    for (const session of Object.values(activeSessions)) {
+      activeInput += session.inputTokens ?? 0;
+      activeOutput += session.outputTokens ?? 0;
+      activeCost += session.totalCost ?? 0;
+      activeCount++;
+    }
+
+    return {
+      totalInputTokens: global.totalInputTokens + activeInput,
+      totalOutputTokens: global.totalOutputTokens + activeOutput,
+      totalCost: global.totalCost + activeCost,
+      totalSessionsCreated: global.totalSessionsCreated,
+      activeSessionsCount: activeCount,
+    };
   }
 
   // ========== Inner State Methods (Ralph Loop tracking) ==========

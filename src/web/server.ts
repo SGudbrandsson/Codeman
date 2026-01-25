@@ -319,6 +319,23 @@ export class WebServer extends EventEmitter {
     // API Routes
     this.app.get('/api/status', async () => this.getFullState());
 
+    // Global stats endpoint
+    this.app.get('/api/stats', async () => {
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+      for (const [sessionId, session] of this.sessions) {
+        activeSessionTokens[sessionId] = {
+          inputTokens: session.inputTokens,
+          outputTokens: session.outputTokens,
+          totalCost: session.totalCost,
+        };
+      }
+      return {
+        success: true,
+        stats: this.store.getAggregateStats(activeSessionTokens),
+        raw: this.store.getGlobalStats(),
+      };
+    });
+
     this.app.get('/api/config', async () => {
       return { success: true, config: this.store.getConfig() };
     });
@@ -352,6 +369,7 @@ export class WebServer extends EventEmitter {
       });
 
       this.sessions.set(session.id, session);
+      this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       this.setupSessionListeners(session);
 
@@ -821,15 +839,15 @@ export class WebServer extends EventEmitter {
         autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
         autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
         aiIdleCheckEnabled: config.aiIdleCheckEnabled ?? currentConfig?.aiIdleCheckEnabled ?? true,
-        aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel,
-        aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext,
-        aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs,
-        aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs,
+        aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? 'claude-opus-4-5-20251101',
+        aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? 16000,
+        aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? 90000,
+        aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? 180000,
         aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
-        aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel,
-        aiPlanCheckMaxContext: config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext,
-        aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs,
-        aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs,
+        aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
+        aiPlanCheckMaxContext: config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? 8000,
+        aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? 60000,
+        aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
         durationMinutes: currentConfig?.durationMinutes,
       };
       this.screenManager.updateRespawnConfig(id, merged);
@@ -1024,6 +1042,7 @@ export class WebServer extends EventEmitter {
 
       const session = new Session({ workingDir: dir });
       this.sessions.set(session.id, session);
+      this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       this.setupSessionListeners(session);
 
@@ -1321,6 +1340,7 @@ export class WebServer extends EventEmitter {
       }
 
       this.sessions.set(session.id, session);
+      this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       this.setupSessionListeners(session);
       this.broadcast('session:created', session.toDetailedState());
@@ -1688,6 +1708,13 @@ export class WebServer extends EventEmitter {
 
     // Stop session and remove listeners
     if (session) {
+      // Accumulate tokens to global stats before removing session
+      // This preserves lifetime usage even after sessions are deleted
+      if (killScreen && (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)) {
+        this.store.addToGlobalStats(session.inputTokens, session.outputTokens, session.totalCost);
+        console.log(`[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`);
+      }
+
       session.removeAllListeners();
       await session.stop(killScreen);
       this.sessions.delete(sessionId);
@@ -1909,6 +1936,7 @@ export class WebServer extends EventEmitter {
         });
 
         this.sessions.set(session.id, session);
+        this.store.incrementSessionsCreated();
         this.setupSessionListeners(session);
         session.parentAgentId = name;
 
@@ -2088,6 +2116,7 @@ export class WebServer extends EventEmitter {
         // Create a session for this iteration
         session = new Session({ workingDir: run.workingDir });
         this.sessions.set(session.id, session);
+        this.store.incrementSessionsCreated();
         this.persistSessionState(session);
         this.setupSessionListeners(session);
         run.sessionId = session.id;
@@ -2191,11 +2220,22 @@ export class WebServer extends EventEmitter {
       respawnStatus[sessionId] = controller.getStatus();
     }
 
+    // Build active sessions token map for aggregate calculation
+    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+    for (const [sessionId, session] of this.sessions) {
+      activeSessionTokens[sessionId] = {
+        inputTokens: session.inputTokens,
+        outputTokens: session.outputTokens,
+        totalCost: session.totalCost,
+      };
+    }
+
     return {
       version: APP_VERSION,
       sessions: this.getSessionsState(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
+      globalStats: this.store.getAggregateStats(activeSessionTokens),
       timestamp: Date.now(),
     };
   }
@@ -2448,6 +2488,18 @@ export class WebServer extends EventEmitter {
                   savedState.autoClearEnabled ?? false,
                   savedState.autoClearThreshold
                 );
+              }
+              // Token tracking
+              if (savedState.inputTokens !== undefined || savedState.outputTokens !== undefined || savedState.totalCost !== undefined) {
+                session.restoreTokens(
+                  savedState.inputTokens ?? 0,
+                  savedState.outputTokens ?? 0,
+                  savedState.totalCost ?? 0
+                );
+                const totalTokens = (savedState.inputTokens ?? 0) + (savedState.outputTokens ?? 0);
+                if (totalTokens > 0) {
+                  console.log(`[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`);
+                }
               }
               // Ralph / Todo tracker
               if (savedState.ralphEnabled) {

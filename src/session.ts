@@ -571,6 +571,16 @@ export class Session extends EventEmitter {
     return this._totalOutputTokens;
   }
 
+  /**
+   * Restore token and cost values from saved state.
+   * Called when recovering sessions after server restart.
+   */
+  restoreTokens(inputTokens: number, outputTokens: number, totalCost: number): void {
+    this._totalInputTokens = inputTokens;
+    this._totalOutputTokens = outputTokens;
+    this._totalCost = totalCost;
+  }
+
   get autoClearThreshold(): number {
     return this._autoClearThreshold;
   }

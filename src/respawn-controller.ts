@@ -662,7 +662,11 @@ export class RespawnController extends EventEmitter {
   constructor(session: Session, config: Partial<RespawnConfig> = {}) {
     super();
     this.session = session;
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    // Filter out undefined values from config to prevent overwriting defaults
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<RespawnConfig>;
+    this.config = { ...DEFAULT_CONFIG, ...filteredConfig };
     this.aiChecker = new AiIdleChecker(session.id, {
       enabled: this.config.aiIdleCheckEnabled,
       model: this.config.aiIdleCheckModel,
@@ -2169,7 +2173,11 @@ export class RespawnController extends EventEmitter {
    * @fires log - With updated config details
    */
   updateConfig(config: Partial<RespawnConfig>): void {
-    this.config = { ...this.config, ...config };
+    // Filter out undefined values to prevent overwriting existing config with undefined
+    const filteredConfig = Object.fromEntries(
+      Object.entries(config).filter(([, v]) => v !== undefined)
+    ) as Partial<RespawnConfig>;
+    this.config = { ...this.config, ...filteredConfig };
 
     // Sync AI checker config if relevant fields changed
     if (config.aiIdleCheckEnabled !== undefined || config.aiIdleCheckModel !== undefined ||

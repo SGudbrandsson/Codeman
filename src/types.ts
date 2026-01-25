@@ -88,6 +88,27 @@ export interface SessionState {
   childAgentIds?: string[];
 }
 
+// ========== Global Stats Types ==========
+
+/**
+ * Global statistics across all sessions (including deleted ones).
+ * Persisted to track cumulative usage over time.
+ */
+export interface GlobalStats {
+  /** Total input tokens used across all sessions */
+  totalInputTokens: number;
+  /** Total output tokens used across all sessions */
+  totalOutputTokens: number;
+  /** Total cost in USD across all sessions */
+  totalCost: number;
+  /** Total number of sessions created (lifetime) */
+  totalSessionsCreated: number;
+  /** Timestamp when stats were first recorded */
+  firstRecordedAt: number;
+  /** Timestamp of last update */
+  lastUpdatedAt: number;
+}
+
 // ========== Task Types ==========
 
 /**
@@ -178,6 +199,8 @@ export interface AppState {
   ralphLoop: RalphLoopState;
   /** Application configuration */
   config: AppConfig;
+  /** Global statistics (cumulative across all sessions) */
+  globalStats?: GlobalStats;
 }
 
 // ========== Respawn Controller Types ==========
@@ -744,6 +767,23 @@ export function createInitialState(): AppState {
       lastCheckAt: null,
     },
     config: { ...DEFAULT_CONFIG },
+    globalStats: createInitialGlobalStats(),
+  };
+}
+
+/**
+ * Creates initial global stats object
+ * @returns Fresh global stats with zero values
+ */
+export function createInitialGlobalStats(): GlobalStats {
+  const now = Date.now();
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCost: 0,
+    totalSessionsCreated: 0,
+    firstRecordedAt: now,
+    lastUpdatedAt: now,
   };
 }
 
