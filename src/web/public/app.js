@@ -2247,6 +2247,15 @@ class ClaudemanApp {
   // ========== Countdown Timer Display Methods ==========
 
   addActionLogEntry(sessionId, action) {
+    // Filter to important actions only
+    // Skip: timer starts/cancels, detection updates, ai-check status
+    // Keep: command (sent to console), plan-check (with action), step (completions)
+    if (action.type === 'timer' || action.type === 'timer-cancel') return;
+    if (action.type === 'detection') return;
+    if (action.type === 'ai-check') return;
+    if (action.type === 'plan-check' && !action.detail.includes('sending')) return;
+    if (action.type === 'step' && !action.detail.includes('completed')) return;
+
     if (!this.respawnActionLogs[sessionId]) {
       this.respawnActionLogs[sessionId] = [];
     }

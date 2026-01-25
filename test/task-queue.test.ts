@@ -376,6 +376,231 @@ describe('TaskQueue', () => {
   });
 });
 
+describe('circular dependency detection', () => {
+  let queue: TaskQueue;
+
+  beforeEach(() => {
+    queue = new TaskQueue();
+  });
+
+  it('should throw error for direct cycle (A depends on B, B depends on A)', () => {
+    // Create Task A that depends on task-b (which will be created next)
+    const taskA = Task.fromState({
+      id: 'task-a',
+      prompt: 'Task A',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['task-b'], // A depends on B
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    // Create Task B that depends on task-a
+    const taskB = Task.fromState({
+      id: 'task-b',
+      prompt: 'Task B',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['task-a'], // B depends on A - this creates a cycle!
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    // Manually add task A to the queue
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('task-a', taskA);
+
+    // Now try to add task B - since B depends on A, and A depends on B,
+    // we need to check validateDependencies manually since addTask generates new IDs
+    // Let's directly test the wouldCreateCycle method
+
+    // Add task B too
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('task-b', taskB);
+
+    // Now the graph has a cycle: A -> B -> A
+    // Test that if we try to add a task C that depends on A,
+    // the cycle through B -> A -> B would be detected if we were A
+    // Actually, this tests that the existing cycle causes issues for new tasks
+
+    // The real test: check wouldCreateCycle directly
+    // @ts-expect-error - accessing private method for testing
+    const hasCycle = queue.wouldCreateCycle('task-a', 'task-b');
+    expect(hasCycle).toBe(true);
+
+    // @ts-expect-error - accessing private method for testing
+    const hasCycleReverse = queue.wouldCreateCycle('task-b', 'task-a');
+    expect(hasCycleReverse).toBe(true);
+  });
+
+  it('should throw error for indirect cycle (A -> B -> C -> A)', () => {
+    // Create the chain where A -> B -> C -> A
+    // A depends on B, B depends on C, C depends on A (completing the cycle)
+
+    const taskA = Task.fromState({
+      id: 'task-a',
+      prompt: 'Task A',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['task-b'], // A depends on B
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    const taskB = Task.fromState({
+      id: 'task-b',
+      prompt: 'Task B',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['task-c'], // B depends on C
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    const taskC = Task.fromState({
+      id: 'task-c',
+      prompt: 'Task C',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['task-a'], // C depends on A - completes the cycle!
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('task-a', taskA);
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('task-b', taskB);
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('task-c', taskC);
+
+    // Test the cycle detection: A -> B -> C -> A
+    // @ts-expect-error - accessing private method for testing
+    expect(queue.wouldCreateCycle('task-a', 'task-b')).toBe(true);
+    // @ts-expect-error - accessing private method for testing
+    expect(queue.wouldCreateCycle('task-b', 'task-c')).toBe(true);
+    // @ts-expect-error - accessing private method for testing
+    expect(queue.wouldCreateCycle('task-c', 'task-a')).toBe(true);
+  });
+
+  it('should allow valid dependency chains without cycles', () => {
+    // Linear chain: A -> B -> C (C depends on B, B depends on A)
+    const taskA = queue.addTask({ prompt: 'Task A' });
+    const taskB = queue.addTask({ prompt: 'Task B', dependencies: [taskA.id] });
+    const taskC = queue.addTask({ prompt: 'Task C', dependencies: [taskB.id] });
+
+    expect(queue.getAllTasks()).toHaveLength(3);
+
+    // Diamond pattern: D depends on both E and F, E and F both depend on G
+    const taskG = queue.addTask({ prompt: 'Task G' });
+    const taskE = queue.addTask({ prompt: 'Task E', dependencies: [taskG.id] });
+    const taskF = queue.addTask({ prompt: 'Task F', dependencies: [taskG.id] });
+    const taskD = queue.addTask({ prompt: 'Task D', dependencies: [taskE.id, taskF.id] });
+
+    expect(queue.getAllTasks()).toHaveLength(7);
+  });
+
+  it('should handle multiple dependencies without cycles', () => {
+    const task1 = queue.addTask({ prompt: 'Task 1' });
+    const task2 = queue.addTask({ prompt: 'Task 2' });
+    const task3 = queue.addTask({ prompt: 'Task 3', dependencies: [task1.id, task2.id] });
+
+    // task3 depends on both task1 and task2 - no cycle
+    expect(queue.getTask(task3.id)?.dependencies).toEqual([task1.id, task2.id]);
+  });
+
+  it('should allow dependencies on non-existent tasks (just unsatisfied, not a cycle)', () => {
+    // Dependencies on non-existent tasks are valid - they just won't be satisfied
+    expect(() => {
+      queue.addTask({ prompt: 'Task D', dependencies: ['non-existent-id'] });
+    }).not.toThrow();
+  });
+
+  it('should detect self-dependency when task references itself', () => {
+    // Manually create a task that depends on its own ID
+    const selfDepTask = Task.fromState({
+      id: 'self-ref-task',
+      prompt: 'Self-referencing task',
+      workingDir: '/tmp',
+      priority: 0,
+      dependencies: ['self-ref-task'], // Depends on itself
+      status: 'pending',
+      assignedSessionId: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+      output: '',
+      error: null,
+    });
+
+    // Add to queue manually
+    // @ts-expect-error - accessing private property for testing
+    queue.tasks.set('self-ref-task', selfDepTask);
+
+    // Test that the self-reference is detected
+    // @ts-expect-error - accessing private method for testing
+    expect(queue.wouldCreateCycle('self-ref-task', 'self-ref-task')).toBe(true);
+
+    // Also test that validateDependencies catches it
+    expect(() => {
+      // @ts-expect-error - accessing private method for testing
+      queue.validateDependencies('self-ref-task', ['self-ref-task']);
+    }).toThrow(/Circular dependency detected/);
+  });
+
+  it('should handle complex valid DAG (directed acyclic graph)', () => {
+    // Build a complex but valid dependency graph:
+    //       A
+    //      / \
+    //     B   C
+    //    /|   |\
+    //   D E   F G
+    //    \|   |/
+    //     H   I
+    //      \ /
+    //       J
+
+    const A = queue.addTask({ prompt: 'A' });
+    const B = queue.addTask({ prompt: 'B', dependencies: [A.id] });
+    const C = queue.addTask({ prompt: 'C', dependencies: [A.id] });
+    const D = queue.addTask({ prompt: 'D', dependencies: [B.id] });
+    const E = queue.addTask({ prompt: 'E', dependencies: [B.id] });
+    const F = queue.addTask({ prompt: 'F', dependencies: [C.id] });
+    const G = queue.addTask({ prompt: 'G', dependencies: [C.id] });
+    const H = queue.addTask({ prompt: 'H', dependencies: [D.id, E.id] });
+    const I = queue.addTask({ prompt: 'I', dependencies: [F.id, G.id] });
+    const J = queue.addTask({ prompt: 'J', dependencies: [H.id, I.id] });
+
+    expect(queue.getAllTasks()).toHaveLength(10);
+    expect(queue.getTask(J.id)?.dependencies).toEqual([H.id, I.id]);
+  });
+});
+
 describe('getTaskQueue singleton', () => {
   it('should return a TaskQueue instance', () => {
     const queue = getTaskQueue();

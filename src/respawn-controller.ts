@@ -667,6 +667,10 @@ export class RespawnController extends EventEmitter {
       Object.entries(config).filter(([, v]) => v !== undefined)
     ) as Partial<RespawnConfig>;
     this.config = { ...DEFAULT_CONFIG, ...filteredConfig };
+
+    // Validate configuration values
+    this.validateConfig();
+
     this.aiChecker = new AiIdleChecker(session.id, {
       enabled: this.config.aiIdleCheckEnabled,
       model: this.config.aiIdleCheckModel,
@@ -683,6 +687,36 @@ export class RespawnController extends EventEmitter {
     });
     this.setupAiCheckerListeners();
     this.setupPlanCheckerListeners();
+  }
+
+  /**
+   * Validate configuration values and reset invalid ones to defaults.
+   * Ensures timeouts are positive and logically consistent.
+   */
+  private validateConfig(): void {
+    const c = this.config;
+
+    // Ensure timeouts are positive
+    if (c.idleTimeoutMs <= 0) c.idleTimeoutMs = DEFAULT_CONFIG.idleTimeoutMs;
+    if (c.completionConfirmMs <= 0) c.completionConfirmMs = DEFAULT_CONFIG.completionConfirmMs;
+    if (c.noOutputTimeoutMs <= 0) c.noOutputTimeoutMs = DEFAULT_CONFIG.noOutputTimeoutMs;
+    if (c.autoAcceptDelayMs < 0) c.autoAcceptDelayMs = DEFAULT_CONFIG.autoAcceptDelayMs;
+    if (c.interStepDelayMs <= 0) c.interStepDelayMs = DEFAULT_CONFIG.interStepDelayMs;
+
+    // Ensure completion confirm doesn't exceed no-output timeout
+    if (c.completionConfirmMs > c.noOutputTimeoutMs) {
+      c.completionConfirmMs = c.noOutputTimeoutMs;
+    }
+
+    // Ensure AI check timeouts are positive
+    if (c.aiIdleCheckTimeoutMs <= 0) c.aiIdleCheckTimeoutMs = DEFAULT_CONFIG.aiIdleCheckTimeoutMs;
+    if (c.aiIdleCheckCooldownMs < 0) c.aiIdleCheckCooldownMs = DEFAULT_CONFIG.aiIdleCheckCooldownMs;
+    if (c.aiIdleCheckMaxContext <= 0) c.aiIdleCheckMaxContext = DEFAULT_CONFIG.aiIdleCheckMaxContext;
+
+    // Ensure plan check timeouts are positive
+    if (c.aiPlanCheckTimeoutMs <= 0) c.aiPlanCheckTimeoutMs = DEFAULT_CONFIG.aiPlanCheckTimeoutMs;
+    if (c.aiPlanCheckCooldownMs < 0) c.aiPlanCheckCooldownMs = DEFAULT_CONFIG.aiPlanCheckCooldownMs;
+    if (c.aiPlanCheckMaxContext <= 0) c.aiPlanCheckMaxContext = DEFAULT_CONFIG.aiPlanCheckMaxContext;
   }
 
   /** Wire up AI checker events to controller events */

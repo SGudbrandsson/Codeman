@@ -54,9 +54,16 @@ export class TaskQueue extends EventEmitter {
     }
   }
 
-  /** Adds a new task to the queue. */
+  /**
+   * Adds a new task to the queue.
+   * @throws Error if the task's dependencies would create a circular dependency
+   */
   addTask(options: CreateTaskOptions): Task {
     const task = new Task(options);
+    // Validate dependencies before adding to prevent circular dependency deadlocks
+    if (options.dependencies && options.dependencies.length > 0) {
+      this.validateDependencies(task.id, options.dependencies);
+    }
     this.tasks.set(task.id, task);
     this.store.setTask(task.id, task.toState());
     this.emit('taskAdded', task);
@@ -149,6 +156,50 @@ export class TaskQueue extends EventEmitter {
       }
     }
     return true;
+  }
+
+  /**
+   * Detect if adding a dependency would create a cycle.
+   * Uses DFS to check if there's a path from depId back to taskId.
+   *
+   * @param taskId - The task that would have the new dependency
+   * @param depId - The dependency being added
+   * @param visited - Set of already visited nodes (for DFS)
+   * @returns true if adding this dependency would create a cycle
+   */
+  private wouldCreateCycle(taskId: string, depId: string, visited: Set<string> = new Set()): boolean {
+    // Direct self-reference
+    if (depId === taskId) return true;
+    // Already visited this node in current path
+    if (visited.has(depId)) return false;
+
+    visited.add(depId);
+    const depTask = this.tasks.get(depId);
+    if (!depTask) return false;
+
+    // Recursively check all dependencies of the dependency
+    for (const nextDep of depTask.dependencies) {
+      if (this.wouldCreateCycle(taskId, nextDep, visited)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Validates that a set of dependencies won't create cycles for a given task.
+   * Throws an error if a circular dependency is detected.
+   *
+   * @param taskId - The task ID that will have these dependencies
+   * @param dependencies - Array of dependency task IDs to validate
+   * @throws Error if a circular dependency would be created
+   */
+  private validateDependencies(taskId: string, dependencies: string[]): void {
+    for (const depId of dependencies) {
+      if (this.wouldCreateCycle(taskId, depId)) {
+        throw new Error(`Circular dependency detected: adding dependency ${depId} to task ${taskId} would create a cycle`);
+      }
+    }
   }
 
   /** Gets all tasks assigned to a specific session. */

@@ -61,7 +61,12 @@ const LINE_BUFFER_FLUSH_INTERVAL = 100;
 const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 
 // Pre-compiled regex patterns for performance (avoid re-compilation on each call)
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+// Comprehensive ANSI escape pattern:
+// - SGR (colors/styles): ESC [ params m
+// - CSI sequences (cursor, scroll, etc.): ESC [ params letter
+// - OSC sequences (title, etc.): ESC ] ... BEL or ESC ] ... ST
+// - Single-char escapes: ESC = or ESC >
+const ANSI_ESCAPE_PATTERN = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
 const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
 
 // ============================================================================

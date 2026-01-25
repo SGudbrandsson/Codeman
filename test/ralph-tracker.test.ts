@@ -990,4 +990,305 @@ Final text
       expect(parsed[0].content).toBe('Task 1');
     });
   });
+
+  describe('Edge Cases and Bug Fixes', () => {
+    describe('ITERATION_PATTERN "X of Y" parsing', () => {
+      it('should parse "Iteration 5 of 50" format', () => {
+        tracker.processTerminalData('Iteration 5 of 50\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(5);
+        expect(state.maxIterations).toBe(50);
+        expect(state.active).toBe(true);
+      });
+
+      it('should parse "iter 10 of 100" format', () => {
+        tracker.processTerminalData('iter 10 of 100\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(10);
+        expect(state.maxIterations).toBe(100);
+        expect(state.active).toBe(true);
+      });
+
+      it('should parse "Iteration 1 of 25" format (lowercase of)', () => {
+        tracker.processTerminalData('Iteration 1 of 25\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(1);
+        expect(state.maxIterations).toBe(25);
+      });
+
+      it('should parse "iter. 7 of 20" format (with period)', () => {
+        tracker.processTerminalData('iter. 7 of 20\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(7);
+        expect(state.maxIterations).toBe(20);
+      });
+
+      it('should parse "Iteration #3 of 15" format (with hash)', () => {
+        tracker.processTerminalData('Iteration #3 of 15\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(3);
+        expect(state.maxIterations).toBe(15);
+      });
+
+      it('should handle mixed case "ITERATION 5 OF 50"', () => {
+        tracker.processTerminalData('ITERATION 5 OF 50\n');
+        const state = tracker.loopState;
+        expect(state.cycleCount).toBe(5);
+        expect(state.maxIterations).toBe(50);
+      });
+    });
+
+    describe('Nested promise tags edge case', () => {
+      it('should handle nested promise tags gracefully', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop();
+        tracker.processTerminalData('<promise><promise>NESTED</promise></promise>\n');
+
+        // Should capture the inner "NESTED" not "<promise>NESTED"
+        // The regex [^<]+ will stop at the first < character
+        expect(completionHandler).toHaveBeenCalled();
+        // Verify the phrase captured is "NESTED" (from innermost tag)
+        expect(tracker.loopState.completionPhrase).toBe('NESTED');
+      });
+
+      it('should handle malformed nested tags without crashing', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop();
+        // This should not crash even with weird nesting
+        tracker.processTerminalData('<promise>OUTER<promise>INNER</promise>STILL_OUTER</promise>\n');
+
+        // Should still detect something
+        expect(completionHandler).toHaveBeenCalled();
+      });
+
+      it('should extract correct phrase from consecutive promise tags', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop();
+        tracker.processTerminalData('<promise>FIRST</promise> then <promise>SECOND</promise>\n');
+
+        // Should have detected at least one completion
+        expect(completionHandler).toHaveBeenCalled();
+      });
+    });
+
+    describe('Bare phrase detection after loop starts', () => {
+      it('should detect bare phrase after startLoop()', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop('COMPLETE');
+        tracker.processTerminalData('The task is COMPLETE now.\n');
+
+        expect(completionHandler).toHaveBeenCalledWith('COMPLETE');
+      });
+
+      it('should detect bare phrase after tagged phrase was seen', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        // First occurrence: tagged phrase (from prompt)
+        tracker.processTerminalData('<promise>DONE_SIGNAL</promise>\n');
+        // Second occurrence: bare phrase (actual completion)
+        tracker.processTerminalData('All work is DONE_SIGNAL finished.\n');
+
+        // Should have been called for both occurrences
+        expect(completionHandler).toHaveBeenCalled();
+      });
+
+      it('should not detect bare phrase if never seen in tags', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.enable();
+        // No startLoop() call, no tagged phrase seen
+        tracker.processTerminalData('The task is COMPLETE now.\n');
+
+        // Should NOT trigger - no expected phrase established
+        expect(completionHandler).not.toHaveBeenCalled();
+      });
+
+      it('should only fire once for bare phrase detection', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop('FINISHED');
+        tracker.processTerminalData('Task is FINISHED.\n');
+        tracker.processTerminalData('Everything is FINISHED now.\n');
+
+        // Should only fire once for bare phrase
+        expect(completionHandler).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('Completion phrase map trimming edge case', () => {
+      it('should preserve current phrase when trimming map', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.enable();
+        // Simulate many unique phrases to exceed MAX_COMPLETION_PHRASE_ENTRIES (50)
+        for (let i = 0; i < 60; i++) {
+          tracker.processTerminalData(`<promise>PHRASE${i}</promise>\n`);
+        }
+
+        // The most recent phrase should still be tracked and trigger completion
+        tracker.processTerminalData('<promise>PHRASE59</promise>\n');
+
+        // Should have detected completion (second occurrence of PHRASE59)
+        expect(completionHandler).toHaveBeenCalled();
+      });
+
+      it('should keep high-count phrases when trimming', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.enable();
+        // Set a phrase with high count
+        tracker.startLoop('IMPORTANT');
+        // Add many other phrases
+        for (let i = 0; i < 55; i++) {
+          tracker.processTerminalData(`<promise>FILLER${i}</promise>\n`);
+        }
+
+        // The important phrase should still be tracked
+        tracker.processTerminalData('<promise>IMPORTANT</promise>\n');
+
+        expect(completionHandler).toHaveBeenCalledWith('IMPORTANT');
+      });
+    });
+
+    describe('TODO_TASK_STATUS_PATTERN arrow variations', () => {
+      it('should detect task status with arrow character (unicode arrow)', () => {
+        tracker.processTerminalData('✔ Task #1 created: Fix the bug\n');
+        expect(tracker.todos).toHaveLength(1);
+        expect(tracker.todos[0].status).toBe('pending');
+
+        tracker.processTerminalData('✔ Task #1 updated: status → completed\n');
+        tracker.flushPendingEvents();
+
+        expect(tracker.todos[0].status).toBe('completed');
+      });
+
+      it('should detect task status with in progress update', () => {
+        tracker.processTerminalData('✔ Task #2 created: Implement feature\n');
+        tracker.processTerminalData('✔ Task #2 updated: status → in progress\n');
+        tracker.flushPendingEvents();
+
+        const task = tracker.todos.find(t => t.content === 'Implement feature');
+        expect(task?.status).toBe('in_progress');
+      });
+
+      it('should detect task status with pending update', () => {
+        tracker.processTerminalData('✔ Task #3 created: Review code\n');
+        tracker.processTerminalData('✔ Task #3 updated: status → pending\n');
+        tracker.flushPendingEvents();
+
+        const task = tracker.todos.find(t => t.content === 'Review code');
+        expect(task?.status).toBe('pending');
+      });
+
+      it('should handle multiple task status updates in sequence', () => {
+        // Create tasks
+        tracker.processTerminalData('✔ Task #1 created: Task one\n');
+        tracker.processTerminalData('✔ Task #2 created: Task two\n');
+        tracker.processTerminalData('✔ Task #3 created: Task three\n');
+
+        // Update statuses
+        tracker.processTerminalData('✔ Task #1 updated: status → completed\n');
+        tracker.processTerminalData('✔ Task #2 updated: status → in progress\n');
+        tracker.flushPendingEvents();
+
+        const stats = tracker.getTodoStats();
+        expect(stats.completed).toBe(1);
+        expect(stats.inProgress).toBe(1);
+        expect(stats.pending).toBe(1);
+      });
+    });
+
+    describe('Additional edge cases', () => {
+      it('should handle promise tag with spaces around phrase', () => {
+        const completionHandler = vi.fn();
+        tracker.on('completionDetected', completionHandler);
+
+        tracker.startLoop();
+        tracker.processTerminalData('<promise> SPACED_PHRASE </promise>\n');
+
+        // Should capture with spaces (the regex captures [^<]+)
+        expect(completionHandler).toHaveBeenCalled();
+      });
+
+      it('should handle iteration pattern at end of long line', () => {
+        const longPrefix = 'Processing task: ' + 'x'.repeat(100) + ' ';
+        tracker.processTerminalData(`${longPrefix}Iteration 42 of 100\n`);
+
+        expect(tracker.loopState.cycleCount).toBe(42);
+        expect(tracker.loopState.maxIterations).toBe(100);
+      });
+
+      it('should handle zero iteration count gracefully', () => {
+        tracker.processTerminalData('Iteration 0 of 10\n');
+        // Should not crash and should record the values
+        expect(tracker.loopState.cycleCount).toBe(0);
+        expect(tracker.loopState.maxIterations).toBe(10);
+      });
+
+      it('should handle very large iteration numbers', () => {
+        tracker.processTerminalData('Iteration 999999 of 1000000\n');
+        expect(tracker.loopState.cycleCount).toBe(999999);
+        expect(tracker.loopState.maxIterations).toBe(1000000);
+      });
+
+      it('should preserve enabled state across multiple resets', () => {
+        tracker.enable();
+        expect(tracker.enabled).toBe(true);
+
+        tracker.reset();
+        expect(tracker.enabled).toBe(true);
+
+        tracker.reset();
+        expect(tracker.enabled).toBe(true);
+
+        // Full reset should disable
+        tracker.fullReset();
+        expect(tracker.enabled).toBe(false);
+      });
+
+      it('should handle task summary format without prior creation', () => {
+        // This tests the "✔ #N content" format when no "created" line was seen
+        tracker.processTerminalData('✔ #5 Some standalone task\n');
+        tracker.flushPendingEvents();
+
+        // Should create a todo from the summary format
+        expect(tracker.todos).toHaveLength(1);
+        expect(tracker.todos[0].content).toBe('Some standalone task');
+      });
+
+      it('should handle consecutive data chunks without newlines', () => {
+        // Simulate data arriving in chunks
+        tracker.processTerminalData('- [ ] First ');
+        tracker.processTerminalData('part of task');
+        tracker.processTerminalData('\n- [x] Complete task\n');
+
+        expect(tracker.todos).toHaveLength(2);
+        expect(tracker.todos[0].content).toBe('First part of task');
+        expect(tracker.todos[1].content).toBe('Complete task');
+      });
+
+      it('should not create duplicate todos from repeated output', () => {
+        // Simulate terminal refresh showing same todo multiple times
+        for (let i = 0; i < 5; i++) {
+          tracker.processTerminalData('- [ ] Repeated task\n');
+        }
+
+        expect(tracker.todos).toHaveLength(1);
+        expect(tracker.todos[0].content).toBe('Repeated task');
+      });
+    });
+  });
 });

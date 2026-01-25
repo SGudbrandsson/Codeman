@@ -165,7 +165,7 @@ const CYCLE_PATTERN = /cycle\s*#?(\d+)|respawn cycle #(\d+)/i;
  * Examples: "Iteration 5/50", "[5/50]", "iteration #5", "iter. 3 of 10"
  * Capture groups: (1,2) for "Iteration X/Y" format, (3,4) for "[X/Y]" format
  */
-const ITERATION_PATTERN = /(?:iteration|iter\.?)\s*#?(\d+)(?:\s*[\/of]\s*(\d+))?|\[(\d+)\/(\d+)\]/i;
+const ITERATION_PATTERN = /(?:iteration|iter\.?)\s*#?(\d+)(?:\s*(?:\/|of)\s*(\d+))?|\[(\d+)\/(\d+)\]/i;
 
 /**
  * Matches Ralph loop start command or announcement

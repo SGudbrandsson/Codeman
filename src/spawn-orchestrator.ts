@@ -227,6 +227,7 @@ export class SpawnOrchestrator extends EventEmitter {
 
   /**
    * Cancel an agent by ID.
+   * Cascades cancellation to all child agents before cleaning up the parent.
    */
   async cancelAgent(agentId: string, reason: string = 'Cancelled by parent'): Promise<void> {
     const agent = this._agents.get(agentId);
@@ -239,6 +240,28 @@ export class SpawnOrchestrator extends EventEmitter {
         this.emitStateUpdate();
       }
       return;
+    }
+
+    // Cancel all child agents first (cascade)
+    // Child agents have their parentSessionId set to this agent's sessionId
+    if (agent.sessionId) {
+      for (const [childId, childAgent] of this._agents) {
+        if (childAgent.parentSessionId === agent.sessionId && childAgent.status !== 'cancelled') {
+          await this.cancelAgent(childId, `Parent ${agentId} cancelled`);
+        }
+      }
+    }
+
+    // Also remove any queued tasks that depend on this agent's session
+    if (agent.sessionId) {
+      const queuedChildren = this._queue.filter(t => t.parentSessionId === agent.sessionId);
+      for (const task of queuedChildren) {
+        const idx = this._queue.indexOf(task);
+        if (idx >= 0) {
+          this._queue.splice(idx, 1);
+          this.emit('cancelled', { agentId: task.spec.agentId, reason: `Parent ${agentId} cancelled` });
+        }
+      }
     }
 
     agent.status = 'cancelled';
