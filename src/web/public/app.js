@@ -917,18 +917,12 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:stepSent', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnStep').textContent = data.input;
-      }
+    this.eventSource.addEventListener('respawn:stepSent', (_e) => {
+      // Step info is shown via state label (e.g., "Sending prompt", "Clearing context")
     });
 
     this.eventSource.addEventListener('respawn:autoAcceptSent', (e) => {
       const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnStep').textContent = '⏎ Auto-accepted plan';
-      }
       const session = this.sessions.get(data.sessionId);
       this.notificationManager?.notify({
         urgency: 'info',
@@ -950,34 +944,20 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckStarted', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnStep').textContent = 'AI Check: Analyzing...';
-      }
+    this.eventSource.addEventListener('respawn:aiCheckStarted', (_e) => {
+      // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckCompleted', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        const icon = data.verdict === 'IDLE' ? '✓' : '⏳';
-        document.getElementById('respawnStep').textContent = `AI Check: ${data.verdict} ${icon}`;
-      }
+    this.eventSource.addEventListener('respawn:aiCheckCompleted', (_e) => {
+      // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckFailed', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnStep').textContent = `AI Check: Error - ${data.error?.substring(0, 50)}`;
-      }
+    this.eventSource.addEventListener('respawn:aiCheckFailed', (_e) => {
+      // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckCooldown', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId && data.active) {
-        const remaining = Math.ceil((data.endsAt - Date.now()) / 1000);
-        document.getElementById('respawnStep').textContent = `AI Check: WORKING (cooldown ${remaining}s)`;
-      }
+    this.eventSource.addEventListener('respawn:aiCheckCooldown', (_e) => {
+      // AI check status shown via updateDetectionDisplay
     });
 
     // Respawn run timer events (timed respawn runs)
@@ -1981,8 +1961,28 @@ class ClaudemanApp {
     this.hideRespawnTimer();
   }
 
+  // Human-friendly state labels
+  getStateLabel(state) {
+    const labels = {
+      'stopped': 'Stopped',
+      'watching': 'Watching',
+      'confirming_idle': 'Confirming idle',
+      'ai_checking': 'AI checking',
+      'sending_update': 'Sending prompt',
+      'waiting_update': 'Running prompt',
+      'sending_clear': 'Clearing context',
+      'waiting_clear': 'Clearing...',
+      'sending_init': 'Initializing',
+      'waiting_init': 'Initializing...',
+      'monitoring_init': 'Waiting for work',
+      'sending_kickstart': 'Kickstarting',
+      'waiting_kickstart': 'Kickstarting...',
+    };
+    return labels[state] || state.replace(/_/g, ' ');
+  }
+
   updateRespawnBanner(state) {
-    this.$('respawnState').textContent = state.replace(/_/g, ' ');
+    this.$('respawnState').textContent = this.getStateLabel(state);
   }
 
   updateDetectionDisplay(detection) {
@@ -1991,50 +1991,48 @@ class ClaudemanApp {
     const statusEl = this.$('detectionStatus');
     const waitingEl = this.$('detectionWaiting');
     const confidenceEl = this.$('detectionConfidence');
+    const aiCheckEl = document.getElementById('detectionAiCheck');
 
-    // Update status text
-    statusEl.textContent = detection.statusText || '';
-
-    // Update waiting for text
-    if (detection.waitingFor) {
-      waitingEl.textContent = `→ ${detection.waitingFor}`;
+    // Simplified status - only show when meaningful
+    if (detection.statusText && detection.statusText !== 'Watching...') {
+      statusEl.textContent = detection.statusText;
+      statusEl.style.display = '';
     } else {
-      waitingEl.textContent = '';
+      statusEl.style.display = 'none';
     }
 
-    // Update confidence level
+    // Hide "waiting for" text - it's redundant with the state label
+    waitingEl.style.display = 'none';
+
+    // Show confidence only when confirming (>0%)
     const confidence = detection.confidenceLevel || 0;
     if (confidence > 0) {
       confidenceEl.textContent = `${confidence}%`;
       confidenceEl.style.display = '';
       confidenceEl.className = 'detection-confidence';
-      if (confidence >= 60) {
-        confidenceEl.classList.add('high');
-      } else if (confidence >= 30) {
-        confidenceEl.classList.add('medium');
-      }
+      if (confidence >= 60) confidenceEl.classList.add('high');
+      else if (confidence >= 30) confidenceEl.classList.add('medium');
     } else {
       confidenceEl.style.display = 'none';
     }
 
-    // Show AI check info if available
-    const aiCheckEl = document.getElementById('detectionAiCheck');
+    // Simplified AI check display
     if (aiCheckEl && detection.aiCheck) {
       const ai = detection.aiCheck;
       let aiText = '';
       if (ai.status === 'checking') {
-        aiText = 'AI: Analyzing...';
+        aiText = 'AI analyzing...';
       } else if (ai.status === 'cooldown' && ai.cooldownEndsAt) {
         const remaining = Math.ceil((ai.cooldownEndsAt - Date.now()) / 1000);
-        aiText = `AI: WORKING (${remaining}s cooldown)`;
+        if (remaining > 0) aiText = `Cooldown ${remaining}s`;
       } else if (ai.status === 'disabled') {
-        aiText = `AI: Disabled (${ai.disabledReason || 'errors'})`;
-      } else if (ai.lastVerdict) {
-        aiText = `AI: Last=${ai.lastVerdict}`;
-        if (ai.lastCheckDurationMs) aiText += ` (${Math.round(ai.lastCheckDurationMs / 1000)}s)`;
+        aiText = 'AI disabled';
       }
+      // Don't show "last verdict" - it's noise
       aiCheckEl.textContent = aiText;
       aiCheckEl.style.display = aiText ? '' : 'none';
+    } else if (aiCheckEl) {
+      aiCheckEl.style.display = 'none';
     }
   }
 
@@ -2062,6 +2060,12 @@ class ClaudemanApp {
     }
 
     const timer = this.respawnTimers[this.activeSessionId];
+    // Guard against invalid timer data
+    if (!timer.endAt || isNaN(timer.endAt)) {
+      this.hideRespawnTimer();
+      return;
+    }
+
     const now = Date.now();
     const remaining = Math.max(0, timer.endAt - now);
 

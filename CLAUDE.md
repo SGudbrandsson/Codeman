@@ -39,85 +39,107 @@ npm install
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
 
+### Build & Clean
+
 ```bash
 npm run build          # Compile TS + copy static files + templates + make bins executable
 npm run clean          # Remove dist/
+npm run typecheck      # Type check without building (or: npx tsc --noEmit)
+```
 
-# Start web server (pick one):
+### Web Server
+
+```bash
 npx tsx src/index.ts web           # Dev mode - no build needed (RECOMMENDED)
 npx tsx src/index.ts web -p 8080   # Dev mode with custom port
 npx tsx src/index.ts web --https   # Dev mode with self-signed TLS (enables browser notifications)
 npm run web                        # After npm run build (shorthand)
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
+```
 
-# Start TUI (terminal user interface):
+### TUI (Terminal User Interface)
+
+```bash
 npx tsx src/index.ts tui           # Dev mode - prompts to start web if not running
 claudeman tui                      # After npm link
 claudeman tui --with-web           # Auto-start web server if not running (no prompt)
 claudeman tui --no-web             # Skip web server check entirely
 claudeman tui -p 8080              # Specify web server port
+```
 
-# Testing (vitest)
-# Note: globals: true configured - no imports needed for describe/it/expect
+### Testing
+
+```bash
 npm run test                              # Run all tests once
 npm run test:watch                        # Watch mode
 npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
+```
 
-# Test port allocation (integration tests spawn servers):
-# 3099: quick-start.test.ts
-# 3102: session.test.ts
-# 3105: scheduled-runs.test.ts
-# 3107: sse-events.test.ts
-# 3110: edge-cases.test.ts
-# 3115: integration-flows.test.ts
-# 3120: session-cleanup.test.ts
-# 3125: ralph-integration.test.ts
-# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker
-# Next available: 3127+
+**Test Configuration** (vitest.config.ts):
+- `globals: true` - no imports needed for `describe`/`it`/`expect`
+- `testTimeout: 30000` - 30s for integration tests
+- `teardownTimeout: 60000` - 60s ensures cleanup runs even on failures
+- `fileParallelism: false` - sequential file execution to respect screen session limits
+- Coverage excludes entry points: `src/index.ts`, `src/cli.ts`
 
-# Tests mock PTY - no real Claude CLI spawned
-# Test timeout: 30s (configured in vitest.config.ts)
-# Teardown timeout: 60s (ensures cleanup runs even on failures)
-# Coverage excludes: src/index.ts, src/cli.ts (entry points)
-# Global test utilities (describe/it/expect) available without imports (globals: true)
-# Tests run sequentially (fileParallelism: false) to respect screen session limits
-# Global setup (test/setup.ts) enforces max 10 concurrent screens + orphan cleanup
-#
-# ✅ TEST SAFETY: test/setup.ts protects its own process tree during cleanup.
-# You can safely run tests from within a Claudeman-managed session - the cleanup
-# will not kill your own Claude instance. The respawn-controller tests use
-# MockSession (not real screens).
+**Test Port Allocation** (integration tests spawn servers):
 
-# TypeScript checking
-npm run typecheck                         # Type check without building (or: npx tsc --noEmit)
-# Note: No ESLint/Prettier configured - rely on TypeScript strict mode
+| Port | Test File |
+|------|-----------|
+| 3099 | quick-start.test.ts |
+| 3102 | session.test.ts |
+| 3105 | scheduled-runs.test.ts |
+| 3107 | sse-events.test.ts |
+| 3110 | edge-cases.test.ts |
+| 3115 | integration-flows.test.ts |
+| 3120 | session-cleanup.test.ts |
+| 3125 | ralph-integration.test.ts |
+| 3127+ | Next available |
 
-# MCP Server (for Claude Code to call spawn tools directly):
-# Configure in Claude Code's MCP settings:
-#   command: "node", args: ["dist/mcp-server.js"]
-#   env: { CLAUDEMAN_API_URL: "http://localhost:3000", CLAUDEMAN_SESSION_ID: "<id>" }
+Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker
+
+**Test Safety**: `test/setup.ts` enforces max 10 concurrent screens, performs orphan cleanup, and protects its own process tree. You can safely run tests from within a Claudeman-managed session - the cleanup will not kill your own Claude instance. The respawn-controller tests use MockSession (not real screens).
+
+### MCP Server
+
+```bash
 npx tsx src/mcp-server.ts                 # Dev mode (stdio transport)
+```
 
-# Debugging
+Configure in Claude Code's MCP settings:
+```json
+{ "command": "node", "args": ["dist/mcp-server.js"], "env": { "CLAUDEMAN_API_URL": "http://localhost:3000", "CLAUDEMAN_SESSION_ID": "<id>" } }
+```
+
+### Debugging
+
+```bash
 screen -ls                                # List GNU screen sessions
 screen -r <name>                          # Attach to screen session (Ctrl+A D to detach)
 curl localhost:3000/api/sessions          # Check active sessions
 curl localhost:3000/api/status | jq .     # Full app state including respawn
 cat ~/.claudeman/state.json | jq .        # View main state
 cat ~/.claudeman/state-inner.json | jq .  # View Ralph loop state
+```
 
-# Systemd service (respawning, survives logout):
+### Systemd Service
+
+```bash
 systemctl --user status claudeman-web     # Check status
 systemctl --user restart claudeman-web    # Restart
 systemctl --user stop claudeman-web       # Stop
 journalctl --user -u claudeman-web -f     # Stream logs
-# Install: ln -sf scripts/claudeman-web.service ~/.config/systemd/user/
-# Enable: systemctl --user enable claudeman-web && loginctl enable-linger $USER
+```
 
-# Kill stuck screen sessions
+Install: `ln -sf scripts/claudeman-web.service ~/.config/systemd/user/`
+Enable: `systemctl --user enable claudeman-web && loginctl enable-linger $USER`
+
+### Kill Stuck Screens
+
+```bash
 screen -X -S <name> quit                  # Graceful quit
 pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
 ```
@@ -148,16 +170,6 @@ claudeman tui                      # Start TUI
 claudeman status                   # Overall status
 claudeman reset                    # Reset all state
 ```
-
-## Keyboard Shortcuts (Web UI)
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Enter` | Quick-start session |
-| `Ctrl+W` | Close session |
-| `Ctrl+Tab` | Next session |
-| `Ctrl+K` | Kill all sessions |
-| `Ctrl+L` | Clear terminal |
 
 ## Architecture
 
@@ -405,19 +417,9 @@ CLI commands (`claudeman status/session list`) read from `state.json` to display
 
 ### TypeScript Config
 
-Module resolution: NodeNext. Target: ES2022. Strict mode with additional checks:
+Module resolution: NodeNext. Target: ES2022. Strict mode enabled with all additional strictness flags (`noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, etc.). No ESLint/Prettier configured - rely on TypeScript strict mode.
 
-| Setting | Effect |
-|---------|--------|
-| `noUnusedLocals` | Error on unused local variables |
-| `noUnusedParameters` | Error on unused function parameters |
-| `noImplicitReturns` | All code paths must return a value |
-| `noImplicitOverride` | Require `override` keyword for overridden methods |
-| `noFallthroughCasesInSwitch` | Require break/return in switch cases |
-| `allowUnreachableCode: false` | Error on unreachable code |
-| `allowUnusedLabels: false` | Error on unused labels |
-
-TUI uses React JSX (`jsxImportSource: react`) for Ink components.
+TUI uses React JSX (`jsx: react-jsx`, `jsxImportSource: react`) for Ink components.
 
 ## Adding New Features
 
