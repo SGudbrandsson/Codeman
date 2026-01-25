@@ -5098,10 +5098,18 @@ class ClaudemanApp {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Calculate final position (cascade from top-left)
+    // Calculate final position - grid layout to avoid overlaps
     const windowCount = this.subagentWindows.size;
-    const finalX = 50 + (windowCount % 5) * 30;
-    const finalY = 100 + (windowCount % 5) * 30;
+    const windowWidth = 420;
+    const windowHeight = 350;
+    const gap = 20;
+    const startX = 50;
+    const startY = 120;
+    const maxCols = Math.floor((window.innerWidth - startX - 50) / (windowWidth + gap)) || 1;
+    const col = windowCount % maxCols;
+    const row = Math.floor(windowCount / maxCols);
+    const finalX = startX + col * (windowWidth + gap);
+    const finalY = startY + row * (windowHeight + gap);
 
     // Get parent tab position for spawn animation
     const parentTab = agent.parentSessionId

@@ -3819,10 +3819,10 @@ kbd {
 
 .subagent-window {
   position: fixed;
-  width: 500px;
-  height: 400px;
-  min-width: 300px;
-  min-height: 200px;
+  width: 420px;
+  height: 350px;
+  min-width: 280px;
+  min-height: 180px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3980,17 +3980,19 @@ kbd {
 }
 
 .connection-line {
-  stroke: var(--accent);
+  stroke: #00ff41;
   stroke-width: 2;
   stroke-dasharray: 5 3;
   fill: none;
-  opacity: 0.5;
-  transition: opacity 0.2s, stroke-width 0.2s;
+  opacity: 0.6;
+  filter: drop-shadow(0 0 3px #00ff41);
+  transition: opacity 0.2s, stroke-width 0.2s, filter 0.2s;
 }
 
 .connection-line:hover {
-  opacity: 0.8;
+  opacity: 1;
   stroke-width: 3;
+  filter: drop-shadow(0 0 6px #00ff41);
 }
 
 .connection-line.spawning-line {
