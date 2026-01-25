@@ -380,6 +380,7 @@ class ClaudemanApp {
     // Terminal write batching
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
+    this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
@@ -564,7 +565,25 @@ class ClaudemanApp {
     this.terminal.writeln('');
   }
 
+  /**
+   * Check if terminal viewport is at or near the bottom.
+   * Used to implement "sticky scroll" behavior - keep user at bottom if they were there.
+   */
+  isTerminalAtBottom() {
+    if (!this.terminal) return true;
+    const buffer = this.terminal.buffer.active;
+    // viewportY is the top line of the viewport, baseY is where scrollback starts
+    // If viewportY >= baseY, we're showing the latest content (at bottom)
+    // Allow 2 lines tolerance for edge cases
+    return buffer.viewportY >= buffer.baseY - 2;
+  }
+
   batchTerminalWrite(data) {
+    // Check if at bottom BEFORE adding data (captures user's scroll position)
+    // Only update if not already scheduled (preserve the first check's result)
+    if (!this.writeFrameScheduled) {
+      this._wasAtBottomBeforeWrite = this.isTerminalAtBottom();
+    }
     this.pendingWrites += data;
     if (!this.writeFrameScheduled) {
       this.writeFrameScheduled = true;
@@ -572,6 +591,10 @@ class ClaudemanApp {
         if (this.pendingWrites && this.terminal) {
           this.terminal.write(this.pendingWrites);
           this.pendingWrites = '';
+          // Sticky scroll: if user was at bottom, keep them there after new output
+          if (this._wasAtBottomBeforeWrite) {
+            this.terminal.scrollToBottom();
+          }
         }
         this.writeFrameScheduled = false;
       });
