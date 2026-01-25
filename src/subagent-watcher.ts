@@ -405,6 +405,64 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Extract a smart, concise title from a task prompt
+   * Aims for ~40-50 chars that convey what the agent is doing
+   */
+  private extractSmartTitle(text: string): string {
+    const MAX_LEN = 45;
+
+    // Get first line/sentence
+    let title = text.split('\n')[0].trim();
+
+    // If already short enough, use it
+    if (title.length <= MAX_LEN) {
+      return title.replace(/[.!?,\s]+$/, '');
+    }
+
+    // Remove common filler phrases to condense
+    const fillers = [
+      /^(please |i need you to |i want you to |can you |could you )/i,
+      / (the|a|an) /gi,
+      / (in|at|on|to|for|of|with|from|by) the /gi,
+      / (including|related to|regarding|about) /gi,
+      /[""]/g,
+      / +/g, // multiple spaces to single
+    ];
+
+    let condensed = title;
+    for (const filler of fillers) {
+      condensed = condensed.replace(filler, (match) => {
+        // Keep single space for word boundaries
+        if (match.trim() === '') return ' ';
+        if (/^(the|a|an)$/i.test(match.trim())) return ' ';
+        if (/including|related to|regarding|about/i.test(match)) return ': ';
+        return ' ';
+      });
+    }
+    condensed = condensed.replace(/ +/g, ' ').trim();
+
+    // If condensed version is short enough, use it
+    if (condensed.length <= MAX_LEN) {
+      return condensed.replace(/[.!?,:\s]+$/, '');
+    }
+
+    // Try to cut at a natural boundary (colon, dash, comma)
+    const boundaryMatch = condensed.substring(0, MAX_LEN + 5).match(/^(.{20,}?)[:\-,]/);
+    if (boundaryMatch && boundaryMatch[1].length <= MAX_LEN) {
+      return boundaryMatch[1].trim();
+    }
+
+    // Last resort: truncate at word boundary
+    const truncated = condensed.substring(0, MAX_LEN);
+    const lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > 20) {
+      return truncated.substring(0, lastSpace).replace(/[.!?,:\s]+$/, '');
+    }
+
+    return truncated.replace(/[.!?,:\s]+$/, '');
+  }
+
+  /**
    * Scan for all subagent directories
    */
   private scanForSubagents(): void {
@@ -518,24 +576,7 @@ export class SubagentWatcher extends EventEmitter {
             }
 
             if (text) {
-              // Extract a useful title: first line, first sentence, or first 80 chars
-              // Split on newline first
-              const firstLine = text.split('\n')[0].trim();
-              // If still long, try to find a sentence boundary
-              let title = firstLine;
-              if (title.length > 80) {
-                // Look for sentence end (. ! ?) within first 100 chars
-                const sentenceEnd = title.substring(0, 100).search(/[.!?]/);
-                if (sentenceEnd > 10) {
-                  title = title.substring(0, sentenceEnd + 1);
-                } else {
-                  // Truncate at word boundary
-                  const truncated = title.substring(0, 80);
-                  const lastSpace = truncated.lastIndexOf(' ');
-                  title = lastSpace > 40 ? truncated.substring(0, lastSpace) + '...' : truncated + '...';
-                }
-              }
-              description = title;
+              description = this.extractSmartTitle(text);
               break;
             }
           }
