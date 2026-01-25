@@ -2174,12 +2174,14 @@ export class WebServer extends EventEmitter {
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
-    const summaryTracker = this.runSummaryTrackers.get(sessionId);
+    // Helper to get tracker lazily (may not exist at setup time for restored sessions)
+    const getTracker = () => this.runSummaryTrackers.get(sessionId);
 
     controller.on('stateChanged', (state: RespawnState, prevState: RespawnState) => {
       this.broadcast('respawn:stateChanged', { sessionId, state, prevState });
-      // Track in run summary
-      if (summaryTracker) summaryTracker.recordStateChange(state, `${prevState} → ${state}`);
+      // Track in run summary (lazy lookup since tracker may be created after controller)
+      const tracker = getTracker();
+      if (tracker) tracker.recordStateChange(state, `${prevState} → ${state}`);
     });
 
     controller.on('respawnCycleStarted', (cycleNumber: number) => {
@@ -2212,14 +2214,16 @@ export class WebServer extends EventEmitter {
 
     controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
       this.broadcast('respawn:aiCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
-      // Track in run summary
-      if (summaryTracker) summaryTracker.recordAiCheckResult(result.verdict);
+      // Track in run summary (lazy lookup)
+      const tracker = getTracker();
+      if (tracker) tracker.recordAiCheckResult(result.verdict);
     });
 
     controller.on('aiCheckFailed', (error: string) => {
       this.broadcast('respawn:aiCheckFailed', { sessionId, error });
-      // Track in run summary
-      if (summaryTracker) summaryTracker.recordError('AI check failed', error);
+      // Track in run summary (lazy lookup)
+      const tracker = getTracker();
+      if (tracker) tracker.recordError('AI check failed', error);
     });
 
     controller.on('aiCheckCooldown', (active: boolean, endsAt: number | null) => {
@@ -2261,8 +2265,9 @@ export class WebServer extends EventEmitter {
 
     controller.on('error', (error: Error) => {
       this.broadcast('respawn:error', { sessionId, error: error.message });
-      // Track in run summary
-      if (summaryTracker) summaryTracker.recordError('Respawn error', error.message);
+      // Track in run summary (lazy lookup)
+      const tracker = getTracker();
+      if (tracker) tracker.recordError('Respawn error', error.message);
     });
   }
 
