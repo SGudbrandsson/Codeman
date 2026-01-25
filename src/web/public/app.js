@@ -3921,7 +3921,9 @@ class ClaudemanApp {
       const displayName = agent.description || agent.agentId.substring(0, 7);
       html.push(`
         <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}"
-             onclick="app.selectSubagent('${agent.agentId}')">
+             onclick="app.selectSubagent('${agent.agentId}')"
+             ondblclick="app.openSubagentWindow('${agent.agentId}')"
+             title="Double-click to open tracking window">
           <div class="subagent-header">
             <span class="subagent-icon">🤖</span>
             <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
