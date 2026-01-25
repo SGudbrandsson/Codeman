@@ -2964,6 +2964,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
+    document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -3023,6 +3024,7 @@ class ClaudemanApp {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
+      subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),

@@ -1454,6 +1454,17 @@ export class WebServer extends EventEmitter {
           mkdirSync(dir, { recursive: true });
         }
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+        // Handle subagent tracking toggle dynamically
+        const subagentEnabled = settings.subagentTrackingEnabled ?? true;
+        if (subagentEnabled && !subagentWatcher.isRunning()) {
+          subagentWatcher.start();
+          console.log('Subagent watcher started via settings change');
+        } else if (!subagentEnabled && subagentWatcher.isRunning()) {
+          subagentWatcher.stop();
+          console.log('Subagent watcher stopped via settings change');
+        }
+
         return { success: true };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -2627,9 +2638,31 @@ export class WebServer extends EventEmitter {
     // Restore screen sessions from previous run
     await this.restoreScreenSessions();
 
-    // Start subagent watcher for Claude Code background agent visibility
-    subagentWatcher.start();
-    console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
+    // Start subagent watcher for Claude Code background agent visibility (if enabled)
+    if (this.isSubagentTrackingEnabled()) {
+      subagentWatcher.start();
+      console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
+    } else {
+      console.log('Subagent watcher disabled by user settings');
+    }
+  }
+
+  /**
+   * Check if subagent tracking is enabled in settings (default: true)
+   */
+  private isSubagentTrackingEnabled(): boolean {
+    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    try {
+      if (existsSync(settingsPath)) {
+        const content = readFileSync(settingsPath, 'utf-8');
+        const settings = JSON.parse(content);
+        // Default to true if not explicitly set
+        return settings.subagentTrackingEnabled ?? true;
+      }
+    } catch (err) {
+      console.error('Failed to read subagent tracking setting:', err);
+    }
+    return true; // Default enabled
   }
 
   private async restoreScreenSessions(): Promise<void> {

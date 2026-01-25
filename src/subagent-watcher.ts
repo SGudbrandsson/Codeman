@@ -102,7 +102,7 @@ export class SubagentWatcher extends EventEmitter {
   private idleTimers = new Map<string, NodeJS.Timeout>();
   private pollInterval: NodeJS.Timeout | null = null;
   private livenessInterval: NodeJS.Timeout | null = null;
-  private isRunning = false;
+  private _isRunning = false;
   private knownSubagentDirs = new Set<string>();
 
   constructor() {
@@ -115,8 +115,8 @@ export class SubagentWatcher extends EventEmitter {
    * Start watching for subagent activity
    */
   start(): void {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    if (this._isRunning) return;
+    this._isRunning = true;
 
     // Initial scan
     this.scanForSubagents();
@@ -178,10 +178,17 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Check if the watcher is currently running
+   */
+  isRunning(): boolean {
+    return this._isRunning;
+  }
+
+  /**
    * Stop watching
    */
   stop(): void {
-    this.isRunning = false;
+    this._isRunning = false;
 
     if (this.pollInterval) {
       clearInterval(this.pollInterval);

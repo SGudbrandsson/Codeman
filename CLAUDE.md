@@ -13,11 +13,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Why this matters**: Killing your own screen terminates your session mid-work, losing context and potentially corrupting state.
 
+## ⚡ COM Shorthand (Deployment)
+
+When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md`, 2) `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM.
+
 ## Project Overview
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1356
+**Version**: 0.1357 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -38,8 +42,6 @@ npm install
 ## Commands
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
-
-**COM Shorthand**: When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md`, 2) `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM.
 
 ### Build & Clean
 
@@ -100,7 +102,8 @@ npx vitest run -t "should create session" # By pattern
 | 3120 | session-cleanup.test.ts |
 | 3125 | ralph-integration.test.ts |
 | 3127 | respawn-integration.test.ts (reserved) |
-| 3128+ | Next available |
+
+**Next available port**: 3128
 
 Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker, ai-plan-checker
 
@@ -196,35 +199,38 @@ claudeman reset                    # Reset all state
 
 ### Key Files
 
+**Core Session Management:**
 | File | Purpose |
 |------|---------|
 | `src/session.ts` | Core PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
-| `src/respawn-controller.ts` | State machine for autonomous session cycling |
-| `src/ai-idle-checker.ts` | Spawns fresh Claude session to analyze terminal output for IDLE/WORKING verdict |
-| `src/ai-plan-checker.ts` | Spawns fresh Claude session to detect plan mode approval prompts for auto-accept |
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
-| `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
-| `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
-| `src/task-tracker.ts` | Parses background task output (agent IDs, status) from Claude CLI |
-| `src/session-manager.ts` | Manages session lifecycle, task assignment, and cleanup |
+| `src/session-manager.ts` | Session lifecycle, task assignment, cleanup |
 | `src/state-store.ts` | JSON persistence to `~/.claudeman/` with debounced writes |
+| `src/types.ts` | All TypeScript interfaces |
+
+**Autonomous Features:**
+| File | Purpose |
+|------|---------|
+| `src/respawn-controller.ts` | State machine for autonomous session cycling |
+| `src/ai-idle-checker.ts` | Spawns Claude to analyze terminal output for IDLE/WORKING verdict |
+| `src/ai-plan-checker.ts` | Spawns Claude to detect plan mode prompts for auto-accept |
+| `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status |
+| `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
+
+**Spawn Protocol (Autonomous Agents):**
+| File | Purpose |
+|------|---------|
+| `src/spawn-orchestrator.ts` | Full agent lifecycle: spawn, monitor, budget, queue, cleanup |
+| `src/mcp-server.ts` | MCP server binary exposing spawn tools to Claude Code |
+| `src/subagent-watcher.ts` | Monitors Claude Code background agents in `~/.claude/projects/*/subagents/*.jsonl` |
+
+**Web & TUI:**
+| File | Purpose |
+|------|---------|
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: SSE handling, xterm.js, tab management |
-| `src/tui/App.tsx` | TUI main component: tabs, terminal viewport, status bar (Ink/React) |
-| `src/tui/components/*.tsx` | TUI components: StartScreen, TabBar, TerminalView, StatusBar, RalphPanel, HelpOverlay |
-| `src/tui/hooks/useSessionManager.ts` | TUI session state, screen polling, input handling |
-| `src/hooks-config.ts` | Generates .claude/settings.local.json with Claude Code hooks for desktop notifications |
-| `src/types.ts` | All TypeScript interfaces |
-| `src/templates/claude-md.ts` | CLAUDE.md template generation with placeholder support |
-| `src/templates/case-template.md` | Default CLAUDE.md template for new cases (with placeholders) |
-| `src/spawn-types.ts` | Types, YAML parser, factory functions for spawn1337 protocol |
-| `src/spawn-detector.ts` | Detects `<spawn1337>` tags in terminal output (legacy, replaced by MCP) |
-| `src/spawn-orchestrator.ts` | Full agent lifecycle: spawn, monitor, budget, queue, cleanup |
-| `src/spawn-claude-md.ts` | Generates CLAUDE.md for spawned agent sessions |
-| `src/mcp-server.ts` | MCP server binary (`claudeman-mcp`) exposing spawn tools to Claude Code |
-| `src/subagent-watcher.ts` | Monitors Claude Code background agents in `~/.claude/projects/*/subagents/*.jsonl` |
-| `src/tui/DirectAttach.ts` | Full-screen console attach with tab switching between sessions |
-| `scripts/claudeman-web.service` | Systemd user service for `claudeman web --https` (Restart=always) |
+| `src/tui/App.tsx` | TUI main component (Ink/React) |
+| `src/tui/DirectAttach.ts` | Full-screen console attach with tab switching |
 
 ### Data Flow
 
@@ -261,7 +267,9 @@ Monitors Claude Code's internal background agents (the `Task` tool) in real-time
 
 **Status lifecycle**: `active` → `idle` (30s no activity) → `completed` (process exited or file stale)
 
-Implementation: `src/subagent-watcher.ts` - singleton `subagentWatcher` started on server boot.
+**Settings**: Can be disabled via App Settings → Display → "Enable Subagent Tracking" (default: enabled). Setting is stored in `~/.claudeman/settings.json` as `subagentTrackingEnabled`.
+
+Implementation: `src/subagent-watcher.ts` - singleton `subagentWatcher` started on server boot (if enabled).
 
 ### Session Modes
 
@@ -532,7 +540,7 @@ All routes defined in `server.ts:buildServer()`. Key endpoint groups:
 | `~/.claudeman/state.json` | Full session state (all settings, tokens, respawn config, Ralph state), tasks, app config |
 | `~/.claudeman/state-inner.json` | Ralph loop/todo state per session (separate to reduce writes) |
 | `~/.claudeman/screens.json` | Screen session metadata (for recovery after restart) |
-| `~/.claudeman/settings.json` | User preferences (lastUsedCase, custom template path) |
+| `~/.claudeman/settings.json` | User preferences (lastUsedCase, custom template path, subagentTrackingEnabled) |
 | `~/.claudeman/certs/` | Self-signed TLS certificates for `--https` mode |
 
 **Recovery**: On restart, sessions restored from `state.json` (primary) with `screens.json` as fallback. All settings re-applied to live sessions. Cases created in `~/claudeman-cases/` by default.
