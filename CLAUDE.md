@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1350
+**Version**: 0.1351
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -107,6 +107,22 @@ Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive,
 **Test Utilities**: `test/respawn-test-utils.ts` provides MockSession, MockAiIdleChecker, MockAiPlanChecker, time controller, state tracker, and event recorder for respawn controller testing. See `test/respawn-test-plan.md` for architecture and `test/respawn-scenarios.md` for comprehensive test scenarios.
 
 **Test Safety**: `test/setup.ts` enforces max 10 concurrent screens, performs orphan cleanup, and protects its own process tree. You can safely run tests from within a Claudeman-managed session - the cleanup will not kill your own Claude instance. The respawn-controller tests use MockSession (not real screens).
+
+**Test Cleanup Patterns**: Integration tests track resources in `createdSessions` and `createdCases` arrays, cleaned up by `afterAll`/`afterEach` hooks. However, some tests perform cleanup in the test body itself (e.g., `edge-cases.test.ts:273-302` creates 5 sessions and cleans them in a loop). If assertions fail before cleanup code runs, resources leak.
+
+**Known Cleanup Issues**:
+- `pty-interactive.test.ts`: Uses `await session.stop()` at end of each test, not in `afterEach`. Test failures leave sessions running.
+- `edge-cases.test.ts`: Multiple sessions created in test body with cleanup at end; failures leak sessions.
+- Test cases (`~/claudeman-cases/`): Cases named `flow-test-*`, `ralph-track-loop-*`, `session-detail-*` may persist after test failures.
+
+**Manual Cleanup**:
+```bash
+# Remove orphaned test cases
+rm -rf ~/claudeman-cases/flow-test-* ~/claudeman-cases/ralph-track-loop-* ~/claudeman-cases/session-detail-*
+
+# Kill orphaned test screens (only detached claudeman screens)
+screen -ls | grep -E 'Detached.*claudeman' | cut -d. -f1 | xargs -I{} screen -S {} -X quit
+```
 
 ### MCP Server
 
