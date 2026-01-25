@@ -21,7 +21,7 @@ When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1366 (must match `package.json`)
+**Version**: 0.1367 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -222,6 +222,7 @@ claudeman reset                    # Reset all state
 | `src/ai-plan-checker.ts` | Spawns Claude to detect plan mode prompts for auto-accept |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status |
 | `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
+| `src/run-summary.ts` | Tracks session events for "what happened while away" summaries |
 
 **Spawn Protocol (Autonomous Agents):**
 | File | Purpose |
@@ -443,6 +444,18 @@ Key events (see `app.js:handleSSEEvent()`):
 - `subagent:discovered`, `subagent:tool_call`, `subagent:progress`, `subagent:message`, `subagent:completed` - Claude Code background agents
 - `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks
 
+### Run Summary
+
+Per-session event tracking for "what happened while you were away" view. Click the chart icon (📊) on any session tab to view.
+
+**Tracked Events**: session start/stop, respawn cycles, state changes, idle/working transitions, token milestones (every 50k), auto-compact/clear, Ralph completions, AI check results, hook events, errors/warnings, state stuck warnings (>10min same state).
+
+**Stats**: respawn cycles, peak tokens, active time, idle time, error/warning counts.
+
+**Storage**: In-memory only (not persisted). Fresh tracker created per session; cleared when session is deleted.
+
+**Implementation**: `RunSummaryTracker` class in `src/run-summary.ts`, integrated via `setupSessionListeners()` and `setupRespawnListeners()` in `server.ts`.
+
 ### Frontend (app.js)
 
 Vanilla JS + xterm.js. 60fps rendering: server batches terminal data every 16ms, client uses `requestAnimationFrame` to batch xterm.js writes.
@@ -536,6 +549,7 @@ All routes defined in `server.ts:buildServer()`. Key endpoint groups:
 - `/api/spawn/*` - Agent lifecycle (list, status, result, messages, cancel, trigger)
 - `/api/subagents` - List/get/kill Claude Code background agents, get transcripts
 - `/api/sessions/:id/subagents` - Get subagents for a specific session's working directory
+- `/api/sessions/:id/run-summary` - Get run summary (events, stats) for "what happened while away"
 - `/api/hook-event` - Claude Code hook callbacks (`{event, sessionId, data?}`)
 
 

@@ -469,6 +469,56 @@
       </div>
     </div>
 
+    <!-- Run Summary Modal -->
+    <div class="modal" id="runSummaryModal">
+      <div class="modal-backdrop" onclick="app.closeRunSummary()"></div>
+      <div class="modal-content modal-lg">
+        <div class="modal-header">
+          <h3>Run Summary</h3>
+          <button class="modal-close" onclick="app.closeRunSummary()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <!-- Stats Cards -->
+          <div class="run-summary-stats" id="runSummaryStats">
+            <div class="stat-card">
+              <div class="stat-value" id="rsStat-cycles">0</div>
+              <div class="stat-label">Respawn Cycles</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="rsStat-tokens">0</div>
+              <div class="stat-label">Tokens Used</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="rsStat-active">0m</div>
+              <div class="stat-label">Active Time</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="rsStat-issues">0</div>
+              <div class="stat-label">Issues</div>
+            </div>
+          </div>
+
+          <!-- Filter Buttons -->
+          <div class="run-summary-filters">
+            <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>
+            <button class="filter-btn" data-filter="errors" onclick="app.filterRunSummary('errors')">Errors</button>
+            <button class="filter-btn" data-filter="warnings" onclick="app.filterRunSummary('warnings')">Warnings</button>
+            <button class="filter-btn" data-filter="respawn" onclick="app.filterRunSummary('respawn')">Respawn</button>
+            <button class="filter-btn" data-filter="idle" onclick="app.filterRunSummary('idle')">Idle/Working</button>
+          </div>
+
+          <!-- Timeline -->
+          <div class="run-summary-timeline" id="runSummaryTimeline">
+            <p class="empty-message">Loading summary...</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <span class="run-summary-session-info" id="runSummarySessionInfo"></span>
+          <button class="btn-toolbar btn-sm" onclick="app.closeRunSummary()">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Close Session Confirmation Modal -->
     <div class="modal" id="closeConfirmModal">
       <div class="modal-backdrop" onclick="app.cancelCloseSession()"></div>

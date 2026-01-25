@@ -31,6 +31,7 @@ import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type Subagen
 import { TranscriptWatcher } from '../transcript-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
+import { RunSummaryTracker } from '../run-summary.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -77,6 +78,13 @@ const TERMINAL_BATCH_INTERVAL = 16;
 const OUTPUT_BATCH_INTERVAL = 50;
 // Batch task:updated events for 100ms
 const TASK_UPDATE_BATCH_INTERVAL = 100;
+
+// DEC mode 2026 - Synchronized Output
+// When terminal supports this, it buffers all output between start/end markers
+// and renders atomically, eliminating partial-frame flicker from Ink redraws.
+// Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
+const DEC_SYNC_START = '\x1b[?2026h';  // Begin synchronized update
+const DEC_SYNC_END = '\x1b[?2026l';    // End synchronized update (flush to screen)
 // State update debounce interval (batch expensive toDetailedState() calls)
 const STATE_UPDATE_DEBOUNCE_INTERVAL = 500;
 // Scheduled runs cleanup interval (check every 5 minutes)
@@ -234,6 +242,7 @@ export class WebServer extends EventEmitter {
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
+  private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
   private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
@@ -531,6 +540,29 @@ export class WebServer extends EventEmitter {
           todoStats: session.ralphTodoStats,
         }
       };
+    });
+
+    // Get run summary for a session (what happened while you were away)
+    this.app.get('/api/sessions/:id/run-summary', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      const tracker = this.runSummaryTrackers.get(id);
+      if (!tracker) {
+        // Create a fresh tracker if one doesn't exist (shouldn't happen normally)
+        const newTracker = new RunSummaryTracker(id, session.name);
+        this.runSummaryTrackers.set(id, newTracker);
+        return { success: true, summary: newTracker.getSummary() };
+      }
+
+      // Update session name in case it changed
+      tracker.setSessionName(session.name);
+
+      return { success: true, summary: tracker.getSummary() };
     });
 
     // Configure Ralph (Ralph Wiggum) settings
@@ -1726,6 +1758,13 @@ export class WebServer extends EventEmitter {
       // Sanitize forwarded data: only include known safe fields, limit size
       const safeData = sanitizeHookData(data);
       this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
+
+      // Track in run summary
+      const summaryTracker = this.runSummaryTrackers.get(sessionId);
+      if (summaryTracker) {
+        summaryTracker.recordHookEvent(event, safeData);
+      }
+
       return { success: true };
     });
   }
@@ -1929,6 +1968,14 @@ export class WebServer extends EventEmitter {
     // Stop transcript watcher
     this.stopTranscriptWatcher(sessionId);
 
+    // Stop and remove run summary tracker
+    const summaryTracker = this.runSummaryTrackers.get(sessionId);
+    if (summaryTracker) {
+      summaryTracker.recordSessionStopped();
+      summaryTracker.stop();
+      this.runSummaryTrackers.delete(sessionId);
+    }
+
     // Clear batches and pending state updates
     this.terminalBatches.delete(sessionId);
     this.outputBatches.delete(sessionId);
@@ -1985,6 +2032,11 @@ export class WebServer extends EventEmitter {
   }
 
   private setupSessionListeners(session: Session): void {
+    // Create run summary tracker for this session
+    const summaryTracker = new RunSummaryTracker(session.id, session.name);
+    this.runSummaryTrackers.set(session.id, summaryTracker);
+    summaryTracker.recordSessionStarted(session.mode, session.workingDir);
+
     session.on('output', (data) => {
       // Use batching for better performance at high throughput
       this.batchOutputData(session.id, data);
@@ -2006,6 +2058,9 @@ export class WebServer extends EventEmitter {
 
     session.on('error', (error) => {
       this.broadcast('session:error', { id: session.id, error });
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) tracker.recordError('Session error', String(error));
     });
 
     session.on('completion', (result, cost) => {
@@ -2039,12 +2094,24 @@ export class WebServer extends EventEmitter {
 
     session.on('working', () => {
       this.broadcast('session:working', { id: session.id });
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) {
+        tracker.recordWorking();
+        tracker.recordTokens(session.inputTokens, session.outputTokens);
+      }
     });
 
     session.on('idle', () => {
       this.broadcast('session:idle', { id: session.id });
       // Use debounced state update (idle can fire frequently)
       this.broadcastSessionStateDebounced(session.id);
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) {
+        tracker.recordIdle();
+        tracker.recordTokens(session.inputTokens, session.outputTokens);
+      }
     });
 
     // Background task events - use debounced state updates to reduce serialization overhead
@@ -2071,11 +2138,17 @@ export class WebServer extends EventEmitter {
     session.on('autoClear', (data: { tokens: number; threshold: number }) => {
       this.broadcast('session:autoClear', { sessionId: session.id, ...data });
       this.broadcastSessionStateDebounced(session.id);
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) tracker.recordAutoClear(data.tokens, data.threshold);
     });
 
     session.on('autoCompact', (data: { tokens: number; threshold: number; prompt?: string }) => {
       this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
       this.broadcastSessionStateDebounced(session.id);
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
     });
 
     // Ralph tracking events
@@ -2093,13 +2166,20 @@ export class WebServer extends EventEmitter {
 
     session.on('ralphCompletionDetected', (phrase: string) => {
       this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) tracker.recordRalphCompletion(phrase);
     });
 
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
+    const summaryTracker = this.runSummaryTrackers.get(sessionId);
+
     controller.on('stateChanged', (state: RespawnState, prevState: RespawnState) => {
       this.broadcast('respawn:stateChanged', { sessionId, state, prevState });
+      // Track in run summary
+      if (summaryTracker) summaryTracker.recordStateChange(state, `${prevState} → ${state}`);
     });
 
     controller.on('respawnCycleStarted', (cycleNumber: number) => {
@@ -2132,10 +2212,14 @@ export class WebServer extends EventEmitter {
 
     controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
       this.broadcast('respawn:aiCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
+      // Track in run summary
+      if (summaryTracker) summaryTracker.recordAiCheckResult(result.verdict);
     });
 
     controller.on('aiCheckFailed', (error: string) => {
       this.broadcast('respawn:aiCheckFailed', { sessionId, error });
+      // Track in run summary
+      if (summaryTracker) summaryTracker.recordError('AI check failed', error);
     });
 
     controller.on('aiCheckCooldown', (active: boolean, endsAt: number | null) => {
@@ -2177,6 +2261,8 @@ export class WebServer extends EventEmitter {
 
     controller.on('error', (error: Error) => {
       this.broadcast('respawn:error', { sessionId, error: error.message });
+      // Track in run summary
+      if (summaryTracker) summaryTracker.recordError('Respawn error', error.message);
     });
   }
 
@@ -2609,7 +2695,12 @@ export class WebServer extends EventEmitter {
   private flushTerminalBatches(): void {
     for (const [sessionId, data] of this.terminalBatches) {
       if (data.length > 0) {
-        this.broadcast('session:terminal', { id: sessionId, data });
+        // Wrap with DEC mode 2026 synchronized output markers
+        // Terminal buffers all output between markers and renders atomically,
+        // eliminating partial-frame flicker from Ink's full-screen redraws.
+        // Unsupported terminals ignore these sequences harmlessly.
+        const syncData = DEC_SYNC_START + data + DEC_SYNC_END;
+        this.broadcast('session:terminal', { id: sessionId, data: syncData });
       }
     }
     this.terminalBatches.clear();

@@ -1960,6 +1960,151 @@ body {
   max-width: 520px;
 }
 
+/* Run Summary Modal */
+.run-summary-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.run-summary-stats .stat-card {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.run-summary-stats .stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.run-summary-stats .stat-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+.run-summary-filters {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  padding: 0.375rem 0.75rem;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+}
+
+.filter-btn:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.run-summary-timeline {
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.timeline-event {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+}
+
+.timeline-event.event-success {
+  border-left-color: var(--green);
+}
+
+.timeline-event.event-warning {
+  border-left-color: var(--yellow);
+}
+
+.timeline-event.event-error {
+  border-left-color: var(--red);
+}
+
+.timeline-event.event-info {
+  border-left-color: var(--accent);
+}
+
+.event-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.event-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.event-title {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.event-time {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.event-details {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+.run-summary-session-info {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+/* Tab summary icon */
+.tab-summary {
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: opacity 0.15s;
+  margin-right: 0.25rem;
+}
+
+.session-tab:hover .tab-summary {
+  opacity: 0.5;
+}
+
+.session-tab:hover .tab-summary:hover {
+  opacity: 1;
+}
+
 .modal-warning-text {
   color: var(--text-dim);
   font-size: 0.85rem;

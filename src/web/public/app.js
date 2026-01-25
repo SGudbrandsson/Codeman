@@ -2,6 +2,14 @@
 // Default terminal scrollback (can be changed via settings)
 const DEFAULT_SCROLLBACK = 5000;
 
+// DEC mode 2026 - Synchronized Output
+// Wrap terminal writes with these markers to prevent partial-frame flicker.
+// Terminal buffers all output between markers and renders atomically.
+// Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
+// Unsupported terminals ignore these sequences harmlessly.
+const DEC_SYNC_START = '\x1b[?2026h';
+const DEC_SYNC_END = '\x1b[?2026l';
+
 // Notification Manager - Multi-layer browser notification system
 class NotificationManager {
   constructor(app) {
@@ -643,9 +651,9 @@ class ClaudemanApp {
         return;
       }
 
-      // For small buffers, write directly
+      // For small buffers, write directly with DEC 2026 sync for atomic render
       if (buffer.length <= chunkSize) {
-        this.terminal.write(buffer);
+        this.terminal.write(DEC_SYNC_START + buffer + DEC_SYNC_END);
         resolve();
         return;
       }
@@ -659,7 +667,8 @@ class ClaudemanApp {
         }
 
         const chunk = buffer.slice(offset, offset + chunkSize);
-        this.terminal.write(chunk);
+        // Wrap each chunk with DEC 2026 sync markers for atomic render per frame
+        this.terminal.write(DEC_SYNC_START + chunk + DEC_SYNC_END);
         offset += chunkSize;
 
         // Schedule next chunk on next frame
@@ -807,7 +816,8 @@ class ClaudemanApp {
           this.terminal.clear();
           this.terminal.reset();
           if (termData.terminalBuffer) {
-            this.terminal.write(termData.terminalBuffer);
+            // Wrap with DEC 2026 sync markers for atomic render (prevents flicker)
+            this.terminal.write(DEC_SYNC_START + termData.terminalBuffer + DEC_SYNC_END);
           }
 
           // Send resize to ensure proper dimensions
@@ -1600,6 +1610,7 @@ class ClaudemanApp {
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
+          <span class="tab-summary" onclick="event.stopPropagation(); app.openRunSummary('${id}')" title="Run Summary">&#x1F4CA;</span>
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
         </div>`);
@@ -2924,6 +2935,166 @@ class ClaudemanApp {
   closeSessionOptions() {
     this.editingSessionId = null;
     document.getElementById('sessionOptionsModal').classList.remove('active');
+  }
+
+  // ========== Run Summary Modal ==========
+
+  async openRunSummary(sessionId) {
+    this.runSummarySessionId = sessionId;
+    this.runSummaryFilter = 'all';
+
+    // Show modal
+    document.getElementById('runSummaryModal').classList.add('active');
+
+    // Reset filter buttons
+    document.querySelectorAll('.run-summary-filters .filter-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === 'all');
+    });
+
+    // Load summary data
+    await this.loadRunSummary(sessionId);
+  }
+
+  closeRunSummary() {
+    this.runSummarySessionId = null;
+    document.getElementById('runSummaryModal').classList.remove('active');
+  }
+
+  async loadRunSummary(sessionId) {
+    const timeline = document.getElementById('runSummaryTimeline');
+    timeline.innerHTML = '<p class="empty-message">Loading summary...</p>';
+
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/run-summary`);
+      const data = await response.json();
+
+      if (!data.success) {
+        timeline.innerHTML = `<p class="empty-message">Failed to load summary: ${data.error}</p>`;
+        return;
+      }
+
+      this.runSummaryData = data.summary;
+      this.renderRunSummary();
+    } catch (err) {
+      console.error('Failed to load run summary:', err);
+      timeline.innerHTML = '<p class="empty-message">Failed to load summary</p>';
+    }
+  }
+
+  renderRunSummary() {
+    if (!this.runSummaryData) return;
+
+    const { stats, events, sessionName, startedAt, lastUpdatedAt } = this.runSummaryData;
+
+    // Update stats
+    document.getElementById('rsStat-cycles').textContent = stats.totalRespawnCycles;
+    document.getElementById('rsStat-tokens').textContent = this.formatTokens(stats.peakTokens || stats.totalTokensUsed);
+    document.getElementById('rsStat-active').textContent = this.formatDuration(stats.totalTimeActiveMs);
+    document.getElementById('rsStat-issues').textContent = stats.errorCount + stats.warningCount;
+
+    // Update session info
+    const duration = lastUpdatedAt - startedAt;
+    document.getElementById('runSummarySessionInfo').textContent =
+      `${sessionName || 'Session'} - ${this.formatDuration(duration)} total`;
+
+    // Filter and render events
+    const filteredEvents = this.filterRunSummaryEvents(events);
+    this.renderRunSummaryTimeline(filteredEvents);
+  }
+
+  filterRunSummaryEvents(events) {
+    if (this.runSummaryFilter === 'all') return events;
+
+    return events.filter(event => {
+      switch (this.runSummaryFilter) {
+        case 'errors': return event.severity === 'error';
+        case 'warnings': return event.severity === 'warning' || event.severity === 'error';
+        case 'respawn': return event.type.startsWith('respawn_') || event.type === 'state_stuck';
+        case 'idle': return event.type === 'idle_detected' || event.type === 'working_detected';
+        default: return true;
+      }
+    });
+  }
+
+  filterRunSummary(filter) {
+    this.runSummaryFilter = filter;
+
+    // Update active state on buttons
+    document.querySelectorAll('.run-summary-filters .filter-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+
+    this.renderRunSummary();
+  }
+
+  renderRunSummaryTimeline(events) {
+    const timeline = document.getElementById('runSummaryTimeline');
+
+    if (!events || events.length === 0) {
+      timeline.innerHTML = '<p class="empty-message">No events recorded yet</p>';
+      return;
+    }
+
+    // Reverse to show most recent first
+    const reversedEvents = [...events].reverse();
+
+    const html = reversedEvents.map(event => {
+      const time = new Date(event.timestamp).toLocaleTimeString();
+      const severityClass = `event-${event.severity}`;
+      const icon = this.getEventIcon(event.type, event.severity);
+
+      return `
+        <div class="timeline-event ${severityClass}">
+          <div class="event-icon">${icon}</div>
+          <div class="event-content">
+            <div class="event-header">
+              <span class="event-title">${this.escapeHtml(event.title)}</span>
+              <span class="event-time">${time}</span>
+            </div>
+            ${event.details ? `<div class="event-details">${this.escapeHtml(event.details)}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    timeline.innerHTML = html;
+  }
+
+  getEventIcon(type, severity) {
+    if (severity === 'error') return '&#x274C;'; // Red X
+    if (severity === 'warning') return '&#x26A0;'; // Warning triangle
+    if (severity === 'success') return '&#x2714;'; // Checkmark
+
+    switch (type) {
+      case 'session_started': return '&#x1F680;'; // Rocket
+      case 'session_stopped': return '&#x1F6D1;'; // Stop sign
+      case 'respawn_cycle_started': return '&#x1F504;'; // Cycle
+      case 'respawn_cycle_completed': return '&#x2705;'; // Green check
+      case 'respawn_state_change': return '&#x27A1;'; // Arrow
+      case 'token_milestone': return '&#x1F4B0;'; // Money bag
+      case 'idle_detected': return '&#x1F4A4;'; // Zzz
+      case 'working_detected': return '&#x1F4BB;'; // Laptop
+      case 'ai_check_result': return '&#x1F916;'; // Robot
+      case 'hook_event': return '&#x1F514;'; // Bell
+      default: return '&#x2022;'; // Bullet
+    }
+  }
+
+  formatTokens(tokens) {
+    if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+    return String(tokens || 0);
+  }
+
+  formatDuration(ms) {
+    if (!ms || ms < 0) return '0s';
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
   }
 
   saveSessionOptions() {
