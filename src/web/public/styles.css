@@ -67,6 +67,13 @@ body {
   font-weight: 600;
   color: var(--accent-hover);
   letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: color 0.15s, text-shadow 0.15s;
+}
+
+.logo:hover {
+  color: #93c5fd;
+  text-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
 }
 
 /* Session Tabs */
@@ -1433,6 +1440,21 @@ body {
   border-color: #3d7a3d;
   box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
   color: #a8d8a8;
+}
+
+/* Ralph Loop button - golden/yellow theme */
+.btn-toolbar.btn-ralph {
+  background: linear-gradient(135deg, #3d3415 0%, #4a3f1a 100%);
+  border-color: #6b5a1e;
+  color: #eab308;
+  font-weight: 500;
+}
+
+.btn-toolbar.btn-ralph:hover {
+  background: linear-gradient(135deg, #4a3f1a 0%, #5a4d20 100%);
+  border-color: #8b7a2e;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.4);
+  color: #fcd34d;
 }
 
 /* Button icon styling */
@@ -4599,4 +4621,260 @@ kbd {
 .file-link-tooltip::before {
   content: "📄 Click to stream: ";
   color: var(--accent);
+}
+
+/* ========== Ralph Loop Wizard ========== */
+
+/* Wizard Progress Indicator */
+.wizard-progress {
+  display: flex;
+  justify-content: center;
+  gap: 2rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  transition: color 0.2s;
+}
+
+.wizard-step.active {
+  color: var(--accent);
+}
+
+.wizard-step.completed {
+  color: var(--green);
+}
+
+.wizard-step-number {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.wizard-step.active .wizard-step-number {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.wizard-step.completed .wizard-step-number {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+.wizard-step-label {
+  font-weight: 500;
+}
+
+/* Wizard Pages */
+.wizard-page {
+  min-height: 280px;
+}
+
+.wizard-page.hidden {
+  display: none;
+}
+
+/* Wizard Footer */
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.wizard-footer-right {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Textarea with AI Assist button */
+.textarea-with-assist {
+  position: relative;
+}
+
+.textarea-with-assist textarea {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  resize: vertical;
+  min-height: 140px;
+}
+
+.textarea-with-assist textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Phrase Input Group */
+.phrase-input-group {
+  position: relative;
+}
+
+.phrase-input-group input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
+.phrase-input-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Iteration Presets */
+.iteration-presets {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.iteration-preset-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 50px;
+}
+
+.iteration-preset-btn:hover {
+  border-color: var(--border-light);
+  color: var(--text);
+}
+
+.iteration-preset-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Case Select Inline */
+.case-select-inline {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.case-select-inline select {
+  flex: 1;
+}
+
+/* Ralph Prompt Preview */
+.ralph-preview-section {
+  margin-bottom: 1rem;
+}
+
+.ralph-preview-section > label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ralph-prompt-preview {
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ralph-prompt-preview .preview-highlight {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Config Summary */
+.ralph-config-summary {
+  background: var(--bg-input);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.config-summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  font-size: 0.8rem;
+}
+
+.config-summary-row:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+
+.config-label {
+  color: var(--text-dim);
+}
+
+.config-summary-row code {
+  background: var(--bg-dark);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: var(--green);
+}
+
+/* Advanced Options */
+.advanced-options {
+  margin-top: 1rem;
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.advanced-options summary:hover {
+  color: var(--text);
+}
+
+.advanced-options[open] summary {
+  margin-bottom: 0.75rem;
+}
+
+.advanced-options-content {
+  padding-left: 0.5rem;
 }

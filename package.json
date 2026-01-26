@@ -1,6 +1,6 @@
 {
   "name": "claudeman",
-  "version": "0.1388",
+  "version": "0.1389",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -54,12 +54,13 @@
     "@types/node": "^20.14.0",
     "@types/react": "^19.2.9",
     "@types/uuid": "^10.0.0",
-    "@vitest/coverage-v8": "^4.0.17",
+    "@vitest/coverage-v8": "^4.0.18",
     "agent-browser": "^0.6.0",
     "playwright": "^1.58.0",
+    "puppeteer": "^24.36.0",
     "tsx": "^4.15.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.17"
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=18.0.0"

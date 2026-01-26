@@ -1764,7 +1764,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:completed', (e) => {
+    this.eventSource.addEventListener('subagent:completed', async (e) => {
       const data = JSON.parse(e.data);
       const existing = this.subagents.get(data.agentId);
       if (existing) {
@@ -1778,7 +1778,7 @@ class ClaudemanApp {
       if (this.subagentWindows.has(data.agentId)) {
         const windowData = this.subagentWindows.get(data.agentId);
         if (windowData && !windowData.minimized) {
-          this.closeSubagentWindow(data.agentId); // This minimizes to tab
+          await this.closeSubagentWindow(data.agentId); // This minimizes to tab
           this.saveSubagentWindowStates(); // Persist the minimized state
         }
       }
@@ -2344,6 +2344,245 @@ class ClaudemanApp {
     const currentIndex = ids.indexOf(this.activeSessionId);
     const nextIndex = (currentIndex + 1) % ids.length;
     this.selectSession(ids[nextIndex]);
+  }
+
+  // ========== Navigation ==========
+
+  goHome() {
+    // Deselect active session and show welcome screen
+    this.activeSessionId = null;
+    this.terminal.clear();
+    this.showWelcome();
+    this.renderSessionTabs();
+    this.renderRalphStatePanel();
+  }
+
+  // ========== Ralph Loop Wizard ==========
+
+  // Wizard state
+  ralphWizardStep = 1;
+  ralphWizardConfig = {
+    taskDescription: '',
+    completionPhrase: 'COMPLETE',
+    maxIterations: 10,
+    caseName: 'testcase',
+    enableRespawn: true,
+  };
+
+  showRalphWizard() {
+    // Reset wizard state
+    this.ralphWizardStep = 1;
+    this.ralphWizardConfig = {
+      taskDescription: '',
+      completionPhrase: 'COMPLETE',
+      maxIterations: 10,
+      caseName: document.getElementById('quickStartCase')?.value || 'testcase',
+      enableRespawn: true,
+    };
+
+    // Reset UI
+    document.getElementById('ralphTaskDescription').value = '';
+    document.getElementById('ralphCompletionPhrase').value = 'COMPLETE';
+    this.selectIterationPreset(10);
+
+    // Populate case selector
+    this.populateRalphCaseSelector();
+
+    // Show wizard modal
+    this.updateRalphWizardUI();
+    document.getElementById('ralphWizardModal').classList.add('active');
+    document.getElementById('ralphTaskDescription').focus();
+  }
+
+  closeRalphWizard() {
+    document.getElementById('ralphWizardModal')?.classList.remove('active');
+  }
+
+  populateRalphCaseSelector() {
+    const select = document.getElementById('ralphCaseSelect');
+    const quickStartSelect = document.getElementById('quickStartCase');
+
+    if (quickStartSelect && select) {
+      select.innerHTML = quickStartSelect.innerHTML;
+      select.value = this.ralphWizardConfig.caseName;
+    }
+  }
+
+  selectIterationPreset(iterations) {
+    this.ralphWizardConfig.maxIterations = iterations;
+
+    // Update button states
+    document.querySelectorAll('.iteration-preset-btn').forEach(btn => {
+      const btnIterations = parseInt(btn.dataset.iterations);
+      btn.classList.toggle('active', btnIterations === iterations);
+    });
+  }
+
+  ralphWizardNext() {
+    if (this.ralphWizardStep === 1) {
+      // Validate step 1
+      const taskDescription = document.getElementById('ralphTaskDescription').value.trim();
+      const completionPhrase = document.getElementById('ralphCompletionPhrase').value.trim() || 'COMPLETE';
+      const caseName = document.getElementById('ralphCaseSelect').value;
+
+      if (!taskDescription) {
+        this.showToast('Please enter a task description', 'error');
+        document.getElementById('ralphTaskDescription').focus();
+        return;
+      }
+
+      // Save config
+      this.ralphWizardConfig.taskDescription = taskDescription;
+      this.ralphWizardConfig.completionPhrase = completionPhrase.toUpperCase();
+      this.ralphWizardConfig.caseName = caseName;
+
+      // Generate preview
+      this.updateRalphPromptPreview();
+
+      // Move to step 2
+      this.ralphWizardStep = 2;
+      this.updateRalphWizardUI();
+    }
+  }
+
+  ralphWizardBack() {
+    if (this.ralphWizardStep === 2) {
+      this.ralphWizardStep = 1;
+      this.updateRalphWizardUI();
+    }
+  }
+
+  updateRalphWizardUI() {
+    const step = this.ralphWizardStep;
+
+    // Update progress indicators
+    document.querySelectorAll('.wizard-step').forEach(el => {
+      const stepNum = parseInt(el.dataset.step);
+      el.classList.toggle('active', stepNum === step);
+      el.classList.toggle('completed', stepNum < step);
+    });
+
+    // Show/hide pages
+    document.getElementById('ralphWizardStep1').classList.toggle('hidden', step !== 1);
+    document.getElementById('ralphWizardStep2').classList.toggle('hidden', step !== 2);
+
+    // Show/hide buttons
+    document.getElementById('ralphBackBtn').style.display = step === 1 ? 'none' : 'block';
+    document.getElementById('ralphNextBtn').style.display = step === 2 ? 'none' : 'block';
+    document.getElementById('ralphStartBtn').style.display = step === 2 ? 'block' : 'none';
+  }
+
+  updateRalphPromptPreview() {
+    const config = this.ralphWizardConfig;
+    const preview = document.getElementById('ralphPromptPreview');
+
+    // Build the formatted prompt
+    let prompt = config.taskDescription;
+
+    // Add completion instructions
+    prompt += '\n\n---\n\n';
+    prompt += '## Completion Criteria\n\n';
+    prompt += 'When ALL requirements above are complete:\n';
+    prompt += '1. Run all tests to verify\n';
+    prompt += '2. Commit your changes\n';
+    prompt += `3. Output: <promise>${config.completionPhrase}</promise>\n`;
+
+    // Show preview with highlighting
+    const highlightedPrompt = prompt
+      .replace(/<promise>/g, '<span class="preview-highlight">&lt;promise&gt;')
+      .replace(/<\/promise>/g, '&lt;/promise&gt;</span>');
+
+    preview.innerHTML = highlightedPrompt;
+
+    // Update summary
+    document.getElementById('summaryPhrase').textContent = config.completionPhrase;
+    document.getElementById('summaryIterations').textContent =
+      config.maxIterations === 0 ? 'Unlimited' : config.maxIterations;
+    document.getElementById('summaryCase').textContent = config.caseName;
+  }
+
+  async startRalphLoop() {
+    const config = this.ralphWizardConfig;
+
+    // Read advanced options
+    config.enableRespawn = document.getElementById('ralphEnableRespawn')?.checked ?? true;
+
+    // Close wizard
+    this.closeRalphWizard();
+
+    // Build the full prompt
+    let fullPrompt = config.taskDescription;
+    fullPrompt += '\n\n---\n\n';
+    fullPrompt += '## Completion Criteria\n\n';
+    fullPrompt += 'When ALL requirements above are complete:\n';
+    fullPrompt += '1. Run all tests to verify\n';
+    fullPrompt += '2. Commit your changes\n';
+    fullPrompt += `3. Output: <promise>${config.completionPhrase}</promise>\n`;
+
+    try {
+      // Step 1: Create/verify case exists and start session
+      this.terminal.clear();
+      this.terminal.writeln(`\x1b[1;33m Starting Ralph Loop in ${config.caseName}...\x1b[0m`);
+      this.terminal.writeln('');
+
+      // Create session via quick-start
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseName: config.caseName, mode: 'claude' })
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        this.showToast(data.error || 'Failed to start session', 'error');
+        return;
+      }
+
+      const sessionId = data.sessionId;
+
+      // Step 2: Configure Ralph tracker for this session
+      await fetch(`/api/sessions/${sessionId}/ralph-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: true,
+          completionPhrase: config.completionPhrase,
+          maxIterations: config.maxIterations || null,
+        })
+      });
+
+      // Step 3: Enable respawn if requested
+      if (config.enableRespawn) {
+        await fetch(`/api/sessions/${sessionId}/respawn/enable`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: 'continue',
+            sendClear: true,
+            sendInit: true,
+          })
+        });
+      }
+
+      // Step 4: Switch to session and wait for it to be ready
+      await this.selectSession(sessionId);
+
+      // Wait a moment for session to be ready, then send the prompt
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Send the prompt to start the loop
+      await fetch(`/api/sessions/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: fullPrompt + '\n' })
+      });
+
+      this.showToast(`Ralph Loop started in ${config.caseName}`, 'success');
+
+    } catch (err) {
+      console.error('Failed to start Ralph loop:', err);
+      this.showToast('Failed to start Ralph loop: ' + err.message, 'error');
+    }
   }
 
   // ========== Quick Start ==========
@@ -4287,13 +4526,35 @@ class ClaudemanApp {
   async restoreSubagentWindowStates() {
     const states = await this.loadSubagentWindowStates();
 
-    // Restore minimized state
-    for (const [sessionId, agentIds] of Object.entries(states.minimized || {})) {
+    // First, discover parent sessions for all subagents to establish correct mapping
+    // This is important after server restart when parentSessionId isn't set
+    const parentDiscoveryPromises = [];
+    for (const [agentId, agent] of this.subagents) {
+      if (!agent.parentSessionId) {
+        parentDiscoveryPromises.push(this.findParentSessionForSubagent(agentId));
+      }
+    }
+    if (parentDiscoveryPromises.length > 0) {
+      await Promise.all(parentDiscoveryPromises);
+    }
+
+    // Restore minimized state, but verify session mapping is correct
+    for (const [savedSessionId, agentIds] of Object.entries(states.minimized || {})) {
       if (Array.isArray(agentIds) && agentIds.length > 0) {
-        // Verify agents still exist
-        const validAgents = agentIds.filter(id => this.subagents.has(id));
-        if (validAgents.length > 0) {
-          this.minimizedSubagents.set(sessionId, new Set(validAgents));
+        for (const agentId of agentIds) {
+          const agent = this.subagents.get(agentId);
+          if (!agent) continue; // Agent no longer exists
+
+          // Use discovered parentSessionId, or validate saved sessionId exists
+          const correctSessionId = agent.parentSessionId ||
+            (this.sessions.has(savedSessionId) ? savedSessionId : null);
+
+          if (correctSessionId) {
+            if (!this.minimizedSubagents.has(correctSessionId)) {
+              this.minimizedSubagents.set(correctSessionId, new Set());
+            }
+            this.minimizedSubagents.get(correctSessionId).add(agentId);
+          }
         }
       }
     }
@@ -4326,6 +4587,7 @@ class ClaudemanApp {
     }
 
     this.renderSessionTabs(); // Update tab badges
+    this.saveSubagentWindowStates(); // Persist corrected mappings
   }
 
   // ========== Help Modal ==========
@@ -5804,14 +6066,23 @@ class ClaudemanApp {
     this.saveSubagentWindowStates();
   }
 
-  closeSubagentWindow(agentId) {
+  async closeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (!windowData) return;
 
     const agent = this.subagents.get(agentId);
-    const parentSessionId = agent?.parentSessionId || this.activeSessionId;
 
-    // Always minimize to tab (use active session if no parent)
+    // Try to discover parent session if not already known
+    // This ensures we minimize to the correct tab
+    if (agent && !agent.parentSessionId) {
+      await this.findParentSessionForSubagent(agentId);
+    }
+
+    // Now get the correct parent session (re-read agent after discovery)
+    const updatedAgent = this.subagents.get(agentId);
+    const parentSessionId = updatedAgent?.parentSessionId || this.activeSessionId;
+
+    // Always minimize to tab (use active session if no parent found)
     windowData.element.style.display = 'none';
     windowData.minimized = true;
 

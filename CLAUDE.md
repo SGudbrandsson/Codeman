@@ -25,7 +25,7 @@ Always bump version on every COM, even for small changes.
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1388 (must match `package.json`)
+**Version**: 0.1389 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -119,10 +119,31 @@ npx vitest run -t "should create session" # By pattern
 | 3152 | browser-e2e.test.ts (hook events tests) |
 | 3153 | browser-e2e.test.ts (Ralph panel tests) |
 | 3154 | file-link-click.test.ts |
+| 3155 | browser-playwright.test.ts |
+| 3156 | browser-puppeteer.test.ts |
+| 3157 | browser-agent.test.ts |
+| 3158-3160 | browser-comparison.test.ts |
+| 3180-3182 | scripts/browser-comparison.mjs (benchmark) |
 
-**Next available port**: 3155
+**Next available port**: 3183
 
-Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, ai-idle-checker, ai-plan-checker
+**Browser Testing**: Three frameworks available (Playwright, Puppeteer, Agent-Browser). See `docs/browser-testing-guide.md` for full comparison and patterns.
+
+```bash
+# Run browser benchmark (standalone - recommended)
+npx tsx scripts/browser-comparison.mjs
+
+# Run existing browser E2E tests
+npm test -- test/browser-e2e.test.ts
+```
+
+**Browser Testing Key Points**:
+- **Vitest hook issue**: Browser tests using `beforeAll`/`afterAll` timeout even when tests pass. Use standalone scripts or run browser code directly in tests.
+- **Recommended framework**: Playwright for most cases (auto-waiting, debugging). Puppeteer for Chrome-specific/CDP features.
+- **Required browser args**: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`
+- **Install browsers**: `npx playwright install chromium` after npm install
+
+**Unit tests** (no server needed): `respawn-controller`, `ralph-tracker`, `pty-interactive`, `task-queue`, `task`, `ralph-loop`, `session-manager`, `state-store`, `types`, `templates`, `ralph-config`, `spawn-detector`, `spawn-types`, `spawn-orchestrator`, `ai-idle-checker`, `ai-plan-checker`
 
 **Test Utilities**: `test/respawn-test-utils.ts` provides MockSession, MockAiIdleChecker, MockAiPlanChecker, time controller, state tracker, and event recorder for respawn controller testing. See `test/respawn-test-plan.md` for architecture and `test/respawn-scenarios.md` for comprehensive test scenarios.
 
@@ -613,6 +634,7 @@ Placeholders replaced:
 - `docs/spawn-protocol.md` - Spawn1337 agent protocol, MCP tools, resource governance
 - `docs/ralph-wiggum-guide.md` - Ralph Wiggum loop guide (plugin reference, prompt templates)
 - `docs/claude-code-hooks-reference.md` - Claude Code hooks documentation
+- `docs/browser-testing-guide.md` - Browser testing frameworks comparison, patterns, and known issues
 
 **Internal planning** (historical context, may be outdated):
 - `docs/respawn-improvement-plan.md` - Planned respawn improvements
