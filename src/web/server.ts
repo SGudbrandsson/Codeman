@@ -28,7 +28,7 @@ import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig } from '../hooks-config.js';
-import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage } from '../subagent-watcher.js';
+import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage, type SubagentToolResult } from '../subagent-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
@@ -339,6 +339,10 @@ export class WebServer extends EventEmitter {
       this.broadcast('subagent:tool_call', data);
     });
 
+    subagentWatcher.on('subagent:tool_result', (data: SubagentToolResult) => {
+      this.broadcast('subagent:tool_result', data);
+    });
+
     subagentWatcher.on('subagent:progress', (data: SubagentProgress) => {
       this.broadcast('subagent:progress', data);
     });
@@ -370,35 +374,19 @@ export class WebServer extends EventEmitter {
    * matches the subagent's project hash, then checking for recent tasks.
    */
   private getTaskDescriptionForSubagent(info: SubagentInfo): string | undefined {
-    // Find the session whose working directory matches this subagent's project
+    // Find sessions whose working directory matches this subagent's project
+    // Check ALL matching sessions since multiple sessions may have the same working directory
+    const subagentStartTime = new Date(info.startedAt).getTime();
+
     for (const session of this.sessions.values()) {
       const sessionProjectHash = subagentWatcher.getProjectHashForDir(session.workingDir);
       if (sessionProjectHash === info.projectHash) {
-        // Found the owning session - check its TaskTracker for recent tasks
-        // Get all tasks from the tracker
-        const allTasks = Array.from(session.taskTracker.getAllTasks().values());
-        if (allTasks.length > 0) {
-          // Sort by start time descending to get most recent first
-          const recentTasks = allTasks.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
-
-          // Check if there's a task that started recently (within 5 seconds of subagent discovery)
-          const subagentStartTime = new Date(info.startedAt).getTime();
-          for (const task of recentTasks) {
-            const taskStartTime = task.startTime || 0;
-            const timeDiff = Math.abs(subagentStartTime - taskStartTime);
-            // If the task started within 5 seconds of the subagent, use its description
-            if (timeDiff < 5000 && task.description) {
-              return task.description;
-            }
-          }
-
-          // Fallback: use the most recent running task's description
-          const runningTask = recentTasks.find(t => t.status === 'running');
-          if (runningTask?.description) {
-            return runningTask.description;
-          }
+        // Found a matching session - check for recent task descriptions parsed from terminal
+        // The Session parses "Explore(Description)" patterns from Claude Code output
+        const description = session.findTaskDescriptionNear(subagentStartTime, 15000);
+        if (description) {
+          return description;
         }
-        break; // Found the session, no need to continue
       }
     }
     return undefined;

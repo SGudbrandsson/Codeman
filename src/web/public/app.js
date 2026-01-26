@@ -437,6 +437,7 @@ class ClaudemanApp {
     // Subagent (Claude Code background agent) tracking
     this.subagents = new Map(); // Map<agentId, SubagentInfo>
     this.subagentActivity = new Map(); // Map<agentId, activity[]> - recent tool calls/progress
+    this.subagentToolResults = new Map(); // Map<agentId, Map<toolUseId, result>> - tool results by toolUseId
     this.activeSubagentId = null; // Currently selected subagent for detail view
     this.subagentPanelVisible = false;
     this.subagentWindows = new Map(); // Map<agentId, { element, position }>
@@ -1643,6 +1644,29 @@ class ClaudemanApp {
       activity.push({ type: 'message', ...data });
       if (activity.length > 100) activity.shift();
       this.subagentActivity.set(data.agentId, activity);
+      if (this.activeSubagentId === data.agentId) {
+        this.renderSubagentDetail();
+      }
+      // Update floating window
+      if (this.subagentWindows.has(data.agentId)) {
+        this.renderSubagentWindowContent(data.agentId);
+      }
+    });
+
+    this.eventSource.addEventListener('subagent:tool_result', (e) => {
+      const data = JSON.parse(e.data);
+      // Store tool result by toolUseId for later lookup
+      if (!this.subagentToolResults.has(data.agentId)) {
+        this.subagentToolResults.set(data.agentId, new Map());
+      }
+      this.subagentToolResults.get(data.agentId).set(data.toolUseId, data);
+
+      // Add to activity stream
+      const activity = this.subagentActivity.get(data.agentId) || [];
+      activity.push({ type: 'tool_result', ...data });
+      if (activity.length > 100) activity.shift();
+      this.subagentActivity.set(data.agentId, activity);
+
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
       }
@@ -5051,6 +5075,9 @@ class ClaudemanApp {
       const lastTool = lastActivity?.type === 'tool' ? lastActivity.tool : null;
       const hasWindow = this.subagentWindows.has(agent.agentId);
       const canKill = agent.status === 'active' || agent.status === 'idle';
+      const modelBadge = agent.modelShort
+        ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
+        : '';
 
       const displayName = agent.description || agent.agentId.substring(0, 7);
       html.push(`
@@ -5061,6 +5088,7 @@ class ClaudemanApp {
           <div class="subagent-header">
             <span class="subagent-icon">🤖</span>
             <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
+            ${modelBadge}
             <span class="subagent-status ${statusClass}">${agent.status}</span>
             ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${agent.agentId}')" title="Kill agent">&#x2715;</button>` : ''}
             <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${agent.agentId}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
@@ -5104,18 +5132,36 @@ class ClaudemanApp {
     const activityHtml = activity.slice(-30).map(a => {
       const time = new Date(a.timestamp).toLocaleTimeString();
       if (a.type === 'tool') {
-        return `<div class="subagent-activity tool">
+        const toolDetail = this.getToolDetailExpanded(a.tool, a.input, a.fullInput, a.toolUseId);
+        return `<div class="subagent-activity tool" data-tool-use-id="${a.toolUseId || ''}">
           <span class="time">${time}</span>
           <span class="icon">${this.getToolIcon(a.tool)}</span>
           <span class="name">${a.tool}</span>
-          <span class="detail">${this.getToolDetail(a.tool, a.input)}</span>
+          <span class="detail">${toolDetail.primary}</span>
+          ${toolDetail.hasMore ? `<button class="tool-expand-btn" onclick="app.toggleToolParams('${a.toolUseId}')">▶</button>` : ''}
+          ${toolDetail.hasMore ? `<div class="tool-params-expanded" id="tool-params-${a.toolUseId}" style="display:none;"><pre>${this.escapeHtml(JSON.stringify(a.fullInput || a.input, null, 2))}</pre></div>` : ''}
         </div>`;
-      } else if (a.type === 'progress') {
-        const icon = a.progressType === 'query_update' ? '⟳' : '✓';
-        return `<div class="subagent-activity progress">
+      } else if (a.type === 'tool_result') {
+        const icon = a.isError ? '❌' : '📄';
+        const statusClass = a.isError ? 'error' : '';
+        const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
+        const preview = a.preview.length > 80 ? a.preview.substring(0, 80) + '...' : a.preview;
+        return `<div class="subagent-activity tool-result ${statusClass}">
           <span class="time">${time}</span>
           <span class="icon">${icon}</span>
-          <span class="detail">${a.query || a.progressType}</span>
+          <span class="name">${a.tool || 'result'}</span>
+          <span class="detail">${this.escapeHtml(preview)}${sizeInfo}</span>
+        </div>`;
+      } else if (a.type === 'progress') {
+        // Check for hook events
+        const isHook = a.hookEvent || a.hookName;
+        const icon = isHook ? '🪝' : (a.progressType === 'query_update' ? '⟳' : '✓');
+        const hookClass = isHook ? ' hook' : '';
+        const displayText = isHook ? (a.hookName || a.hookEvent) : (a.query || a.progressType);
+        return `<div class="subagent-activity progress${hookClass}">
+          <span class="time">${time}</span>
+          <span class="icon">${icon}</span>
+          <span class="detail">${displayText}</span>
         </div>`;
       } else if (a.type === 'message') {
         const preview = a.text.length > 100 ? a.text.substring(0, 100) + '...' : a.text;
@@ -5129,9 +5175,17 @@ class ClaudemanApp {
     }).join('');
 
     const detailTitle = agent.description || `Agent ${agent.agentId}`;
+    const modelBadge = agent.modelShort
+      ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
+      : '';
+    const tokenStats = (agent.totalInputTokens || agent.totalOutputTokens)
+      ? `<span>Tokens: ${this.formatTokenCount(agent.totalInputTokens || 0)}↓ ${this.formatTokenCount(agent.totalOutputTokens || 0)}↑</span>`
+      : '';
+
     detail.innerHTML = `
       <div class="subagent-detail-header">
         <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(detailTitle.length > 60 ? detailTitle.substring(0, 60) + '...' : detailTitle)}</span>
+        ${modelBadge}
         <span class="subagent-status ${agent.status}">${agent.status}</span>
         <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${agent.agentId}')">
           View Full Transcript
@@ -5141,11 +5195,37 @@ class ClaudemanApp {
         <span>Tools: ${agent.toolCallCount}</span>
         <span>Entries: ${agent.entryCount}</span>
         <span>Size: ${(agent.fileSize / 1024).toFixed(1)}KB</span>
+        ${tokenStats}
       </div>
       <div class="subagent-activity-log">
         ${activityHtml || '<div class="subagent-empty">No activity yet</div>'}
       </div>
     `;
+  }
+
+  toggleToolParams(toolUseId) {
+    const el = document.getElementById(`tool-params-${toolUseId}`);
+    if (!el) return;
+    const btn = el.previousElementSibling;
+    if (el.style.display === 'none') {
+      el.style.display = 'block';
+      if (btn) btn.textContent = '▼';
+    } else {
+      el.style.display = 'none';
+      if (btn) btn.textContent = '▶';
+    }
+  }
+
+  formatTokenCount(count) {
+    if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
+    if (count >= 1000) return (count / 1000).toFixed(1) + 'k';
+    return count.toString();
+  }
+
+  formatBytes(bytes) {
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + 'KB';
+    return bytes + 'B';
   }
 
   getToolIcon(tool) {
@@ -5176,6 +5256,16 @@ class ClaudemanApp {
     if (tool === 'Glob' && input.pattern) return input.pattern;
     if (tool === 'Grep' && input.pattern) return input.pattern;
     return '';
+  }
+
+  getToolDetailExpanded(tool, input, fullInput, toolUseId) {
+    const primary = this.getToolDetail(tool, input);
+    // Check if there are additional params beyond the primary one
+    const primaryKeys = ['query', 'url', 'file_path', 'command', 'pattern'];
+    const inputKeys = Object.keys(fullInput || input || {});
+    const extraKeys = inputKeys.filter(k => !primaryKeys.includes(k));
+    const hasMore = extraKeys.length > 0 || (fullInput && JSON.stringify(fullInput).length > 100);
+    return { primary, hasMore, fullInput: fullInput || input };
   }
 
   async killSubagent(agentId) {
@@ -5449,11 +5539,15 @@ class ClaudemanApp {
 
     const windowTitle = agent.description || agentId.substring(0, 7);
     const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
+    const modelBadge = agent.modelShort
+      ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
+      : '';
     win.innerHTML = `
       <div class="subagent-window-header">
         <div class="subagent-window-title" title="${this.escapeHtml(agent.description || agentId)}">
           <span class="icon">🤖</span>
           <span class="id">${this.escapeHtml(truncatedTitle)}</span>
+          ${modelBadge}
           <span class="status ${agent.status}">${agent.status}</span>
         </div>
         <div class="subagent-window-actions">
@@ -5700,12 +5794,26 @@ class ClaudemanApp {
           <span class="tool-name">${a.tool}</span>
           <span class="tool-detail">${this.escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
         </div>`;
-      } else if (a.type === 'progress') {
-        const icon = a.progressType === 'query_update' ? '⟳' : '✓';
-        return `<div class="activity-line progress-line">
+      } else if (a.type === 'tool_result') {
+        const icon = a.isError ? '❌' : '📄';
+        const statusClass = a.isError ? ' error' : '';
+        const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
+        const preview = a.preview.length > 60 ? a.preview.substring(0, 60) + '...' : a.preview;
+        return `<div class="activity-line result-line${statusClass}">
           <span class="time">${time}</span>
           <span class="tool-icon">${icon}</span>
-          <span class="tool-detail">${this.escapeHtml(a.query || a.progressType)}</span>
+          <span class="tool-name">${a.tool || '→'}</span>
+          <span class="tool-detail">${this.escapeHtml(preview)}${sizeInfo}</span>
+        </div>`;
+      } else if (a.type === 'progress') {
+        // Check for hook events
+        const isHook = a.hookEvent || a.hookName;
+        const icon = isHook ? '🪝' : (a.progressType === 'query_update' ? '⟳' : '✓');
+        const displayText = isHook ? (a.hookName || a.hookEvent) : (a.query || a.progressType);
+        return `<div class="activity-line progress-line${isHook ? ' hook-line' : ''}">
+          <span class="time">${time}</span>
+          <span class="tool-icon">${icon}</span>
+          <span class="tool-detail">${this.escapeHtml(displayText)}</span>
         </div>`;
       } else if (a.type === 'message') {
         const preview = a.text.length > 150 ? a.text.substring(0, 150) + '...' : a.text;
@@ -5748,6 +5856,21 @@ class ClaudemanApp {
     const titleContainer = win.querySelector('.subagent-window-title');
     if (titleContainer) {
       titleContainer.title = agent.description || agentId;
+    }
+
+    // Update or add model badge
+    let modelBadge = win.querySelector('.subagent-window-title .subagent-model-badge');
+    if (agent.modelShort) {
+      if (!modelBadge) {
+        modelBadge = document.createElement('span');
+        modelBadge.className = `subagent-model-badge ${agent.modelShort}`;
+        const statusEl = win.querySelector('.subagent-window-title .status');
+        if (statusEl) {
+          statusEl.insertAdjacentElement('beforebegin', modelBadge);
+        }
+      }
+      modelBadge.className = `subagent-model-badge ${agent.modelShort}`;
+      modelBadge.textContent = agent.modelShort;
     }
 
     // Update status

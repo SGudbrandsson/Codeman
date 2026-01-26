@@ -3971,6 +3971,98 @@ kbd {
   color: var(--text);
 }
 
+/* Model badges */
+.subagent-model-badge {
+  font-size: 0.55rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.subagent-model-badge.haiku {
+  background: #4ade80;
+  color: #052e16;
+}
+
+.subagent-model-badge.sonnet {
+  background: #60a5fa;
+  color: #1e3a5f;
+}
+
+.subagent-model-badge.opus {
+  background: #c084fc;
+  color: #3b0764;
+}
+
+/* Hook events */
+.subagent-activity.progress.hook .icon {
+  color: #f59e0b;
+}
+
+.activity-line.hook-line .tool-icon {
+  color: #f59e0b;
+}
+
+/* Tool result activity */
+.subagent-activity.tool-result .icon {
+  color: var(--success);
+}
+
+.subagent-activity.tool-result.error .icon {
+  color: var(--red);
+}
+
+.activity-line.result-line .tool-icon {
+  color: var(--success);
+}
+
+.activity-line.result-line.error .tool-icon {
+  color: var(--red);
+}
+
+.activity-line.result-line .tool-detail {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Tool params expansion */
+.tool-expand-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  margin-left: 0.3rem;
+  transition: all 0.15s;
+}
+
+.tool-expand-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tool-params-expanded {
+  background: var(--bg-dark);
+  border-left: 2px solid var(--accent);
+  margin: 0.3rem 0 0.3rem 2rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0 4px 4px 0;
+  font-size: 0.65rem;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.tool-params-expanded pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+}
+
 /* ========== Subagent Windows (Floating) ========== */
 
 .subagent-window {

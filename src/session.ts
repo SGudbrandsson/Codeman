@@ -69,6 +69,11 @@ const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 // - Single-char escapes: ESC = or ESC >
 const ANSI_ESCAPE_PATTERN = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
 const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+// Pattern to match Task tool invocations in terminal output
+// Matches: "Explore(Description)", "Task(Description)", "Bash(Description)", etc.
+// The prefix characters vary (●, ·, ✶, etc.) so we don't require them
+// We look for the tool name followed by (description)
+const TASK_TOOL_PATTERN = /\b(Explore|Task|Bash|Plan|general-purpose)\(([^)]+)\)/g;
 
 // ============================================================================
 // Claude CLI PATH Resolution
@@ -424,6 +429,11 @@ export class Session extends EventEmitter {
     toolEnd: (tool: ActiveBashTool) => void;
     toolsUpdate: (tools: ActiveBashTool[]) => void;
   } | null = null;
+
+  // Task descriptions parsed from terminal output (e.g., "Explore(Description)")
+  // Used to correlate with SubagentWatcher discoveries for better window titles
+  private _recentTaskDescriptions: Map<number, string> = new Map(); // timestamp -> description
+  private static readonly TASK_DESCRIPTION_MAX_AGE_MS = 30000; // Keep descriptions for 30 seconds
 
   constructor(config: Partial<SessionConfig> & {
     workingDir: string;
@@ -893,6 +903,10 @@ export class Session extends EventEmitter {
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(data);
 
+      // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
+      // This enables correlating subagent windows with their short descriptions
+      this.parseTaskDescriptionsFromTerminalData(data);
+
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
       if (data.includes('❯') || data.includes('\u276f')) {
@@ -1305,8 +1319,106 @@ export class Session extends EventEmitter {
       } else if (trimmed) {
         this._textOutput.append(line + '\n');
       }
+
+      // Parse task descriptions from terminal output (e.g., "Explore(Description)")
+      // This captures the short description from Claude Code's Task tool output
+      this.parseTaskDescriptionsFromLine(cleanLine);
     }
     // Note: BufferAccumulator auto-trims when max size exceeded
+  }
+
+  /**
+   * Parse task descriptions from raw terminal data (may contain multiple lines).
+   * Called from interactive mode's onData handler.
+   */
+  private parseTaskDescriptionsFromTerminalData(data: string): void {
+    // Quick pre-check: skip if no parentheses present
+    if (!data.includes('(') || !data.includes(')')) return;
+
+    // Split by newlines and process each line
+    const lines = data.split(/\r?\n/);
+    for (const line of lines) {
+      this.parseTaskDescriptionsFromLine(line);
+    }
+  }
+
+  /**
+   * Parse task descriptions from terminal output.
+   * Claude Code outputs Task tool calls as "ToolName(Description)" in the terminal.
+   * We capture these descriptions to use as window titles for subagents.
+   */
+  private parseTaskDescriptionsFromLine(line: string): void {
+    // Quick pre-check: skip expensive regex if no common tool patterns present
+    if (!line.includes('(') || !line.includes(')')) return;
+
+    // Strip ANSI codes before matching - terminal output has embedded codes like [1mExplore[0m
+    const cleanLine = line.replace(ANSI_ESCAPE_PATTERN, '');
+
+    // Reset regex lastIndex for global pattern
+    TASK_TOOL_PATTERN.lastIndex = 0;
+
+    let match;
+    while ((match = TASK_TOOL_PATTERN.exec(cleanLine)) !== null) {
+      const description = match[2].trim();
+      if (description && description.length > 0) {
+        const now = Date.now();
+        this._recentTaskDescriptions.set(now, description);
+
+        // Cleanup old entries
+        this.cleanupOldTaskDescriptions();
+      }
+    }
+  }
+
+  /**
+   * Remove task descriptions older than TASK_DESCRIPTION_MAX_AGE_MS.
+   */
+  private cleanupOldTaskDescriptions(): void {
+    const cutoff = Date.now() - Session.TASK_DESCRIPTION_MAX_AGE_MS;
+    for (const [timestamp] of this._recentTaskDescriptions) {
+      if (timestamp < cutoff) {
+        this._recentTaskDescriptions.delete(timestamp);
+      }
+    }
+  }
+
+  /**
+   * Get recent task descriptions parsed from terminal output.
+   * Returns descriptions sorted by timestamp (most recent first).
+   */
+  getRecentTaskDescriptions(): Array<{ timestamp: number; description: string }> {
+    this.cleanupOldTaskDescriptions();
+    const results: Array<{ timestamp: number; description: string }> = [];
+    for (const [timestamp, description] of this._recentTaskDescriptions) {
+      results.push({ timestamp, description });
+    }
+    return results.sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  /**
+   * Find a task description that was parsed close to a given timestamp.
+   * Used to correlate with SubagentWatcher discoveries.
+   *
+   * @param subagentStartTime - The timestamp when the subagent was discovered
+   * @param maxAgeMs - Maximum age difference to consider (default 10 seconds)
+   * @returns The matching description or undefined
+   */
+  findTaskDescriptionNear(subagentStartTime: number, maxAgeMs: number = 10000): string | undefined {
+    this.cleanupOldTaskDescriptions();
+
+    // Find the most recent description that was parsed before or around the subagent start time
+    let bestMatch: { timestamp: number; description: string } | undefined;
+    let bestDiff = Infinity;
+
+    for (const [timestamp, description] of this._recentTaskDescriptions) {
+      const diff = Math.abs(subagentStartTime - timestamp);
+      if (diff < maxAgeMs && diff < bestDiff) {
+        bestMatch = { timestamp, description };
+        bestDiff = diff;
+      }
+    }
+
+    return bestMatch?.description;
   }
 
   // Parse token count from Claude's status line in interactive mode

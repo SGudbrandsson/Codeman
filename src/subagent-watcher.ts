@@ -27,6 +27,10 @@ export interface SubagentInfo {
   entryCount: number;
   fileSize: number;
   description?: string; // Task description from first user message
+  model?: string; // Full model name (e.g., "claude-sonnet-4-20250514")
+  modelShort?: 'haiku' | 'sonnet' | 'opus'; // Short model identifier
+  totalInputTokens?: number; // Running total of input tokens
+  totalOutputTokens?: number; // Running total of output tokens
 }
 
 export interface SubagentToolCall {
@@ -35,6 +39,8 @@ export interface SubagentToolCall {
   timestamp: string;
   tool: string;
   input: Record<string, unknown>;
+  toolUseId?: string; // For linking to tool_result
+  fullInput: Record<string, unknown>; // Complete input object (input is truncated for display)
 }
 
 export interface SubagentProgress {
@@ -44,6 +50,8 @@ export interface SubagentProgress {
   progressType: 'query_update' | 'search_results_received' | string;
   query?: string;
   resultCount?: number;
+  hookEvent?: string; // e.g., "PostToolUse"
+  hookName?: string; // e.g., "PostToolUse:Read"
 }
 
 export interface SubagentMessage {
@@ -61,25 +69,48 @@ export interface SubagentTranscriptEntry {
   sessionId: string;
   message?: {
     role: string;
+    model?: string; // Model used for this message (e.g., "claude-sonnet-4-20250514")
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+    };
     content: string | Array<{
       type: 'text' | 'tool_use' | 'tool_result';
       text?: string;
       name?: string;
+      id?: string; // tool_use_id for tool_use blocks
+      tool_use_id?: string; // tool_use_id for tool_result blocks
       input?: Record<string, unknown>;
-      content?: string;
+      content?: string | Array<{ type: string; text?: string }>; // tool_result content
+      is_error?: boolean; // For tool_result errors
     }>;
   };
   data?: {
     type: string;
     query?: string;
     resultCount?: number;
+    hookEvent?: string; // e.g., "PostToolUse"
+    hookName?: string; // e.g., "PostToolUse:Read"
+    tool_name?: string; // Tool name for hook events
   };
+}
+
+export interface SubagentToolResult {
+  agentId: string;
+  sessionId: string;
+  timestamp: string;
+  toolUseId: string;
+  tool?: string; // Tool name (looked up from pending)
+  preview: string; // First 500 chars of result
+  contentLength: number; // Total length of result
+  isError: boolean; // Whether result is an error
 }
 
 export interface SubagentEvents {
   'subagent:discovered': (info: SubagentInfo) => void;
   'subagent:updated': (info: SubagentInfo) => void;
   'subagent:tool_call': (data: SubagentToolCall) => void;
+  'subagent:tool_result': (data: SubagentToolResult) => void;
   'subagent:progress': (data: SubagentProgress) => void;
   'subagent:message': (data: SubagentMessage) => void;
   'subagent:completed': (info: SubagentInfo) => void;
@@ -105,9 +136,22 @@ export class SubagentWatcher extends EventEmitter {
   private livenessInterval: NodeJS.Timeout | null = null;
   private _isRunning = false;
   private knownSubagentDirs = new Set<string>();
+  // Map of agentId -> Map of toolUseId -> tool name (for linking tool_result to tool_call)
+  private pendingToolCalls = new Map<string, Map<string, string>>();
 
   constructor() {
     super();
+  }
+
+  /**
+   * Extract short model identifier from full model name
+   */
+  private extractModelShort(model: string): 'haiku' | 'sonnet' | 'opus' | undefined {
+    const lower = model.toLowerCase();
+    if (lower.includes('haiku')) return 'haiku';
+    if (lower.includes('sonnet')) return 'sonnet';
+    if (lower.includes('opus')) return 'opus';
+    return undefined;
   }
 
   // ========== Public API ==========
@@ -787,8 +831,26 @@ export class SubagentWatcher extends EventEmitter {
    * Process a transcript entry and emit appropriate events
    */
   private processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): void {
-    // Check if this is first user message and description is missing
     const info = this.agentInfo.get(agentId);
+
+    // Extract model from assistant messages (first one sets the model)
+    if (info && entry.type === 'assistant' && entry.message?.model && !info.model) {
+      info.model = entry.message.model;
+      info.modelShort = this.extractModelShort(entry.message.model);
+      this.emit('subagent:updated', info);
+    }
+
+    // Aggregate token usage from messages
+    if (info && entry.message?.usage) {
+      if (entry.message.usage.input_tokens) {
+        info.totalInputTokens = (info.totalInputTokens || 0) + entry.message.usage.input_tokens;
+      }
+      if (entry.message.usage.output_tokens) {
+        info.totalOutputTokens = (info.totalOutputTokens || 0) + entry.message.usage.output_tokens;
+      }
+    }
+
+    // Check if this is first user message and description is missing
     if (info && !info.description && entry.type === 'user' && entry.message?.content) {
       let text: string | undefined;
       if (typeof entry.message.content === 'string') {
@@ -813,6 +875,11 @@ export class SubagentWatcher extends EventEmitter {
         progressType: entry.data.type,
         query: entry.data.query,
         resultCount: entry.data.resultCount,
+        // Extract hook event info if present
+        hookEvent: entry.data.hookEvent,
+        hookName: entry.data.hookName || (entry.data.hookEvent && entry.data.tool_name
+          ? `${entry.data.hookEvent}:${entry.data.tool_name}`
+          : undefined),
       };
       this.emit('subagent:progress', progress);
     } else if (entry.type === 'assistant' && entry.message?.content) {
@@ -832,12 +899,22 @@ export class SubagentWatcher extends EventEmitter {
       } else {
         for (const content of entry.message.content) {
           if (content.type === 'tool_use' && content.name) {
+            // Store toolUseId for linking to results
+            if (content.id) {
+              if (!this.pendingToolCalls.has(agentId)) {
+                this.pendingToolCalls.set(agentId, new Map());
+              }
+              this.pendingToolCalls.get(agentId)!.set(content.id, content.name);
+            }
+
             const toolCall: SubagentToolCall = {
               agentId,
               sessionId,
               timestamp: entry.timestamp,
               tool: content.name,
-              input: content.input || {},
+              input: this.getTruncatedInput(content.name, content.input || {}),
+              toolUseId: content.id,
+              fullInput: content.input || {},
             };
             this.emit('subagent:tool_call', toolCall);
 
@@ -846,6 +923,22 @@ export class SubagentWatcher extends EventEmitter {
             if (agentInfo) {
               agentInfo.toolCallCount++;
             }
+          } else if (content.type === 'tool_result' && content.tool_use_id) {
+            // Extract tool result
+            const resultContent = this.extractToolResultContent(content.content);
+            const toolName = this.pendingToolCalls.get(agentId)?.get(content.tool_use_id);
+
+            const toolResult: SubagentToolResult = {
+              agentId,
+              sessionId,
+              timestamp: entry.timestamp,
+              toolUseId: content.tool_use_id,
+              tool: toolName,
+              preview: resultContent.substring(0, 500),
+              contentLength: resultContent.length,
+              isError: content.is_error || false,
+            };
+            this.emit('subagent:tool_result', toolResult);
           } else if (content.type === 'text' && content.text) {
             const text = content.text.trim();
             if (text.length > 0) {
@@ -862,27 +955,84 @@ export class SubagentWatcher extends EventEmitter {
         }
       }
     } else if (entry.type === 'user' && entry.message?.content) {
-      // Handle both string and array content formats
-      let userText: string | undefined;
+      // Handle both string and array content formats - also check for tool_result in user messages
       if (typeof entry.message.content === 'string') {
-        userText = entry.message.content.trim();
+        const userText = entry.message.content.trim();
+        if (userText.length > 0 && userText.length < 500) {
+          const message: SubagentMessage = {
+            agentId,
+            sessionId,
+            timestamp: entry.timestamp,
+            role: 'user',
+            text: userText,
+          };
+          this.emit('subagent:message', message);
+        }
       } else {
-        const firstContent = entry.message.content[0];
-        if (firstContent?.type === 'text' && firstContent.text) {
-          userText = firstContent.text.trim();
+        // Check for tool_result blocks in user messages (common pattern)
+        for (const content of entry.message.content) {
+          if (content.type === 'tool_result' && content.tool_use_id) {
+            const resultContent = this.extractToolResultContent(content.content);
+            const toolName = this.pendingToolCalls.get(agentId)?.get(content.tool_use_id);
+
+            const toolResult: SubagentToolResult = {
+              agentId,
+              sessionId,
+              timestamp: entry.timestamp,
+              toolUseId: content.tool_use_id,
+              tool: toolName,
+              preview: resultContent.substring(0, 500),
+              contentLength: resultContent.length,
+              isError: content.is_error || false,
+            };
+            this.emit('subagent:tool_result', toolResult);
+          } else if (content.type === 'text' && content.text) {
+            const userText = content.text.trim();
+            if (userText.length > 0 && userText.length < 500) {
+              const message: SubagentMessage = {
+                agentId,
+                sessionId,
+                timestamp: entry.timestamp,
+                role: 'user',
+                text: userText,
+              };
+              this.emit('subagent:message', message);
+            }
+          }
         }
       }
-      if (userText && userText.length > 0 && userText.length < 500) {
-        const message: SubagentMessage = {
-          agentId,
-          sessionId,
-          timestamp: entry.timestamp,
-          role: 'user',
-          text: userText,
-        };
-        this.emit('subagent:message', message);
+    }
+  }
+
+  /**
+   * Extract text content from tool_result content field
+   */
+  private extractToolResultContent(content: string | Array<{ type: string; text?: string }> | undefined): string {
+    if (!content) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter(c => c.type === 'text' && c.text)
+        .map(c => c.text)
+        .join('\n');
+    }
+    return '';
+  }
+
+  /**
+   * Get truncated input for display (keeps primary param, truncates large content)
+   */
+  private getTruncatedInput(_tool: string, input: Record<string, unknown>): Record<string, unknown> {
+    const truncated: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (typeof value === 'string' && value.length > 100) {
+        // Keep short preview of long strings
+        truncated[key] = value.substring(0, 100) + '...';
+      } else {
+        truncated[key] = value;
       }
     }
+    return truncated;
   }
 
   /**
