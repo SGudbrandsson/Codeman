@@ -2952,125 +2952,128 @@ kbd {
   animation: none;
 }
 
-/* Subagent Badge on Tabs */
+/* Subagent Badge on Tabs - Compact hover-triggered */
 .session-tab .tab-subagent-badge {
   position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
   padding: 0 4px;
   border-radius: 8px;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   cursor: pointer;
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  margin-left: 4px;
+  transition: transform 0.1s, background 0.15s;
 }
 
 .session-tab .tab-subagent-badge:hover {
-  background: rgba(59, 130, 246, 0.3);
+  background: var(--accent-hover);
+  transform: scale(1.1);
 }
 
 .session-tab .tab-subagent-badge .subagent-count {
-  font-size: 0.6rem;
+  font-size: 0.65rem;
   font-weight: 600;
-  color: var(--accent-hover);
+  line-height: 1;
 }
 
-/* Subagent Dropdown - uses fixed positioning to escape overflow:hidden parents */
+/* Subagent Dropdown - compact, hover-triggered */
 .subagent-dropdown {
   display: none;
   position: fixed;
-  min-width: 220px;
-  max-width: 320px;
+  min-width: 180px;
+  max-width: 280px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   z-index: 10000;
   overflow: hidden;
+  padding: 4px 0;
 }
 
 .subagent-dropdown.open {
   display: block;
+  animation: dropdownFadeIn 0.1s ease-out;
 }
 
+@keyframes dropdownFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.subagent-dropdown.pinned {
+  border-color: var(--accent);
+}
+
+/* Header removed - no longer needed */
 .subagent-dropdown-header {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  background: var(--bg-input);
-  border-bottom: 1px solid var(--border);
+  display: none;
 }
 
 .subagent-dropdown-item {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  gap: 6px;
+  padding: 6px 10px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.1s;
 }
 
 .subagent-dropdown-item:hover {
   background: var(--bg-hover);
 }
 
-.subagent-dropdown-icon {
-  font-size: 0.85rem;
+/* Status dot instead of text label */
+.subagent-dropdown-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.subagent-dropdown-status.active {
+  background: var(--green);
+  box-shadow: 0 0 4px var(--green);
+}
+
+.subagent-dropdown-status.idle {
+  background: var(--yellow);
+}
+
+.subagent-dropdown-status.completed {
+  background: var(--accent);
 }
 
 .subagent-dropdown-name {
   flex: 1;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.subagent-dropdown-status {
-  font-size: 0.6rem;
-  padding: 0.1rem 0.3rem;
-  border-radius: 4px;
-  background: var(--bg-input);
-  color: var(--text-muted);
-}
-
-.subagent-dropdown-status.active {
-  background: var(--green);
-  color: white;
-}
-
-.subagent-dropdown-status.idle {
-  background: var(--yellow);
-  color: #000;
-}
-
-.subagent-dropdown-status.completed {
-  background: var(--accent);
-  color: white;
-}
-
-.subagent-dropdown-name {
-  cursor: pointer;
-}
-
-.subagent-dropdown-name:hover {
+.subagent-dropdown-item:hover .subagent-dropdown-name {
   color: var(--accent-hover);
-  text-decoration: underline;
 }
 
 .subagent-dropdown-close {
-  font-size: 1rem;
+  font-size: 0.9rem;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 0.25rem;
-  margin-left: auto;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.subagent-dropdown-item:hover .subagent-dropdown-close {
   opacity: 0.6;
-  transition: opacity 0.15s, color 0.15s;
 }
 
 .subagent-dropdown-close:hover {

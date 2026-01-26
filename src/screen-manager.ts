@@ -16,7 +16,7 @@
 
 import { EventEmitter } from 'node:events';
 import { spawn, execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage } from './types.js';
@@ -55,6 +55,7 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
 
 /** Maximum retry attempts for carriage return (3) */
 const CR_MAX_ATTEMPTS = 3;
+
 
 /** Cached directory containing the claude binary */
 let _claudeDir: string | null = null;
@@ -193,7 +194,10 @@ export class ScreenManager extends EventEmitter {
     }
   }
 
-  // Save screens to disk
+  /**
+   * Save screens to disk asynchronously.
+   * Uses async write to avoid blocking the event loop.
+   */
   private saveScreens(): void {
     try {
       const dir = dirname(SCREENS_FILE);
@@ -201,7 +205,14 @@ export class ScreenManager extends EventEmitter {
         mkdirSync(dir, { recursive: true });
       }
       const data = Array.from(this.screens.values());
-      writeFileSync(SCREENS_FILE, JSON.stringify(data, null, 2));
+      const json = JSON.stringify(data, null, 2);
+
+      // Async write to avoid blocking event loop
+      writeFile(SCREENS_FILE, json, (err) => {
+        if (err) {
+          console.error('[ScreenManager] Failed to save screens:', err);
+        }
+      });
     } catch (err) {
       console.error('[ScreenManager] Failed to save screens:', err);
     }
@@ -621,6 +632,14 @@ export class ScreenManager extends EventEmitter {
       clearInterval(this.statsInterval);
       this.statsInterval = null;
     }
+  }
+
+  /**
+   * Clean up resources.
+   * Call this on server shutdown.
+   */
+  destroy(): void {
+    this.stopStatsCollection();
   }
 
   // Register a session as using screen (for when session creates its own screen)

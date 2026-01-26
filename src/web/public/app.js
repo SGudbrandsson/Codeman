@@ -461,6 +461,7 @@ class ClaudemanApp {
     this.subagentWindows = new Map(); // Map<agentId, { element, position }>
     this.subagentWindowZIndex = 1000;
     this.minimizedSubagents = new Map(); // Map<sessionId, Set<agentId>> - minimized to tab
+    this._subagentHideTimeout = null; // Timeout for hover-based dropdown hide
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Project Insights tracking (active Bash tools with clickable file paths)
@@ -1917,6 +1918,10 @@ class ClaudemanApp {
   _fullRenderSessionTabs() {
     const container = this.$('sessionTabs');
 
+    // Clean up any orphaned dropdowns before re-rendering
+    document.querySelectorAll('body > .subagent-dropdown').forEach(d => d.remove());
+    this.cancelHideSubagentDropdown();
+
     // Build tabs HTML using array for better string concatenation performance
     const parts = [];
     for (const [id, session] of this.sessions) {
@@ -1958,23 +1963,25 @@ class ClaudemanApp {
     for (const agentId of minimizedAgents) {
       const agent = this.subagents.get(agentId);
       const displayName = agent?.description || agentId.substring(0, 12);
-      const truncatedName = displayName.length > 30 ? displayName.substring(0, 30) + '...' : displayName;
+      const truncatedName = displayName.length > 25 ? displayName.substring(0, 25) + '…' : displayName;
       const statusClass = agent?.status || 'idle';
       agentItems.push(`
-        <div class="subagent-dropdown-item">
-          <span class="subagent-dropdown-icon">🤖</span>
-          <span class="subagent-dropdown-name" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${agentId}', '${sessionId}')" title="Click to restore">${this.escapeHtml(truncatedName)}</span>
-          <span class="subagent-dropdown-status ${statusClass}">${statusClass}</span>
-          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${agentId}', '${sessionId}')" title="Close permanently">&times;</span>
+        <div class="subagent-dropdown-item" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${agentId}', '${sessionId}')" title="Click to restore">
+          <span class="subagent-dropdown-status ${statusClass}"></span>
+          <span class="subagent-dropdown-name">${this.escapeHtml(truncatedName)}</span>
+          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${agentId}', '${sessionId}')" title="Dismiss">&times;</span>
         </div>
       `);
     }
 
+    // Compact badge - shows on hover, click to pin open
     return `
-      <span class="tab-subagent-badge" onclick="event.stopPropagation(); app.toggleSubagentDropdown(this);" title="${minimizedAgents.size} minimized subagent${minimizedAgents.size > 1 ? 's' : ''}">
-        🤖<span class="subagent-count">${minimizedAgents.size}</span>
-        <div class="subagent-dropdown">
-          <div class="subagent-dropdown-header">Minimized Agents</div>
+      <span class="tab-subagent-badge"
+            onmouseenter="app.showSubagentDropdown(this)"
+            onmouseleave="app.scheduleHideSubagentDropdown(this)"
+            onclick="event.stopPropagation(); app.pinSubagentDropdown(this);">
+        <span class="subagent-count">${minimizedAgents.size}</span>
+        <div class="subagent-dropdown" onmouseenter="app.cancelHideSubagentDropdown()" onmouseleave="app.scheduleHideSubagentDropdown(this.parentElement)">
           ${agentItems.join('')}
         </div>
       </span>
@@ -2002,40 +2009,68 @@ class ClaudemanApp {
     this.saveSubagentWindowStates();
   }
 
-  // Toggle subagent dropdown visibility on click
-  toggleSubagentDropdown(badgeEl) {
+  // Show subagent dropdown on hover
+  showSubagentDropdown(badgeEl) {
+    this.cancelHideSubagentDropdown();
     const dropdown = badgeEl.querySelector('.subagent-dropdown');
-    if (!dropdown) return;
+    if (!dropdown || dropdown.classList.contains('open')) return;
 
-    const isOpen = dropdown.classList.contains('open');
-
-    // Close all other dropdowns first and move them back to their badges
+    // Close other dropdowns first
     document.querySelectorAll('.subagent-dropdown.open').forEach(d => {
-      d.classList.remove('open');
-      // Move back to original parent if it was moved to body
+      d.classList.remove('open', 'pinned');
       if (d.parentElement === document.body && d._originalParent) {
         d._originalParent.appendChild(d);
       }
     });
 
-    if (!isOpen) {
-      // Move dropdown to body to escape contain:layout clipping from .session-tabs
-      dropdown._originalParent = dropdown.parentElement;
-      document.body.appendChild(dropdown);
+    // Move to body to escape clipping
+    dropdown._originalParent = badgeEl;
+    document.body.appendChild(dropdown);
 
-      // Position the dropdown using fixed positioning
-      const rect = badgeEl.getBoundingClientRect();
-      dropdown.style.top = `${rect.bottom + 4}px`;
-      dropdown.style.left = `${rect.left + rect.width / 2}px`;
-      dropdown.style.transform = 'translateX(-50%)';
+    // Position below badge
+    const rect = badgeEl.getBoundingClientRect();
+    dropdown.style.top = `${rect.bottom + 2}px`;
+    dropdown.style.left = `${rect.left + rect.width / 2}px`;
+    dropdown.style.transform = 'translateX(-50%)';
+    dropdown.classList.add('open');
+  }
 
-      dropdown.classList.add('open');
+  // Schedule hide after delay (allows moving mouse to dropdown)
+  scheduleHideSubagentDropdown(badgeEl) {
+    this._subagentHideTimeout = setTimeout(() => {
+      const dropdown = badgeEl?.querySelector?.('.subagent-dropdown') ||
+                       document.querySelector('.subagent-dropdown.open');
+      if (dropdown && !dropdown.classList.contains('pinned')) {
+        dropdown.classList.remove('open');
+        if (dropdown._originalParent) {
+          dropdown._originalParent.appendChild(dropdown);
+        }
+      }
+    }, 150);
+  }
 
-      // Close dropdown when clicking outside
+  // Cancel scheduled hide
+  cancelHideSubagentDropdown() {
+    if (this._subagentHideTimeout) {
+      clearTimeout(this._subagentHideTimeout);
+      this._subagentHideTimeout = null;
+    }
+  }
+
+  // Pin dropdown open on click (stays until clicking outside)
+  pinSubagentDropdown(badgeEl) {
+    const dropdown = document.querySelector('.subagent-dropdown.open');
+    if (!dropdown) {
+      this.showSubagentDropdown(badgeEl);
+      return;
+    }
+    dropdown.classList.toggle('pinned');
+
+    if (dropdown.classList.contains('pinned')) {
+      // Close on outside click
       const closeHandler = (e) => {
         if (!badgeEl.contains(e.target) && !dropdown.contains(e.target)) {
-          dropdown.classList.remove('open');
-          // Move back to original parent
+          dropdown.classList.remove('open', 'pinned');
           if (dropdown._originalParent) {
             dropdown._originalParent.appendChild(dropdown);
           }
@@ -2044,6 +2079,11 @@ class ClaudemanApp {
       };
       setTimeout(() => document.addEventListener('click', closeHandler), 0);
     }
+  }
+
+  // Legacy toggle for backwards compat
+  toggleSubagentDropdown(badgeEl) {
+    this.pinSubagentDropdown(badgeEl);
   }
 
   // Permanently close a minimized subagent (remove from DOM and minimized set)
@@ -2428,43 +2468,47 @@ class ClaudemanApp {
       // Get global Ralph tracker setting
       const ralphEnabled = this.isRalphTrackerEnabledByDefault();
 
-      // Create multiple sessions with unique w-numbers
+      // Create all sessions in parallel for speed
+      const sessionNames = [];
       for (let i = 0; i < tabCount; i++) {
-        const sessionName = `w${startNumber + i}-${caseName}`;
-
-        // Create session
-        const createRes = await fetch('/api/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, name: sessionName })
-        });
-        const createData = await createRes.json();
-        if (!createData.success) throw new Error(createData.error);
-
-        // Apply global Ralph tracker setting
-        // If enabled: enable the tracker
-        // If disabled: disable auto-enable to prevent pattern-based activation
-        await fetch(`/api/sessions/${createData.session.id}/ralph-config`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            enabled: ralphEnabled,
-            disableAutoEnable: !ralphEnabled
-          })
-        });
-
-        // Start interactive mode
-        await fetch(`/api/sessions/${createData.session.id}/interactive`, {
-          method: 'POST'
-        });
-
-        // Track first session
-        if (i === 0) {
-          firstSessionId = createData.session.id;
-        }
-
-        this.terminal.writeln(`\x1b[90m Created session ${i}/${tabCount}: ${sessionName}\x1b[0m`);
+        sessionNames.push(`w${startNumber + i}-${caseName}`);
       }
+
+      // Step 1: Create all sessions in parallel
+      this.terminal.writeln(`\x1b[90m Creating ${tabCount} session(s)...\x1b[0m`);
+      const createPromises = sessionNames.map(name =>
+        fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workingDir, name })
+        }).then(r => r.json())
+      );
+      const createResults = await Promise.all(createPromises);
+
+      // Collect created session IDs
+      const sessionIds = [];
+      for (const result of createResults) {
+        if (!result.success) throw new Error(result.error);
+        sessionIds.push(result.session.id);
+      }
+      firstSessionId = sessionIds[0];
+
+      // Step 2: Configure Ralph for all sessions in parallel
+      await Promise.all(sessionIds.map(id =>
+        fetch(`/api/sessions/${id}/ralph-config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: ralphEnabled, disableAutoEnable: !ralphEnabled })
+        })
+      ));
+
+      // Step 3: Start all sessions in parallel (biggest speedup)
+      this.terminal.writeln(`\x1b[90m Starting ${tabCount} session(s) in parallel...\x1b[0m`);
+      await Promise.all(sessionIds.map(id =>
+        fetch(`/api/sessions/${id}/interactive`, { method: 'POST' })
+      ));
+
+      this.terminal.writeln(`\x1b[90m All ${tabCount} sessions ready\x1b[0m`);
 
       // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
@@ -2505,38 +2549,49 @@ class ClaudemanApp {
         }
       }
 
-      // Create multiple shell sessions
+      // Create all shell sessions in parallel
+      const sessionNames = [];
       for (let i = 0; i < shellCount; i++) {
-        const sessionName = `s${startNumber + i}-${caseName}`;
+        sessionNames.push(`s${startNumber + i}-${caseName}`);
+      }
 
-        // Create session with shell mode
-        const createRes = await fetch('/api/sessions', {
+      // Step 1: Create all sessions in parallel
+      const createPromises = sessionNames.map(name =>
+        fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workingDir, mode: 'shell', name: sessionName })
-        });
-        const createData = await createRes.json();
-        if (!createData.success) throw new Error(createData.error);
+          body: JSON.stringify({ workingDir, mode: 'shell', name })
+        }).then(r => r.json())
+      );
+      const createResults = await Promise.all(createPromises);
 
-        const sessionId = createData.session.id;
+      const sessionIds = [];
+      for (const result of createResults) {
+        if (!result.success) throw new Error(result.error);
+        sessionIds.push(result.session.id);
+      }
 
-        // Start shell
-        await fetch(`/api/sessions/${sessionId}/shell`, {
-          method: 'POST'
-        });
+      // Step 2: Start all shells in parallel
+      await Promise.all(sessionIds.map(id =>
+        fetch(`/api/sessions/${id}/shell`, { method: 'POST' })
+      ));
 
-        // Set active to last created
-        this.activeSessionId = sessionId;
-
-        // Send resize
-        const dims = this.fitAddon.proposeDimensions();
-        if (dims) {
-          await fetch(`/api/sessions/${sessionId}/resize`, {
+      // Step 3: Resize all in parallel
+      const dims = this.fitAddon.proposeDimensions();
+      if (dims) {
+        await Promise.all(sessionIds.map(id =>
+          fetch(`/api/sessions/${id}/resize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-          });
-        }
+          })
+        ));
+      }
+
+      // Switch to first session
+      if (sessionIds.length > 0) {
+        this.activeSessionId = sessionIds[0];
+        await this.selectSession(sessionIds[0]);
       }
 
       this.terminal.focus();
@@ -4192,13 +4247,22 @@ class ClaudemanApp {
       // Only restore window if agent exists and is still active/idle (not completed)
       if (agent && agent.status !== 'completed') {
         this.openSubagentWindow(agentId);
-        // Restore position if saved
+        // Restore position if saved (with viewport bounds check)
         if (position) {
           const windowData = this.subagentWindows.get(agentId);
           if (windowData && windowData.element) {
-            windowData.element.style.left = position.left;
-            windowData.element.style.top = position.top;
-            windowData.position = position;
+            // Parse position values and clamp to viewport
+            let left = parseInt(position.left, 10) || 50;
+            let top = parseInt(position.top, 10) || 120;
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const windowWidth = 420;
+            const windowHeight = 350;
+            left = Math.max(10, Math.min(left, viewportWidth - windowWidth - 10));
+            top = Math.max(10, Math.min(top, viewportHeight - windowHeight - 10));
+            windowData.element.style.left = `${left}px`;
+            windowData.element.style.top = `${top}px`;
+            windowData.position = { left: `${left}px`, top: `${top}px` };
           }
         }
       }
@@ -5545,11 +5609,18 @@ class ClaudemanApp {
     const gap = 20;
     const startX = 50;
     const startY = 120;
-    const maxCols = Math.floor((window.innerWidth - startX - 50) / (windowWidth + gap)) || 1;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+    const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
     const col = windowCount % maxCols;
-    const row = Math.floor(windowCount / maxCols);
-    const finalX = startX + col * (windowWidth + gap);
-    const finalY = startY + row * (windowHeight + gap);
+    const row = Math.floor(windowCount / maxCols) % maxRows; // Wrap rows to stay in viewport
+    let finalX = startX + col * (windowWidth + gap);
+    let finalY = startY + row * (windowHeight + gap);
+
+    // Ensure window stays within viewport bounds
+    finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
+    finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
 
     // Get parent tab position for spawn animation
     const parentTab = agent.parentSessionId
@@ -5790,8 +5861,15 @@ class ClaudemanApp {
       if (!isDragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      win.style.left = `${startLeft + dx}px`;
-      win.style.top = `${startTop + dy}px`;
+      // Constrain to viewport bounds
+      const winWidth = win.offsetWidth || 420;
+      const winHeight = win.offsetHeight || 350;
+      const maxX = window.innerWidth - winWidth - 10;
+      const maxY = window.innerHeight - winHeight - 10;
+      const newLeft = Math.max(10, Math.min(startLeft + dx, maxX));
+      const newTop = Math.max(10, Math.min(startTop + dy, maxY));
+      win.style.left = `${newLeft}px`;
+      win.style.top = `${newTop}px`;
       // Throttle connection line updates during drag
       if (!dragUpdateScheduled) {
         dragUpdateScheduled = true;
@@ -5803,7 +5881,11 @@ class ClaudemanApp {
     });
 
     document.addEventListener('mouseup', () => {
-      isDragging = false;
+      if (isDragging) {
+        isDragging = false;
+        // Save position after drag ends
+        this.saveSubagentWindowStates();
+      }
     });
   }
 

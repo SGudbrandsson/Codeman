@@ -15,13 +15,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## ⚡ COM Shorthand (Deployment)
 
-When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md`, 2) `git add && git commit && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM.
+When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md` (keep them in sync), 2) `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM, even for small changes.
 
 ## Project Overview
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1384 (must match `package.json`)
+**Version**: 0.1385 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -42,6 +42,12 @@ npm install
 ## Commands
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
+
+**Quick reference**:
+- Dev server: `npx tsx src/index.ts web` (or `web --https` for notifications)
+- Type check: `npx tsc --noEmit`
+- Single test: `npx vitest run test/<file>.test.ts`
+- Restart prod: `systemctl --user restart claudeman-web`
 
 ### Build & Clean
 
@@ -523,7 +529,11 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 
 ## TUI (WIP)
 
-Ink/React-based TUI in `src/tui/`. Client to the web server, uses `/api/*` endpoints and attaches to screens via GNU screen. Not fully implemented yet.
+Ink/React-based TUI in `src/tui/`. Client to the web server, uses `/api/*` endpoints and attaches to screens via GNU screen.
+
+**Key files**: `App.tsx` (main component), `DirectAttach.ts` (full-screen attach with tab switching), `SessionList.tsx`, `SessionView.tsx`.
+
+**Current state**: Basic session list and direct attach work. Missing: full session management UI, settings panel, notifications.
 
 ## Buffer Limits
 

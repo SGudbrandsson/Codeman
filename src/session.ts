@@ -1424,10 +1424,15 @@ export class Session extends EventEmitter {
    */
   private cleanupOldTaskDescriptions(): void {
     const cutoff = Date.now() - Session.TASK_DESCRIPTION_MAX_AGE_MS;
+    // Collect keys to delete first, then delete (avoids modifying Map during iteration)
+    const keysToDelete: number[] = [];
     for (const [timestamp] of this._recentTaskDescriptions) {
       if (timestamp < cutoff) {
-        this._recentTaskDescriptions.delete(timestamp);
+        keysToDelete.push(timestamp);
       }
+    }
+    for (const key of keysToDelete) {
+      this._recentTaskDescriptions.delete(key);
     }
 
     // Enforce size limit by removing oldest entries

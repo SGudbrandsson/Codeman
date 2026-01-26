@@ -3292,8 +3292,8 @@ export class WebServer extends EventEmitter {
       this.scheduledCleanupTimer = null;
     }
 
-    // Stop screen stats collection
-    this.screenManager.stopStatsCollection();
+    // Stop screen manager and flush pending saves
+    this.screenManager.destroy();
 
     // Clear all pending respawn start timers (from restoration grace period)
     for (const timer of this.pendingRespawnStarts.values()) {
