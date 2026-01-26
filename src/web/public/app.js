@@ -659,15 +659,86 @@ class ClaudemanApp {
 
   /**
    * Register a custom link provider for xterm.js that detects file paths
-   * in Bash tool output and makes them clickable.
+   * in terminal output and makes them clickable.
    * When clicked, opens a floating log viewer window with live streaming.
    */
-  /**
-   * Placeholder for file path link provider.
-   * Currently disabled - xterm.js link provider doesn't render decorations reliably.
-   */
   registerFilePathLinkProvider() {
-    // Disabled for now
+    const self = this;
+
+    this.terminal.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const buffer = self.terminal.buffer.active;
+        const line = buffer.getLine(bufferLineNumber);
+
+        if (!line) {
+          callback(undefined);
+          return;
+        }
+
+        // Get line text - translateToString handles wrapped lines
+        const lineText = line.translateToString(true);
+
+        if (!lineText || !lineText.includes('/')) {
+          callback(undefined);
+          return;
+        }
+
+        const links = [];
+
+        // Pattern 1: Commands with file paths (tail -f, cat, head, grep pattern, etc.)
+        // Handles: tail -f /path, grep pattern /path, cat -n /path
+        const cmdPattern = /(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]*\s+)*(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
+
+        // Pattern 2: Paths with common extensions
+        const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
+
+        // Pattern 3: Bash() tool output
+        const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
+
+        const addLink = (filePath, matchIndex) => {
+          const startCol = lineText.indexOf(filePath, matchIndex);
+          if (startCol === -1) return;
+
+          // Skip if already have link at this position
+          if (links.some(l => l.range.start.x === startCol + 1)) return;
+
+          links.push({
+            text: filePath,
+            range: {
+              start: { x: startCol + 1, y: bufferLineNumber },      // 1-based
+              end: { x: startCol + filePath.length + 1, y: bufferLineNumber }
+            },
+            decorations: {
+              pointerCursor: true,
+              underline: true
+            },
+            activate(event, text) {
+              self.openLogViewerWindow(text, self.activeSessionId);
+            }
+          });
+        };
+
+        // Match all patterns
+        let match;
+
+        cmdPattern.lastIndex = 0;
+        while ((match = cmdPattern.exec(lineText)) !== null) {
+          addLink(match[2], match.index);
+        }
+
+        extPattern.lastIndex = 0;
+        while ((match = extPattern.exec(lineText)) !== null) {
+          addLink(match[1], match.index);
+        }
+
+        bashPattern.lastIndex = 0;
+        while ((match = bashPattern.exec(lineText)) !== null) {
+          addLink(match[1], match.index);
+        }
+
+        callback(links.length > 0 ? links : undefined);
+      }
+    });
   }
 
   showWelcome() {
@@ -1853,10 +1924,20 @@ class ClaudemanApp {
 
     const isOpen = dropdown.classList.contains('open');
 
-    // Close all other dropdowns first
-    document.querySelectorAll('.subagent-dropdown.open').forEach(d => d.classList.remove('open'));
+    // Close all other dropdowns first and move them back to their badges
+    document.querySelectorAll('.subagent-dropdown.open').forEach(d => {
+      d.classList.remove('open');
+      // Move back to original parent if it was moved to body
+      if (d.parentElement === document.body && d._originalParent) {
+        d._originalParent.appendChild(d);
+      }
+    });
 
     if (!isOpen) {
+      // Move dropdown to body to escape contain:layout clipping from .session-tabs
+      dropdown._originalParent = dropdown.parentElement;
+      document.body.appendChild(dropdown);
+
       // Position the dropdown using fixed positioning
       const rect = badgeEl.getBoundingClientRect();
       dropdown.style.top = `${rect.bottom + 4}px`;
@@ -1869,6 +1950,10 @@ class ClaudemanApp {
       const closeHandler = (e) => {
         if (!badgeEl.contains(e.target) && !dropdown.contains(e.target)) {
           dropdown.classList.remove('open');
+          // Move back to original parent
+          if (dropdown._originalParent) {
+            dropdown._originalParent.appendChild(dropdown);
+          }
           document.removeEventListener('click', closeHandler);
         }
       };
