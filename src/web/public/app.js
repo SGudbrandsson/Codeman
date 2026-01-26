@@ -1857,11 +1857,17 @@ class ClaudemanApp {
     document.querySelectorAll('.subagent-dropdown.open').forEach(d => d.classList.remove('open'));
 
     if (!isOpen) {
+      // Position the dropdown using fixed positioning
+      const rect = badgeEl.getBoundingClientRect();
+      dropdown.style.top = `${rect.bottom + 4}px`;
+      dropdown.style.left = `${rect.left + rect.width / 2}px`;
+      dropdown.style.transform = 'translateX(-50%)';
+
       dropdown.classList.add('open');
 
       // Close dropdown when clicking outside
       const closeHandler = (e) => {
-        if (!badgeEl.contains(e.target)) {
+        if (!badgeEl.contains(e.target) && !dropdown.contains(e.target)) {
           dropdown.classList.remove('open');
           document.removeEventListener('click', closeHandler);
         }
