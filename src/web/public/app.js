@@ -1980,7 +1980,7 @@ class ClaudemanApp {
             onmouseenter="app.showSubagentDropdown(this)"
             onmouseleave="app.scheduleHideSubagentDropdown(this)"
             onclick="event.stopPropagation(); app.pinSubagentDropdown(this);">
-        <span class="subagent-count">${minimizedAgents.size}</span>
+        <span class="subagent-label">Agent</span><span class="subagent-count">${minimizedAgents.size}</span>
         <div class="subagent-dropdown" onmouseenter="app.cancelHideSubagentDropdown()" onmouseleave="app.scheduleHideSubagentDropdown(this.parentElement)">
           ${agentItems.join('')}
         </div>
@@ -5752,14 +5752,14 @@ class ClaudemanApp {
     if (!windowData) return;
 
     const agent = this.subagents.get(agentId);
-    const parentSessionId = agent?.parentSessionId;
+    const parentSessionId = agent?.parentSessionId || this.activeSessionId;
 
+    // Always minimize to tab (use active session if no parent)
+    windowData.element.style.display = 'none';
+    windowData.minimized = true;
+
+    // Track minimized agent for the session
     if (parentSessionId) {
-      // Minimize to tab instead of removing
-      windowData.element.style.display = 'none';
-      windowData.minimized = true;
-
-      // Track minimized agent for the parent session
       if (!this.minimizedSubagents.has(parentSessionId)) {
         this.minimizedSubagents.set(parentSessionId, new Set());
       }
@@ -5767,15 +5767,10 @@ class ClaudemanApp {
 
       // Update tab badge to show minimized agents
       this.renderSessionTabs();
-
-      // Persist the state change
-      this.saveSubagentWindowStates();
-    } else {
-      // No parent session - fully remove the window
-      windowData.element.remove();
-      this.subagentWindows.delete(agentId);
     }
 
+    // Persist the state change
+    this.saveSubagentWindowStates();
     this.updateConnectionLines();
   }
 
@@ -5820,8 +5815,15 @@ class ClaudemanApp {
 
   restoreSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
+    const agent = this.subagents.get(agentId);
+
+    // If window doesn't exist but agent does, recreate it
+    if (!windowData && agent) {
+      this.createSubagentWindow(agentId);
+      return;
+    }
+
     if (windowData) {
-      const agent = this.subagents.get(agentId);
       const settings = this.loadAppSettingsFromStorage();
       const activeTabOnly = settings.subagentActiveTabOnly ?? false;
 

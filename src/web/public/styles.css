@@ -2958,11 +2958,11 @@ kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
+  gap: 2px;
   height: 16px;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: 8px;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   cursor: pointer;
   background: var(--accent);
   color: white;
@@ -2972,7 +2972,14 @@ kbd {
 
 .session-tab .tab-subagent-badge:hover {
   background: var(--accent-hover);
-  transform: scale(1.1);
+  transform: scale(1.05);
+}
+
+.session-tab .tab-subagent-badge .subagent-label {
+  font-size: 0.55rem;
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .session-tab .tab-subagent-badge .subagent-count {
