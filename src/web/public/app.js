@@ -474,6 +474,10 @@ class ClaudemanApp {
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
+    // Pending hooks per session: Map<sessionId, Set<hookType>>
+    // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
+    this.pendingHooks = new Map();
+
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
@@ -525,6 +529,44 @@ class ClaudemanApp {
     const inputCost = (inputTokens / 1000000) * 15;
     const outputCost = (outputTokens / 1000000) * 75;
     return inputCost + outputCost;
+  }
+
+  // ========== Pending Hooks State Machine ==========
+  // Track pending hook events per session to determine tab alerts.
+  // Action hooks (permission_prompt, elicitation_dialog) take priority over idle_prompt.
+
+  setPendingHook(sessionId, hookType) {
+    if (!this.pendingHooks.has(sessionId)) {
+      this.pendingHooks.set(sessionId, new Set());
+    }
+    this.pendingHooks.get(sessionId).add(hookType);
+    this.updateTabAlertFromHooks(sessionId);
+  }
+
+  clearPendingHooks(sessionId, hookType = null) {
+    const hooks = this.pendingHooks.get(sessionId);
+    if (!hooks) return;
+    if (hookType) {
+      hooks.delete(hookType);
+    } else {
+      hooks.clear();
+    }
+    if (hooks.size === 0) {
+      this.pendingHooks.delete(sessionId);
+    }
+    this.updateTabAlertFromHooks(sessionId);
+  }
+
+  updateTabAlertFromHooks(sessionId) {
+    const hooks = this.pendingHooks.get(sessionId);
+    if (!hooks || hooks.size === 0) {
+      this.tabAlerts.delete(sessionId);
+    } else if (hooks.has('permission_prompt') || hooks.has('elicitation_dialog')) {
+      this.tabAlerts.set(sessionId, 'action');
+    } else if (hooks.has('idle_prompt')) {
+      this.tabAlerts.set(sessionId, 'idle');
+    }
+    this.renderSessionTabs();
   }
 
   init() {
@@ -645,12 +687,15 @@ class ClaudemanApp {
     const flushInput = () => {
       if (this._pendingInput && this.activeSessionId) {
         const input = this._pendingInput;
+        const sessionId = this.activeSessionId;
         this._pendingInput = '';
-        fetch(`/api/sessions/${this.activeSessionId}/input`, {
+        fetch(`/api/sessions/${sessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ input })
         });
+        // Clear pending hooks when user sends input (they've addressed the prompt)
+        this.clearPendingHooks(sessionId);
       }
       this._inputFlushTimeout = null;
     };
@@ -1175,7 +1220,10 @@ class ClaudemanApp {
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
-        this.tabAlerts.delete(data.id);
+        // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
+        if (!this.pendingHooks.has(data.id)) {
+          this.tabAlerts.delete(data.id);
+        }
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
       }
@@ -1541,12 +1589,14 @@ class ClaudemanApp {
     });
 
     // Hook events (from Claude Code hooks system)
+    // Use pendingHooks state machine to track hook events and derive tab alerts.
+    // This ensures alerts persist even when session:working events fire.
     this.eventSource.addEventListener('hook:idle_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
-      if (data.sessionId && data.sessionId !== this.activeSessionId) {
-        this.tabAlerts.set(data.sessionId, 'idle');
-        this.renderSessionTabs();
+      // Always track pending hook - alert will show when switching away from session
+      if (data.sessionId) {
+        this.setPendingHook(data.sessionId, 'idle_prompt');
       }
       this.notificationManager?.notify({
         urgency: 'warning',
@@ -1561,9 +1611,9 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:permission_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
-      if (data.sessionId && data.sessionId !== this.activeSessionId) {
-        this.tabAlerts.set(data.sessionId, 'action');
-        this.renderSessionTabs();
+      // Always track pending hook - action alerts need user interaction to clear
+      if (data.sessionId) {
+        this.setPendingHook(data.sessionId, 'permission_prompt');
       }
       const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
       this.notificationManager?.notify({
@@ -1579,9 +1629,9 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:elicitation_dialog', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
-      if (data.sessionId && data.sessionId !== this.activeSessionId) {
-        this.tabAlerts.set(data.sessionId, 'action');
-        this.renderSessionTabs();
+      // Always track pending hook - action alerts need user interaction to clear
+      if (data.sessionId) {
+        this.setPendingHook(data.sessionId, 'elicitation_dialog');
       }
       this.notificationManager?.notify({
         urgency: 'critical',
@@ -1596,6 +1646,10 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:stop', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
+      // Clear all pending hooks when Claude finishes responding
+      if (data.sessionId) {
+        this.clearPendingHooks(data.sessionId);
+      }
       this.notificationManager?.notify({
         urgency: 'info',
         category: 'hook-stop',
@@ -2126,7 +2180,8 @@ class ClaudemanApp {
     if (this.activeSessionId === sessionId) return;
 
     this.activeSessionId = sessionId;
-    this.tabAlerts.delete(sessionId);
+    // Clear idle hooks on view, but keep action hooks until user interacts
+    this.clearPendingHooks(sessionId, 'idle_prompt');
     this.renderSessionTabs();
 
     // Check if this is a restored session that needs to be attached
