@@ -318,16 +318,13 @@ export class WebServer extends EventEmitter {
   /**
    * Set up event listeners for subagent watcher.
    * Broadcasts real-time subagent activity to SSE clients.
+   *
+   * The SubagentWatcher now extracts descriptions directly from the parent session's
+   * transcript, which contains the exact Task tool call with the description parameter.
+   * This is more reliable than the previous timing-based correlation approach.
    */
   private setupSubagentWatcherListeners(): void {
     subagentWatcher.on('subagent:discovered', (info: SubagentInfo) => {
-      // Try to get a better description from the session's TaskTracker
-      // The TaskTracker has access to params.description from the Task tool call
-      const betterDescription = this.getTaskDescriptionForSubagent(info);
-      if (betterDescription && betterDescription !== info.description) {
-        info.description = betterDescription;
-        subagentWatcher.updateDescription(info.agentId, betterDescription);
-      }
       this.broadcast('subagent:discovered', info);
     });
 
@@ -358,38 +355,6 @@ export class WebServer extends EventEmitter {
     subagentWatcher.on('subagent:error', (error: Error, agentId?: string) => {
       console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
     });
-  }
-
-  /**
-   * Get the short description from TaskTracker for a discovered subagent.
-   *
-   * When Claude Code spawns a subagent via the Task tool, it passes two parameters:
-   * - description: Short title like "Explore Python scripts" (3-5 words)
-   * - prompt: Full detailed task prompt
-   *
-   * The TaskTracker parses the Task tool call and has access to params.description,
-   * while the SubagentWatcher only sees the JSONL file which contains the full prompt.
-   *
-   * This method correlates them by finding the session whose working directory
-   * matches the subagent's project hash, then checking for recent tasks.
-   */
-  private getTaskDescriptionForSubagent(info: SubagentInfo): string | undefined {
-    // Find sessions whose working directory matches this subagent's project
-    // Check ALL matching sessions since multiple sessions may have the same working directory
-    const subagentStartTime = new Date(info.startedAt).getTime();
-
-    for (const session of this.sessions.values()) {
-      const sessionProjectHash = subagentWatcher.getProjectHashForDir(session.workingDir);
-      if (sessionProjectHash === info.projectHash) {
-        // Found a matching session - check for recent task descriptions parsed from terminal
-        // The Session parses "Explore(Description)" patterns from Claude Code output
-        const description = session.findTaskDescriptionNear(subagentStartTime, 15000);
-        if (description) {
-          return description;
-        }
-      }
-    }
-    return undefined;
   }
 
   private async setupRoutes(): Promise<void> {

@@ -554,6 +554,73 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Extract the short description from the parent session's transcript.
+   * This is the most reliable method because it reads the actual Task tool call
+   * that spawned this agent, which contains the description parameter.
+   *
+   * The parent transcript contains:
+   * 1. An assistant message with tool_use for Task, containing input.description
+   * 2. A progress entry with data.agentId and parentToolUseID linking them
+   */
+  private extractDescriptionFromParentTranscript(
+    projectHash: string,
+    sessionId: string,
+    agentId: string
+  ): string | undefined {
+    try {
+      // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
+      const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
+      if (!existsSync(transcriptPath)) return undefined;
+
+      const content = readFileSync(transcriptPath, 'utf8');
+      const lines = content.split('\n').filter((l) => l.trim());
+
+      // First pass: Find the progress entry for this agent to get parentToolUseID
+      let parentToolUseID: string | undefined;
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'progress' && entry.data?.agentId === agentId && entry.parentToolUseID) {
+            parentToolUseID = entry.parentToolUseID;
+            break;
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      if (!parentToolUseID) return undefined;
+
+      // Second pass: Find the Task tool_use with this ID and extract description
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'assistant' && entry.message?.content) {
+            const content = entry.message.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (
+                  block.type === 'tool_use' &&
+                  block.id === parentToolUseID &&
+                  block.name === 'Task' &&
+                  block.input?.description
+                ) {
+                  return block.input.description;
+                }
+              }
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    } catch {
+      // Failed to read transcript
+    }
+    return undefined;
+  }
+
+  /**
    * Extract description from agent file by finding first user message
    */
   private extractDescriptionFromFile(filePath: string): string | undefined {
@@ -683,41 +750,13 @@ export class SubagentWatcher extends EventEmitter {
     // Initial info
     const stat = statSync(filePath);
 
-    // Extract description from first user message in the JSONL
-    // The Task tool passes a "description" (short title) and "prompt" (full task)
-    // We want the short description, which may be in the first line or sentence
-    let description: string | undefined;
-    try {
-      const content = readFileSync(filePath, 'utf8');
-      const lines = content.split('\n').filter((l) => l.trim());
+    // Extract description - prefer reading from parent transcript (most reliable)
+    // The parent transcript has the exact Task tool call with description parameter
+    let description = this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
 
-      // Try each line until we find a user message with text
-      for (const line of lines.slice(0, 5)) {
-        try {
-          const entry = JSON.parse(line);
-          if (entry.type === 'user' && entry.message?.content) {
-            // Handle both formats: content can be a string or an array of content blocks
-            let text: string | undefined;
-            if (typeof entry.message.content === 'string') {
-              text = entry.message.content.trim();
-            } else if (Array.isArray(entry.message.content)) {
-              const firstContent = entry.message.content[0];
-              if (firstContent?.type === 'text' && firstContent.text) {
-                text = firstContent.text.trim();
-              }
-            }
-
-            if (text) {
-              description = this.extractSmartTitle(text);
-              break;
-            }
-          }
-        } catch {
-          // Skip malformed lines
-        }
-      }
-    } catch {
-      // Failed to read description, continue without it
+    // Fallback: extract a smart title from the subagent's prompt if parent lookup failed
+    if (!description) {
+      description = this.extractDescriptionFromFile(filePath);
     }
 
     const info: SubagentInfo = {
@@ -764,7 +803,16 @@ export class SubagentWatcher extends EventEmitter {
 
             // Retry description extraction if missing (race condition fix)
             if (!existingInfo.description) {
-              const extractedDescription = this.extractDescriptionFromFile(filePath);
+              // First try parent transcript (most reliable)
+              let extractedDescription = this.extractDescriptionFromParentTranscript(
+                existingInfo.projectHash,
+                existingInfo.sessionId,
+                agentId
+              );
+              // Fallback to subagent file
+              if (!extractedDescription) {
+                extractedDescription = this.extractDescriptionFromFile(filePath);
+              }
               if (extractedDescription) {
                 existingInfo.description = extractedDescription;
                 this.emit('subagent:updated', existingInfo);
@@ -852,17 +900,29 @@ export class SubagentWatcher extends EventEmitter {
 
     // Check if this is first user message and description is missing
     if (info && !info.description && entry.type === 'user' && entry.message?.content) {
-      let text: string | undefined;
-      if (typeof entry.message.content === 'string') {
-        text = entry.message.content.trim();
-      } else if (Array.isArray(entry.message.content)) {
-        const firstContent = entry.message.content[0];
-        if (firstContent?.type === 'text' && firstContent.text) {
-          text = firstContent.text.trim();
+      // First try parent transcript (most reliable)
+      let description = this.extractDescriptionFromParentTranscript(
+        info.projectHash,
+        info.sessionId,
+        agentId
+      );
+      // Fallback: extract smart title from the prompt content
+      if (!description) {
+        let text: string | undefined;
+        if (typeof entry.message.content === 'string') {
+          text = entry.message.content.trim();
+        } else if (Array.isArray(entry.message.content)) {
+          const firstContent = entry.message.content[0];
+          if (firstContent?.type === 'text' && firstContent.text) {
+            text = firstContent.text.trim();
+          }
+        }
+        if (text) {
+          description = this.extractSmartTitle(text);
         }
       }
-      if (text) {
-        info.description = this.extractSmartTitle(text);
+      if (description) {
+        info.description = description;
         this.emit('subagent:updated', info);
       }
     }
