@@ -48,6 +48,8 @@ body {
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  position: relative;
+  z-index: 100; /* Above main content so dropdowns work */
 }
 
 .header-brand {
