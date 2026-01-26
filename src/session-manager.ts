@@ -48,8 +48,17 @@ export interface SessionManagerEvents {
  * @fires SessionManagerEvents.sessionOutput
  * @fires SessionManagerEvents.sessionCompletion
  */
+/** Stored event handlers for a session, used for cleanup */
+interface SessionHandlers {
+  output: (data: string) => void;
+  error: (data: string) => void;
+  completion: (phrase: string) => void;
+  exit: () => void;
+}
+
 export class SessionManager extends EventEmitter {
   private sessions: Map<string, Session> = new Map();
+  private sessionHandlers: Map<string, SessionHandlers> = new Map();
   private store = getStore();
 
   /**
@@ -89,25 +98,32 @@ export class SessionManager extends EventEmitter {
 
     const session = new Session({ workingDir });
 
-    // Set up event forwarding
-    session.on('output', (data) => {
-      this.emit('sessionOutput', session.id, data);
-      this.updateSessionState(session);
-    });
+    // Set up event forwarding with stored handlers for cleanup
+    const handlers: SessionHandlers = {
+      output: (data: string) => {
+        this.emit('sessionOutput', session.id, data);
+        this.updateSessionState(session);
+      },
+      error: (data: string) => {
+        this.emit('sessionError', session.id, data);
+        this.updateSessionState(session);
+      },
+      completion: (phrase: string) => {
+        this.emit('sessionCompletion', session.id, phrase);
+      },
+      exit: () => {
+        this.emit('sessionStopped', session.id);
+        this.updateSessionState(session);
+      },
+    };
 
-    session.on('error', (data) => {
-      this.emit('sessionError', session.id, data);
-      this.updateSessionState(session);
-    });
+    session.on('output', handlers.output);
+    session.on('error', handlers.error);
+    session.on('completion', handlers.completion);
+    session.on('exit', handlers.exit);
 
-    session.on('completion', (phrase) => {
-      this.emit('sessionCompletion', session.id, phrase);
-    });
-
-    session.on('exit', () => {
-      this.emit('sessionStopped', session.id);
-      this.updateSessionState(session);
-    });
+    // Store handlers for later cleanup
+    this.sessionHandlers.set(session.id, handlers);
 
     await session.start();
 
@@ -134,6 +150,16 @@ export class SessionManager extends EventEmitter {
         this.store.setSession(id, storedSession);
       }
       return;
+    }
+
+    // Remove event listeners to prevent memory leaks
+    const handlers = this.sessionHandlers.get(id);
+    if (handlers) {
+      session.off('output', handlers.output);
+      session.off('error', handlers.error);
+      session.off('completion', handlers.completion);
+      session.off('exit', handlers.exit);
+      this.sessionHandlers.delete(id);
     }
 
     await session.stop();
@@ -234,4 +260,15 @@ export function getSessionManager(): SessionManager {
     managerInstance = new SessionManager();
   }
   return managerInstance;
+}
+
+/**
+ * Resets the singleton SessionManager instance.
+ * Primarily used for testing to ensure test isolation.
+ */
+export async function resetSessionManager(): Promise<void> {
+  if (managerInstance) {
+    await managerInstance.stopAllSessions();
+    managerInstance = null;
+  }
 }

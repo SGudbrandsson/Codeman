@@ -229,6 +229,8 @@ export interface AppState {
   config: AppConfig;
   /** Global statistics (cumulative across all sessions) */
   globalStats?: GlobalStats;
+  /** Daily token usage statistics */
+  tokenStats?: TokenStats;
 }
 
 // ========== Respawn Controller Types ==========

@@ -965,11 +965,22 @@ class ClaudemanApp {
   // ========== SSE Connection ==========
 
   connectSSE() {
+    // Close existing EventSource before creating new one to prevent duplicate connections
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+
     this.eventSource = new EventSource('/api/events');
 
     this.eventSource.onopen = () => this.setConnectionStatus('connected');
     this.eventSource.onerror = () => {
       this.setConnectionStatus('disconnected');
+      // Close the failed connection before scheduling reconnect
+      if (this.eventSource) {
+        this.eventSource.close();
+        this.eventSource = null;
+      }
       setTimeout(() => this.connectSSE(), 3000);
     };
 

@@ -1969,6 +1969,7 @@ export class WebServer extends EventEmitter {
   private stopTranscriptWatcher(sessionId: string): void {
     const watcher = this.transcriptWatchers.get(sessionId);
     if (watcher) {
+      watcher.removeAllListeners();  // Prevent memory leaks from attached listeners
       watcher.stop();
       this.transcriptWatchers.delete(sessionId);
     }
@@ -2247,6 +2248,12 @@ export class WebServer extends EventEmitter {
           controller.removeAllListeners();
           this.respawnControllers.delete(session.id);
         }
+        // Also clean up the respawn timer to prevent orphaned timers
+        const timerInfo = this.respawnTimers.get(session.id);
+        if (timerInfo) {
+          clearTimeout(timerInfo.timer);
+          this.respawnTimers.delete(session.id);
+        }
       } catch (err) {
         console.error(`[Server] Error cleaning up respawn controller for ${session.id}:`, err);
       }
@@ -2485,13 +2492,9 @@ export class WebServer extends EventEmitter {
         return session ? session.totalCost : 0;
       },
       stopSession: async (sessionId: string) => {
-        const session = this.sessions.get(sessionId);
-        if (session) {
-          await session.stop();
-          this.sessions.delete(sessionId);
-          this.broadcast('session:deleted', { id: sessionId });
-          this.persistSessionState(session);
-        }
+        // Use cleanupSession to properly clean up all resources (respawn controllers,
+        // run summary trackers, file streams, Ralph state, etc.)
+        await this.cleanupSession(sessionId);
       },
       onSessionCompletion: (sessionId: string, handler: (phrase: string) => void) => {
         const session = this.sessions.get(sessionId);

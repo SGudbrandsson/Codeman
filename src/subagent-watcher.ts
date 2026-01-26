@@ -123,6 +123,7 @@ const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Check for new files every second
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
+const STALE_AGENT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // Remove completed agents older than 24 hours
 
 // ========== SubagentWatcher Class ==========
 
@@ -188,10 +189,14 @@ export class SubagentWatcher extends EventEmitter {
           const alive = await this.checkSubagentAlive(agentId);
           if (!alive) {
             info.status = 'completed';
+            // Clean up pendingToolCalls for this agent to prevent memory leak
+            this.pendingToolCalls.delete(agentId);
             this.emit('subagent:completed', info);
           }
         }
       }
+      // Periodically clean up stale completed agents (older than 24 hours)
+      this.cleanupStaleAgents();
     }, LIVENESS_CHECK_MS);
   }
 
@@ -230,7 +235,7 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Stop watching
+   * Stop watching and clean up all state
    */
   stop(): void {
     this._isRunning = false;
@@ -259,6 +264,12 @@ export class SubagentWatcher extends EventEmitter {
       clearTimeout(timer);
     }
     this.idleTimers.clear();
+
+    // Clear all state for clean restart
+    this.filePositions.clear();
+    this.agentInfo.clear();
+    this.knownSubagentDirs.clear();
+    this.pendingToolCalls.clear();
   }
 
   /**

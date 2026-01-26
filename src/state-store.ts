@@ -14,7 +14,7 @@
  * @module state-store
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
@@ -107,7 +107,8 @@ export class StateStore {
   }
 
   /**
-   * Immediately writes state to disk.
+   * Immediately writes state to disk using atomic write pattern.
+   * Writes to temp file first, then renames to prevent corruption on crash.
    * Use when guaranteed persistence is required (e.g., before shutdown).
    */
   saveNow(): void {
@@ -120,7 +121,22 @@ export class StateStore {
     }
     this.dirty = false;
     this.ensureDir();
-    writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
+    // Atomic write: write to temp file, then rename (atomic on POSIX)
+    const tempPath = this.filePath + '.tmp';
+    try {
+      writeFileSync(tempPath, JSON.stringify(this.state, null, 2), 'utf-8');
+      renameSync(tempPath, this.filePath);
+    } catch (err) {
+      console.error('[StateStore] Failed to save state:', err);
+      // Try to clean up temp file on error
+      try {
+        if (existsSync(tempPath)) {
+          const { unlinkSync } = require('node:fs');
+          unlinkSync(tempPath);
+        }
+      } catch { /* ignore cleanup errors */ }
+      throw err;
+    }
   }
 
   /** Flushes any pending main state save. Call before shutdown. */
@@ -293,14 +309,13 @@ export class StateStore {
    * Get or initialize token stats from state.
    */
   getTokenStats(): TokenStats {
-    const state = this.state as AppState & { tokenStats?: TokenStats };
-    if (!state.tokenStats) {
-      state.tokenStats = {
+    if (!this.state.tokenStats) {
+      this.state.tokenStats = {
         daily: [],
         lastUpdated: Date.now(),
       };
     }
-    return state.tokenStats;
+    return this.state.tokenStats;
   }
 
   /**
@@ -425,7 +440,10 @@ export class StateStore {
     }, SAVE_DEBOUNCE_MS);
   }
 
-  // Immediate save for inner states
+  /**
+   * Immediate save for inner states using atomic write pattern.
+   * Writes to temp file first, then renames to prevent corruption on crash.
+   */
   private saveRalphStatesNow(): void {
     if (this.ralphStateSaveTimeout) {
       clearTimeout(this.ralphStateSaveTimeout);
@@ -436,11 +454,23 @@ export class StateStore {
     }
     this.ralphStateDirty = false;
     this.ensureDir();
-    const data: Record<string, RalphSessionState> = {};
-    for (const [sessionId, state] of this.ralphStates) {
-      data[sessionId] = state;
+    const data = Object.fromEntries(this.ralphStates);
+    // Atomic write: write to temp file, then rename (atomic on POSIX)
+    const tempPath = this.ralphStatePath + '.tmp';
+    try {
+      writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+      renameSync(tempPath, this.ralphStatePath);
+    } catch (err) {
+      console.error('[StateStore] Failed to save Ralph state:', err);
+      // Try to clean up temp file on error
+      try {
+        if (existsSync(tempPath)) {
+          const { unlinkSync } = require('node:fs');
+          unlinkSync(tempPath);
+        }
+      } catch { /* ignore cleanup errors */ }
+      throw err;
     }
-    writeFileSync(this.ralphStatePath, JSON.stringify(data, null, 2), 'utf-8');
   }
 
   /** Returns inner state for a session, or null if not found. */
