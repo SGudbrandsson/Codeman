@@ -4692,6 +4692,19 @@ kbd {
   stroke-dashoffset: 1000;
 }
 
+/* Wizard connection lines - different color to show plan generation link */
+.connection-line.wizard-connection {
+  stroke: #60a5fa;
+  filter: drop-shadow(0 0 4px #60a5fa);
+  stroke-dasharray: 8 4;
+  animation: wizard-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes wizard-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
 /* ========== Project Insights Panel (Bash File Viewers) ========== */
 
 .project-insights-panel {
@@ -5366,10 +5379,23 @@ kbd {
   gap: 0.5rem;
 }
 
-/* Wizard Modal - wider layout */
+/* Wizard Modal - wider layout with height constraints */
 .modal-wizard {
   width: 720px;
   max-width: 95vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-wizard .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-wizard .wizard-footer {
+  flex-shrink: 0;
 }
 
 .wizard-page-compact {
@@ -5641,19 +5667,157 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 300px;
+  max-height: 200px;
   overflow-y: auto;
   margin-bottom: 0.5rem;
 }
 
-.plan-item {
+.plan-loading-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.plan-cancel-btn {
+  color: var(--red);
+}
+
+/* Plan Stopped State */
+.plan-stopped-indicator {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.5rem;
-  background: var(--bg-input);
-  border-radius: 4px;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: var(--surface);
+  border-radius: 6px;
+  border: 1px solid var(--border);
 }
+
+.plan-stopped-icon {
+  color: var(--red);
+  font-size: 1rem;
+}
+
+.plan-stopped-text {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.plan-actions-single {
+  justify-content: center;
+}
+
+.plan-skip-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 0.75rem;
+}
+
+.plan-skip-hint strong {
+  color: var(--text-dim);
+}
+
+/* ========== Plan Subagent Windows (Visible Opus Agents) ========== */
+.plan-subagent-window {
+  position: fixed;
+  width: 280px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 20px rgba(96, 165, 250, 0.2);
+  overflow: hidden;
+  animation: planSubagentSpawn 0.3s ease-out;
+}
+
+@keyframes planSubagentSpawn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.plan-subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.2), rgba(96, 165, 250, 0.1));
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-subagent-icon {
+  font-size: 1rem;
+}
+
+.plan-subagent-title {
+  flex: 1;
+  font-weight: 500;
+  font-size: 0.8rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-subagent-model {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  background: #7c3aed;
+  color: white;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.plan-subagent-body {
+  padding: 0.75rem;
+}
+
+.plan-subagent-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.plan-subagent-status.running .plan-subagent-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.plan-subagent-status.completed .plan-subagent-status-text {
+  color: var(--green);
+}
+
+.plan-subagent-status.failed .plan-subagent-status-text {
+  color: var(--red);
+}
+
+.plan-subagent-status-text {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.plan-subagent-detail {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Note: main .plan-item styles are in "Enhanced Plan Item Styling" section below */
 
 .plan-item-checkbox {
   flex-shrink: 0;
@@ -5700,6 +5864,8 @@ kbd {
 .plan-item-remove:hover {
   color: var(--red);
 }
+
+/* Note: .plan-item-phase and .plan-item-verify enhanced styles are in section below */
 
 .plan-item:has(.plan-item-checkbox:not(:checked)) {
   opacity: 0.5;
@@ -5759,6 +5925,571 @@ kbd {
 
 .plan-warnings {
   color: #fbbf24;
+}
+
+/* Enhanced Plan Item Styling */
+.plan-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-input);
+  border-radius: 4px;
+  border-left: 3px solid transparent;
+  transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
+  cursor: default;
+}
+
+.plan-item.dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
+
+.plan-item.drag-over {
+  background: var(--accent-dim);
+  border-left-color: var(--accent);
+}
+
+/* Priority color borders */
+.plan-item.priority-p0 {
+  border-left-color: #ef4444;
+}
+
+.plan-item.priority-p1 {
+  border-left-color: #f59e0b;
+}
+
+.plan-item.priority-p2 {
+  border-left-color: #3b82f6;
+}
+
+/* Drag handle */
+.plan-item-drag {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 0 0.2rem;
+  opacity: 0.5;
+  user-select: none;
+}
+
+.plan-item-drag:hover {
+  opacity: 1;
+}
+
+.plan-item-drag:active {
+  cursor: grabbing;
+}
+
+/* TDD Phase badge - enhanced */
+.plan-item-phase {
+  flex-shrink: 0;
+  min-width: 22px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  border-radius: 3px;
+  background: var(--bg-card);
+}
+
+.plan-item-phase.phase-setup {
+  background: #6366f1;
+  color: white;
+}
+
+.plan-item-phase.phase-test {
+  background: #8b5cf6;
+  color: white;
+}
+
+.plan-item-phase.phase-impl {
+  background: #06b6d4;
+  color: white;
+}
+
+.plan-item-phase.phase-review {
+  background: #f59e0b;
+  color: white;
+}
+
+.plan-item-phase.phase-verify {
+  background: #22c55e;
+  color: white;
+}
+
+/* Enhanced verification indicator */
+.plan-item-verify {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: var(--green);
+  font-size: 0.65rem;
+  cursor: help;
+  padding: 0.1rem 0.25rem;
+  background: rgba(34, 197, 94, 0.1);
+  border-radius: 3px;
+  opacity: 0.85;
+}
+
+.plan-item-verify:hover {
+  opacity: 1;
+  background: rgba(34, 197, 94, 0.2);
+}
+
+/* Dependencies indicator */
+.plan-item-deps {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  padding: 0.1rem 0.25rem;
+  background: var(--bg-card);
+  border-radius: 3px;
+  cursor: help;
+}
+
+.plan-item-deps:hover {
+  color: var(--accent);
+}
+
+/* Review checklist indicator */
+.plan-item-checklist {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: #f59e0b;
+  font-size: 0.65rem;
+  cursor: help;
+  padding: 0.1rem 0.25rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 3px;
+  opacity: 0.85;
+}
+
+.plan-item-checklist:hover {
+  opacity: 1;
+  background: rgba(245, 158, 11, 0.2);
+}
+
+/* Checklist modal */
+.checklist-modal-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.checklist-modal {
+  padding: 1rem;
+}
+
+.checklist-modal h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--text);
+}
+
+.checklist-task {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.checklist-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+}
+
+.checklist-checkbox {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+.checklist-item label {
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.checklist-footer {
+  text-align: right;
+}
+
+/* Group headers for TDD phases */
+.plan-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  margin-top: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plan-group-header:first-child {
+  margin-top: 0;
+}
+
+.plan-group-header:hover {
+  color: var(--text);
+}
+
+.plan-group-header .group-icon {
+  font-size: 0.8rem;
+}
+
+.plan-group-header .group-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-weight: normal;
+}
+
+.plan-group-header .group-chevron {
+  transition: transform 0.15s;
+}
+
+.plan-group-header.collapsed .group-chevron {
+  transform: rotate(-90deg);
+}
+
+.plan-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.25rem 0;
+}
+
+.plan-group-items.collapsed {
+  display: none;
+}
+
+/* View mode toggle */
+.plan-view-toggle {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.plan-view-btn {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.plan-view-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.plan-view-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Verification criteria tooltip expansion */
+.plan-item-verify-expanded {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  z-index: 10;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.2);
+  max-width: 300px;
+}
+
+.plan-item-verify-expanded::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--border);
+}
+
+/* Plan toolbar improvements */
+.plan-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-toolbar-left {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.plan-toolbar-right {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* Plan item inline actions */
+.plan-item-actions {
+  display: flex;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.plan-item:hover .plan-item-actions {
+  opacity: 1;
+}
+
+.plan-item-action {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.2rem;
+  border-radius: 2px;
+}
+
+.plan-item-action:hover {
+  color: var(--text);
+  background: var(--bg-card);
+}
+
+/* Runtime task card enhancements */
+.ralph-task-card {
+  position: relative;
+}
+
+.ralph-task-attempts {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.ralph-task-attempts.has-errors {
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.ralph-task-verify-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 0.6rem;
+  color: var(--green);
+  opacity: 0.7;
+}
+
+.ralph-task-deps-indicator {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 0.55rem;
+  color: var(--accent);
+}
+
+/* Quick actions on task hover */
+.ralph-task-actions {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  gap: 0.25rem;
+  background: rgba(0,0,0,0.85);
+  padding: 0.25rem;
+  border-radius: 4px;
+}
+
+.ralph-task-card:hover .ralph-task-actions {
+  display: flex;
+}
+
+.ralph-task-action-btn {
+  padding: 0.2rem 0.35rem;
+  font-size: 0.65rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ralph-task-action-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Plan version indicator */
+.plan-version-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-input);
+  border-radius: 4px;
+}
+
+.plan-version-badge {
+  background: var(--accent);
+  color: white;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 500;
+}
+
+.plan-version-history {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.plan-version-history:hover {
+  text-decoration: underline;
+}
+
+/* Plan history dropdown */
+.plan-history-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 100;
+  min-width: 200px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.plan-history-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.plan-history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background-color 0.15s;
+}
+
+.plan-history-item:last-child {
+  border-bottom: none;
+}
+
+.plan-history-item:hover {
+  background: var(--bg-input);
+}
+
+.plan-history-item.current {
+  background: var(--accent-dim);
+  cursor: default;
+}
+
+.plan-history-item.current::after {
+  content: '(current)';
+  font-size: 0.65rem;
+  color: var(--accent);
+  margin-left: 0.5rem;
+}
+
+.plan-history-version {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.plan-history-tasks {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: 0.5rem;
+}
+
+.plan-history-time {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* Ralph panel version info */
+.ralph-version-info {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.ralph-version-info .version-badge {
+  background: var(--bg-card);
+  padding: 0.1rem 0.25rem;
+  border-radius: 2px;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.ralph-version-info .rollback-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.25rem;
+}
+
+.ralph-version-info .rollback-btn:hover {
+  text-decoration: underline;
 }
 
 /* Textarea with AI Assist button */

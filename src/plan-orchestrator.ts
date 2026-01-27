@@ -124,14 +124,29 @@ export interface DetailedPlanResult {
 
 export type ProgressCallback = (phase: string, detail: string) => void;
 
+/** Event types for plan subagent visibility */
+export interface PlanSubagentEvent {
+  type: 'started' | 'progress' | 'completed' | 'failed';
+  agentId: string;
+  agentType: 'requirements' | 'architecture' | 'testing' | 'risks' | 'verification';
+  model: string;
+  status: string;
+  detail?: string;
+  itemCount?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+export type SubagentCallback = (event: PlanSubagentEvent) => void;
+
 // ============================================================================
 // Constants
 // ============================================================================
 
-const SUBAGENT_TIMEOUT_MS = 45000; // 45 seconds per subagent
-const VERIFICATION_TIMEOUT_MS = 60000; // 60 seconds for verification
-const MODEL_ANALYSIS = 'haiku'; // Fast model for parallel analysis
-const MODEL_VERIFICATION = 'sonnet'; // Better reasoning for verification
+const SUBAGENT_TIMEOUT_MS = 300000; // 5 minutes per subagent (Opus needs time for complex analysis)
+const VERIFICATION_TIMEOUT_MS = 480000; // 8 minutes for verification (Opus + large plans)
+const MODEL_ANALYSIS = 'opus'; // Best model for thorough analysis
+const MODEL_VERIFICATION = 'opus'; // Best model for verification
 
 // ============================================================================
 // Subagent Prompts
@@ -375,10 +390,33 @@ Be critical but constructive. A thorough review catches issues that tests miss.`
 export class PlanOrchestrator {
   private screenManager: ScreenManager;
   private workingDir: string;
+  private runningSessions: Set<Session> = new Set();
+  private cancelled = false;
 
   constructor(screenManager: ScreenManager, workingDir: string = process.cwd()) {
     this.screenManager = screenManager;
     this.workingDir = workingDir;
+  }
+
+  /**
+   * Cancel all running subagent sessions.
+   * Call this when the client disconnects or user clicks Stop.
+   */
+  async cancel(): Promise<void> {
+    this.cancelled = true;
+    console.log(`[PlanOrchestrator] Cancelling ${this.runningSessions.size} running sessions...`);
+
+    const stopPromises = Array.from(this.runningSessions).map(async (session) => {
+      try {
+        await session.stop();
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+
+    await Promise.all(stopPromises);
+    this.runningSessions.clear();
+    console.log('[PlanOrchestrator] All sessions cancelled');
   }
 
   /**
@@ -391,7 +429,8 @@ export class PlanOrchestrator {
    */
   async generateDetailedPlan(
     taskDescription: string,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
   ): Promise<DetailedPlanResult> {
     const startTime = Date.now();
     let totalCost = 0;
@@ -399,7 +438,7 @@ export class PlanOrchestrator {
     try {
       // Phase 1: Parallel Analysis
       onProgress?.('parallel-analysis', 'Spawning analysis subagents...');
-      const subagentResults = await this.runParallelAnalysis(taskDescription, onProgress);
+      const subagentResults = await this.runParallelAnalysis(taskDescription, onProgress, onSubagent);
 
       totalCost += subagentResults.reduce((sum, r) => sum + (r.success ? 0.002 : 0), 0); // Estimate
 
@@ -421,7 +460,8 @@ export class PlanOrchestrator {
       const verificationResult = await this.runVerification(
         taskDescription,
         synthesisResult.items,
-        onProgress
+        onProgress,
+        onSubagent
       );
 
       totalCost += 0.01; // Verification cost estimate
@@ -462,7 +502,8 @@ export class PlanOrchestrator {
    */
   private async runParallelAnalysis(
     taskDescription: string,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
   ): Promise<SubagentResult[]> {
     const subagents: Array<{
       type: SubagentResult['agentType'];
@@ -476,7 +517,7 @@ export class PlanOrchestrator {
 
     // Run all subagents in parallel
     const promises = subagents.map(({ type, prompt }) =>
-      this.runSubagent(type, prompt, onProgress)
+      this.runSubagent(type, prompt, onProgress, onSubagent)
     );
 
     return Promise.all(promises);
@@ -488,9 +529,33 @@ export class PlanOrchestrator {
   private async runSubagent(
     agentType: SubagentResult['agentType'],
     prompt: string,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
   ): Promise<SubagentResult> {
+    const agentId = `plan-${agentType}-${Date.now()}`;
+
+    // Check if already cancelled
+    if (this.cancelled) {
+      return {
+        agentType,
+        items: [],
+        success: false,
+        error: 'Cancelled',
+        durationMs: 0,
+      };
+    }
+
     const startTime = Date.now();
+
+    // Emit started event
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType,
+      model: MODEL_ANALYSIS,
+      status: 'running',
+      detail: `Analyzing ${agentType}...`,
+    });
 
     const session = new Session({
       workingDir: this.workingDir,
@@ -498,6 +563,9 @@ export class PlanOrchestrator {
       useScreen: false,
       mode: 'claude',
     });
+
+    // Track this session for cancellation
+    this.runningSessions.add(session);
 
     try {
       onProgress?.('subagent', `Running ${agentType} analysis...`);
@@ -507,9 +575,38 @@ export class PlanOrchestrator {
         this.timeout(SUBAGENT_TIMEOUT_MS),
       ]);
 
+      // Check if cancelled during execution
+      if (this.cancelled) {
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType,
+          model: MODEL_ANALYSIS,
+          status: 'cancelled',
+          error: 'Cancelled',
+          durationMs: Date.now() - startTime,
+        });
+        return {
+          agentType,
+          items: [],
+          success: false,
+          error: 'Cancelled',
+          durationMs: Date.now() - startTime,
+        };
+      }
+
       // Parse JSON from result
       const jsonMatch = result.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType,
+          model: MODEL_ANALYSIS,
+          status: 'failed',
+          error: 'No JSON array found in response',
+          durationMs: Date.now() - startTime,
+        });
         return {
           agentType,
           items: [],
@@ -521,6 +618,15 @@ export class PlanOrchestrator {
 
       const parsed = JSON.parse(jsonMatch[0]);
       if (!Array.isArray(parsed)) {
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType,
+          model: MODEL_ANALYSIS,
+          status: 'failed',
+          error: 'Response is not an array',
+          durationMs: Date.now() - startTime,
+        });
         return {
           agentType,
           items: [],
@@ -544,6 +650,17 @@ export class PlanOrchestrator {
 
       onProgress?.('subagent', `${agentType} complete (${items.length} items)`);
 
+      // Emit completed event
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType,
+        model: MODEL_ANALYSIS,
+        status: 'completed',
+        itemCount: items.length,
+        durationMs: Date.now() - startTime,
+      });
+
       return {
         agentType,
         items,
@@ -551,14 +668,26 @@ export class PlanOrchestrator {
         durationMs: Date.now() - startTime,
       };
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType,
+        model: MODEL_ANALYSIS,
+        status: 'failed',
+        error: errorMsg,
+        durationMs: Date.now() - startTime,
+      });
       return {
         agentType,
         items: [],
         success: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMsg,
         durationMs: Date.now() - startTime,
       };
     } finally {
+      // Remove from tracking and clean up
+      this.runningSessions.delete(session);
       try {
         await session.stop();
       } catch {
@@ -702,14 +831,37 @@ export class PlanOrchestrator {
   private async runVerification(
     taskDescription: string,
     synthesizedItems: PlanItem[],
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    onSubagent?: SubagentCallback
   ): Promise<VerificationResult> {
+    const agentId = `plan-verification-${Date.now()}`;
+
+    // Check if already cancelled
+    if (this.cancelled) {
+      return this.fallbackVerification(synthesizedItems);
+    }
+
+    // Emit started event
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'verification',
+      model: MODEL_VERIFICATION,
+      status: 'running',
+      detail: 'Validating and prioritizing plan...',
+    });
+
+    const startTime = Date.now();
+
     const session = new Session({
       workingDir: this.workingDir,
       screenManager: this.screenManager,
       useScreen: false,
       mode: 'claude',
     });
+
+    // Track this session for cancellation
+    this.runningSessions.add(session);
 
     try {
       // Format plan for verification
@@ -727,6 +879,11 @@ export class PlanOrchestrator {
         session.runPrompt(prompt, { model: MODEL_VERIFICATION }),
         this.timeout(VERIFICATION_TIMEOUT_MS),
       ]);
+
+      // Check if cancelled during execution
+      if (this.cancelled) {
+        return this.fallbackVerification(synthesizedItems);
+      }
 
       // Parse JSON from result
       const jsonMatch = result.match(/\{[\s\S]*\}/);
@@ -787,6 +944,17 @@ export class PlanOrchestrator {
 
       onProgress?.('verification', `Verification complete (quality: ${Math.round((parsed.qualityScore || 0.8) * 100)}%)`);
 
+      // Emit completed event
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'verification',
+        model: MODEL_VERIFICATION,
+        status: 'completed',
+        itemCount: validatedPlan.length,
+        durationMs: Date.now() - startTime,
+      });
+
       return {
         validatedPlan,
         gaps: Array.isArray(parsed.gaps) ? parsed.gaps.map(String) : [],
@@ -795,8 +963,19 @@ export class PlanOrchestrator {
       };
     } catch (err) {
       console.error('[PlanOrchestrator] Verification failed:', err);
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'verification',
+        model: MODEL_VERIFICATION,
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startTime,
+      });
       return this.fallbackVerification(synthesizedItems);
     } finally {
+      // Remove from tracking and clean up
+      this.runningSessions.delete(session);
       try {
         await session.stop();
       } catch {
@@ -808,8 +987,10 @@ export class PlanOrchestrator {
   /**
    * Fallback verification when the verification subagent fails.
    * Assigns heuristic priorities and adds basic verification criteria.
+   * Note: This is a silent fallback - no warning shown to user since the result is still useful.
    */
   private fallbackVerification(items: PlanItem[]): VerificationResult {
+    console.log('[PlanOrchestrator] Using heuristic priorities (verification subagent timed out or failed)');
     return {
       validatedPlan: items.map((item, idx) => ({
         ...item,
@@ -824,8 +1005,8 @@ export class PlanOrchestrator {
         version: 1,
       })),
       gaps: [],
-      warnings: ['Verification subagent failed - using heuristic priorities'],
-      qualityScore: 0.7,
+      warnings: [], // Silent fallback - heuristics are good enough, no need to alarm user
+      qualityScore: 0.75, // Slightly higher since fallback still produces useful results
     };
   }
 

@@ -738,6 +738,10 @@ export interface RalphTrackerState {
   lastActivity: number;
   /** Elapsed hours if detected */
   elapsedHours: number | null;
+  /** Current plan version (for versioning UI) */
+  planVersion?: number;
+  /** Number of versions in history (for versioning UI) */
+  planHistoryLength?: number;
 }
 
 /**

@@ -172,6 +172,13 @@
                 <span class="ralph-info-label">Elapsed</span>
                 <span id="ralphElapsed">0m</span>
               </div>
+              <div class="ralph-info-row" id="ralphVersionRow" style="display: none;">
+                <span class="ralph-info-label">Plan</span>
+                <div class="ralph-version-info">
+                  <span class="version-badge" id="ralphPlanVersion">v1</span>
+                  <button class="rollback-btn" id="ralphRollbackBtn" onclick="app.showPlanHistory()" title="View history">history</button>
+                </div>
+              </div>
             </div>
             <div class="ralph-tasks-grid" id="ralphTasksGrid"></div>
           </div>
@@ -1013,16 +1020,23 @@
                 </div>
               </div>
               <p class="plan-loading-hint" id="planLoadingHint">Initializing deep reasoning model</p>
-              <button class="btn-toolbar btn-sm plan-skip-btn" onclick="app.skipPlanGeneration()">Skip</button>
+              <div class="plan-loading-actions">
+                <button class="btn-toolbar btn-sm plan-cancel-btn" onclick="app.cancelPlanGeneration()">Stop</button>
+                <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
+              </div>
             </div>
 
-            <!-- Error state -->
+            <!-- Stopped/Error state -->
             <div id="planGenerationError" class="plan-section hidden">
+              <div class="plan-stopped-indicator" id="planStoppedIndicator">
+                <span class="plan-stopped-icon">&#x25A0;</span>
+                <span class="plan-stopped-text">Stopped</span>
+              </div>
               <p class="plan-error-msg" id="planErrorMsg"></p>
               <div class="plan-actions">
-                <button class="btn-toolbar btn-primary" onclick="app.generatePlan()">Retry</button>
-                <button class="btn-toolbar" onclick="app.skipPlanGeneration()">Skip</button>
+                <button class="btn-toolbar btn-primary" onclick="app.generatePlan()">Regenerate Plan</button>
               </div>
+              <p class="plan-skip-hint">Use <strong>Back</strong> to edit your task, or <strong>Next</strong> to continue without a plan</p>
             </div>
 
             <!-- Editor state -->
@@ -1034,8 +1048,8 @@
                     <label>Detail:</label>
                     <div class="plan-detail-btns">
                       <button type="button" class="plan-detail-btn" data-detail="brief" onclick="app.setPlanDetail('brief')" title="High-level milestones only">Brief</button>
-                      <button type="button" class="plan-detail-btn active" data-detail="standard" onclick="app.setPlanDetail('standard')" title="Single-pass generation with Opus 4.5">Standard</button>
-                      <button type="button" class="plan-detail-btn" data-detail="detailed" onclick="app.setPlanDetail('detailed')" title="Enhanced: 4 parallel subagents + verification (slower but more thorough)">Enhanced</button>
+                      <button type="button" class="plan-detail-btn" data-detail="standard" onclick="app.setPlanDetail('standard')" title="Single-pass generation with Opus 4.5">Standard</button>
+                      <button type="button" class="plan-detail-btn active" data-detail="detailed" onclick="app.setPlanDetail('detailed')" title="Enhanced: 4 parallel subagents + verification (slower but more thorough)">Enhanced</button>
                     </div>
                   </div>
                   <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
@@ -1045,6 +1059,10 @@
               <div id="planItemsList" class="plan-items-list"></div>
               <div class="plan-editor-footer">
                 <button class="btn-toolbar btn-sm" onclick="app.addPlanItem()">+ Add Step</button>
+                <div class="plan-view-toggle">
+                  <button type="button" class="plan-view-btn active" data-view="list" onclick="app.setPlanViewMode('list')" title="Flat list">&#x2630;</button>
+                  <button type="button" class="plan-view-btn" data-view="grouped" onclick="app.setPlanViewMode('grouped')" title="Group by TDD phase">&#x229E;</button>
+                </div>
               </div>
             </div>
           </div>

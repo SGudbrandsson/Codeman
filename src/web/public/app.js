@@ -464,6 +464,11 @@ class ClaudemanApp {
     this._subagentHideTimeout = null; // Timeout for hover-based dropdown hide
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
+    // Plan subagent windows (visible Opus agents during plan generation)
+    this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element }>
+    this.planSubagentWindowZIndex = 1100;
+    this.planGenerationStopped = false; // Flag to ignore SSE events after Stop
+
     // Project Insights tracking (active Bash tools with clickable file paths)
     this.projectInsights = new Map(); // Map<sessionId, ActiveBashTool[]>
     this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
@@ -1907,6 +1912,13 @@ class ClaudemanApp {
       }, 5 * 60 * 1000); // 5 minutes
     });
 
+    // Plan subagent visibility events (show Opus agents during plan generation)
+    addListener('plan:subagent', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Plan Subagent]', data);
+      this.handlePlanSubagentEvent(data);
+    });
+
     // Plan generation progress events (for detailed mode with subagents)
     addListener('plan:progress', (e) => {
       const data = JSON.parse(e.data);
@@ -2578,7 +2590,7 @@ class ClaudemanApp {
     generatedPlan: null,      // [{content, priority, enabled, id}] or null
     planGenerated: false,
     skipPlanGeneration: false,
-    planDetailLevel: 'standard', // 'brief', 'standard', 'detailed'
+    planDetailLevel: 'detailed', // 'brief', 'standard', 'detailed'
   };
   planLoadingTimer = null;
   planLoadingStartTime = null;
@@ -2596,7 +2608,7 @@ class ClaudemanApp {
       generatedPlan: null,
       planGenerated: false,
       skipPlanGeneration: false,
-      planDetailLevel: 'standard',
+      planDetailLevel: 'detailed',
       // Existing plan detection
       existingPlan: null,       // { todos, stats, content } from @fix_plan.md
       useExistingPlan: false,   // User chose to use existing plan
@@ -2620,10 +2632,16 @@ class ClaudemanApp {
     this.updateRalphWizardUI();
     document.getElementById('ralphWizardModal').classList.add('active');
     document.getElementById('ralphTaskDescription').focus();
+
+    // Update connection lines to show wizard connections
+    this.updateConnectionLines();
   }
 
   closeRalphWizard() {
     document.getElementById('ralphWizardModal')?.classList.remove('active');
+
+    // Update connection lines (wizard closed, revert to normal)
+    this.updateConnectionLines();
   }
 
   populateRalphCaseSelector() {
@@ -2925,6 +2943,10 @@ class ClaudemanApp {
     const spinnerEl = document.querySelector('.plan-spinner');
     if (spinnerEl) spinnerEl.style.display = '';
 
+    // Reset stopped indicator
+    const stoppedIndicator = document.getElementById('planStoppedIndicator');
+    if (stoppedIndicator) stoppedIndicator.style.display = 'none';
+
     // Reset existing plan badge
     const badge = document.getElementById('existingPlanBadge');
     if (badge) badge.style.display = 'none';
@@ -2936,6 +2958,9 @@ class ClaudemanApp {
 
     // Stop any existing generation first
     this.stopPlanGeneration();
+
+    // Reset stopped flag to allow new SSE events
+    this.planGenerationStopped = false;
 
     // Create abort controller for this generation
     this.planGenerationAbortController = new AbortController();
@@ -3164,6 +3189,10 @@ class ClaudemanApp {
 
     const errorEl = document.getElementById('planGenerationError');
     const msgEl = document.getElementById('planErrorMsg');
+    const stoppedIndicator = document.getElementById('planStoppedIndicator');
+
+    // Hide the stopped indicator for real errors, show error message
+    if (stoppedIndicator) stoppedIndicator.style.display = 'none';
     if (msgEl) msgEl.textContent = message;
     errorEl?.classList.remove('hidden');
   }
@@ -3175,6 +3204,9 @@ class ClaudemanApp {
     document.getElementById('planGenerationLoading')?.classList.add('hidden');
     document.getElementById('planGenerationError')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.remove('hidden');
+
+    // Close plan subagent windows since generation is complete
+    this.closePlanSubagentWindows();
 
     const list = document.getElementById('planItemsList');
     if (!list) return;
@@ -3565,13 +3597,183 @@ class ClaudemanApp {
 
   cancelPlanGeneration() {
     this.stopPlanGeneration();
-    this.showToast('Plan generation cancelled', 'info');
+    this.planGenerationStopped = true; // Ignore future SSE events
+    this.showToast('Plan generation stopped', 'info');
 
+    // Allow user to proceed without a plan by clicking Next
+    this.ralphWizardConfig.skipPlanGeneration = true;
+
+    // Show stopped state with clear visual indicator
     const errorEl = document.getElementById('planGenerationError');
     const msgEl = document.getElementById('planErrorMsg');
-    if (msgEl) msgEl.textContent = 'Plan generation was cancelled.';
-    errorEl?.classList.remove('hidden');
+    const stoppedIndicator = document.getElementById('planStoppedIndicator');
+
+    // Show the stopped indicator, hide error message since this was intentional
+    if (stoppedIndicator) stoppedIndicator.style.display = 'flex';
+    if (msgEl) msgEl.textContent = '';
+
+    // Hide spinner immediately and show stopped state
     document.getElementById('planGenerationLoading')?.classList.add('hidden');
+    errorEl?.classList.remove('hidden');
+
+    // Close all plan subagent windows
+    this.closePlanSubagentWindows();
+  }
+
+  // ========== Plan Subagent Windows (Visible Opus Agents) ==========
+
+  handlePlanSubagentEvent(event) {
+    // Ignore events if user has stopped plan generation
+    if (this.planGenerationStopped) return;
+
+    const { type, agentId, agentType, model, status, detail, itemCount, durationMs, error } = event;
+
+    if (type === 'started') {
+      // Create new plan subagent window
+      this.createPlanSubagentWindow(agentId, agentType, model, detail);
+    } else if (type === 'completed' || type === 'failed') {
+      // Update window to show completion/failure
+      this.updatePlanSubagentWindow(agentId, status, itemCount, durationMs, error);
+    } else if (type === 'progress') {
+      // Update progress detail
+      const windowData = this.planSubagents.get(agentId);
+      if (windowData?.element) {
+        const detailEl = windowData.element.querySelector('.plan-subagent-detail');
+        if (detailEl) detailEl.textContent = detail || '';
+      }
+    }
+  }
+
+  createPlanSubagentWindow(agentId, agentType, model, detail) {
+    if (this.planSubagents.has(agentId)) return;
+
+    const wizardModal = document.getElementById('ralphWizardModal');
+    const wizardContent = wizardModal?.querySelector('.modal-content');
+    const wizardRect = wizardContent?.getBoundingClientRect();
+
+    // Calculate position - alternate left/right of wizard
+    const windowWidth = 280;
+    const windowHeight = 100;
+    const windowCount = this.planSubagents.size;
+    const viewportWidth = window.innerWidth;
+
+    let x, y;
+    if (wizardRect) {
+      const centerX = wizardRect.left + wizardRect.width / 2;
+      const gap = 30;
+
+      // Stack windows vertically on each side
+      const side = windowCount % 2 === 0 ? 'right' : 'left';
+      const sideIndex = Math.floor(windowCount / 2);
+
+      if (side === 'right') {
+        x = wizardRect.right + gap;
+      } else {
+        x = wizardRect.left - windowWidth - gap;
+      }
+      y = wizardRect.top + sideIndex * (windowHeight + 15);
+
+      // Clamp to viewport
+      x = Math.max(10, Math.min(x, viewportWidth - windowWidth - 10));
+      y = Math.max(60, Math.min(y, window.innerHeight - windowHeight - 10));
+    } else {
+      // Fallback positioning
+      x = 50 + windowCount * 30;
+      y = 120 + windowCount * 30;
+    }
+
+    // Create window element
+    const win = document.createElement('div');
+    win.className = 'plan-subagent-window';
+    win.id = `plan-subagent-${agentId}`;
+    win.style.left = `${x}px`;
+    win.style.top = `${y}px`;
+    win.style.zIndex = ++this.planSubagentWindowZIndex;
+
+    const typeLabels = {
+      requirements: 'Requirements Analyst',
+      architecture: 'Architecture Planner',
+      testing: 'TDD Specialist',
+      risks: 'Risk Analyst',
+      verification: 'Verification Expert',
+    };
+
+    const typeIcons = {
+      requirements: '📋',
+      architecture: '🏗️',
+      testing: '🧪',
+      risks: '⚠️',
+      verification: '✓',
+    };
+
+    win.innerHTML = `
+      <div class="plan-subagent-header">
+        <span class="plan-subagent-icon">${typeIcons[agentType] || '🤖'}</span>
+        <span class="plan-subagent-title">${typeLabels[agentType] || agentType}</span>
+        <span class="plan-subagent-model">${model}</span>
+      </div>
+      <div class="plan-subagent-body">
+        <div class="plan-subagent-status running">
+          <span class="plan-subagent-spinner"></span>
+          <span class="plan-subagent-status-text">Running...</span>
+        </div>
+        <div class="plan-subagent-detail">${detail || ''}</div>
+      </div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Store reference
+    this.planSubagents.set(agentId, {
+      type: agentType,
+      model,
+      status: 'running',
+      startTime: Date.now(),
+      element: win,
+    });
+
+    // Update connection lines
+    this.updateConnectionLines();
+  }
+
+  updatePlanSubagentWindow(agentId, status, itemCount, durationMs, error) {
+    const windowData = this.planSubagents.get(agentId);
+    if (!windowData?.element) return;
+
+    const win = windowData.element;
+    const statusEl = win.querySelector('.plan-subagent-status');
+    const statusTextEl = win.querySelector('.plan-subagent-status-text');
+    const spinnerEl = win.querySelector('.plan-subagent-spinner');
+    const detailEl = win.querySelector('.plan-subagent-detail');
+
+    windowData.status = status;
+
+    if (status === 'completed') {
+      statusEl?.classList.remove('running');
+      statusEl?.classList.add('completed');
+      if (spinnerEl) spinnerEl.style.display = 'none';
+      if (statusTextEl) statusTextEl.textContent = `Done (${itemCount || 0} items)`;
+      if (detailEl && durationMs) detailEl.textContent = `${(durationMs / 1000).toFixed(1)}s`;
+    } else if (status === 'failed' || status === 'cancelled') {
+      statusEl?.classList.remove('running');
+      statusEl?.classList.add('failed');
+      if (spinnerEl) spinnerEl.style.display = 'none';
+      if (statusTextEl) statusTextEl.textContent = status === 'cancelled' ? 'Cancelled' : 'Failed';
+      if (detailEl) detailEl.textContent = error || '';
+    }
+
+    // Update connection lines
+    this.updateConnectionLines();
+  }
+
+  closePlanSubagentWindows() {
+    for (const [agentId, windowData] of this.planSubagents) {
+      if (windowData.element) {
+        windowData.element.remove();
+      }
+    }
+    this.planSubagents.clear();
+    this.updateConnectionLines();
   }
 
   skipPlanGeneration() {
@@ -7768,34 +7970,118 @@ class ClaudemanApp {
 
     svg.innerHTML = '';
 
+    // Check if Ralph wizard modal is open
+    const wizardModal = document.getElementById('ralphWizardModal');
+    const wizardOpen = wizardModal && !wizardModal.classList.contains('hidden') &&
+                       wizardModal.style.display !== 'none';
+    const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
+
     for (const [agentId, windowInfo] of this.subagentWindows) {
       if (windowInfo.minimized || windowInfo.hidden) continue;
 
       const agent = this.subagents.get(agentId);
-      if (!agent?.parentSessionId) continue;
-
-      const tab = document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`);
       const win = windowInfo.element;
-      if (!tab || !win) continue;
+      if (!win) continue;
 
-      const tabRect = tab.getBoundingClientRect();
       const winRect = win.getBoundingClientRect();
 
-      // Draw curved line from tab bottom-center to window top-center
-      const x1 = tabRect.left + tabRect.width / 2;
-      const y1 = tabRect.bottom;
-      const x2 = winRect.left + winRect.width / 2;
-      const y2 = winRect.top;
+      // If wizard is open, draw lines from wizard to subagent windows
+      if (wizardOpen && wizardContent) {
+        const wizardRect = wizardContent.getBoundingClientRect();
 
-      // Bezier curve control points for smooth curve
-      const midY = (y1 + y2) / 2;
-      const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+        // Determine which side of wizard the window is on
+        const winCenterX = winRect.left + winRect.width / 2;
+        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
 
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      line.setAttribute('d', path);
-      line.setAttribute('class', 'connection-line');
-      line.setAttribute('data-agent-id', agentId);
-      svg.appendChild(line);
+        let x1, y1, x2, y2;
+
+        if (winCenterX < wizardCenterX) {
+          // Window is on the left - connect from wizard left edge
+          x1 = wizardRect.left;
+          y1 = wizardRect.top + wizardRect.height / 2;
+          x2 = winRect.right;
+          y2 = winRect.top + winRect.height / 2;
+        } else {
+          // Window is on the right - connect from wizard right edge
+          x1 = wizardRect.right;
+          y1 = wizardRect.top + wizardRect.height / 2;
+          x2 = winRect.left;
+          y2 = winRect.top + winRect.height / 2;
+        }
+
+        // Bezier curve for smooth horizontal connection
+        const midX = (x1 + x2) / 2;
+        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        line.setAttribute('d', path);
+        line.setAttribute('class', 'connection-line wizard-connection');
+        line.setAttribute('data-agent-id', agentId);
+        svg.appendChild(line);
+      } else if (agent?.parentSessionId) {
+        // Normal mode - connect to parent session tab
+        const tab = document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`);
+        if (!tab) continue;
+
+        const tabRect = tab.getBoundingClientRect();
+
+        // Draw curved line from tab bottom-center to window top-center
+        const x1 = tabRect.left + tabRect.width / 2;
+        const y1 = tabRect.bottom;
+        const x2 = winRect.left + winRect.width / 2;
+        const y2 = winRect.top;
+
+        // Bezier curve control points for smooth curve
+        const midY = (y1 + y2) / 2;
+        const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        line.setAttribute('d', path);
+        line.setAttribute('class', 'connection-line');
+        line.setAttribute('data-agent-id', agentId);
+        svg.appendChild(line);
+      }
+    }
+
+    // Draw lines from wizard to plan subagent windows (Opus agents during plan generation)
+    if (wizardOpen && wizardContent && this.planSubagents.size > 0) {
+      const wizardRect = wizardContent.getBoundingClientRect();
+
+      for (const [agentId, windowData] of this.planSubagents) {
+        const win = windowData.element;
+        if (!win) continue;
+
+        const winRect = win.getBoundingClientRect();
+
+        // Determine which side of wizard the window is on
+        const winCenterX = winRect.left + winRect.width / 2;
+        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
+
+        let x1, y1, x2, y2;
+
+        if (winCenterX < wizardCenterX) {
+          // Window is on the left
+          x1 = wizardRect.left;
+          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
+          x2 = winRect.right;
+          y2 = winRect.top + winRect.height / 2;
+        } else {
+          // Window is on the right
+          x1 = wizardRect.right;
+          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
+          x2 = winRect.left;
+          y2 = winRect.top + winRect.height / 2;
+        }
+
+        const midX = (x1 + x2) / 2;
+        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        line.setAttribute('d', path);
+        line.setAttribute('class', 'connection-line wizard-connection plan-subagent-line');
+        line.setAttribute('data-plan-agent-id', agentId);
+        svg.appendChild(line);
+      }
     }
   }
 
@@ -7874,11 +8160,48 @@ class ClaudemanApp {
     const windowWidth = 420;
     const windowHeight = 350;
     const gap = 20;
-    const startX = 50;
-    const startY = 120;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+
+    // Check if Ralph wizard modal is open - if so, position windows on the sides
+    const wizardModal = document.getElementById('ralphWizardModal');
+    const wizardOpen = wizardModal && !wizardModal.classList.contains('hidden') &&
+                       wizardModal.style.display !== 'none';
+
+    let startX, startY, maxCols;
+
+    if (wizardOpen) {
+      // Wizard is ~720px wide, centered. Position windows on left/right sides
+      const wizardWidth = 720;
+      const centerX = viewportWidth / 2;
+      const wizardLeft = centerX - wizardWidth / 2;
+      const wizardRight = centerX + wizardWidth / 2;
+
+      // Alternate between left and right sides of the wizard
+      const leftSideSpace = wizardLeft - 20;
+      const rightSideSpace = viewportWidth - wizardRight - 20;
+
+      if (windowCount % 2 === 0 && rightSideSpace >= windowWidth) {
+        // Even windows go to the right
+        startX = wizardRight + 20;
+        maxCols = Math.floor(rightSideSpace / (windowWidth + gap)) || 1;
+      } else if (leftSideSpace >= windowWidth) {
+        // Odd windows go to the left
+        startX = Math.max(10, wizardLeft - windowWidth - 20);
+        maxCols = 1; // Usually only room for 1 column on left
+      } else {
+        // Not enough side space, use right side
+        startX = wizardRight + 20;
+        maxCols = 1;
+      }
+      startY = 80; // Start higher when wizard is open
+    } else {
+      // Normal positioning
+      startX = 50;
+      startY = 120;
+      maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
+    }
+
     const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
     const col = windowCount % maxCols;
     const row = Math.floor(windowCount / maxCols) % maxRows; // Wrap rows to stay in viewport
