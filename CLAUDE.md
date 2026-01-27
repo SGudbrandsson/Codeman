@@ -38,7 +38,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
 
-**Version**: 0.1397 (must match `package.json`)
+**Version**: 0.1398 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -578,11 +578,13 @@ Two methods:
 2. **`session.writeViaScreen(data)`** - Via GNU screen (RECOMMENDED for programmatic input). Used by RespawnController, auto-compact, auto-clear.
 
 **How `writeViaScreen` works internally** (in `screen-manager.ts:sendInput`):
-1. Splits input into text and `\r` (carriage return)
+1. Strips all `\n` newlines and `\r` carriage returns from text
 2. Sends text first: `screen -S name -p 0 -X stuff "text"`
 3. Sends Enter separately: `screen -S name -p 0 -X stuff "$(printf '\015')"`
 
 **Why separate commands?** Claude CLI uses Ink (React for terminals) which requires text and Enter as separate `screen -X stuff` commands. Combining them doesn't work. This is a critical implementation detail when debugging input issues.
+
+**IMPORTANT**: All prompts sent via `writeViaScreen` (respawn updatePrompt, kickstartPrompt, auto-compact, etc.) must be **single-line**. Newlines are stripped, so multi-line prompts become one long line.
 
 ### Idle Detection
 
@@ -844,4 +846,6 @@ The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Clau
 3. Optionally generates a task plan (`@fix_plan.md`)
 4. Sends the initial prompt with iteration protocol
 
-**IMPORTANT**: The respawn controller is **disabled by default** for Ralph Loops. The "Enable Respawn" checkbox in Advanced Options is unchecked by default. Ralph Loops handle their own iteration protocol via `<promise>` tags and do not need the respawn controller's autonomous session cycling.
+**Respawn for Ralph Loops**: Disabled by default (checkbox unchecked). When enabled, the respawn controller uses Ralph-specific prompts:
+- **Update Prompt**: Instructs Claude to document progress to CLAUDE.md, update planning files (`@fix_plan.md`), mark completed tasks, and write a summary before `/clear`
+- **Kickstart Prompt**: After `/init`, tells Claude it's in a Ralph Wiggum loop and to continue work by reading `@fix_plan.md` and CLAUDE.md notes, then resume on uncompleted tasks

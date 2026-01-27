@@ -3255,15 +3255,21 @@ class ClaudemanApp {
         }
       }
 
-      // Step 3: Enable respawn if requested
+      // Step 3: Enable respawn if requested (with Ralph-specific prompts)
+      // NOTE: Prompts must be single-line because screen-manager.ts strips newlines
       if (config.enableRespawn) {
+        const ralphUpdatePrompt = 'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
+
+        const ralphKickstartPrompt = `You are in a Ralph Wiggum loop. Read @fix_plan.md for task status, check CLAUDE.md for notes from previous iterations, continue on the next uncompleted task, output <promise>${config.completionPhrase}</promise> when ALL tasks are complete.`;
+
         await fetch(`/api/sessions/${sessionId}/respawn/enable`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: 'continue',
+            updatePrompt: ralphUpdatePrompt,
             sendClear: true,
             sendInit: true,
+            kickstartPrompt: ralphKickstartPrompt,
           })
         });
       }
