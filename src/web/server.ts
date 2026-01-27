@@ -34,6 +34,7 @@ import { TranscriptWatcher } from '../transcript-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
+import { PlanOrchestrator, type DetailedPlanResult } from '../plan-orchestrator.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -2384,6 +2385,54 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         } catch {
           // Ignore cleanup errors
         }
+      }
+    });
+
+    // Generate detailed implementation plan using subagent orchestration
+    // This spawns multiple specialist subagents in parallel for thorough analysis
+    this.app.post('/api/generate-plan-detailed', async (req): Promise<ApiResponse> => {
+      const { taskDescription } = req.body as { taskDescription: string };
+
+      if (!taskDescription || typeof taskDescription !== 'string') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description is required');
+      }
+
+      if (taskDescription.length > 10000) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Task description too long (max 10000 chars)');
+      }
+
+      const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd());
+
+      // Track progress for SSE updates
+      const progressUpdates: Array<{ phase: string; detail: string; timestamp: number }> = [];
+      const onProgress = (phase: string, detail: string) => {
+        const update = { phase, detail, timestamp: Date.now() };
+        progressUpdates.push(update);
+        // Broadcast progress to connected clients
+        this.broadcast('plan:progress', update);
+      };
+
+      try {
+        const result: DetailedPlanResult = await orchestrator.generateDetailedPlan(
+          taskDescription,
+          onProgress
+        );
+
+        if (!result.success) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error || 'Plan generation failed');
+        }
+
+        return {
+          success: true,
+          data: {
+            items: result.items,
+            costUsd: result.costUsd,
+            metadata: result.metadata,
+            progressLog: progressUpdates,
+          },
+        };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Detailed plan generation failed: ' + getErrorMessage(err));
       }
     });
 

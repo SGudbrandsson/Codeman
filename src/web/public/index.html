@@ -1033,14 +1033,15 @@
                   <div class="plan-option-group">
                     <label>Detail:</label>
                     <div class="plan-detail-btns">
-                      <button type="button" class="plan-detail-btn" data-detail="brief" onclick="app.setPlanDetail('brief')">Brief</button>
-                      <button type="button" class="plan-detail-btn active" data-detail="standard" onclick="app.setPlanDetail('standard')">Standard</button>
-                      <button type="button" class="plan-detail-btn" data-detail="detailed" onclick="app.setPlanDetail('detailed')">Detailed</button>
+                      <button type="button" class="plan-detail-btn" data-detail="brief" onclick="app.setPlanDetail('brief')" title="High-level milestones only">Brief</button>
+                      <button type="button" class="plan-detail-btn active" data-detail="standard" onclick="app.setPlanDetail('standard')" title="Single-pass generation with Opus 4.5">Standard</button>
+                      <button type="button" class="plan-detail-btn" data-detail="detailed" onclick="app.setPlanDetail('detailed')" title="Enhanced: 4 parallel subagents + verification (slower but more thorough)">Enhanced</button>
                     </div>
                   </div>
                   <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
                 </div>
               </div>
+              <div id="planWarnings" class="hidden"></div>
               <div id="planItemsList" class="plan-items-list"></div>
               <div class="plan-editor-footer">
                 <button class="btn-toolbar btn-sm" onclick="app.addPlanItem()">+ Add Step</button>

@@ -5718,6 +5718,49 @@ kbd {
   text-align: left;
 }
 
+/* Quality score indicators for detailed plan mode */
+.quality-high {
+  color: #4ade80;
+  font-weight: 500;
+}
+
+.quality-medium {
+  color: #fbbf24;
+  font-weight: 500;
+}
+
+.quality-low {
+  color: #f87171;
+  font-weight: 500;
+}
+
+.mode-changed {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Plan warnings and gaps display */
+#planWarnings {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+#planWarnings.hidden {
+  display: none;
+}
+
+.plan-gaps {
+  color: #f87171;
+  margin-bottom: 0.25rem;
+}
+
+.plan-warnings {
+  color: #fbbf24;
+}
+
 /* Textarea with AI Assist button */
 .textarea-with-assist {
   position: relative;

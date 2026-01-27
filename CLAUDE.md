@@ -38,7 +38,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
 
-**Version**: 0.1399 (must match `package.json`)
+**Version**: 0.1400 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -359,6 +359,7 @@ claudeman reset                    # Reset all state
 | `src/ai-plan-checker.ts` | Spawns Claude to detect plan mode prompts for auto-accept |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status |
 | `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
+| `src/plan-orchestrator.ts` | Multi-agent plan generation with parallel analysis + verification |
 | `src/run-summary.ts` | Tracks session events for "what happened while away" summaries |
 
 **Spawn Protocol (Autonomous Agents):**
@@ -853,6 +854,24 @@ The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Clau
 2. Configures the Ralph tracker with completion phrase and max iterations
 3. Optionally generates a task plan (`@fix_plan.md`)
 4. Sends the initial prompt with iteration protocol
+
+**Plan Generation Modes** (Step 2 of wizard):
+| Mode | Description | API Endpoint |
+|------|-------------|--------------|
+| **Brief** | High-level milestones only | `/api/generate-plan` |
+| **Standard** | Balanced implementation steps | `/api/generate-plan` |
+| **Enhanced** | Multi-agent orchestration with verification | `/api/generate-plan-detailed` |
+
+**Enhanced Plan Generation** (`src/plan-orchestrator.ts`): When "Enhanced" mode is selected, the plan is generated using parallel subagent orchestration:
+1. **Phase 1 - Parallel Analysis**: Spawns 4 specialist subagents simultaneously:
+   - Requirements Analyst → Extracts explicit/implicit requirements
+   - Architecture Planner → Identifies modules, interfaces, types
+   - TDD Specialist → Designs test-first approach, edge cases
+   - Risk Analyst → Identifies failure points, dependencies, blockers
+2. **Phase 2 - Synthesis**: Merges outputs, deduplicates, orders by dependency
+3. **Phase 3 - Verification**: Review subagent validates plan, assigns P0/P1/P2 priorities, identifies gaps
+
+The enhanced mode takes longer (~60-90s) but produces more thorough plans with quality scores. Switching between modes auto-regenerates the plan.
 
 **Respawn for Ralph Loops**: Disabled by default (checkbox unchecked). When enabled, the respawn controller uses Ralph-specific prompts:
 - **Update Prompt**: Instructs Claude to document progress to CLAUDE.md, update planning files (`@fix_plan.md`), mark completed tasks, and write a summary before `/clear`

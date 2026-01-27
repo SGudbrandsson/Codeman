@@ -1880,6 +1880,34 @@ class ClaudemanApp {
         }
       }, 5 * 60 * 1000); // 5 minutes
     });
+
+    // Plan generation progress events (for detailed mode with subagents)
+    this.eventSource.addEventListener('plan:progress', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Plan Progress]', data);
+
+      // Update UI if we have a progress handler registered
+      if (this._planProgressHandler) {
+        this._planProgressHandler({ type: 'plan:progress', data });
+      }
+
+      // Also update the loading display directly for better feedback
+      const titleEl = document.getElementById('planLoadingTitle');
+      const hintEl = document.getElementById('planLoadingHint');
+
+      if (titleEl && data.phase) {
+        const phaseLabels = {
+          'parallel-analysis': 'Running parallel analysis...',
+          'subagent': data.detail || 'Subagent working...',
+          'synthesis': 'Synthesizing results...',
+          'verification': 'Running verification...',
+        };
+        titleEl.textContent = phaseLabels[data.phase] || data.phase;
+      }
+      if (hintEl && data.detail) {
+        hintEl.textContent = data.detail;
+      }
+    });
   }
 
   setConnectionStatus(status) {
@@ -2856,6 +2884,7 @@ class ClaudemanApp {
 
   async generatePlan() {
     const config = this.ralphWizardConfig;
+    const isDetailed = config.planDetailLevel === 'detailed';
 
     // Stop any existing generation first
     this.stopPlanGeneration();
@@ -2869,8 +2898,8 @@ class ClaudemanApp {
     document.getElementById('planEditor')?.classList.add('hidden');
     document.getElementById('planGenerationLoading')?.classList.remove('hidden');
 
-    // Animated progress phases
-    const phases = [
+    // Different phases for detailed vs standard generation
+    const standardPhases = [
       { time: 0, title: 'Starting Opus 4.5...', hint: 'Initializing deep reasoning model' },
       { time: 3, title: 'Analyzing task requirements...', hint: 'Understanding the scope and complexity' },
       { time: 8, title: 'Identifying components...', hint: 'Breaking down into modules and features' },
@@ -2881,6 +2910,23 @@ class ClaudemanApp {
       { time: 70, title: 'Finalizing plan...', hint: 'Organizing and prioritizing steps' },
       { time: 90, title: 'Still working...', hint: 'Complex tasks take longer - hang tight!' },
     ];
+
+    const detailedPhases = [
+      { time: 0, title: 'Spawning analysis subagents...', hint: 'Starting 4 specialist agents in parallel' },
+      { time: 3, title: 'Requirements Analyst working...', hint: 'Extracting explicit and implicit requirements' },
+      { time: 6, title: 'Architecture Planner working...', hint: 'Designing modules and interfaces' },
+      { time: 9, title: 'TDD Specialist working...', hint: 'Planning test-first implementation' },
+      { time: 12, title: 'Risk Analyst working...', hint: 'Identifying edge cases and blockers' },
+      { time: 20, title: 'Subagents completing...', hint: 'Collecting analysis results' },
+      { time: 30, title: 'Synthesizing results...', hint: 'Merging and deduplicating items' },
+      { time: 40, title: 'Starting verification...', hint: 'Running quality assurance subagent' },
+      { time: 50, title: 'Assigning priorities...', hint: 'Determining P0/P1/P2 for each task' },
+      { time: 60, title: 'Checking for gaps...', hint: 'Identifying missing requirements' },
+      { time: 75, title: 'Finalizing plan...', hint: 'Preparing validated task list' },
+      { time: 90, title: 'Still working...', hint: 'Complex tasks take longer - hang tight!' },
+    ];
+
+    const phases = isDetailed ? detailedPhases : standardPhases;
 
     // Start elapsed time and phase display
     this.planLoadingStartTime = Date.now();
@@ -2908,14 +2954,42 @@ class ClaudemanApp {
       }
     }, 1000);
 
+    // Listen for real-time progress updates from detailed generation
+    const handlePlanProgress = (event) => {
+      if (event.type === 'plan:progress' && event.data) {
+        const titleEl = document.getElementById('planLoadingTitle');
+        const hintEl = document.getElementById('planLoadingHint');
+        if (titleEl && event.data.phase) {
+          const phaseLabels = {
+            'parallel-analysis': 'Running parallel analysis...',
+            'subagent': event.data.detail || 'Subagent working...',
+            'synthesis': 'Synthesizing results...',
+            'verification': 'Running verification...',
+          };
+          titleEl.textContent = phaseLabels[event.data.phase] || event.data.phase;
+        }
+        if (hintEl && event.data.detail) {
+          hintEl.textContent = event.data.detail;
+        }
+      }
+    };
+
+    // Add SSE listener for detailed mode progress
+    if (isDetailed) {
+      this._planProgressHandler = handlePlanProgress;
+    }
+
     try {
-      const res = await fetch('/api/generate-plan', {
+      // Use different endpoint for detailed mode
+      const endpoint = isDetailed ? '/api/generate-plan-detailed' : '/api/generate-plan';
+      const body = isDetailed
+        ? { taskDescription: config.taskDescription }
+        : { taskDescription: config.taskDescription, detailLevel: config.planDetailLevel };
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskDescription: config.taskDescription,
-          detailLevel: config.planDetailLevel,
-        }),
+        body: JSON.stringify(body),
         signal: this.planGenerationAbortController?.signal,
       });
 
@@ -2927,6 +3001,9 @@ class ClaudemanApp {
         this.planLoadingTimer = null;
       }
 
+      // Remove progress handler
+      this._planProgressHandler = null;
+
       if (!data.success) {
         this.showPlanError(data.error || 'Failed to generate plan');
         return;
@@ -2937,12 +3014,20 @@ class ClaudemanApp {
         return;
       }
 
-      // Show "Done!" briefly before transitioning
-      const titleEl = document.getElementById('planLoadingTitle');
-      const hintEl = document.getElementById('planLoadingHint');
+      // Show "Done!" with quality info for detailed mode
+      const doneTitle = document.getElementById('planLoadingTitle');
+      const doneHint = document.getElementById('planLoadingHint');
       const spinnerEl = document.querySelector('.plan-spinner');
-      if (titleEl) titleEl.textContent = 'Done!';
-      if (hintEl) hintEl.textContent = `Generated ${data.data.items.length} steps`;
+
+      if (doneTitle) doneTitle.textContent = 'Done!';
+      if (doneHint) {
+        if (isDetailed && data.data.metadata?.qualityScore) {
+          const quality = Math.round(data.data.metadata.qualityScore * 100);
+          doneHint.textContent = `Generated ${data.data.items.length} steps (Quality: ${quality}%)`;
+        } else {
+          doneHint.textContent = `Generated ${data.data.items.length} steps`;
+        }
+      }
       if (spinnerEl) spinnerEl.style.display = 'none';
 
       // Brief pause to show "Done!" before showing editor
@@ -2958,6 +3043,11 @@ class ClaudemanApp {
       config.skipPlanGeneration = false;
       config.planCost = data.data.costUsd || 0;
 
+      // Store metadata for detailed mode
+      if (isDetailed && data.data.metadata) {
+        config.planMetadata = data.data.metadata;
+      }
+
       // Show editor and update detail buttons
       this.renderPlanEditor();
       this.updateDetailLevelButtons();
@@ -2968,6 +3058,9 @@ class ClaudemanApp {
         clearInterval(this.planLoadingTimer);
         this.planLoadingTimer = null;
       }
+
+      // Remove progress handler
+      this._planProgressHandler = null;
 
       // Ignore abort errors (user cancelled, e.g., clicked "Use Existing Plan")
       if (err.name === 'AbortError') {
@@ -2981,14 +3074,39 @@ class ClaudemanApp {
   }
 
   setPlanDetail(level) {
+    const previousLevel = this.ralphWizardConfig.planDetailLevel;
     this.ralphWizardConfig.planDetailLevel = level;
     this.updateDetailLevelButtons();
+
+    // If plan was already generated and level changed, automatically regenerate
+    if (this.ralphWizardConfig.planGenerated && previousLevel !== level) {
+      const modeLabel = level === 'detailed' ? 'Enhanced (Multi-Agent)' : level === 'brief' ? 'Brief' : 'Standard';
+      console.log(`[Ralph Wizard] Plan mode changed to ${modeLabel}, regenerating...`);
+
+      // Clear current plan and regenerate
+      this.ralphWizardConfig.generatedPlan = null;
+      this.ralphWizardConfig.planGenerated = false;
+      this.ralphWizardConfig.planMetadata = null;
+
+      // Trigger regeneration with visual feedback
+      this.generatePlan();
+    }
   }
 
   updateDetailLevelButtons() {
     const level = this.ralphWizardConfig.planDetailLevel;
     document.querySelectorAll('.plan-detail-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.detail === level);
+      const isActive = btn.dataset.detail === level;
+      btn.classList.toggle('active', isActive);
+
+      // Add visual indicator for enhanced mode
+      if (btn.dataset.detail === 'detailed') {
+        btn.title = 'Enhanced: Uses 4 parallel subagents + verification (slower but more thorough)';
+      } else if (btn.dataset.detail === 'standard') {
+        btn.title = 'Standard: Single-pass generation with Opus 4.5';
+      } else {
+        btn.title = 'Brief: High-level milestones only';
+      }
     });
   }
 
@@ -3015,11 +3133,48 @@ class ClaudemanApp {
     list.innerHTML = '';
     const items = this.ralphWizardConfig.generatedPlan || [];
     const cost = this.ralphWizardConfig.planCost || 0;
+    const metadata = this.ralphWizardConfig.planMetadata;
 
-    // Update header with item count and cost
+    // Update header with item count, cost, and quality score if available
     const statsEl = document.getElementById('planStats');
     if (statsEl) {
-      statsEl.textContent = `${items.length} steps · $${cost.toFixed(3)}`;
+      let statsText = `${items.length} steps · $${cost.toFixed(3)}`;
+
+      // Show quality score and source info for detailed mode
+      if (metadata) {
+        const quality = Math.round(metadata.qualityScore * 100);
+        const qualityClass = quality >= 80 ? 'quality-high' : quality >= 60 ? 'quality-medium' : 'quality-low';
+        statsText = `<span class="${qualityClass}">${quality}% quality</span> · ${items.length} steps · $${cost.toFixed(3)}`;
+
+        // Add subagent breakdown if available
+        if (metadata.synthesisStats?.sourceBreakdown) {
+          const sources = metadata.synthesisStats.sourceBreakdown;
+          const sourceList = Object.entries(sources)
+            .map(([src, count]) => `${src}: ${count}`)
+            .join(', ');
+          statsText += ` · Sources: ${sourceList}`;
+        }
+      }
+
+      statsEl.innerHTML = statsText;
+    }
+
+    // Show warnings/gaps if present from verification
+    const warningsEl = document.getElementById('planWarnings');
+    if (warningsEl) {
+      if (metadata?.verificationWarnings?.length > 0 || metadata?.verificationGaps?.length > 0) {
+        let warningsHtml = '';
+        if (metadata.verificationGaps?.length > 0) {
+          warningsHtml += `<div class="plan-gaps"><strong>Gaps identified:</strong> ${metadata.verificationGaps.join('; ')}</div>`;
+        }
+        if (metadata.verificationWarnings?.length > 0) {
+          warningsHtml += `<div class="plan-warnings"><strong>Warnings:</strong> ${metadata.verificationWarnings.join('; ')}</div>`;
+        }
+        warningsEl.innerHTML = warningsHtml;
+        warningsEl.classList.remove('hidden');
+      } else {
+        warningsEl.classList.add('hidden');
+      }
     }
 
     items.forEach((item, index) => {
