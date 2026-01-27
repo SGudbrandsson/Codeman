@@ -1073,6 +1073,9 @@ class ClaudemanApp {
       if (session.id === this.activeSessionId && session.tokens) {
         this.updateRespawnTokens(session.tokens);
       }
+      // Update parentSessionName for any subagents belonging to this session
+      // (fixes stale name display after session rename)
+      this.updateSubagentParentNames(session.id);
     });
 
     this.eventSource.addEventListener('session:deleted', (e) => {
@@ -2441,6 +2444,10 @@ class ClaudemanApp {
     maxIterations: 10,
     caseName: 'testcase',
     enableRespawn: true,
+    // Plan generation fields
+    generatedPlan: null,      // [{content, priority, enabled, id}] or null
+    planGenerated: false,
+    skipPlanGeneration: false,
   };
 
   showRalphWizard() {
@@ -2452,6 +2459,10 @@ class ClaudemanApp {
       maxIterations: 10,
       caseName: document.getElementById('quickStartCase')?.value || 'testcase',
       enableRespawn: true,
+      // Plan generation fields
+      generatedPlan: null,
+      planGenerated: false,
+      skipPlanGeneration: false,
     };
 
     // Reset UI
@@ -2461,6 +2472,9 @@ class ClaudemanApp {
 
     // Populate case selector
     this.populateRalphCaseSelector();
+
+    // Reset plan generation UI
+    this.resetPlanGenerationUI();
 
     // Show wizard modal
     this.updateRalphWizardUI();
@@ -2510,17 +2524,30 @@ class ClaudemanApp {
       this.ralphWizardConfig.completionPhrase = completionPhrase.toUpperCase();
       this.ralphWizardConfig.caseName = caseName;
 
+      // Move to step 2 (plan generation)
+      this.ralphWizardStep = 2;
+      this.updateRalphWizardUI();
+    } else if (this.ralphWizardStep === 2) {
+      // Must have generated or skipped plan
+      if (!this.ralphWizardConfig.planGenerated && !this.ralphWizardConfig.skipPlanGeneration) {
+        this.showToast('Generate a plan or skip', 'warning');
+        return;
+      }
+
       // Generate preview
       this.updateRalphPromptPreview();
 
-      // Move to step 2
-      this.ralphWizardStep = 2;
+      // Move to step 3 (launch)
+      this.ralphWizardStep = 3;
       this.updateRalphWizardUI();
     }
   }
 
   ralphWizardBack() {
-    if (this.ralphWizardStep === 2) {
+    if (this.ralphWizardStep === 3) {
+      this.ralphWizardStep = 2;
+      this.updateRalphWizardUI();
+    } else if (this.ralphWizardStep === 2) {
       this.ralphWizardStep = 1;
       this.updateRalphWizardUI();
     }
@@ -2536,14 +2563,15 @@ class ClaudemanApp {
       el.classList.toggle('completed', stepNum < step);
     });
 
-    // Show/hide pages
+    // Show/hide pages (now 3 pages)
     document.getElementById('ralphWizardStep1').classList.toggle('hidden', step !== 1);
     document.getElementById('ralphWizardStep2').classList.toggle('hidden', step !== 2);
+    document.getElementById('ralphWizardStep3').classList.toggle('hidden', step !== 3);
 
     // Show/hide buttons
     document.getElementById('ralphBackBtn').style.display = step === 1 ? 'none' : 'block';
-    document.getElementById('ralphNextBtn').style.display = step === 2 ? 'none' : 'block';
-    document.getElementById('ralphStartBtn').style.display = step === 2 ? 'block' : 'none';
+    document.getElementById('ralphNextBtn').style.display = step === 3 ? 'none' : 'block';
+    document.getElementById('ralphStartBtn').style.display = step === 3 ? 'block' : 'none';
   }
 
   updateRalphPromptPreview() {
@@ -6184,40 +6212,99 @@ class ClaudemanApp {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Helper to check a session and set parent if found
-    const checkSession = async (sessionId, session) => {
+    // Strategy 1: Check if another subagent with the same Claude sessionId already has a parent
+    // This ensures subagents from the same Claude session go to the same Claudeman session
+    if (agent.sessionId) {
+      for (const [otherAgentId, otherAgent] of this.subagents) {
+        if (otherAgentId !== agentId &&
+            otherAgent.sessionId === agent.sessionId &&
+            otherAgent.parentSessionId &&
+            this.sessions.has(otherAgent.parentSessionId)) {
+          // Found a sibling subagent with an assigned parent
+          agent.parentSessionId = otherAgent.parentSessionId;
+          agent.parentSessionName = otherAgent.parentSessionName;
+          this.subagents.set(agentId, agent);
+          this.updateSubagentWindowParent(agentId);
+          this.updateSubagentWindowVisibility();
+          return;
+        }
+      }
+    }
+
+    // Strategy 2: Find all sessions that match by workingDir
+    const matchingSessions = [];
+    for (const [sessionId, session] of this.sessions) {
       try {
         const resp = await fetch(`/api/sessions/${sessionId}/subagents`);
-        if (!resp.ok) return false;
+        if (!resp.ok) continue;
         const result = await resp.json();
         const subagents = result.data || result.subagents || [];
         if (subagents.some(s => s.agentId === agentId)) {
-          agent.parentSessionId = sessionId;
-          agent.parentSessionName = this.getSessionName(session);
-          this.subagents.set(agentId, agent);
-          // Update window if already open
-          this.updateSubagentWindowParent(agentId);
-          // Update visibility based on whether this is the active session
-          this.updateSubagentWindowVisibility();
-          return true;
+          matchingSessions.push({ sessionId, session });
         }
       } catch (err) {
         // Ignore errors
       }
-      return false;
-    };
-
-    // First, check the active session (most likely parent for new agents)
-    if (this.activeSessionId && this.sessions.has(this.activeSessionId)) {
-      const found = await checkSession(this.activeSessionId, this.sessions.get(this.activeSessionId));
-      if (found) return;
     }
 
-    // Then check other sessions
-    for (const [sessionId, session] of this.sessions) {
-      if (sessionId === this.activeSessionId) continue; // Already checked
-      const found = await checkSession(sessionId, session);
-      if (found) return;
+    if (matchingSessions.length === 0) {
+      // No matching session found
+      return;
+    }
+
+    // If only one session matches, use it
+    let chosen = matchingSessions[0];
+
+    if (matchingSessions.length > 1) {
+      // Multiple sessions with same workingDir - use heuristics to pick the right one
+      // Prefer the most recently created session (newest session likely spawned the subagent)
+      matchingSessions.sort((a, b) => {
+        const aTime = new Date(a.session.createdAt || 0).getTime();
+        const bTime = new Date(b.session.createdAt || 0).getTime();
+        return bTime - aTime; // Newest first
+      });
+      chosen = matchingSessions[0];
+    }
+
+    // Assign the parent
+    agent.parentSessionId = chosen.sessionId;
+    agent.parentSessionName = this.getSessionName(chosen.session);
+    this.subagents.set(agentId, agent);
+    this.updateSubagentWindowParent(agentId);
+    this.updateSubagentWindowVisibility();
+  }
+
+  /**
+   * Update parentSessionName for all subagents belonging to a session.
+   * Called when a session is updated (e.g., renamed) to keep cached names fresh.
+   */
+  updateSubagentParentNames(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const newName = this.getSessionName(session);
+    let updated = false;
+
+    for (const [agentId, agent] of this.subagents) {
+      if (agent.parentSessionId === sessionId && agent.parentSessionName !== newName) {
+        agent.parentSessionName = newName;
+        this.subagents.set(agentId, agent);
+        updated = true;
+
+        // Update the window header if open
+        const windowData = this.subagentWindows.get(agentId);
+        if (windowData) {
+          const parentNameEl = windowData.element.querySelector('.subagent-window-parent .parent-name');
+          if (parentNameEl) {
+            parentNameEl.textContent = newName;
+          }
+        }
+      }
+    }
+
+    // Update connection lines if any names changed (visual refresh)
+    if (updated) {
+      this.updateConnectionLines();
     }
   }
 

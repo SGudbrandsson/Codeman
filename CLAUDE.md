@@ -323,6 +323,47 @@ Monitors Claude Code's internal background agents (the `Task` tool) in real-time
 
 Implementation: `src/subagent-watcher.ts` - singleton `subagentWatcher` started on server boot (if enabled).
 
+### Subagent Window Management (Frontend)
+
+Floating subagent windows in the web UI show real-time activity from Claude Code's background agents. Each window displays tool calls, progress, and messages, with visual connection lines to the parent session tab.
+
+**Parent Session Discovery** (`app.js:findParentSessionForSubagent()`):
+1. When a subagent is discovered via SSE event, the frontend must determine which Claudeman session spawned it
+2. Matching uses `workingDir` → `projectHash` conversion: `/home/user/project` becomes `-home-user-project`
+3. For each session, calls `/api/sessions/{id}/subagents` which returns subagents matching that session's `workingDir`
+4. First match wins: checks active session first, then iterates through other sessions
+5. Once found, caches `parentSessionId` and `parentSessionName` in the agent object
+
+**Window Visibility** (`app.js:updateSubagentWindowVisibility()`):
+- "Show for Active Tab Only" setting controls whether windows are hidden when their parent session isn't active
+- Windows with unknown parents (discovery pending) are always shown
+- Minimized windows stay minimized regardless of visibility setting
+
+**Tab Badge System**:
+- Minimized subagents appear as a badge on their parent session's tab
+- Badge dropdown allows restoring or permanently dismissing each agent
+- `minimizedSubagents` Map tracks agentIds per sessionId
+
+**Parent Matching Algorithm** (to handle multiple sessions with same workingDir):
+
+1. **Strategy 1 - Sibling matching**: If another subagent with the same Claude `sessionId` already has a parent, use that same parent. This ensures all subagents from the same Claude session go to the same Claudeman session.
+
+2. **Strategy 2 - WorkingDir matching with heuristics**: Find all sessions matching by `workingDir`. If multiple match, prefer the most recently created session (newest session likely spawned the subagent).
+
+**Session Rename Handling**: When a session is renamed, `updateSubagentParentNames()` updates all subagent objects and their window headers via the `session:updated` SSE handler.
+
+**Key Frontend Data Structures** (`app.js`):
+```javascript
+this.subagents = new Map();          // agentId → SubagentInfo (includes parentSessionId, parentSessionName)
+this.subagentWindows = new Map();    // agentId → { element, minimized, hidden, position }
+this.minimizedSubagents = new Map(); // sessionId → Set<agentId> (for tab badges)
+```
+
+**Implementation Files**:
+- Server: `src/subagent-watcher.ts` (discovery, monitoring, events)
+- Server: `src/web/server.ts` (SSE broadcast, REST endpoints)
+- Frontend: `src/web/public/app.js:6183-6550` (window management, parent discovery, visibility)
+
 ### Session Modes
 
 Sessions have a `mode` property (`SessionMode` type):
