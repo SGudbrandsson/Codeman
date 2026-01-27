@@ -496,6 +496,9 @@ class ClaudemanApp {
     // SSE reconnect timeout (to prevent orphaned timeouts)
     this.sseReconnectTimeout = null;
 
+    // SSE event listener cleanup function (to prevent listener accumulation on reconnect)
+    this._sseListenerCleanup = null;
+
     // Notification system
     this.notificationManager = new NotificationManager(this);
     this.idleTimers = new Map(); // Map<sessionId, timeout> for stuck detection
@@ -1038,6 +1041,12 @@ class ClaudemanApp {
       this.sseReconnectTimeout = null;
     }
 
+    // Clean up existing SSE listeners before creating new connection (prevents listener accumulation)
+    if (this._sseListenerCleanup) {
+      this._sseListenerCleanup();
+      this._sseListenerCleanup = null;
+    }
+
     // Close existing EventSource before creating new one to prevent duplicate connections
     if (this.eventSource) {
       this.eventSource.close();
@@ -1045,6 +1054,23 @@ class ClaudemanApp {
     }
 
     this.eventSource = new EventSource('/api/events');
+
+    // Store all event listeners for cleanup on reconnect
+    const listeners = [];
+    const addListener = (event, handler) => {
+      this.eventSource.addEventListener(event, handler);
+      listeners.push({ event, handler });
+    };
+
+    // Create cleanup function to remove all listeners
+    this._sseListenerCleanup = () => {
+      for (const { event, handler } of listeners) {
+        if (this.eventSource) {
+          this.eventSource.removeEventListener(event, handler);
+        }
+      }
+      listeners.length = 0;
+    };
 
     this.eventSource.onopen = () => this.setConnectionStatus('connected');
     this.eventSource.onerror = () => {
@@ -1061,7 +1087,7 @@ class ClaudemanApp {
       this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), 3000);
     };
 
-    this.eventSource.addEventListener('init', (e) => {
+    addListener('init', (e) => {
       try {
         this.handleInit(JSON.parse(e.data));
       } catch (err) {
@@ -1069,14 +1095,14 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:created', (e) => {
+    addListener('session:created', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.set(data.id, data);
       this.renderSessionTabs();
       this.updateCost();
     });
 
-    this.eventSource.addEventListener('session:updated', (e) => {
+    addListener('session:updated', (e) => {
       const data = JSON.parse(e.data);
       const session = data.session || data;
       this.sessions.set(session.id, session);
@@ -1091,7 +1117,7 @@ class ClaudemanApp {
       this.updateSubagentParentNames(session.id);
     });
 
-    this.eventSource.addEventListener('session:deleted', (e) => {
+    addListener('session:deleted', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
@@ -1120,14 +1146,14 @@ class ClaudemanApp {
       this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
     });
 
-    this.eventSource.addEventListener('session:terminal', (e) => {
+    addListener('session:terminal', (e) => {
       const data = JSON.parse(e.data);
       if (data.id === this.activeSessionId) {
         this.batchTerminalWrite(data.data);
       }
     });
 
-    this.eventSource.addEventListener('session:clearTerminal', async (e) => {
+    addListener('session:clearTerminal', async (e) => {
       const data = JSON.parse(e.data);
       if (data.id === this.activeSessionId) {
         // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
@@ -1162,7 +1188,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:completion', (e) => {
+    addListener('session:completion', (e) => {
       const data = JSON.parse(e.data);
       this.totalCost += data.cost || 0;
       this.updateCost();
@@ -1172,7 +1198,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:error', (e) => {
+    addListener('session:error', (e) => {
       const data = JSON.parse(e.data);
       if (data.id === this.activeSessionId) {
         this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
@@ -1188,7 +1214,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('session:exit', (e) => {
+    addListener('session:exit', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.id);
       if (session) {
@@ -1208,7 +1234,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:idle', (e) => {
+    addListener('session:idle', (e) => {
       const data = JSON.parse(e.data);
       console.log('[DEBUG] session:idle event for:', data.id);
       const session = this.sessions.get(data.id);
@@ -1236,7 +1262,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:working', (e) => {
+    addListener('session:working', (e) => {
       const data = JSON.parse(e.data);
       console.log('[DEBUG] session:working event for:', data.id);
       const session = this.sessions.get(data.id);
@@ -1258,29 +1284,29 @@ class ClaudemanApp {
     });
 
     // Scheduled run events
-    this.eventSource.addEventListener('scheduled:created', (e) => {
+    addListener('scheduled:created', (e) => {
       this.currentRun = JSON.parse(e.data);
       this.showTimer();
     });
 
-    this.eventSource.addEventListener('scheduled:updated', (e) => {
+    addListener('scheduled:updated', (e) => {
       this.currentRun = JSON.parse(e.data);
       this.updateTimer();
     });
 
-    this.eventSource.addEventListener('scheduled:completed', (e) => {
+    addListener('scheduled:completed', (e) => {
       this.currentRun = JSON.parse(e.data);
       this.hideTimer();
       this.showToast('Scheduled run completed!', 'success');
     });
 
-    this.eventSource.addEventListener('scheduled:stopped', (e) => {
+    addListener('scheduled:stopped', (e) => {
       this.currentRun = null;
       this.hideTimer();
     });
 
     // Respawn events
-    this.eventSource.addEventListener('respawn:started', (e) => {
+    addListener('respawn:started', (e) => {
       const data = JSON.parse(e.data);
       this.respawnStatus[data.sessionId] = data.status;
       if (data.sessionId === this.activeSessionId) {
@@ -1288,7 +1314,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:stopped', (e) => {
+    addListener('respawn:stopped', (e) => {
       const data = JSON.parse(e.data);
       delete this.respawnStatus[data.sessionId];
       if (data.sessionId === this.activeSessionId) {
@@ -1296,7 +1322,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:stateChanged', (e) => {
+    addListener('respawn:stateChanged', (e) => {
       const data = JSON.parse(e.data);
       if (this.respawnStatus[data.sessionId]) {
         this.respawnStatus[data.sessionId].state = data.state;
@@ -1306,7 +1332,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:cycleStarted', (e) => {
+    addListener('respawn:cycleStarted', (e) => {
       const data = JSON.parse(e.data);
       if (this.respawnStatus[data.sessionId]) {
         this.respawnStatus[data.sessionId].cycleCount = data.cycleNumber;
@@ -1316,7 +1342,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:blocked', (e) => {
+    addListener('respawn:blocked', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       const reasonMap = {
@@ -1343,11 +1369,11 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:stepSent', (_e) => {
+    addListener('respawn:stepSent', (_e) => {
       // Step info is shown via state label (e.g., "Sending prompt", "Clearing context")
     });
 
-    this.eventSource.addEventListener('respawn:autoAcceptSent', (e) => {
+    addListener('respawn:autoAcceptSent', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       this.notificationManager?.notify({
@@ -1360,7 +1386,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('respawn:detectionUpdate', (e) => {
+    addListener('respawn:detectionUpdate', (e) => {
       const data = JSON.parse(e.data);
       if (this.respawnStatus[data.sessionId]) {
         this.respawnStatus[data.sessionId].detection = data.detection;
@@ -1370,24 +1396,24 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckStarted', (_e) => {
+    addListener('respawn:aiCheckStarted', (_e) => {
       // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckCompleted', (_e) => {
+    addListener('respawn:aiCheckCompleted', (_e) => {
       // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckFailed', (_e) => {
+    addListener('respawn:aiCheckFailed', (_e) => {
       // AI check status shown via updateDetectionDisplay
     });
 
-    this.eventSource.addEventListener('respawn:aiCheckCooldown', (_e) => {
+    addListener('respawn:aiCheckCooldown', (_e) => {
       // AI check status shown via updateDetectionDisplay
     });
 
     // Respawn run timer events (timed respawn runs)
-    this.eventSource.addEventListener('respawn:timerStarted', (e) => {
+    addListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
       this.respawnTimers[data.sessionId] = {
         endAt: data.endAt,
@@ -1400,7 +1426,7 @@ class ClaudemanApp {
     });
 
     // Respawn controller countdown timer events (internal timers)
-    this.eventSource.addEventListener('respawn:timerStarted', (e) => {
+    addListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
       // This may fire for both run timers and controller timers - check for timer object
       if (data.timer) {
@@ -1420,7 +1446,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:timerCancelled', (e) => {
+    addListener('respawn:timerCancelled', (e) => {
       const data = JSON.parse(e.data);
       const { sessionId, timerName } = data;
       if (this.respawnCountdownTimers[sessionId]) {
@@ -1431,7 +1457,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:timerCompleted', (e) => {
+    addListener('respawn:timerCompleted', (e) => {
       const data = JSON.parse(e.data);
       const { sessionId, timerName } = data;
       if (this.respawnCountdownTimers[sessionId]) {
@@ -1442,7 +1468,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('respawn:actionLog', (e) => {
+    addListener('respawn:actionLog', (e) => {
       const data = JSON.parse(e.data);
       const { sessionId, action } = data;
       this.addActionLogEntry(sessionId, action);
@@ -1453,7 +1479,7 @@ class ClaudemanApp {
     });
 
     // Auto-clear event
-    this.eventSource.addEventListener('session:autoClear', (e) => {
+    addListener('session:autoClear', (e) => {
       const data = JSON.parse(e.data);
       if (data.sessionId === this.activeSessionId) {
         this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
@@ -1471,7 +1497,7 @@ class ClaudemanApp {
     });
 
     // Background task events
-    this.eventSource.addEventListener('task:created', (e) => {
+    addListener('task:created', (e) => {
       const data = JSON.parse(e.data);
       this.renderSessionTabs();
       if (data.sessionId === this.activeSessionId) {
@@ -1479,7 +1505,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('task:completed', (e) => {
+    addListener('task:completed', (e) => {
       const data = JSON.parse(e.data);
       this.renderSessionTabs();
       if (data.sessionId === this.activeSessionId) {
@@ -1487,7 +1513,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('task:failed', (e) => {
+    addListener('task:failed', (e) => {
       const data = JSON.parse(e.data);
       this.renderSessionTabs();
       if (data.sessionId === this.activeSessionId) {
@@ -1495,7 +1521,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('task:updated', (e) => {
+    addListener('task:updated', (e) => {
       const data = JSON.parse(e.data);
       if (data.sessionId === this.activeSessionId) {
         this.renderTaskPanel();
@@ -1503,26 +1529,26 @@ class ClaudemanApp {
     });
 
     // Screen events
-    this.eventSource.addEventListener('screen:created', (e) => {
+    addListener('screen:created', (e) => {
       const screen = JSON.parse(e.data);
       this.screenSessions.push(screen);
       this.renderScreenSessions();
     });
 
-    this.eventSource.addEventListener('screen:killed', (e) => {
+    addListener('screen:killed', (e) => {
       const data = JSON.parse(e.data);
       this.screenSessions = this.screenSessions.filter(s => s.sessionId !== data.sessionId);
       this.renderScreenSessions();
     });
 
-    this.eventSource.addEventListener('screen:died', (e) => {
+    addListener('screen:died', (e) => {
       const data = JSON.parse(e.data);
       this.screenSessions = this.screenSessions.filter(s => s.sessionId !== data.sessionId);
       this.renderScreenSessions();
       this.showToast('Screen session died: ' + data.sessionId.slice(0, 8), 'warning');
     });
 
-    this.eventSource.addEventListener('screen:statsUpdated', (e) => {
+    addListener('screen:statsUpdated', (e) => {
       this.screenSessions = JSON.parse(e.data);
       if (document.getElementById('monitorPanel').classList.contains('open')) {
         this.renderScreenSessions();
@@ -1530,17 +1556,17 @@ class ClaudemanApp {
     });
 
     // Ralph loop/todo events
-    this.eventSource.addEventListener('session:ralphLoopUpdate', (e) => {
+    addListener('session:ralphLoopUpdate', (e) => {
       const data = JSON.parse(e.data);
       this.updateRalphState(data.sessionId, { loop: data.state });
     });
 
-    this.eventSource.addEventListener('session:ralphTodoUpdate', (e) => {
+    addListener('session:ralphTodoUpdate', (e) => {
       const data = JSON.parse(e.data);
       this.updateRalphState(data.sessionId, { todos: data.todos });
     });
 
-    this.eventSource.addEventListener('session:ralphCompletionDetected', (e) => {
+    addListener('session:ralphCompletionDetected', (e) => {
       const data = JSON.parse(e.data);
       // Prevent duplicate notifications for the same completion
       const completionKey = `${data.sessionId}:${data.phrase}`;
@@ -1573,12 +1599,12 @@ class ClaudemanApp {
     });
 
     // RALPH_STATUS block and circuit breaker events
-    this.eventSource.addEventListener('session:ralphStatusUpdate', (e) => {
+    addListener('session:ralphStatusUpdate', (e) => {
       const data = JSON.parse(e.data);
       this.updateRalphState(data.sessionId, { statusBlock: data.block });
     });
 
-    this.eventSource.addEventListener('session:circuitBreakerUpdate', (e) => {
+    addListener('session:circuitBreakerUpdate', (e) => {
       const data = JSON.parse(e.data);
       this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
       // Notify if circuit breaker opens
@@ -1595,7 +1621,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:exitGateMet', (e) => {
+    addListener('session:exitGateMet', (e) => {
       const data = JSON.parse(e.data);
       // Notify when exit gate is met
       const session = this.sessions.get(data.sessionId);
@@ -1610,23 +1636,23 @@ class ClaudemanApp {
     });
 
     // Active Bash tool events (for clickable file paths)
-    this.eventSource.addEventListener('session:bashToolStart', (e) => {
+    addListener('session:bashToolStart', (e) => {
       const data = JSON.parse(e.data);
       this.handleBashToolStart(data.sessionId, data.tool);
     });
 
-    this.eventSource.addEventListener('session:bashToolEnd', (e) => {
+    addListener('session:bashToolEnd', (e) => {
       const data = JSON.parse(e.data);
       this.handleBashToolEnd(data.sessionId, data.tool);
     });
 
-    this.eventSource.addEventListener('session:bashToolsUpdate', (e) => {
+    addListener('session:bashToolsUpdate', (e) => {
       const data = JSON.parse(e.data);
       this.handleBashToolsUpdate(data.sessionId, data.tools);
     });
 
     // Spawn agent notification events
-    this.eventSource.addEventListener('spawn:failed', (e) => {
+    addListener('spawn:failed', (e) => {
       const data = JSON.parse(e.data);
       this.notificationManager?.notify({
         urgency: 'critical',
@@ -1638,7 +1664,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('spawn:timeout', (e) => {
+    addListener('spawn:timeout', (e) => {
       const data = JSON.parse(e.data);
       this.notificationManager?.notify({
         urgency: 'critical',
@@ -1650,7 +1676,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('spawn:budgetWarning', (e) => {
+    addListener('spawn:budgetWarning', (e) => {
       const data = JSON.parse(e.data);
       this.notificationManager?.notify({
         urgency: 'warning',
@@ -1662,7 +1688,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('spawn:completed', (e) => {
+    addListener('spawn:completed', (e) => {
       const data = JSON.parse(e.data);
       this.notificationManager?.notify({
         urgency: 'info',
@@ -1677,7 +1703,7 @@ class ClaudemanApp {
     // Hook events (from Claude Code hooks system)
     // Use pendingHooks state machine to track hook events and derive tab alerts.
     // This ensures alerts persist even when session:working events fire.
-    this.eventSource.addEventListener('hook:idle_prompt', (e) => {
+    addListener('hook:idle_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       // Always track pending hook - alert will show when switching away from session
@@ -1694,7 +1720,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('hook:permission_prompt', (e) => {
+    addListener('hook:permission_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       // Always track pending hook - action alerts need user interaction to clear
@@ -1712,7 +1738,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('hook:elicitation_dialog', (e) => {
+    addListener('hook:elicitation_dialog', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       // Always track pending hook - action alerts need user interaction to clear
@@ -1729,7 +1755,7 @@ class ClaudemanApp {
       });
     });
 
-    this.eventSource.addEventListener('hook:stop', (e) => {
+    addListener('hook:stop', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
       // Clear all pending hooks when Claude finishes responding
@@ -1748,7 +1774,7 @@ class ClaudemanApp {
 
     // ========== Subagent Events (Claude Code Background Agents) ==========
 
-    this.eventSource.addEventListener('subagent:discovered', async (e) => {
+    addListener('subagent:discovered', async (e) => {
       const data = JSON.parse(e.data);
       this.subagents.set(data.agentId, data);
       this.subagentActivity.set(data.agentId, []);
@@ -1763,7 +1789,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:updated', (e) => {
+    addListener('subagent:updated', (e) => {
       const data = JSON.parse(e.data);
       const existing = this.subagents.get(data.agentId);
       if (existing) {
@@ -1781,7 +1807,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:tool_call', (e) => {
+    addListener('subagent:tool_call', (e) => {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'tool', ...data });
@@ -1797,7 +1823,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:progress', (e) => {
+    addListener('subagent:progress', (e) => {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'progress', ...data });
@@ -1812,7 +1838,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:message', (e) => {
+    addListener('subagent:message', (e) => {
       const data = JSON.parse(e.data);
       const activity = this.subagentActivity.get(data.agentId) || [];
       activity.push({ type: 'message', ...data });
@@ -1827,7 +1853,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:tool_result', (e) => {
+    addListener('subagent:tool_result', (e) => {
       const data = JSON.parse(e.data);
       // Store tool result by toolUseId for later lookup
       if (!this.subagentToolResults.has(data.agentId)) {
@@ -1850,7 +1876,7 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('subagent:completed', async (e) => {
+    addListener('subagent:completed', async (e) => {
       const data = JSON.parse(e.data);
       const existing = this.subagents.get(data.agentId);
       if (existing) {
@@ -1882,7 +1908,7 @@ class ClaudemanApp {
     });
 
     // Plan generation progress events (for detailed mode with subagents)
-    this.eventSource.addEventListener('plan:progress', (e) => {
+    addListener('plan:progress', (e) => {
       const data = JSON.parse(e.data);
       console.log('[Plan Progress]', data);
 
@@ -1944,6 +1970,24 @@ class ClaudemanApp {
     if (this._shownCompletions) {
       this._shownCompletions.clear();
     }
+    // Clear notification manager title flash interval to prevent memory leak
+    if (this.notificationManager?.titleFlashInterval) {
+      clearInterval(this.notificationManager.titleFlashInterval);
+      this.notificationManager.titleFlashInterval = null;
+    }
+    // Clear any other orphaned timers
+    if (this.planLoadingTimer) {
+      clearInterval(this.planLoadingTimer);
+      this.planLoadingTimer = null;
+    }
+    if (this.timerCountdownInterval) {
+      clearInterval(this.timerCountdownInterval);
+      this.timerCountdownInterval = null;
+    }
+    if (this.runSummaryAutoRefreshTimer) {
+      clearInterval(this.runSummaryAutoRefreshTimer);
+      this.runSummaryAutoRefreshTimer = null;
+    }
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
       // Load ralph state from session data
@@ -1982,6 +2026,10 @@ class ClaudemanApp {
 
     this.updateCost();
     this.renderSessionTabs();
+
+    // CRITICAL: Clean up all floating windows before loading new subagents
+    // This prevents memory leaks from ResizeObservers, EventSources, and DOM elements
+    this.cleanupAllFloatingWindows();
 
     // Load subagents - clear all related maps to prevent memory leaks on reconnect
     if (data.subagents) {
@@ -3112,7 +3160,6 @@ class ClaudemanApp {
 
   showPlanError(message) {
     document.getElementById('planGenerationLoading')?.classList.add('hidden');
-    document.getElementById('planGenerationControls')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.add('hidden');
 
     const errorEl = document.getElementById('planGenerationError');
@@ -3121,9 +3168,11 @@ class ClaudemanApp {
     errorEl?.classList.remove('hidden');
   }
 
+  // Plan view mode: 'list' (flat) or 'grouped' (by TDD phase)
+  planViewMode = 'list';
+
   renderPlanEditor() {
     document.getElementById('planGenerationLoading')?.classList.add('hidden');
-    document.getElementById('planGenerationControls')?.classList.add('hidden');
     document.getElementById('planGenerationError')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.remove('hidden');
 
@@ -3177,20 +3226,137 @@ class ClaudemanApp {
       }
     }
 
-    items.forEach((item, index) => {
-      const row = this.renderPlanItem(item, index);
-      list.appendChild(row);
+    // Render based on view mode - use DocumentFragment for batch DOM updates
+    if (this.planViewMode === 'grouped' && items.some(i => i.tddPhase)) {
+      this.renderPlanItemsGrouped(list, items);
+    } else {
+      // Flat list view with DocumentFragment for performance
+      const fragment = document.createDocumentFragment();
+      items.forEach((item, index) => {
+        const row = this.renderPlanItem(item, index);
+        fragment.appendChild(row);
+      });
+      list.appendChild(fragment);
+    }
+  }
+
+  // Render plan items grouped by TDD phase - uses DocumentFragment for batch DOM updates
+  renderPlanItemsGrouped(container, items) {
+    const phases = ['setup', 'test', 'impl', 'review', 'verify', null];
+    const phaseLabels = {
+      setup: { label: 'Setup', icon: '🔧' },
+      test: { label: 'Tests', icon: '🧪' },
+      impl: { label: 'Implementation', icon: '💻' },
+      review: { label: 'Code Review', icon: '🔍' },
+      verify: { label: 'Verification', icon: '✅' },
+      null: { label: 'Other', icon: '📋' },
+    };
+
+    // First, create indexed items to preserve original positions (non-mutating)
+    const indexedItems = items.map((item, idx) => ({ ...item, _originalIndex: idx }));
+
+    // Build all DOM elements in a DocumentFragment first (no reflows)
+    const fragment = document.createDocumentFragment();
+
+    phases.forEach(phase => {
+      // Filter using indexed items
+      const phaseItems = indexedItems.filter(item => (item.tddPhase || null) === phase);
+
+      if (phaseItems.length === 0) return;
+
+      const phaseKey = phase || 'null';
+      const { label, icon } = phaseLabels[phaseKey];
+
+      // Create group header
+      const header = document.createElement('div');
+      header.className = 'plan-group-header';
+      header.dataset.phase = phaseKey;
+      header.innerHTML = `
+        <span class="group-icon">${icon}</span>
+        <span class="group-label">${label}</span>
+        <span class="group-count">${phaseItems.length}</span>
+        <span class="group-chevron">&#x25BC;</span>
+      `;
+      header.onclick = () => this.togglePlanGroup(phaseKey);
+      fragment.appendChild(header);
+
+      // Create group items container
+      const groupItems = document.createElement('div');
+      groupItems.className = 'plan-group-items';
+      groupItems.dataset.phase = phaseKey;
+
+      phaseItems.forEach(item => {
+        const row = this.renderPlanItem(item, item._originalIndex);
+        groupItems.appendChild(row);
+      });
+
+      fragment.appendChild(groupItems);
     });
+
+    // Single DOM operation - append all at once
+    container.appendChild(fragment);
+  }
+
+  togglePlanGroup(phase) {
+    const header = document.querySelector(`.plan-group-header[data-phase="${phase}"]`);
+    const items = document.querySelector(`.plan-group-items[data-phase="${phase}"]`);
+
+    if (header && items) {
+      header.classList.toggle('collapsed');
+      items.classList.toggle('collapsed');
+    }
+  }
+
+  setPlanViewMode(mode) {
+    this.planViewMode = mode;
+
+    // Update view toggle buttons
+    document.querySelectorAll('.plan-view-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === mode);
+    });
+
+    this.renderPlanEditor();
   }
 
   renderPlanItem(item, index) {
     const row = document.createElement('div');
-    row.className = 'plan-item';
+
+    // Build class with priority indicator
+    let className = 'plan-item';
+    if (item.priority) {
+      className += ` priority-${item.priority.toLowerCase()}`;
+    }
+    row.className = className;
     row.dataset.index = index;
+    row.draggable = true;
+
+    // Add TDD phase badge with enhanced styling
+    const phaseIcon = this.getTddPhaseIcon(item.tddPhase);
+    const phaseClass = item.tddPhase ? `phase-${item.tddPhase}` : '';
+    const phaseTitle = item.tddPhase ? `TDD Phase: ${item.tddPhase}` : '';
+
+    // Build verification tooltip
+    const verificationTitle = item.verificationCriteria
+      ? `Verification: ${item.verificationCriteria}`
+      : '';
+
+    // Dependencies indicator
+    const depsCount = item.dependencies?.length || 0;
+    const depsTitle = depsCount > 0
+      ? `Depends on: ${item.dependencies.join(', ')}`
+      : '';
+
+    // Review checklist indicator for review phase tasks
+    const checklistCount = item.reviewChecklist?.length || 0;
+    const checklistTitle = checklistCount > 0
+      ? `Review Checklist:\n• ${item.reviewChecklist.join('\n• ')}`
+      : '';
 
     row.innerHTML = `
+      <span class="plan-item-drag" title="Drag to reorder">&#x2630;</span>
       <input type="checkbox" class="plan-item-checkbox" ${item.enabled ? 'checked' : ''}
         onchange="app.togglePlanItem(${index})">
+      ${phaseIcon ? `<span class="plan-item-phase ${phaseClass}" title="${phaseTitle}">${phaseIcon}</span>` : ''}
       <input type="text" class="plan-item-content" value="${this.escapeHtml(item.content)}"
         onchange="app.updatePlanItemContent(${index}, this.value)"
         placeholder="Implementation step...">
@@ -3200,10 +3366,146 @@ class ClaudemanApp {
         <option value="P1" ${item.priority === 'P1' ? 'selected' : ''}>P1</option>
         <option value="P2" ${item.priority === 'P2' ? 'selected' : ''}>P2</option>
       </select>
+      ${depsCount > 0 ? `<span class="plan-item-deps" title="${this.escapeHtml(depsTitle)}">&#x2197; ${depsCount}</span>` : ''}
+      ${item.verificationCriteria ? `<span class="plan-item-verify" title="${this.escapeHtml(verificationTitle)}">&#x2713; verify</span>` : ''}
+      ${checklistCount > 0 ? `<span class="plan-item-checklist" title="${this.escapeHtml(checklistTitle)}">&#x2611; ${checklistCount}</span>` : ''}
+      <div class="plan-item-actions">
+        <button class="plan-item-action" onclick="app.editPlanItemVerification(${index})" title="Edit verification">&#x270E;</button>
+        ${checklistCount > 0 ? `<button class="plan-item-action" onclick="app.showReviewChecklist(${index})" title="View checklist">&#x2630;</button>` : ''}
+        <button class="plan-item-action" onclick="app.duplicatePlanItem(${index})" title="Duplicate">&#x2398;</button>
+      </div>
       <button class="plan-item-remove" onclick="app.removePlanItem(${index})" title="Remove">&times;</button>
     `;
 
+    // Add drag-and-drop event handlers
+    row.addEventListener('dragstart', (e) => this.handlePlanItemDragStart(e, index));
+    row.addEventListener('dragend', (e) => this.handlePlanItemDragEnd(e));
+    row.addEventListener('dragover', (e) => this.handlePlanItemDragOver(e));
+    row.addEventListener('drop', (e) => this.handlePlanItemDrop(e, index));
+
     return row;
+  }
+
+  // Drag and drop handlers for plan items
+  handlePlanItemDragStart(e, index) {
+    this._draggedPlanIndex = index;
+    e.target.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index);
+  }
+
+  handlePlanItemDragEnd(e) {
+    e.target.classList.remove('dragging');
+    // Remove drag-over class from all items
+    document.querySelectorAll('.plan-item.drag-over').forEach(el => {
+      el.classList.remove('drag-over');
+    });
+    this._draggedPlanIndex = null;
+  }
+
+  handlePlanItemDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const item = e.target.closest('.plan-item');
+    if (item && !item.classList.contains('dragging')) {
+      // Remove drag-over from other items
+      document.querySelectorAll('.plan-item.drag-over').forEach(el => {
+        if (el !== item) el.classList.remove('drag-over');
+      });
+      item.classList.add('drag-over');
+    }
+  }
+
+  handlePlanItemDrop(e, targetIndex) {
+    e.preventDefault();
+    const sourceIndex = this._draggedPlanIndex;
+
+    if (sourceIndex !== null && sourceIndex !== targetIndex) {
+      const plan = this.ralphWizardConfig.generatedPlan;
+      if (plan) {
+        // Move the item
+        const [movedItem] = plan.splice(sourceIndex, 1);
+        plan.splice(targetIndex, 0, movedItem);
+        this.renderPlanEditor();
+      }
+    }
+  }
+
+  // Edit verification criteria inline
+  editPlanItemVerification(index) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (!plan || !plan[index]) return;
+
+    const currentCriteria = plan[index].verificationCriteria || '';
+    const newCriteria = prompt('Verification criteria:', currentCriteria);
+
+    if (newCriteria !== null) {
+      plan[index].verificationCriteria = newCriteria.trim() || undefined;
+      this.renderPlanEditor();
+    }
+  }
+
+  // Duplicate a plan item
+  duplicatePlanItem(index) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (!plan || !plan[index]) return;
+
+    const original = plan[index];
+    const duplicate = {
+      ...original,
+      id: `plan-${Date.now()}-dup`,
+      content: original.content + ' (copy)',
+    };
+    plan.splice(index + 1, 0, duplicate);
+    this.renderPlanEditor();
+  }
+
+  showReviewChecklist(index) {
+    const plan = this.ralphWizardConfig.generatedPlan;
+    if (!plan || !plan[index]) return;
+
+    const item = plan[index];
+    if (!item.reviewChecklist || item.reviewChecklist.length === 0) return;
+
+    // Create modal content
+    const checklistHtml = item.reviewChecklist.map((check, i) => `
+      <li class="checklist-item">
+        <input type="checkbox" id="check-${i}" class="checklist-checkbox">
+        <label for="check-${i}">${this.escapeHtml(check)}</label>
+      </li>
+    `).join('');
+
+    const content = `
+      <div class="checklist-modal">
+        <h3>Review Checklist</h3>
+        <p class="checklist-task">${this.escapeHtml(item.content)}</p>
+        <ul class="checklist-list">
+          ${checklistHtml}
+        </ul>
+        <div class="checklist-footer">
+          <button class="btn-toolbar" onclick="this.closest('.modal').remove()">Close</button>
+        </div>
+      </div>
+    `;
+
+    // Show in a modal
+    const modal = document.createElement('div');
+    modal.className = 'modal checklist-modal-container';
+    modal.innerHTML = `<div class="modal-content modal-sm">${content}</div>`;
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    document.body.appendChild(modal);
+  }
+
+  getTddPhaseIcon(phase) {
+    switch (phase) {
+      case 'setup': return '🔧';
+      case 'test': return '🧪';
+      case 'impl': return '💻';
+      case 'verify': return '✅';
+      case 'review': return '🔍';
+      default: return '';
+    }
   }
 
   escapeHtml(text) {
@@ -3259,6 +3561,17 @@ class ClaudemanApp {
       const lastInput = list?.querySelector('.plan-item:last-child .plan-item-content');
       lastInput?.focus();
     }, 50);
+  }
+
+  cancelPlanGeneration() {
+    this.stopPlanGeneration();
+    this.showToast('Plan generation cancelled', 'info');
+
+    const errorEl = document.getElementById('planGenerationError');
+    const msgEl = document.getElementById('planErrorMsg');
+    if (msgEl) msgEl.textContent = 'Plan generation was cancelled.';
+    errorEl?.classList.remove('hidden');
+    document.getElementById('planGenerationLoading')?.classList.add('hidden');
   }
 
   skipPlanGeneration() {
@@ -6609,6 +6922,13 @@ class ClaudemanApp {
       tasksCountEl.textContent = `${completed}/${todos.length}`;
     }
 
+    // Update plan version display if available
+    if (state?.loop?.planVersion) {
+      this.updatePlanVersionDisplay(state.loop.planVersion, state.loop.planHistoryLength || 1);
+    } else {
+      this.updatePlanVersionDisplay(null, 0);
+    }
+
     // Render task cards
     this.renderRalphTasks(todos);
 
@@ -6697,85 +7017,161 @@ class ClaudemanApp {
       return (statusOrder[a.status] || 1) - (statusOrder[b.status] || 1);
     });
 
-    // Incremental DOM update - reuse existing elements where possible
-    const existingCards = grid.querySelectorAll('.ralph-task-card');
+    // Always do full rebuild for enhanced features
     const fragment = document.createDocumentFragment();
-    let needsRebuild = existingCards.length !== sorted.length;
 
-    // Check if we can do incremental update
-    if (!needsRebuild) {
-      // Update existing cards in place
-      sorted.forEach((todo, i) => {
-        const card = existingCards[i];
-        const statusClass = `task-${todo.status.replace('_', '-')}`;
-        const priorityClass = todo.priority ? `task-priority-${todo.priority.toLowerCase()}` : '';
-        const icon = this.getRalphTaskIcon(todo.status);
+    sorted.forEach((todo, idx) => {
+      const card = this.createRalphTaskCard(todo, idx);
+      fragment.appendChild(card);
+    });
 
-        // Update class if changed
-        const newClass = `ralph-task-card ${statusClass} ${priorityClass}`.trim();
-        if (card.className !== newClass) {
-          card.className = newClass;
-        }
+    grid.innerHTML = '';
+    grid.appendChild(fragment);
+  }
 
-        // Update icon if changed
-        const iconEl = card.querySelector('.ralph-task-icon');
-        if (iconEl && iconEl.textContent !== icon) {
-          iconEl.textContent = icon;
-        }
+  createRalphTaskCard(todo, index) {
+    const card = document.createElement('div');
+    const statusClass = `task-${todo.status.replace('_', '-')}`;
+    const priorityClass = todo.priority ? `task-priority-${todo.priority.toLowerCase()}` : '';
+    card.className = `ralph-task-card ${statusClass} ${priorityClass}`.trim();
+    card.dataset.taskId = todo.id || index;
 
-        // Update priority badge
-        let badgeEl = card.querySelector('.ralph-task-priority');
-        if (todo.priority) {
-          if (!badgeEl) {
-            badgeEl = document.createElement('span');
-            badgeEl.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
-            card.insertBefore(badgeEl, card.querySelector('.ralph-task-content'));
-          }
-          if (badgeEl.textContent !== todo.priority) {
-            badgeEl.textContent = todo.priority;
-            badgeEl.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
-          }
-        } else if (badgeEl) {
-          badgeEl.remove();
-        }
+    // Status icon
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'ralph-task-icon';
+    iconSpan.textContent = this.getRalphTaskIcon(todo.status);
+    card.appendChild(iconSpan);
 
-        // Update content if changed
-        const contentEl = card.querySelector('.ralph-task-content');
-        if (contentEl && contentEl.textContent !== todo.content) {
-          contentEl.textContent = todo.content;
-        }
+    // Priority badge if present
+    if (todo.priority) {
+      const prioritySpan = document.createElement('span');
+      prioritySpan.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
+      prioritySpan.textContent = todo.priority;
+      card.appendChild(prioritySpan);
+    }
+
+    // Task content
+    const contentSpan = document.createElement('span');
+    contentSpan.className = 'ralph-task-content';
+    contentSpan.textContent = todo.content;
+    card.appendChild(contentSpan);
+
+    // Attempts indicator (if > 0)
+    if (todo.attempts && todo.attempts > 0) {
+      const attemptsSpan = document.createElement('span');
+      attemptsSpan.className = 'ralph-task-attempts';
+      if (todo.lastError) {
+        attemptsSpan.classList.add('has-errors');
+        attemptsSpan.title = `Last error: ${todo.lastError}`;
+      }
+      attemptsSpan.textContent = `#${todo.attempts}`;
+      card.appendChild(attemptsSpan);
+    }
+
+    // Verification badge (if has verification criteria)
+    if (todo.verificationCriteria) {
+      const verifySpan = document.createElement('span');
+      verifySpan.className = 'ralph-task-verify-badge';
+      verifySpan.title = `Verify: ${todo.verificationCriteria}`;
+      verifySpan.textContent = '✓';
+      card.appendChild(verifySpan);
+    }
+
+    // Dependencies indicator
+    if (todo.dependencies && todo.dependencies.length > 0) {
+      const depsSpan = document.createElement('span');
+      depsSpan.className = 'ralph-task-deps-indicator';
+      depsSpan.title = `Depends on: ${todo.dependencies.join(', ')}`;
+      depsSpan.textContent = `↗${todo.dependencies.length}`;
+      card.appendChild(depsSpan);
+    }
+
+    // Quick action buttons (shown on hover)
+    const actions = document.createElement('div');
+    actions.className = 'ralph-task-actions';
+
+    if (todo.status !== 'completed') {
+      const completeBtn = document.createElement('button');
+      completeBtn.className = 'ralph-task-action-btn';
+      completeBtn.textContent = '✓';
+      completeBtn.title = 'Mark complete';
+      completeBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.updateRalphTaskStatus(todo.id, 'completed');
+      };
+      actions.appendChild(completeBtn);
+    }
+
+    if (todo.status === 'completed') {
+      const reopenBtn = document.createElement('button');
+      reopenBtn.className = 'ralph-task-action-btn';
+      reopenBtn.textContent = '↺';
+      reopenBtn.title = 'Reopen';
+      reopenBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.updateRalphTaskStatus(todo.id, 'pending');
+      };
+      actions.appendChild(reopenBtn);
+    }
+
+    if (todo.lastError) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'ralph-task-action-btn';
+      retryBtn.textContent = '↻';
+      retryBtn.title = 'Retry (clear error)';
+      retryBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.retryRalphTask(todo.id);
+      };
+      actions.appendChild(retryBtn);
+    }
+
+    card.appendChild(actions);
+
+    return card;
+  }
+
+  // Update a Ralph task's status via API
+  async updateRalphTaskStatus(taskId, newStatus) {
+    if (!this.activeSessionId) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/plan/task/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
       });
-    } else {
-      // Full rebuild needed - use DocumentFragment for efficiency
-      sorted.forEach(todo => {
-        const card = document.createElement('div');
-        const statusClass = `task-${todo.status.replace('_', '-')}`;
-        const priorityClass = todo.priority ? `task-priority-${todo.priority.toLowerCase()}` : '';
-        card.className = `ralph-task-card ${statusClass} ${priorityClass}`.trim();
 
-        const iconSpan = document.createElement('span');
-        iconSpan.className = 'ralph-task-icon';
-        iconSpan.textContent = this.getRalphTaskIcon(todo.status);
-        card.appendChild(iconSpan);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to update task');
+      }
 
-        // Add priority badge if present
-        if (todo.priority) {
-          const prioritySpan = document.createElement('span');
-          prioritySpan.className = `ralph-task-priority priority-${todo.priority.toLowerCase()}`;
-          prioritySpan.textContent = todo.priority;
-          card.appendChild(prioritySpan);
-        }
+      this.showToast(`Task ${newStatus === 'completed' ? 'completed' : 'reopened'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to update task: ' + err.message, 'error');
+    }
+  }
 
-        const contentSpan = document.createElement('span');
-        contentSpan.className = 'ralph-task-content';
-        contentSpan.textContent = todo.content;
-        card.appendChild(contentSpan);
+  // Retry a failed Ralph task (clear error, reset attempts)
+  async retryRalphTask(taskId) {
+    if (!this.activeSessionId) return;
 
-        fragment.appendChild(card);
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/plan/task/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attempts: 0, lastError: null, status: 'pending' })
       });
 
-      grid.innerHTML = '';
-      grid.appendChild(fragment);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to retry task');
+      }
+
+      this.showToast('Task reset for retry', 'success');
+    } catch (err) {
+      this.showToast('Failed to retry task: ' + err.message, 'error');
     }
   }
 
@@ -6791,6 +7187,146 @@ class ClaudemanApp {
   // Legacy method for backwards compatibility
   getTodoIcon(status) {
     return this.getRalphTaskIcon(status);
+  }
+
+  // ========== Plan Versioning ==========
+
+  // Update the plan version display in the Ralph panel
+  updatePlanVersionDisplay(version, historyLength) {
+    const versionRow = this.$('ralphVersionRow');
+    const versionBadge = this.$('ralphPlanVersion');
+    const rollbackBtn = this.$('ralphRollbackBtn');
+
+    if (!versionRow) return;
+
+    if (version && version > 0) {
+      versionRow.style.display = '';
+      if (versionBadge) versionBadge.textContent = `v${version}`;
+      if (rollbackBtn) {
+        rollbackBtn.style.display = historyLength > 1 ? '' : 'none';
+      }
+    } else {
+      versionRow.style.display = 'none';
+    }
+  }
+
+  // Show plan history dropdown
+  async showPlanHistory() {
+    if (!this.activeSessionId) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/plan/history`);
+      const data = await res.json();
+
+      if (data.error) {
+        this.showToast('Failed to load plan history: ' + data.error, 'error');
+        return;
+      }
+
+      const history = data.history || [];
+      if (history.length === 0) {
+        this.showToast('No plan history available', 'info');
+        return;
+      }
+
+      // Show history dropdown modal
+      this.showPlanHistoryModal(history, data.currentVersion);
+    } catch (err) {
+      this.showToast('Failed to load plan history: ' + err.message, 'error');
+    }
+  }
+
+  // Show the plan history modal
+  showPlanHistoryModal(history, currentVersion) {
+    // Remove existing modal if present
+    const existing = document.getElementById('planHistoryModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'planHistoryModal';
+    modal.className = 'modal active';
+    modal.innerHTML = `
+      <div class="modal-backdrop" onclick="app.closePlanHistoryModal()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Plan Version History</h3>
+          <button class="modal-close" onclick="app.closePlanHistoryModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+            Current version: <strong>v${currentVersion}</strong>
+          </p>
+          <div class="plan-history-list">
+            ${history.map(item => `
+              <div class="plan-history-item ${item.version === currentVersion ? 'current' : ''}"
+                   onclick="app.rollbackToPlanVersion(${item.version})">
+                <div>
+                  <span class="plan-history-version">v${item.version}</span>
+                  <span class="plan-history-tasks">${item.taskCount || 0} tasks</span>
+                </div>
+                <span class="plan-history-time">${this.formatRelativeTime(item.timestamp)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-toolbar" onclick="app.closePlanHistoryModal()">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  closePlanHistoryModal() {
+    const modal = document.getElementById('planHistoryModal');
+    if (modal) modal.remove();
+  }
+
+  // Rollback to a specific plan version
+  async rollbackToPlanVersion(version) {
+    if (!this.activeSessionId) return;
+
+    if (!confirm(`Rollback to plan version ${version}? Current changes will be preserved in history.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/plan/rollback/${version}`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        this.showToast('Failed to rollback: ' + data.error, 'error');
+        return;
+      }
+
+      this.showToast(`Rolled back to plan v${version}`, 'success');
+      this.closePlanHistoryModal();
+
+      // Refresh the plan display
+      this.renderRalphStatePanel();
+    } catch (err) {
+      this.showToast('Failed to rollback: ' + err.message, 'error');
+    }
+  }
+
+  // Format relative time (e.g., "2 mins ago", "1 hour ago")
+  formatRelativeTime(timestamp) {
+    if (!timestamp) return '';
+
+    const now = Date.now();
+    const diff = now - timestamp;
+
+    const mins = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${days}d ago`;
   }
 
   // ========== Subagent Panel (Claude Code Background Agents) ==========
@@ -7411,8 +7947,8 @@ class ClaudemanApp {
 
     document.body.appendChild(win);
 
-    // Make draggable (with connection line update callback)
-    this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
+    // Make draggable (returns listener refs for cleanup)
+    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
     // Check if this window should be visible based on settings
     const settings = this.loadAppSettingsFromStorage();
@@ -7424,11 +7960,12 @@ class ClaudemanApp {
       shouldHide = !isForActiveSession;
     }
 
-    // Store reference
+    // Store reference (including drag listeners for cleanup)
     this.subagentWindows.set(agentId, {
       element: win,
       minimized: false,
       hidden: shouldHide,
+      dragListeners, // Store for cleanup to prevent memory leaks
     });
 
     // Hide window if not for active session
@@ -7546,9 +8083,49 @@ class ClaudemanApp {
       if (windowData.resizeObserver) {
         windowData.resizeObserver.disconnect();
       }
+      // Clean up global drag event listeners (prevents memory leak)
+      if (windowData.dragListeners) {
+        document.removeEventListener('mousemove', windowData.dragListeners.move);
+        document.removeEventListener('mouseup', windowData.dragListeners.up);
+      }
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
     }
+  }
+
+  // Clean up ALL floating windows (called during handleInit to prevent memory leaks on reconnect)
+  cleanupAllFloatingWindows() {
+    // Clean up all subagent windows with their ResizeObservers and drag listeners
+    for (const [agentId, windowData] of this.subagentWindows) {
+      if (windowData.resizeObserver) {
+        windowData.resizeObserver.disconnect();
+      }
+      if (windowData.dragListeners) {
+        document.removeEventListener('mousemove', windowData.dragListeners.move);
+        document.removeEventListener('mouseup', windowData.dragListeners.up);
+      }
+      windowData.element.remove();
+    }
+    this.subagentWindows.clear();
+
+    // Clean up all log viewer windows with their EventSources and drag listeners
+    for (const [windowId, data] of this.logViewerWindows) {
+      if (data.eventSource) {
+        data.eventSource.close();
+      }
+      if (data.dragListeners) {
+        document.removeEventListener('mousemove', data.dragListeners.move);
+        document.removeEventListener('mouseup', data.dragListeners.up);
+      }
+      data.element.remove();
+    }
+    this.logViewerWindows.clear();
+
+    // Clear minimized agents tracking
+    this.minimizedSubagents.clear();
+
+    // Update connection lines (should be empty now)
+    this.updateConnectionLines();
   }
 
   minimizeSubagentWindow(agentId) {
@@ -7591,6 +8168,7 @@ class ClaudemanApp {
     }
   }
 
+  // Returns drag listener references for cleanup (prevents memory leaks)
   makeWindowDraggable(win, handle) {
     let isDragging = false;
     let startX, startY, startLeft, startTop;
@@ -7606,7 +8184,8 @@ class ClaudemanApp {
       e.preventDefault();
     });
 
-    document.addEventListener('mousemove', (e) => {
+    // Store references to document-level listeners so they can be removed on window close
+    const moveListener = (e) => {
       if (!isDragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
@@ -7627,15 +8206,21 @@ class ClaudemanApp {
           dragUpdateScheduled = false;
         });
       }
-    });
+    };
 
-    document.addEventListener('mouseup', () => {
+    const upListener = () => {
       if (isDragging) {
         isDragging = false;
         // Save position after drag ends
         this.saveSubagentWindowStates();
       }
-    });
+    };
+
+    document.addEventListener('mousemove', moveListener);
+    document.addEventListener('mouseup', upListener);
+
+    // Return listener references for cleanup
+    return { move: moveListener, up: upListener };
   }
 
   renderSubagentWindowContent(agentId) {
@@ -8424,8 +9009,8 @@ class ClaudemanApp {
 
     document.body.appendChild(win);
 
-    // Make draggable
-    this.makeWindowDraggable(win, win.querySelector('.log-viewer-window-header'));
+    // Make draggable (returns listener refs for cleanup)
+    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.log-viewer-window-header'));
 
     // Connect to SSE stream
     const eventSource = new EventSource(
@@ -8468,12 +9053,13 @@ class ClaudemanApp {
       this.updateLogViewerStatus(windowId, 'disconnected', 'connection error');
     };
 
-    // Store reference
+    // Store reference (including drag listeners for cleanup)
     this.logViewerWindows.set(windowId, {
       element: win,
       eventSource,
       filePath,
       sessionId,
+      dragListeners, // Store for cleanup to prevent memory leaks
     });
   }
 
@@ -8492,6 +9078,12 @@ class ClaudemanApp {
     // Close SSE connection
     if (windowData.eventSource) {
       windowData.eventSource.close();
+    }
+
+    // Clean up global drag event listeners (prevents memory leak)
+    if (windowData.dragListeners) {
+      document.removeEventListener('mousemove', windowData.dragListeners.move);
+      document.removeEventListener('mouseup', windowData.dragListeners.up);
     }
 
     // Remove element

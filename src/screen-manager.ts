@@ -365,6 +365,38 @@ export class ScreenManager extends EventEmitter {
     return pids;
   }
 
+  // Check if a process is still alive
+  private isProcessAlive(pid: number): boolean {
+    try {
+      // signal 0 doesn't kill, just checks if process exists
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Verify all PIDs are dead, with retry
+  private async verifyProcessesDead(pids: number[], maxWaitMs: number = 1000): Promise<boolean> {
+    const startTime = Date.now();
+    const checkInterval = 50;
+
+    while (Date.now() - startTime < maxWaitMs) {
+      const aliveCount = pids.filter(pid => this.isProcessAlive(pid)).length;
+      if (aliveCount === 0) {
+        return true;
+      }
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    // Log any processes that are still alive
+    const stillAlive = pids.filter(pid => this.isProcessAlive(pid));
+    if (stillAlive.length > 0) {
+      console.warn(`[ScreenManager] ${stillAlive.length} processes still alive after kill: ${stillAlive.join(', ')}`);
+    }
+    return stillAlive.length === 0;
+  }
+
   // Kill a screen session and all its child processes
   async killScreen(sessionId: string): Promise<boolean> {
     const screen = this.screens.get(sessionId);
@@ -377,40 +409,54 @@ export class ScreenManager extends EventEmitter {
 
     console.log(`[ScreenManager] Killing screen ${screen.screenName} (PID ${currentPid})`);
 
+    // Collect all PIDs to track (for verification)
+    const allPids: number[] = [currentPid];
+
     // Strategy 1: Find and kill all child processes recursively
-    const childPids = this.getChildPids(currentPid);
+    // Re-check for children before each kill attempt (they may have changed)
+    let childPids = this.getChildPids(currentPid);
     if (childPids.length > 0) {
       console.log(`[ScreenManager] Found ${childPids.length} child processes to kill`);
+      allPids.push(...childPids);
 
       // Kill children in reverse order (deepest first) with SIGTERM
-      for (const childPid of childPids.reverse()) {
-        try {
-          process.kill(childPid, 'SIGTERM');
-        } catch {
-          // Process may already be dead
+      for (const childPid of [...childPids].reverse()) {
+        if (this.isProcessAlive(childPid)) {
+          try {
+            process.kill(childPid, 'SIGTERM');
+          } catch {
+            // Process may already be dead
+          }
         }
       }
 
       // Give processes a moment to terminate gracefully
       await new Promise(resolve => setTimeout(resolve, SCREEN_KILL_WAIT_MS));
 
-      // Force kill any remaining children
+      // Re-check which children are still alive and force kill them
+      childPids = this.getChildPids(currentPid);
       for (const childPid of childPids) {
-        try {
-          process.kill(childPid, 'SIGKILL');
-        } catch {
-          // Process already terminated
+        if (this.isProcessAlive(childPid)) {
+          try {
+            process.kill(childPid, 'SIGKILL');
+          } catch {
+            // Process already terminated
+          }
         }
       }
     }
 
     // Strategy 2: Kill the entire process group (catches any orphans we missed)
-    try {
-      process.kill(-currentPid, 'SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
-      process.kill(-currentPid, 'SIGKILL');
-    } catch {
-      // Process group may not exist or already terminated
+    if (this.isProcessAlive(currentPid)) {
+      try {
+        process.kill(-currentPid, 'SIGTERM');
+        await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
+        if (this.isProcessAlive(currentPid)) {
+          process.kill(-currentPid, 'SIGKILL');
+        }
+      } catch {
+        // Process group may not exist or already terminated
+      }
     }
 
     // Strategy 3: Kill screen session by name
@@ -423,10 +469,18 @@ export class ScreenManager extends EventEmitter {
     }
 
     // Strategy 4: Direct kill by PID as final fallback
-    try {
-      process.kill(currentPid, 'SIGKILL');
-    } catch {
-      // Already dead
+    if (this.isProcessAlive(currentPid)) {
+      try {
+        process.kill(currentPid, 'SIGKILL');
+      } catch {
+        // Already dead
+      }
+    }
+
+    // Verify all processes are dead (with timeout)
+    const allDead = await this.verifyProcessesDead(allPids, 2000);
+    if (!allDead) {
+      console.error(`[ScreenManager] Warning: Some processes may still be alive for screen ${screen.screenName}`);
     }
 
     this.screens.delete(sessionId);

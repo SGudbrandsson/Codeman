@@ -43,6 +43,9 @@ const SAVE_DEBOUNCE_MS = 500;
  * store.saveNow();
  * ```
  */
+/** Maximum consecutive save failures before circuit breaker opens */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
 export class StateStore {
   private state: AppState;
   private filePath: string;
@@ -54,6 +57,10 @@ export class StateStore {
   private ralphStatePath: string;
   private ralphStateSaveTimeout: NodeJS.Timeout | null = null;
   private ralphStateDirty: boolean = false;
+
+  // Circuit breaker for save failures (prevents hammering disk on persistent errors)
+  private consecutiveSaveFailures: number = 0;
+  private circuitBreakerOpen: boolean = false;
 
   constructor(filePath?: string) {
     this.filePath = filePath || join(homedir(), '.claudeman', 'state.json');
@@ -109,6 +116,7 @@ export class StateStore {
   /**
    * Immediately writes state to disk using atomic write pattern.
    * Writes to temp file first, then renames to prevent corruption on crash.
+   * Includes backup mechanism and circuit breaker for reliability.
    * Use when guaranteed persistence is required (e.g., before shutdown).
    */
   saveNow(): void {
@@ -119,30 +127,120 @@ export class StateStore {
     if (!this.dirty) {
       return;
     }
+
+    // Circuit breaker: stop attempting writes after too many failures
+    if (this.circuitBreakerOpen) {
+      console.warn('[StateStore] Circuit breaker open - skipping save (too many consecutive failures)');
+      return;
+    }
+
     this.dirty = false;
     this.ensureDir();
-    // Atomic write: write to temp file, then rename (atomic on POSIX)
+
     const tempPath = this.filePath + '.tmp';
+    const backupPath = this.filePath + '.bak';
     let json: string;
+
+    // Step 1: Serialize state (validates it's JSON-safe)
     try {
       json = JSON.stringify(this.state, null, 2);
     } catch (err) {
       console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
-      throw err;
+      this.consecutiveSaveFailures++;
+      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
+        this.circuitBreakerOpen = true;
+      }
+      // Don't throw - this prevents crashing the app
+      // Mark dirty again so we can retry later
+      this.dirty = true;
+      return;
     }
+
+    // Step 2: Create backup of current state file (if exists)
+    try {
+      if (existsSync(this.filePath)) {
+        // Read current file and verify it's valid JSON before backing up
+        const currentContent = readFileSync(this.filePath, 'utf-8');
+        JSON.parse(currentContent); // Validate
+        writeFileSync(backupPath, currentContent, 'utf-8');
+      }
+    } catch {
+      // Backup failed - current file may be corrupt, continue with write
+      console.warn('[StateStore] Could not create backup (current file may be corrupt)');
+    }
+
+    // Step 3: Atomic write: write to temp file, then rename
     try {
       writeFileSync(tempPath, json, 'utf-8');
       renameSync(tempPath, this.filePath);
+
+      // Success! Reset failure counter
+      this.consecutiveSaveFailures = 0;
+      if (this.circuitBreakerOpen) {
+        console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
+        this.circuitBreakerOpen = false;
+      }
     } catch (err) {
       console.error('[StateStore] Failed to write state file:', err);
+      this.consecutiveSaveFailures++;
+
       // Try to clean up temp file on error
       try {
         if (existsSync(tempPath)) {
           unlinkSync(tempPath);
         }
       } catch { /* ignore cleanup errors */ }
-      throw err;
+
+      // Check circuit breaker threshold
+      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.error('[StateStore] Circuit breaker OPEN - writes failing repeatedly');
+        this.circuitBreakerOpen = true;
+      }
+
+      // Mark dirty so we retry later (don't throw to avoid crashing app)
+      this.dirty = true;
     }
+  }
+
+  /**
+   * Attempt to recover state from backup file.
+   * Call this if main state file is corrupt.
+   */
+  recoverFromBackup(): boolean {
+    const backupPath = this.filePath + '.bak';
+    try {
+      if (existsSync(backupPath)) {
+        const backupContent = readFileSync(backupPath, 'utf-8');
+        const parsed = JSON.parse(backupContent) as Partial<AppState>;
+        const initial = createInitialState();
+        this.state = {
+          ...initial,
+          ...parsed,
+          sessions: { ...parsed.sessions },
+          tasks: { ...parsed.tasks },
+          ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
+          config: { ...initial.config, ...parsed.config },
+        };
+        console.log('[StateStore] Successfully recovered state from backup');
+        // Reset circuit breaker after successful recovery
+        this.circuitBreakerOpen = false;
+        this.consecutiveSaveFailures = 0;
+        return true;
+      }
+    } catch (err) {
+      console.error('[StateStore] Failed to recover from backup:', err);
+    }
+    return false;
+  }
+
+  /**
+   * Reset the circuit breaker (for manual intervention).
+   */
+  resetCircuitBreaker(): void {
+    this.circuitBreakerOpen = false;
+    this.consecutiveSaveFailures = 0;
+    console.log('[StateStore] Circuit breaker manually reset');
   }
 
   /** Flushes any pending main state save. Call before shutdown. */

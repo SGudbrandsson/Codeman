@@ -20,12 +20,63 @@ import { ScreenManager } from './screen-manager.js';
 // Types
 // ============================================================================
 
+/** Development phase in TDD cycle */
+export type PlanPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
+
+/** Task execution status */
+export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+
+/**
+ * Enhanced plan item with verification, dependencies, and execution tracking.
+ * Supports TDD workflow, failure tracking, and plan versioning.
+ */
 export interface PlanItem {
+  /** Unique identifier (e.g., "P0-001") */
+  id?: string;
+  /** Task description */
   content: string;
+  /** Criticality level */
   priority: 'P0' | 'P1' | 'P2' | null;
+  /** Which subagent generated this item */
   source?: string;
+  /** Why this task is needed */
   rationale?: string;
+  /** Legacy numeric phase (1-4) */
   phase?: number;
+
+  // === NEW: Verification ===
+  /** How to know it's done (e.g., "npm test passes", "endpoint returns 200") */
+  verificationCriteria?: string;
+  /** Command to run for verification (e.g., "npm test -- --grep='auth'") */
+  testCommand?: string;
+
+  // === NEW: Dependencies ===
+  /** IDs of tasks that must complete first */
+  dependencies?: string[];
+
+  // === NEW: Execution tracking ===
+  /** Current execution status */
+  status?: PlanTaskStatus;
+  /** How many times attempted */
+  attempts?: number;
+  /** Most recent failure reason */
+  lastError?: string;
+  /** Timestamp of completion */
+  completedAt?: number;
+
+  // === NEW: Metadata ===
+  /** Estimated complexity */
+  complexity?: 'low' | 'medium' | 'high';
+  /** How to undo if needed */
+  rollbackStrategy?: string;
+  /** Plan version this belongs to */
+  version?: number;
+  /** TDD phase category */
+  tddPhase?: PlanPhase;
+  /** ID of paired test/impl task */
+  pairedWith?: string;
+  /** Checklist items for review tasks (tddPhase: 'review') */
+  reviewChecklist?: string[];
 }
 
 export interface SubagentResult {
@@ -131,7 +182,7 @@ Return ONLY a JSON array:
 
 Generate 10-20 items. Think about the complete system architecture.`;
 
-const TESTING_SPECIALIST_PROMPT = `You are a TDD Specialist designing a comprehensive test strategy.
+const TESTING_SPECIALIST_PROMPT = `You are a TDD Specialist designing a comprehensive test strategy with verification criteria.
 
 ## YOUR TASK
 Design test coverage for this task:
@@ -145,13 +196,25 @@ Following Test-Driven Development methodology:
 2. Plan integration tests for feature interactions
 3. Identify edge cases and boundary conditions
 4. Consider error scenarios and failure modes
-5. Plan verification steps
+5. For each test, specify HOW to verify it passes
 
 ## OUTPUT FORMAT
 Return ONLY a JSON array:
 [
-  {"category": "unit|integration|edge-case|error|verification", "content": "test description", "rationale": "what it validates"}
+  {
+    "category": "unit|integration|edge-case|error|verification",
+    "content": "Write test for user login with valid credentials",
+    "rationale": "Validates happy path authentication flow",
+    "verificationCriteria": "Test passes: POST /auth/login returns 200 with JWT token",
+    "testCommand": "npm test -- --grep='login valid'",
+    "pairedImpl": "Implement login endpoint handler"
+  }
 ]
+
+CRITICAL: Every test item MUST include:
+- verificationCriteria: How to know the test passes (observable outcome)
+- testCommand: The actual command to run (npm test, pytest, etc.)
+- pairedImpl: The implementation step this test validates
 
 Generate 12-25 items. Tests should be written BEFORE implementation.`;
 
@@ -178,6 +241,45 @@ Return ONLY a JSON array:
 
 Generate 8-15 items. Being proactive about risks prevents surprises.`;
 
+// @ts-expect-error Reserved for future use - code review specialist prompt
+const CODE_REVIEWER_PROMPT = `You are a Code Review Specialist designing post-implementation review tasks.
+
+## YOUR TASK
+Design code review steps for implementations in this task:
+
+## TASK DESCRIPTION
+{TASK}
+
+## INSTRUCTIONS
+For each implementation identified, create a review task that checks:
+1. **Best Practices**: Language-specific conventions and idioms
+2. **Security**: OWASP top 10, input validation, authentication
+3. **Performance**: Time complexity, memory usage, N+1 queries
+4. **Error Handling**: Edge cases covered, meaningful error messages
+5. **Code Quality**: DRY, SOLID principles, readability
+6. **Type Safety**: Proper typing, no implicit any, null checks
+
+## REVIEW TASK GUIDELINES
+- Review tasks run AFTER implementation, BEFORE merge
+- Each review should be specific and actionable
+- Include what to look for and how to verify
+- Reference language-specific linting tools where applicable
+
+## OUTPUT FORMAT
+Return ONLY a JSON array:
+[
+  {
+    "category": "security|performance|quality|error-handling|best-practices|type-safety",
+    "content": "Review authentication handler for XSS vulnerabilities",
+    "rationale": "User input flows through auth - must sanitize",
+    "verificationCriteria": "No unescaped user input, all inputs validated",
+    "reviewChecklist": ["Check input sanitization", "Verify CSRF tokens", "Review session handling"],
+    "implToReview": "Implement authentication handler"
+  }
+]
+
+Generate 5-10 review tasks. Code review catches bugs that tests miss.`;
+
 const VERIFICATION_PROMPT = `You are a Plan Verification Expert reviewing an implementation plan for completeness and quality.
 
 ## ORIGINAL TASK
@@ -187,30 +289,84 @@ const VERIFICATION_PROMPT = `You are a Plan Verification Expert reviewing an imp
 {PLAN}
 
 ## YOUR MISSION
-Review this plan and:
+Review and enhance this plan:
 1. Assign priorities (P0=critical/blocking, P1=required, P2=enhancement)
-2. Identify any gaps or missing steps
-3. Check logical ordering (tests before implementation, setup before coding)
-4. Flag potential issues or warnings
-5. Calculate an overall quality score (0.0-1.0)
+2. Add verification criteria to EVERY task (how to know it's done)
+3. Pair test tasks with implementation tasks (TDD cycle)
+4. Add dependencies where one task blocks another
+5. Identify gaps and calculate quality score
 
 ## PRIORITY GUIDELINES
 - P0: Foundation tasks, type definitions, project setup, blocking dependencies
 - P1: Core implementation, tests, main features, error handling
 - P2: Polish, optimization, documentation, nice-to-have features
 
+## TDD + REVIEW CYCLE RULES
+The complete cycle is: test → impl → review
+- Every implementation task should have a corresponding test task AND review task
+- Test task comes BEFORE its paired implementation task
+- Review task comes AFTER the implementation it reviews
+- Use "pairedWith" to link test ↔ implementation ↔ review
+- Verification criteria should reference test results where applicable
+
+## REVIEW TASK REQUIREMENTS
+After EVERY implementation task, add a review task that checks:
+- Best practices for the language/framework
+- Security vulnerabilities (OWASP top 10)
+- Performance concerns
+- Error handling completeness
+- Code quality (DRY, SOLID, readability)
+
 ## OUTPUT FORMAT
 Return ONLY a JSON object:
 {
   "validatedPlan": [
-    {"content": "step description", "priority": "P0|P1|P2", "rationale": "why this priority"}
+    {
+      "id": "P0-001",
+      "content": "Write failing test for user authentication",
+      "priority": "P0",
+      "tddPhase": "test",
+      "verificationCriteria": "Test file exists, test fails with 'not implemented'",
+      "testCommand": "npm test -- --grep='auth'",
+      "pairedWith": "P0-002",
+      "dependencies": [],
+      "complexity": "low"
+    },
+    {
+      "id": "P0-002",
+      "content": "Implement user authentication handler",
+      "priority": "P0",
+      "tddPhase": "impl",
+      "verificationCriteria": "npm test -- --grep='auth' passes",
+      "pairedWith": "P0-001",
+      "dependencies": ["P0-001"],
+      "complexity": "medium"
+    },
+    {
+      "id": "P0-003",
+      "content": "Review auth implementation for security and best practices",
+      "priority": "P0",
+      "tddPhase": "review",
+      "verificationCriteria": "No security issues found, follows TypeScript best practices",
+      "reviewChecklist": ["Input validation", "XSS prevention", "Session security", "Error handling"],
+      "pairedWith": "P0-002",
+      "dependencies": ["P0-002"],
+      "complexity": "low"
+    }
   ],
   "gaps": ["missing requirement 1", "missing test coverage for X"],
   "warnings": ["consider Y before Z", "potential issue with..."],
   "qualityScore": 0.85
 }
 
-Be critical but constructive. A thorough review catches issues early.`;
+CRITICAL REQUIREMENTS:
+1. EVERY task MUST have verificationCriteria (how to verify completion)
+2. Implementation tasks MUST have a paired test task AND a review task
+3. Review tasks MUST have a reviewChecklist with specific items to check
+4. Dependencies must form a valid DAG (no cycles)
+5. Use sequential IDs: P0-001, P0-002, P0-003, P1-001, etc.
+
+Be critical but constructive. A thorough review catches issues that tests miss.`;
 
 // ============================================================================
 // Main Orchestrator Class
@@ -270,11 +426,19 @@ export class PlanOrchestrator {
 
       totalCost += 0.01; // Verification cost estimate
 
+      // Phase 4: Ensure all impl tasks have review tasks
+      onProgress?.('review-injection', 'Ensuring review tasks for all implementations...');
+      const planWithReviews = this.ensureReviewTasks(verificationResult.validatedPlan);
+      const reviewsAdded = planWithReviews.length - verificationResult.validatedPlan.length;
+      if (reviewsAdded > 0) {
+        onProgress?.('review-injection', `Added ${reviewsAdded} auto-review task(s)`);
+      }
+
       const totalDurationMs = Date.now() - startTime;
 
       return {
         success: true,
-        items: verificationResult.validatedPlan,
+        items: planWithReviews,
         costUsd: totalCost,
         metadata: {
           subagentResults,
@@ -573,19 +737,51 @@ export class PlanOrchestrator {
 
       const parsed = JSON.parse(jsonMatch[0]);
 
-      const validatedPlan: PlanItem[] = (parsed.validatedPlan || []).map((item: unknown) => {
+      const validatedPlan: PlanItem[] = (parsed.validatedPlan || []).map((item: unknown, idx: number) => {
         if (typeof item !== 'object' || item === null) {
-          return { content: String(item), priority: 'P1' as const };
+          return { content: String(item), priority: 'P1' as const, id: `task-${idx}` };
         }
         const obj = item as Record<string, unknown>;
         let priority: PlanItem['priority'] = null;
         if (obj.priority === 'P0' || obj.priority === 'P1' || obj.priority === 'P2') {
           priority = obj.priority;
         }
+
+        // Parse TDD phase (now includes 'review')
+        let tddPhase: PlanItem['tddPhase'];
+        if (obj.tddPhase === 'setup' || obj.tddPhase === 'test' || obj.tddPhase === 'impl' || obj.tddPhase === 'verify' || obj.tddPhase === 'review') {
+          tddPhase = obj.tddPhase;
+        }
+
+        // Parse complexity
+        let complexity: PlanItem['complexity'];
+        if (obj.complexity === 'low' || obj.complexity === 'medium' || obj.complexity === 'high') {
+          complexity = obj.complexity;
+        }
+
+        // Parse reviewChecklist for review tasks
+        let reviewChecklist: string[] | undefined;
+        if (Array.isArray(obj.reviewChecklist)) {
+          reviewChecklist = obj.reviewChecklist.map(String);
+        }
+
         return {
+          id: obj.id ? String(obj.id) : `task-${idx}`,
           content: String(obj.content || ''),
           priority,
           rationale: obj.rationale ? String(obj.rationale) : undefined,
+          // Enhanced fields
+          verificationCriteria: obj.verificationCriteria ? String(obj.verificationCriteria) : undefined,
+          testCommand: obj.testCommand ? String(obj.testCommand) : undefined,
+          tddPhase,
+          pairedWith: obj.pairedWith ? String(obj.pairedWith) : undefined,
+          dependencies: Array.isArray(obj.dependencies) ? obj.dependencies.map(String) : undefined,
+          complexity,
+          reviewChecklist,
+          // Execution tracking defaults
+          status: 'pending' as PlanTaskStatus,
+          attempts: 0,
+          version: 1,
         };
       });
 
@@ -611,18 +807,54 @@ export class PlanOrchestrator {
 
   /**
    * Fallback verification when the verification subagent fails.
+   * Assigns heuristic priorities and adds basic verification criteria.
    */
   private fallbackVerification(items: PlanItem[]): VerificationResult {
     return {
-      validatedPlan: items.map(item => ({
+      validatedPlan: items.map((item, idx) => ({
         ...item,
+        id: item.id || `task-${idx}`,
         priority: item.phase === 1 ? 'P0' as const :
                   item.phase === 4 ? 'P2' as const : 'P1' as const,
+        // Add default verification criteria based on content
+        verificationCriteria: item.verificationCriteria ||
+          this.inferVerificationCriteria(item.content),
+        status: 'pending' as PlanTaskStatus,
+        attempts: 0,
+        version: 1,
       })),
       gaps: [],
       warnings: ['Verification subagent failed - using heuristic priorities'],
       qualityScore: 0.7,
     };
+  }
+
+  /**
+   * Infer verification criteria from task content.
+   */
+  private inferVerificationCriteria(content: string): string {
+    const lower = content.toLowerCase();
+
+    if (lower.includes('test')) {
+      return 'Tests pass without errors';
+    }
+    if (lower.includes('implement') || lower.includes('create') || lower.includes('add')) {
+      return 'Code compiles, no type errors';
+    }
+    if (lower.includes('fix') || lower.includes('debug')) {
+      return 'Issue is resolved, tests pass';
+    }
+    if (lower.includes('refactor')) {
+      return 'Code refactored, all tests still pass';
+    }
+    if (lower.includes('document') || lower.includes('readme')) {
+      return 'Documentation exists and is accurate';
+    }
+    if (lower.includes('config') || lower.includes('setup')) {
+      return 'Configuration is valid, app starts';
+    }
+
+    return 'Task completed successfully';
   }
 
   /**
@@ -632,5 +864,131 @@ export class PlanOrchestrator {
     return new Promise((_, reject) => {
       setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
     });
+  }
+
+  /**
+   * Inject review tasks for any implementation tasks that don't have them.
+   * Called as a post-processing step to ensure the test → impl → review cycle is complete.
+   *
+   * @param items - The validated plan items
+   * @returns Updated plan items with review tasks added
+   */
+  ensureReviewTasks(items: PlanItem[]): PlanItem[] {
+    const result: PlanItem[] = [];
+    const implTasksNeedingReview: Map<string, PlanItem> = new Map();
+
+    // First pass: identify impl tasks and their existing review pairs
+    const reviewPairs = new Set<string>();
+    for (const item of items) {
+      if (item.tddPhase === 'review' && item.pairedWith) {
+        reviewPairs.add(item.pairedWith);
+      }
+    }
+
+    // Second pass: collect impl tasks without review pairs
+    for (const item of items) {
+      if (item.tddPhase === 'impl' && item.id && !reviewPairs.has(item.id)) {
+        implTasksNeedingReview.set(item.id, item);
+      }
+    }
+
+    // Third pass: build result with injected review tasks
+    for (const item of items) {
+      result.push(item);
+
+      // If this is an impl task needing review, inject one after it
+      if (item.id && implTasksNeedingReview.has(item.id)) {
+        const reviewId = this.generateReviewId(item.id);
+        const reviewTask = this.createReviewTask(item, reviewId);
+        result.push(reviewTask);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Generate a review task ID from an impl task ID.
+   * P0-002 → P0-002-R, task-5 → task-5-R
+   */
+  private generateReviewId(implId: string): string {
+    return `${implId}-R`;
+  }
+
+  /**
+   * Create a review task for an implementation task.
+   */
+  private createReviewTask(implTask: PlanItem, reviewId: string): PlanItem {
+    const reviewChecklist = this.generateReviewChecklist(implTask.content);
+
+    return {
+      id: reviewId,
+      content: `Review: ${implTask.content}`,
+      priority: implTask.priority,
+      tddPhase: 'review',
+      pairedWith: implTask.id,
+      dependencies: implTask.id ? [implTask.id] : [],
+      verificationCriteria: 'Code review complete, no issues found or all issues addressed',
+      reviewChecklist,
+      status: 'pending',
+      attempts: 0,
+      version: implTask.version || 1,
+      complexity: 'low',
+    };
+  }
+
+  /**
+   * Generate a review checklist based on the implementation task content.
+   */
+  private generateReviewChecklist(content: string): string[] {
+    const lower = content.toLowerCase();
+    const checklist: string[] = [];
+
+    // Always include these
+    checklist.push('Code compiles without errors');
+    checklist.push('No TypeScript/linting warnings');
+
+    // Security checks for certain patterns
+    if (lower.includes('auth') || lower.includes('login') || lower.includes('password')) {
+      checklist.push('Input validation implemented');
+      checklist.push('No sensitive data in logs');
+      checklist.push('Secure session handling');
+    }
+
+    if (lower.includes('api') || lower.includes('endpoint') || lower.includes('route')) {
+      checklist.push('Request validation');
+      checklist.push('Error responses do not leak internals');
+      checklist.push('Rate limiting considered');
+    }
+
+    if (lower.includes('database') || lower.includes('query') || lower.includes('sql')) {
+      checklist.push('Parameterized queries used');
+      checklist.push('No N+1 query issues');
+    }
+
+    if (lower.includes('file') || lower.includes('path') || lower.includes('upload')) {
+      checklist.push('Path traversal prevented');
+      checklist.push('File type validation');
+    }
+
+    if (lower.includes('user') || lower.includes('input')) {
+      checklist.push('XSS prevention');
+      checklist.push('Input sanitization');
+    }
+
+    // Performance checks
+    if (lower.includes('loop') || lower.includes('iterate') || lower.includes('array')) {
+      checklist.push('Algorithm complexity is appropriate');
+    }
+
+    // Error handling
+    checklist.push('Error cases handled');
+    checklist.push('Meaningful error messages');
+
+    // Code quality
+    checklist.push('Code is readable and maintainable');
+    checklist.push('No duplicate logic');
+
+    return checklist;
   }
 }

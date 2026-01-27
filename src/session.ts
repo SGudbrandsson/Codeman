@@ -888,15 +888,21 @@ export class Session extends EventEmitter {
         }
 
         // Attach to the screen session via PTY
-        this.ptyProcess = pty.spawn('screen', [
-          '-x', this._screenSession!.screenName
-        ], {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          env: { ...process.env, TERM: 'xterm-256color' },
-        });
+        try {
+          this.ptyProcess = pty.spawn('screen', [
+            '-x', this._screenSession!.screenName
+          ], {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            env: { ...process.env, TERM: 'xterm-256color' },
+          });
+        } catch (spawnErr) {
+          console.error('[Session] Failed to spawn PTY for screen attachment:', spawnErr);
+          this.emit('error', `Failed to attach to screen: ${spawnErr}`);
+          throw spawnErr;
+        }
 
         // For NEW screens: wait for prompt to appear then clean buffer
         // For RESTORED screens: don't do anything - client will fetch buffer on tab switch
@@ -941,23 +947,30 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if screen is not used
     if (!this.ptyProcess) {
-      this.ptyProcess = pty.spawn('claude', [
-        '--dangerously-skip-permissions'
-      ], {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: this.workingDir,
-        env: {
-          ...process.env,
-          PATH: getAugmentedPath(),
-          TERM: 'xterm-256color',
-          // Inform Claude it's running within Claudeman (helps prevent self-termination)
-          CLAUDEMAN_SCREEN: '1',
-          CLAUDEMAN_SESSION_ID: this.id,
-          CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
-        },
-      });
+      try {
+        this.ptyProcess = pty.spawn('claude', [
+          '--dangerously-skip-permissions'
+        ], {
+          name: 'xterm-256color',
+          cols: 120,
+          rows: 40,
+          cwd: this.workingDir,
+          env: {
+            ...process.env,
+            PATH: getAugmentedPath(),
+            TERM: 'xterm-256color',
+            // Inform Claude it's running within Claudeman (helps prevent self-termination)
+            CLAUDEMAN_SCREEN: '1',
+            CLAUDEMAN_SESSION_ID: this.id,
+            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+          },
+        });
+      } catch (spawnErr) {
+        console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
+        this._status = 'stopped';
+        this.emit('error', `Failed to start Claude: ${spawnErr}`);
+        throw new Error(`Failed to spawn Claude process: ${spawnErr}`);
+      }
     }
 
     this._pid = this.ptyProcess.pid;
@@ -1101,15 +1114,21 @@ export class Session extends EventEmitter {
         }
 
         // Attach to the screen session via PTY
-        this.ptyProcess = pty.spawn('screen', [
-          '-x', this._screenSession!.screenName
-        ], {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          env: { ...process.env, TERM: 'xterm-256color' },
-        });
+        try {
+          this.ptyProcess = pty.spawn('screen', [
+            '-x', this._screenSession!.screenName
+          ], {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            env: { ...process.env, TERM: 'xterm-256color' },
+          });
+        } catch (spawnErr) {
+          console.error('[Session] Failed to spawn PTY for shell screen attachment:', spawnErr);
+          this.emit('error', `Failed to attach to screen: ${spawnErr}`);
+          throw spawnErr;
+        }
 
         // For NEW screens: clear by sending 'clear' command to the shell
         // For RESTORED screens: don't clear - we want to see the existing output
@@ -1130,19 +1149,26 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if screen is not used
     if (!this.ptyProcess) {
-      this.ptyProcess = pty.spawn(shell, [], {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        cwd: this.workingDir,
-        env: {
-          ...process.env,
-          TERM: 'xterm-256color',
-          CLAUDEMAN_SCREEN: '1',
-          CLAUDEMAN_SESSION_ID: this.id,
-          CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
-        },
-      });
+      try {
+        this.ptyProcess = pty.spawn(shell, [], {
+          name: 'xterm-256color',
+          cols: 120,
+          rows: 40,
+          cwd: this.workingDir,
+          env: {
+            ...process.env,
+            TERM: 'xterm-256color',
+            CLAUDEMAN_SCREEN: '1',
+            CLAUDEMAN_SESSION_ID: this.id,
+            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+          },
+        });
+      } catch (spawnErr) {
+        console.error('[Session] Failed to spawn shell PTY:', spawnErr);
+        this._status = 'stopped';
+        this.emit('error', `Failed to start shell: ${spawnErr}`);
+        throw new Error(`Failed to spawn shell process: ${spawnErr}`);
+      }
     }
 
     this._pid = this.ptyProcess.pid;
@@ -1251,21 +1277,27 @@ export class Session extends EventEmitter {
         }
         args.push(prompt);
 
-        this.ptyProcess = pty.spawn('claude', args, {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: this.workingDir,
-          env: {
-            ...process.env,
-            PATH: getAugmentedPath(),
-            TERM: 'xterm-256color',
-            // Inform Claude it's running within Claudeman
-            CLAUDEMAN_SCREEN: '1',
-            CLAUDEMAN_SESSION_ID: this.id,
-            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
-          },
-        });
+        try {
+          this.ptyProcess = pty.spawn('claude', args, {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 40,
+            cwd: this.workingDir,
+            env: {
+              ...process.env,
+              PATH: getAugmentedPath(),
+              TERM: 'xterm-256color',
+              // Inform Claude it's running within Claudeman
+              CLAUDEMAN_SCREEN: '1',
+              CLAUDEMAN_SESSION_ID: this.id,
+              CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+            },
+          });
+        } catch (spawnErr) {
+          console.error('[Session] Failed to spawn Claude PTY for runPrompt:', spawnErr);
+          this.emit('error', `Failed to spawn Claude: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`);
+          throw spawnErr;
+        }
 
         this._pid = this.ptyProcess.pid;
         console.log('[Session] PTY spawned with PID:', this._pid);

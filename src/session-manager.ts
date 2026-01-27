@@ -61,6 +61,9 @@ export class SessionManager extends EventEmitter {
   private sessionHandlers: Map<string, SessionHandlers> = new Map();
   private store = getStore();
 
+  // Mutex for session creation to prevent race conditions
+  private _sessionCreationLock: Promise<void> | null = null;
+
   /**
    * Creates a new SessionManager and loads previous session state.
    */
@@ -84,54 +87,73 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Creates and starts a new Claude session.
+   * Uses mutex to prevent race conditions when multiple requests arrive simultaneously.
    *
    * @param workingDir - Working directory for the session
    * @returns The newly created session
    * @throws Error if max concurrent sessions limit reached
    */
   async createSession(workingDir: string): Promise<Session> {
-    const config = this.store.getConfig();
-
-    if (this.sessions.size >= config.maxConcurrentSessions) {
-      throw new Error(`Maximum concurrent sessions (${config.maxConcurrentSessions}) reached`);
+    // Wait for any pending session creation to complete (mutex pattern)
+    while (this._sessionCreationLock) {
+      await this._sessionCreationLock;
     }
 
-    const session = new Session({ workingDir });
+    // Create a new lock promise that others will wait on
+    let unlock: () => void;
+    this._sessionCreationLock = new Promise<void>(resolve => {
+      unlock = resolve;
+    });
 
-    // Set up event forwarding with stored handlers for cleanup
-    const handlers: SessionHandlers = {
-      output: (data: string) => {
-        this.emit('sessionOutput', session.id, data);
-        this.updateSessionState(session);
-      },
-      error: (data: string) => {
-        this.emit('sessionError', session.id, data);
-        this.updateSessionState(session);
-      },
-      completion: (phrase: string) => {
-        this.emit('sessionCompletion', session.id, phrase);
-      },
-      exit: () => {
-        this.emit('sessionStopped', session.id);
-        this.updateSessionState(session);
-      },
-    };
+    try {
+      const config = this.store.getConfig();
 
-    session.on('output', handlers.output);
-    session.on('error', handlers.error);
-    session.on('completion', handlers.completion);
-    session.on('exit', handlers.exit);
+      // Check limit INSIDE the lock to prevent race conditions
+      if (this.sessions.size >= config.maxConcurrentSessions) {
+        throw new Error(`Maximum concurrent sessions (${config.maxConcurrentSessions}) reached`);
+      }
 
-    // Store handlers for later cleanup
-    this.sessionHandlers.set(session.id, handlers);
+      const session = new Session({ workingDir });
 
-    await session.start();
+      // Set up event forwarding with stored handlers for cleanup
+      const handlers: SessionHandlers = {
+        output: (data: string) => {
+          this.emit('sessionOutput', session.id, data);
+          this.updateSessionState(session);
+        },
+        error: (data: string) => {
+          this.emit('sessionError', session.id, data);
+          this.updateSessionState(session);
+        },
+        completion: (phrase: string) => {
+          this.emit('sessionCompletion', session.id, phrase);
+        },
+        exit: () => {
+          this.emit('sessionStopped', session.id);
+          this.updateSessionState(session);
+        },
+      };
 
-    this.sessions.set(session.id, session);
-    this.store.setSession(session.id, session.toState());
+      session.on('output', handlers.output);
+      session.on('error', handlers.error);
+      session.on('completion', handlers.completion);
+      session.on('exit', handlers.exit);
 
-    this.emit('sessionStarted', session);
-    return session;
+      // Store handlers for later cleanup
+      this.sessionHandlers.set(session.id, handlers);
+
+      await session.start();
+
+      this.sessions.set(session.id, session);
+      this.store.setSession(session.id, session.toState());
+
+      this.emit('sessionStarted', session);
+      return session;
+    } finally {
+      // Release the lock so other createSession calls can proceed
+      this._sessionCreationLock = null;
+      unlock!();
+    }
   }
 
   /**
