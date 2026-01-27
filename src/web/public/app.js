@@ -4124,7 +4124,48 @@ class ClaudemanApp {
         throw new Error(errorData.error || `Failed to write prompt file: ${writeRes.status}`);
       }
 
-      console.log('[RalphWizard] Prompt file written, sending read command to Claude...');
+      console.log('[RalphWizard] Prompt file written.');
+
+      // If plan was generated, send /init first to load CLAUDE.md with research context
+      // This gives Claude awareness of all the research files before starting tasks
+      if (hasPlan) {
+        console.log('[RalphWizard] Sending /init to load research context from CLAUDE.md...');
+        const initRes = await fetch(`/api/sessions/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: '/init\r', useScreen: true })
+        });
+
+        if (!initRes.ok) {
+          console.warn('[RalphWizard] Failed to send /init, continuing anyway...');
+        } else {
+          // Wait for /init to complete (look for ready indicator or timeout)
+          console.log('[RalphWizard] Waiting for /init to complete...');
+          let initComplete = false;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            await new Promise(r => setTimeout(r, 500));
+            try {
+              const statusRes = await fetch(`/api/sessions/${sessionId}`);
+              const statusData = await statusRes.json();
+              // /init is complete when we see the prompt indicator (❯) or status is ready
+              if (statusData.status === 'ready' || statusData.lastOutput?.includes('❯')) {
+                console.log('[RalphWizard] /init complete, Claude now has research context.');
+                initComplete = true;
+                break;
+              }
+            } catch (e) {
+              console.warn('[RalphWizard] Status check error:', e);
+            }
+          }
+          if (!initComplete) {
+            console.log('[RalphWizard] /init may still be running, proceeding anyway...');
+          }
+          // Small delay after /init
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      console.log('[RalphWizard] Sending read command to Claude...');
 
       // Send a simple command to Claude to read the prompt file
       // This avoids all the escaping issues with long multi-line prompts

@@ -15,8 +15,8 @@
 
 import { Session } from './session.js';
 import { ScreenManager } from './screen-manager.js';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 // ============================================================================
 // Types
@@ -919,8 +919,88 @@ ${prompt}
       writeFileSync(summaryPath, summary, 'utf-8');
 
       console.log(`[PlanOrchestrator] Saved final result to ${this.outputDir}`);
+
+      // Update the case CLAUDE.md with research context links
+      this.updateCaseClaudeMd();
     } catch (err) {
       console.error('[PlanOrchestrator] Failed to save final result:', err);
+    }
+  }
+
+  /**
+   * Update the case folder's CLAUDE.md with links to research and analysis files.
+   * This allows Ralph Loop to `/init` and understand the available knowledge base.
+   */
+  private updateCaseClaudeMd(): void {
+    if (!this.outputDir) return;
+
+    try {
+      // outputDir is like /path/to/case/ralph-wizard/
+      // CLAUDE.md is in the parent (case folder)
+      const caseDir = dirname(this.outputDir);
+      const claudeMdPath = join(caseDir, 'CLAUDE.md');
+
+      // Get relative path from case folder to ralph-wizard
+      const wizardRelPath = 'ralph-wizard';
+
+      // Build the research context section
+      const contextSection = `
+## Ralph Wizard Knowledge Base
+
+The following research and analysis files were generated for this task.
+Use \`/init\` to load this context, then read specific files as needed.
+
+### Research Phase
+- \`${wizardRelPath}/research/result.json\` - External resources, codebase patterns, recommendations
+- \`${wizardRelPath}/research/prompt.md\` - Research agent instructions
+
+### Analysis Phase
+- \`${wizardRelPath}/requirements/result.json\` - Requirements analysis
+- \`${wizardRelPath}/architecture/result.json\` - Architecture planning
+- \`${wizardRelPath}/testing/result.json\` - Testing strategy
+- \`${wizardRelPath}/risks/result.json\` - Risk analysis
+
+### Synthesis & Optimization
+- \`${wizardRelPath}/verification/result.json\` - Plan verification and quality scoring
+- \`${wizardRelPath}/execution-optimizer/result.json\` - Parallelization strategy
+- \`${wizardRelPath}/final-review/result.json\` - Final review and completeness check
+
+### Summary
+- \`${wizardRelPath}/summary.md\` - Human-readable plan summary
+- \`${wizardRelPath}/final-result.json\` - Complete plan with all metadata
+
+**Key Research Insights**: Check \`${wizardRelPath}/research/result.json\` for:
+- External GitHub repos and documentation links
+- Existing codebase patterns to follow
+- Technical recommendations from research
+- Potential challenges to watch for
+- Recommended tools and libraries
+`;
+
+      // Read existing CLAUDE.md or create new one
+      let existingContent = '';
+      if (existsSync(claudeMdPath)) {
+        existingContent = readFileSync(claudeMdPath, 'utf-8');
+
+        // Remove any existing Ralph Wizard section to avoid duplicates
+        const sectionStart = existingContent.indexOf('## Ralph Wizard Knowledge Base');
+        if (sectionStart !== -1) {
+          // Find the next ## heading or end of file
+          const nextSectionMatch = existingContent.slice(sectionStart + 1).match(/\n## /);
+          const sectionEnd = nextSectionMatch
+            ? sectionStart + 1 + nextSectionMatch.index!
+            : existingContent.length;
+          existingContent = existingContent.slice(0, sectionStart) + existingContent.slice(sectionEnd);
+        }
+      }
+
+      // Append the new section
+      const newContent = existingContent.trimEnd() + '\n' + contextSection;
+      writeFileSync(claudeMdPath, newContent, 'utf-8');
+
+      console.log(`[PlanOrchestrator] Updated CLAUDE.md with research context at ${claudeMdPath}`);
+    } catch (err) {
+      console.error('[PlanOrchestrator] Failed to update CLAUDE.md:', err);
     }
   }
 
