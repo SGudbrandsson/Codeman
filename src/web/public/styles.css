@@ -2845,6 +2845,12 @@ body {
   font-weight: 500;
 }
 
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .modal-close {
   background: transparent;
   border: none;
@@ -5524,6 +5530,111 @@ kbd {
   flex-direction: column;
 }
 
+/* Draggable wizard state */
+.modal-wizard.draggable {
+  position: absolute;
+  transform: none;
+  cursor: default;
+}
+
+.modal-wizard .modal-header {
+  cursor: grab;
+  user-select: none;
+}
+
+.modal-wizard .modal-header:active {
+  cursor: grabbing;
+}
+
+/* Agents minimized tab */
+.wizard-agents-tab {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 20px rgba(96, 165, 250, 0.2);
+  z-index: 1200;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.wizard-agents-tab:hover {
+  transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.5), 0 0 25px rgba(96, 165, 250, 0.3);
+}
+
+.wizard-agents-tab .tab-icon {
+  font-size: 1.1rem;
+}
+
+.wizard-agents-tab .tab-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.wizard-agents-tab .tab-count {
+  background: var(--accent);
+  color: white;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.wizard-agents-tab .tab-running {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.wizard-agents-tab .tab-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Minimize button in wizard header */
+.wizard-minimize-agents {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin-right: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  transition: all 0.15s ease;
+}
+
+.wizard-minimize-agents:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.wizard-minimize-agents .agent-count {
+  background: var(--accent);
+  color: white;
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
 .modal-wizard .modal-body {
   overflow-y: auto;
   flex: 1;
@@ -5886,6 +5997,12 @@ kbd {
   padding: 0.5rem 0.75rem;
   background: linear-gradient(135deg, rgba(96, 165, 250, 0.2), rgba(96, 165, 250, 0.1));
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+}
+
+.plan-subagent-header:active {
+  cursor: grabbing;
 }
 
 .plan-subagent-icon {
@@ -5951,6 +6068,262 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Clickable prompt link in plan subagent header */
+.plan-subagent-prompt-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  margin: -0.15rem -0.3rem;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+.plan-subagent-prompt-link:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Clickable status text */
+.plan-subagent-status-text.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.plan-subagent-status-text.clickable:hover {
+  text-decoration-style: solid;
+  color: var(--accent);
+}
+
+/* ========== Plan File Manager ========== */
+.plan-file-manager {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 320px;
+  max-height: 450px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 20px rgba(96, 165, 250, 0.15);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.plan-fm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.15), rgba(96, 165, 250, 0.05));
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+}
+
+.plan-fm-header:active {
+  cursor: grabbing;
+}
+
+.plan-fm-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.plan-fm-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.plan-fm-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.plan-fm-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.plan-fm-loading,
+.plan-fm-error {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.plan-fm-error {
+  color: var(--red);
+}
+
+.plan-fm-files {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.plan-fm-file,
+.plan-fm-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.plan-fm-file:hover,
+.plan-fm-item:hover {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.plan-fm-file-icon,
+.plan-fm-item-icon {
+  font-size: 1rem;
+}
+
+.plan-fm-file-name,
+.plan-fm-item-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-fm-item-count {
+  background: var(--bg-dark);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.plan-fm-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.5rem 0;
+}
+
+.plan-fm-section-title {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ========== Plan File Viewer Window ========== */
+.plan-file-window {
+  position: fixed;
+  width: 500px;
+  height: 400px;
+  min-width: 300px;
+  min-height: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.plan-file-window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.plan-file-window-header:active {
+  cursor: grabbing;
+}
+
+.plan-file-window-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-file-window-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.plan-file-window-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.plan-file-window-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.plan-file-content {
+  margin: 0;
+  padding: 1rem;
+  font-family: 'SF Mono', Monaco, 'Menlo', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan-file-content.json {
+  color: #a5d6ff;
+}
+
+.plan-file-content.markdown {
+  color: var(--text-dim);
+}
+
+.plan-file-window-resize {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
+  border-radius: 0 0 8px 0;
+}
+
+.plan-file-window-resize:hover {
+  background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
 }
 
 /* Note: main .plan-item styles are in "Enhanced Plan Item Styling" section below */

@@ -946,7 +946,13 @@
       <div class="modal-content modal-wizard">
         <div class="modal-header">
           <h3>Start Ralph Loop</h3>
-          <button class="modal-close" onclick="app.closeRalphWizard()">&times;</button>
+          <div class="modal-header-actions">
+            <button class="wizard-minimize-agents" id="wizardMinimizeAgentsBtn" onclick="app.togglePlanAgentsMinimized()" style="display: none;">
+              <span class="icon">🤖</span>
+              <span class="agent-count" id="wizardAgentCount">0</span>
+            </button>
+            <button class="modal-close" onclick="app.closeRalphWizard()">&times;</button>
+          </div>
         </div>
 
         <!-- Wizard Progress Steps -->

@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1409 (must match `package.json`)
+**Version**: 0.1410 (must match `package.json`)
 
 ## Project Overview
 
@@ -41,8 +41,9 @@ npm run typecheck                  # Type check
 # Testing
 npx vitest run                     # All tests
 npx vitest run test/<file>.test.ts # Single file
+npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
-npm run test:e2e                   # Browser E2E (run `npx playwright install chromium` first)
+npm run test:e2e                   # Browser E2E (requires: npx playwright install chromium)
 
 # Production
 npm run build
@@ -107,7 +108,7 @@ journalctl --user -u claudeman-web -f
 
 ## Testing
 
-**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts` (E2E_PORTS: 3183-3190). Unit/integration tests pick unique ports manually (3099-3157). Search `const PORT =` or `TEST_PORT` in test files to see used ports. **Next available: 3192**
+**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts`. Unit/integration tests pick unique ports manually. Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config provides ports, timeouts, and helpers.
 
@@ -165,3 +166,26 @@ The app must stay fast with 20 sessions and 50 agent windows:
 | **Test fixtures** | `test/e2e/fixtures/` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
+
+## Active Ralph Loop Task
+
+**Current Task**: Create an improvement plan to make this app(Claudeman) significantly better, but focus on performance, memory leaks, that it runs really fluid and fast and all the functions are working properly also in edge cases.
+
+**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+
+### Key Files
+- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
+- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
+- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
+
+### How to Work on This Task
+1. Read the plan summary to understand the overall approach
+2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
+3. Work through items in priority order (critical → high → medium → low)
+4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
+
+### Research Insights
+Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
+- External GitHub repos and documentation links to reference
+- Existing codebase patterns to follow
+- Technical recommendations from the research phase

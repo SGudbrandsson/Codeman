@@ -465,9 +465,15 @@ class ClaudemanApp {
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Plan subagent windows (visible Opus agents during plan generation)
-    this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element }>
+    this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element, relativePos }>
     this.planSubagentWindowZIndex = 1100;
     this.planGenerationStopped = false; // Flag to ignore SSE events after Stop
+    this.planAgentsMinimized = false; // Whether agent windows are minimized to tab
+
+    // Wizard dragging state
+    this.wizardDragState = null; // { startX, startY, startLeft, startTop, isDragging }
+    this.wizardDragListeners = null; // { move, up } for cleanup
+    this.wizardPosition = null; // { left, top } - null means centered
 
     // Project Insights tracking (active Bash tools with clickable file paths)
     this.projectInsights = new Map(); // Map<sessionId, ActiveBashTool[]>
@@ -2672,7 +2678,25 @@ class ClaudemanApp {
 
     // Show wizard modal
     this.updateRalphWizardUI();
-    document.getElementById('ralphWizardModal').classList.add('active');
+    const modal = document.getElementById('ralphWizardModal');
+    modal.classList.add('active');
+
+    // Reset wizard position to center
+    this.wizardPosition = null;
+    this.planAgentsMinimized = false;
+    const wizardContent = modal.querySelector('.modal-content');
+    if (wizardContent) {
+      wizardContent.classList.remove('draggable');
+      wizardContent.style.left = '';
+      wizardContent.style.top = '';
+    }
+
+    // Set up wizard dragging
+    this.setupWizardDragging();
+
+    // Hide minimize button initially (no agents yet)
+    this.updateWizardAgentCount();
+
     document.getElementById('ralphTaskDescription').focus();
 
     // Update connection lines to show wizard connections
@@ -2680,7 +2704,18 @@ class ClaudemanApp {
   }
 
   closeRalphWizard() {
-    document.getElementById('ralphWizardModal')?.classList.remove('active');
+    const modal = document.getElementById('ralphWizardModal');
+    modal?.classList.remove('active');
+
+    // Clean up wizard drag listeners
+    this.cleanupWizardDragging();
+
+    // Remove agents minimized tab if exists
+    this.removeAgentsMinimizedTab();
+
+    // Reset wizard position
+    this.wizardPosition = null;
+    this.planAgentsMinimized = false;
 
     // Update connection lines (wizard closed, revert to normal)
     this.updateConnectionLines();
@@ -3882,8 +3917,10 @@ class ClaudemanApp {
 
     win.innerHTML = `
       <div class="plan-subagent-header">
-        <span class="plan-subagent-icon">${typeIcons[agentType] || '🤖'}</span>
-        <span class="plan-subagent-title">${typeLabels[agentType] || agentType}</span>
+        <span class="plan-subagent-prompt-link" data-agent-id="${agentId}" data-agent-type="${agentType}" title="Click to view prompt">
+          <span class="plan-subagent-icon">${typeIcons[agentType] || '🤖'}</span>
+          <span class="plan-subagent-title">${typeLabels[agentType] || agentType}</span>
+        </span>
         <span class="plan-subagent-model">${model}</span>
       </div>
       <div class="plan-subagent-body">
@@ -3895,19 +3932,102 @@ class ClaudemanApp {
       </div>
     `;
 
+    // Add click handler for prompt link
+    const promptLink = win.querySelector('.plan-subagent-prompt-link');
+    promptLink.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.showPlanAgentPrompt(agentId, agentType);
+    });
+
     document.body.appendChild(win);
 
-    // Store reference
+    // Calculate relative position to wizard
+    let relativePos = null;
+    if (wizardRect) {
+      relativePos = {
+        dx: x - wizardRect.left,
+        dy: y - wizardRect.top,
+      };
+    }
+
+    // Make the window draggable
+    const header = win.querySelector('.plan-subagent-header');
+    const dragListeners = this.makePlanSubagentDraggable(win, header);
+
+    // Store reference with relative position and drag listeners
     this.planSubagents.set(agentId, {
+      agentId,
       type: agentType,
       model,
       status: 'running',
       startTime: Date.now(),
       element: win,
+      relativePos,
+      dragListeners,
     });
+
+    // If agents are minimized, hide this new window too
+    if (this.planAgentsMinimized) {
+      win.style.display = 'none';
+    }
+
+    // Update wizard agent count button
+    this.updateWizardAgentCount();
 
     // Update connection lines
     this.updateConnectionLines();
+  }
+
+  makePlanSubagentDraggable(win, handle) {
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+    let dragUpdateScheduled = false;
+
+    const mousedownHandler = (e) => {
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = parseInt(win.style.left) || 0;
+      startTop = parseInt(win.style.top) || 0;
+      win.style.zIndex = ++this.planSubagentWindowZIndex;
+      e.preventDefault();
+    };
+
+    const moveHandler = (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      // Constrain to viewport
+      const winWidth = win.offsetWidth || 280;
+      const winHeight = win.offsetHeight || 100;
+      const maxX = window.innerWidth - winWidth - 10;
+      const maxY = window.innerHeight - winHeight - 10;
+      const newLeft = Math.max(10, Math.min(startLeft + dx, maxX));
+      const newTop = Math.max(10, Math.min(startTop + dy, maxY));
+
+      win.style.left = `${newLeft}px`;
+      win.style.top = `${newTop}px`;
+
+      // Throttle connection line updates
+      if (!dragUpdateScheduled) {
+        dragUpdateScheduled = true;
+        requestAnimationFrame(() => {
+          this.updateConnectionLines();
+          dragUpdateScheduled = false;
+        });
+      }
+    };
+
+    const upHandler = () => {
+      isDragging = false;
+    };
+
+    handle.addEventListener('mousedown', mousedownHandler);
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+
+    return { mousedown: mousedownHandler, move: moveHandler, up: upHandler };
   }
 
   updatePlanSubagentWindow(agentId, status, itemCount, durationMs, error) {
@@ -3921,12 +4041,21 @@ class ClaudemanApp {
     const detailEl = win.querySelector('.plan-subagent-detail');
 
     windowData.status = status;
+    windowData.itemCount = itemCount;
 
     if (status === 'completed') {
       statusEl?.classList.remove('running');
       statusEl?.classList.add('completed');
       if (spinnerEl) spinnerEl.style.display = 'none';
-      if (statusTextEl) statusTextEl.textContent = `Done (${itemCount || 0} items)`;
+      if (statusTextEl) {
+        statusTextEl.textContent = `Done (${itemCount || 0} items)`;
+        statusTextEl.classList.add('clickable');
+        statusTextEl.title = 'Click to view result files';
+        statusTextEl.onclick = (e) => {
+          e.stopPropagation();
+          this.showPlanAgentFiles(windowData.agentId, windowData.type);
+        };
+      }
       if (detailEl && durationMs) detailEl.textContent = `${(durationMs / 1000).toFixed(1)}s`;
     } else if (status === 'failed' || status === 'cancelled') {
       statusEl?.classList.remove('running');
@@ -3936,18 +4065,594 @@ class ClaudemanApp {
       if (detailEl) detailEl.textContent = error || '';
     }
 
+    // Update minimized tab if agents are hidden
+    if (this.planAgentsMinimized) {
+      this.createAgentsMinimizedTab();
+    }
+
     // Update connection lines
     this.updateConnectionLines();
   }
 
   closePlanSubagentWindows() {
     for (const [agentId, windowData] of this.planSubagents) {
+      // Clean up drag listeners
+      if (windowData.dragListeners) {
+        document.removeEventListener('mousemove', windowData.dragListeners.move);
+        document.removeEventListener('mouseup', windowData.dragListeners.up);
+      }
       if (windowData.element) {
         windowData.element.remove();
       }
     }
     this.planSubagents.clear();
+    this.updateWizardAgentCount();
+    this.removeAgentsMinimizedTab();
     this.updateConnectionLines();
+  }
+
+  // ========== Wizard Dragging ==========
+
+  setupWizardDragging() {
+    const modal = document.getElementById('ralphWizardModal');
+    const wizardContent = modal?.querySelector('.modal-content');
+    const header = wizardContent?.querySelector('.modal-header');
+    if (!wizardContent || !header) return;
+
+    // Clean up any existing listeners
+    this.cleanupWizardDragging();
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+    let dragUpdateScheduled = false;
+    let agentStartPositions = new Map(); // Track agent window start positions during drag
+
+    const mousedownHandler = (e) => {
+      // Don't drag if clicking buttons
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+
+      isDragging = true;
+
+      // If wizard hasn't been moved yet, calculate its current centered position
+      if (!this.wizardPosition) {
+        const rect = wizardContent.getBoundingClientRect();
+        this.wizardPosition = { left: rect.left, top: rect.top };
+      }
+
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = this.wizardPosition.left;
+      startTop = this.wizardPosition.top;
+
+      // Capture agent window start positions
+      agentStartPositions.clear();
+      for (const [agentId, windowData] of this.planSubagents) {
+        if (windowData.element) {
+          agentStartPositions.set(agentId, {
+            left: parseInt(windowData.element.style.left) || 0,
+            top: parseInt(windowData.element.style.top) || 0,
+          });
+        }
+      }
+
+      // Switch to absolute positioning
+      wizardContent.classList.add('draggable');
+      wizardContent.style.left = `${startLeft}px`;
+      wizardContent.style.top = `${startTop}px`;
+
+      e.preventDefault();
+    };
+
+    const moveHandler = (e) => {
+      if (!isDragging) return;
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      // Constrain to viewport
+      const winWidth = wizardContent.offsetWidth || 480;
+      const winHeight = wizardContent.offsetHeight || 400;
+      const maxX = window.innerWidth - winWidth - 10;
+      const maxY = window.innerHeight - winHeight - 10;
+      const newLeft = Math.max(10, Math.min(startLeft + dx, maxX));
+      const newTop = Math.max(10, Math.min(startTop + dy, maxY));
+
+      this.wizardPosition = { left: newLeft, top: newTop };
+      wizardContent.style.left = `${newLeft}px`;
+      wizardContent.style.top = `${newTop}px`;
+
+      // Move agent windows using their start positions + delta
+      this.moveAgentWindowsWithWizard(agentStartPositions, dx, dy);
+
+      // Throttle connection line updates
+      if (!dragUpdateScheduled) {
+        dragUpdateScheduled = true;
+        requestAnimationFrame(() => {
+          this.updateConnectionLines();
+          dragUpdateScheduled = false;
+        });
+      }
+    };
+
+    const upHandler = () => {
+      if (isDragging) {
+        isDragging = false;
+        // Save agent window positions for next drag
+        this.saveAgentWindowRelativePositions();
+      }
+    };
+
+    header.addEventListener('mousedown', mousedownHandler);
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+
+    this.wizardDragListeners = {
+      header,
+      mousedown: mousedownHandler,
+      move: moveHandler,
+      up: upHandler,
+    };
+  }
+
+  cleanupWizardDragging() {
+    if (this.wizardDragListeners) {
+      const { header, mousedown, move, up } = this.wizardDragListeners;
+      header?.removeEventListener('mousedown', mousedown);
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      this.wizardDragListeners = null;
+    }
+  }
+
+  moveAgentWindowsWithWizard(agentStartPositions, dx, dy) {
+    // Move plan subagent windows using their start positions + delta
+    for (const [agentId, windowData] of this.planSubagents) {
+      if (windowData.element && !this.planAgentsMinimized) {
+        const startPos = agentStartPositions.get(agentId);
+        if (startPos) {
+          windowData.element.style.left = `${startPos.left + dx}px`;
+          windowData.element.style.top = `${startPos.top + dy}px`;
+        }
+      }
+    }
+  }
+
+  saveAgentWindowRelativePositions() {
+    const wizardModal = document.getElementById('ralphWizardModal');
+    const wizardContent = wizardModal?.querySelector('.modal-content');
+    if (!wizardContent) return;
+
+    const wizardRect = wizardContent.getBoundingClientRect();
+
+    for (const [, windowData] of this.planSubagents) {
+      if (windowData.element) {
+        const winRect = windowData.element.getBoundingClientRect();
+        windowData.relativePos = {
+          dx: winRect.left - wizardRect.left,
+          dy: winRect.top - wizardRect.top,
+        };
+      }
+    }
+  }
+
+  // ========== Agent Windows Minimize/Expand ==========
+
+  togglePlanAgentsMinimized() {
+    this.planAgentsMinimized = !this.planAgentsMinimized;
+
+    if (this.planAgentsMinimized) {
+      // Hide all agent windows and show tab
+      for (const [, windowData] of this.planSubagents) {
+        if (windowData.element) {
+          windowData.element.style.display = 'none';
+        }
+      }
+      this.createAgentsMinimizedTab();
+    } else {
+      // Show all agent windows and remove tab
+      for (const [, windowData] of this.planSubagents) {
+        if (windowData.element) {
+          windowData.element.style.display = '';
+        }
+      }
+      this.removeAgentsMinimizedTab();
+    }
+
+    this.updateConnectionLines();
+  }
+
+  createAgentsMinimizedTab() {
+    // Remove existing tab if any
+    this.removeAgentsMinimizedTab();
+
+    const runningCount = Array.from(this.planSubagents.values())
+      .filter(w => w.status === 'running').length;
+    const totalCount = this.planSubagents.size;
+
+    const tab = document.createElement('div');
+    tab.className = 'wizard-agents-tab';
+    tab.id = 'wizardAgentsMinimizedTab';
+    tab.onclick = () => this.togglePlanAgentsMinimized();
+
+    tab.innerHTML = `
+      <span class="tab-icon">🤖</span>
+      <span class="tab-label">Plan Agents</span>
+      <span class="tab-count">${totalCount}</span>
+      ${runningCount > 0 ? `
+        <span class="tab-running">
+          <span class="tab-spinner"></span>
+          ${runningCount} running
+        </span>
+      ` : ''}
+    `;
+
+    document.body.appendChild(tab);
+  }
+
+  removeAgentsMinimizedTab() {
+    document.getElementById('wizardAgentsMinimizedTab')?.remove();
+  }
+
+  updateWizardAgentCount() {
+    const btn = document.getElementById('wizardMinimizeAgentsBtn');
+    const countEl = document.getElementById('wizardAgentCount');
+    if (!btn || !countEl) return;
+
+    const count = this.planSubagents.size;
+    countEl.textContent = count;
+    btn.style.display = count > 0 ? '' : 'none';
+
+    // Update minimized tab if it exists
+    if (this.planAgentsMinimized) {
+      this.createAgentsMinimizedTab();
+    }
+  }
+
+  // ========== Plan Agent Prompts & Files Viewer ==========
+
+  async showPlanAgentPrompt(agentId, agentType) {
+    const caseName = this.ralphWizardConfig?.caseName;
+    if (!caseName) {
+      console.error('No case name available');
+      return;
+    }
+
+    try {
+      const filePath = `${agentType}/prompt.md`;
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/file/${encodeURIComponent(filePath)}`);
+      const data = await res.json();
+
+      if (!data.success) {
+        this.showPlanFileWindow(agentType, 'prompt.md', `Error: ${data.error}`, false);
+        return;
+      }
+
+      this.showPlanFileWindow(agentType, 'prompt.md', data.data.content, false);
+    } catch (err) {
+      console.error('Failed to fetch prompt:', err);
+      this.showPlanFileWindow(agentType, 'prompt.md', `Error fetching prompt: ${err.message}`, false);
+    }
+  }
+
+  async showPlanAgentFiles(agentId, agentType) {
+    const caseName = this.ralphWizardConfig?.caseName;
+    if (!caseName) {
+      console.error('No case name available');
+      return;
+    }
+
+    // Create file manager popup
+    this.showPlanFileManager(agentType, caseName);
+  }
+
+  showPlanFileManager(agentType, caseName) {
+    // Remove existing file manager if any
+    document.getElementById('planFileManager')?.remove();
+
+    const typeLabels = {
+      research: 'Research Agent',
+      requirements: 'Requirements Analyst',
+      architecture: 'Architecture Planner',
+      testing: 'TDD Specialist',
+      risks: 'Risk Analyst',
+      verification: 'Verification Expert',
+      execution: 'Execution Optimizer',
+      'final-review': 'Final Review',
+    };
+
+    const fm = document.createElement('div');
+    fm.className = 'plan-file-manager';
+    fm.id = 'planFileManager';
+    fm.innerHTML = `
+      <div class="plan-fm-header">
+        <span class="plan-fm-title">${typeLabels[agentType] || agentType} Files</span>
+        <button class="plan-fm-close" onclick="document.getElementById('planFileManager')?.remove()">&times;</button>
+      </div>
+      <div class="plan-fm-body">
+        <div class="plan-fm-loading">Loading files...</div>
+      </div>
+    `;
+
+    document.body.appendChild(fm);
+
+    // Make draggable
+    this.makePlanFileManagerDraggable(fm);
+
+    // Fetch files
+    this.loadPlanFileManagerFiles(agentType, caseName, fm);
+  }
+
+  async loadPlanFileManagerFiles(agentType, caseName, fm) {
+    const body = fm.querySelector('.plan-fm-body');
+
+    try {
+      // First try to get the result.json
+      const resultPath = `${agentType}/result.json`;
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/file/${encodeURIComponent(resultPath)}`);
+      const data = await res.json();
+
+      if (!data.success) {
+        body.innerHTML = `<div class="plan-fm-error">No result file found</div>`;
+        return;
+      }
+
+      const parsed = data.data.parsed;
+      let items = [];
+
+      // Extract items based on agent type
+      if (agentType === 'research' && parsed?.findings) {
+        // Research has nested structure
+        items = [
+          { name: 'External Resources', type: 'section', count: parsed.findings.externalResources?.length || 0 },
+          { name: 'Codebase Patterns', type: 'section', count: parsed.findings.codebasePatterns?.length || 0 },
+          { name: 'Technical Recommendations', type: 'section', count: parsed.findings.technicalRecommendations?.length || 0 },
+          { name: 'Potential Challenges', type: 'section', count: parsed.findings.potentialChallenges?.length || 0 },
+          { name: 'Recommended Tools', type: 'section', count: parsed.findings.recommendedTools?.length || 0 },
+        ];
+      } else if (parsed?.items) {
+        items = parsed.items.map((item, idx) => ({
+          name: item.category || item.content?.substring(0, 50) || `Item ${idx + 1}`,
+          type: 'item',
+          content: item.content || JSON.stringify(item, null, 2),
+          rationale: item.rationale,
+        }));
+      } else {
+        // Fallback: show raw JSON structure
+        items = Object.keys(parsed || {}).map(key => ({
+          name: key,
+          type: 'key',
+          content: JSON.stringify(parsed[key], null, 2),
+        }));
+      }
+
+      body.innerHTML = `
+        <div class="plan-fm-files">
+          <div class="plan-fm-file" data-file="prompt.md">
+            <span class="plan-fm-file-icon">📄</span>
+            <span class="plan-fm-file-name">prompt.md</span>
+          </div>
+          <div class="plan-fm-file" data-file="result.json">
+            <span class="plan-fm-file-icon">📊</span>
+            <span class="plan-fm-file-name">result.json</span>
+          </div>
+          <div class="plan-fm-divider"></div>
+          <div class="plan-fm-section-title">Result Contents (${items.length} items)</div>
+          ${items.map((item, idx) => `
+            <div class="plan-fm-item" data-item-idx="${idx}" data-agent-type="${agentType}">
+              <span class="plan-fm-item-icon">${item.type === 'section' ? '📁' : '📝'}</span>
+              <span class="plan-fm-item-name">${this.escapeHtml(item.name)}</span>
+              ${item.count !== undefined ? `<span class="plan-fm-item-count">${item.count}</span>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      // Store items data for click handlers
+      fm._itemsData = items;
+      fm._parsedData = parsed;
+      fm._caseName = caseName;
+      fm._agentType = agentType;
+
+      // Add click handlers
+      body.querySelectorAll('.plan-fm-file').forEach(el => {
+        el.onclick = () => this.openPlanFile(agentType, caseName, el.dataset.file);
+      });
+
+      body.querySelectorAll('.plan-fm-item').forEach(el => {
+        el.onclick = () => this.openPlanFileItem(fm, parseInt(el.dataset.itemIdx));
+      });
+
+    } catch (err) {
+      body.innerHTML = `<div class="plan-fm-error">Error: ${err.message}</div>`;
+    }
+  }
+
+  async openPlanFile(agentType, caseName, fileName) {
+    const filePath = `${agentType}/${fileName}`;
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/file/${encodeURIComponent(filePath)}`);
+      const data = await res.json();
+
+      if (!data.success) {
+        this.showPlanFileWindow(agentType, fileName, `Error: ${data.error}`, fileName.endsWith('.json'));
+        return;
+      }
+
+      const content = fileName.endsWith('.json')
+        ? JSON.stringify(data.data.parsed, null, 2)
+        : data.data.content;
+
+      this.showPlanFileWindow(agentType, fileName, content, fileName.endsWith('.json'));
+    } catch (err) {
+      this.showPlanFileWindow(agentType, fileName, `Error: ${err.message}`, false);
+    }
+  }
+
+  openPlanFileItem(fm, itemIdx) {
+    const items = fm._itemsData;
+    const parsed = fm._parsedData;
+    const agentType = fm._agentType;
+
+    if (!items || itemIdx >= items.length) return;
+
+    const item = items[itemIdx];
+
+    // For research agent, expand the section
+    if (agentType === 'research' && item.type === 'section') {
+      let sectionData;
+      switch (item.name) {
+        case 'External Resources':
+          sectionData = parsed.findings?.externalResources;
+          break;
+        case 'Codebase Patterns':
+          sectionData = parsed.findings?.codebasePatterns;
+          break;
+        case 'Technical Recommendations':
+          sectionData = parsed.findings?.technicalRecommendations;
+          break;
+        case 'Potential Challenges':
+          sectionData = parsed.findings?.potentialChallenges;
+          break;
+        case 'Recommended Tools':
+          sectionData = parsed.findings?.recommendedTools;
+          break;
+      }
+      const content = JSON.stringify(sectionData, null, 2);
+      this.showPlanFileWindow(agentType, item.name, content, true);
+    } else {
+      // Show item content
+      const content = item.content || JSON.stringify(item, null, 2);
+      this.showPlanFileWindow(agentType, item.name, content, typeof item.content !== 'string');
+    }
+  }
+
+  showPlanFileWindow(agentType, fileName, content, isJson) {
+    const windowId = `plan-file-${Date.now()}`;
+
+    const win = document.createElement('div');
+    win.className = 'plan-file-window';
+    win.id = windowId;
+    win.style.left = `${100 + Math.random() * 200}px`;
+    win.style.top = `${100 + Math.random() * 100}px`;
+    win.style.zIndex = ++this.planSubagentWindowZIndex;
+
+    const typeLabels = {
+      research: 'Research',
+      requirements: 'Requirements',
+      architecture: 'Architecture',
+      testing: 'Testing',
+      risks: 'Risks',
+      verification: 'Verification',
+      execution: 'Execution',
+      'final-review': 'Review',
+    };
+
+    win.innerHTML = `
+      <div class="plan-file-window-header">
+        <span class="plan-file-window-title">${typeLabels[agentType] || agentType} / ${this.escapeHtml(fileName)}</span>
+        <button class="plan-file-window-close" onclick="document.getElementById('${windowId}')?.remove()">&times;</button>
+      </div>
+      <div class="plan-file-window-body">
+        <pre class="plan-file-content ${isJson ? 'json' : 'markdown'}">${this.escapeHtml(content)}</pre>
+      </div>
+      <div class="plan-file-window-resize"></div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Make draggable and resizable
+    this.makePlanFileWindowDraggable(win);
+    this.makePlanFileWindowResizable(win);
+  }
+
+  makePlanFileManagerDraggable(fm) {
+    const header = fm.querySelector('.plan-fm-header');
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = parseInt(fm.style.left) || (window.innerWidth / 2 - 150);
+      startTop = parseInt(fm.style.top) || (window.innerHeight / 2 - 200);
+      fm.style.left = `${startLeft}px`;
+      fm.style.top = `${startTop}px`;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      fm.style.left = `${Math.max(10, startLeft + dx)}px`;
+      fm.style.top = `${Math.max(10, startTop + dy)}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+
+  makePlanFileWindowDraggable(win) {
+    const header = win.querySelector('.plan-file-window-header');
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = parseInt(win.style.left) || 0;
+      startTop = parseInt(win.style.top) || 0;
+      win.style.zIndex = ++this.planSubagentWindowZIndex;
+      e.preventDefault();
+    });
+
+    const moveHandler = (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      win.style.left = `${Math.max(10, startLeft + dx)}px`;
+      win.style.top = `${Math.max(10, startTop + dy)}px`;
+    };
+
+    const upHandler = () => {
+      isDragging = false;
+    };
+
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+  }
+
+  makePlanFileWindowResizable(win) {
+    const resizer = win.querySelector('.plan-file-window-resize');
+    let isResizing = false;
+    let startX, startY, startWidth, startHeight;
+
+    resizer.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startWidth = win.offsetWidth;
+      startHeight = win.offsetHeight;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      win.style.width = `${Math.max(300, startWidth + dx)}px`;
+      win.style.height = `${Math.max(200, startHeight + dy)}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isResizing = false;
+    });
   }
 
   skipPlanGeneration() {
@@ -8327,7 +9032,8 @@ class ClaudemanApp {
     }
 
     // Draw lines from wizard to plan subagent windows (Opus agents during plan generation)
-    if (wizardOpen && wizardContent && this.planSubagents.size > 0) {
+    // Skip if agents are minimized to tab
+    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
       const wizardRect = wizardContent.getBoundingClientRect();
 
       for (const [agentId, windowData] of this.planSubagents) {

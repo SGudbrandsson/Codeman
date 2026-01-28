@@ -2561,6 +2561,96 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       return { success: true, data: { cancelled } };
     });
 
+    // Get ralph-wizard files for a case (prompts and results)
+    this.app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
+      const { caseName } = req.params as { caseName: string };
+      const casesDir = join(homedir(), 'claudeman-cases');
+      const casePath = join(casesDir, caseName);
+
+      // Security: Path traversal protection
+      const resolvedCase = resolve(casePath);
+      const resolvedBase = resolve(casesDir);
+      if (!resolvedCase.startsWith(resolvedBase)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+      }
+
+      const wizardDir = join(casePath, 'ralph-wizard');
+
+      if (!existsSync(wizardDir)) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Ralph wizard directory not found');
+      }
+
+      // List all subdirectories and their files
+      const files: Array<{ agentType: string; promptFile?: string; resultFile?: string }> = [];
+      const entries = readdirSync(wizardDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const agentDir = join(wizardDir, entry.name);
+          const agentFiles: { agentType: string; promptFile?: string; resultFile?: string } = {
+            agentType: entry.name,
+          };
+
+          if (existsSync(join(agentDir, 'prompt.md'))) {
+            agentFiles.promptFile = `${entry.name}/prompt.md`;
+          }
+          if (existsSync(join(agentDir, 'result.json'))) {
+            agentFiles.resultFile = `${entry.name}/result.json`;
+          }
+
+          if (agentFiles.promptFile || agentFiles.resultFile) {
+            files.push(agentFiles);
+          }
+        }
+      }
+
+      return { success: true, data: { files, caseName } };
+    });
+
+    // Read a specific ralph-wizard file
+    this.app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req) => {
+      const { caseName, filePath } = req.params as { caseName: string; filePath: string };
+      const casesDir = join(homedir(), 'claudeman-cases');
+      const casePath = join(casesDir, caseName);
+
+      // Security: Path traversal protection for case name
+      const resolvedCase = resolve(casePath);
+      const resolvedBase = resolve(casesDir);
+      if (!resolvedCase.startsWith(resolvedBase)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+      }
+
+      const wizardDir = join(casePath, 'ralph-wizard');
+
+      // Decode the file path (it may be URL encoded)
+      const decodedPath = decodeURIComponent(filePath);
+      const fullPath = join(wizardDir, decodedPath);
+
+      // Security: ensure path is within wizard directory
+      const resolvedPath = resolve(fullPath);
+      const resolvedWizard = resolve(wizardDir);
+      if (!resolvedPath.startsWith(resolvedWizard)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid file path');
+      }
+
+      if (!existsSync(fullPath)) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+      }
+
+      const content = readFileSync(fullPath, 'utf-8');
+      const isJson = filePath.endsWith('.json');
+
+      return {
+        success: true,
+        data: {
+          content,
+          filePath: decodedPath,
+          isJson,
+          parsed: isJson ? JSON.parse(content) : null,
+        },
+      };
+    });
+
     // ============ Plan Management Endpoints ============
     // These endpoints support runtime plan adaptation with checkpoints, failure tracking, and versioning
 
