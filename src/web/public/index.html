@@ -331,6 +331,16 @@
             <div class="monitor-empty">No screen sessions</div>
           </div>
         </div>
+        <div class="monitor-section" id="monitorSubagentsSection">
+          <div class="monitor-section-header">
+            <span>Background Agents</span>
+            <span class="task-stats" id="monitorSubagentStats">0 tracked</span>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.clearAllSubagents()" title="Clear all">Clear</button>
+          </div>
+          <div class="monitor-section-body" id="monitorSubagentsBody">
+            <div class="monitor-empty">No background agents</div>
+          </div>
+        </div>
         <div class="monitor-section" id="backgroundTasksSection" style="display: none;">
           <div class="monitor-section-header">
             <span>Background Tasks</span>
@@ -349,6 +359,7 @@
           Subagents <span id="subagentCountBadge" class="subagent-badge"></span>
         </div>
         <div class="subagents-panel-actions">
+          <button class="btn-toolbar btn-sm btn-danger" onclick="app.clearAllSubagents()" title="Clear all tracked subagents">Clear All</button>
           <button class="btn-icon-sm" onclick="app.toggleSubagentsDetach()" title="Detach panel" id="subagentsDetachBtn">&#x29C9;</button>
           <button class="btn-icon-sm" onclick="app.toggleSubagentsPanel()" title="Toggle panel" id="subagentsToggleBtn">&#x25B2;</button>
           <button class="btn-icon-sm" onclick="app.closeSubagentsPanel()" title="Close">&times;</button>
@@ -488,6 +499,15 @@
                 </div>
               </div>
               <span class="form-hint">Completely resets context (use higher threshold than compact)</span>
+            </div>
+
+            <div class="form-row form-row-switch">
+              <label>Image Watcher</label>
+              <label class="switch">
+                <input type="checkbox" id="modalImageWatcherEnabled" checked onchange="app.toggleSessionImageWatcher()">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Auto-popup new images (screenshots, etc.) in this session's directory</span>
             </div>
           </div><!-- End context-tab -->
 
@@ -685,6 +705,7 @@
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="settings-display">Display</button>
           <button class="modal-tab-btn" data-tab="settings-claude">Claude CLI</button>
+          <button class="modal-tab-btn" data-tab="settings-models">Models</button>
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
         </div>
@@ -763,6 +784,16 @@
                   <span class="slider"></span>
                 </label>
               </div>
+
+              <!-- Image Watcher Options Section -->
+              <div class="settings-section-header">Image Watcher</div>
+              <div class="settings-item" title="Automatically detect and popup new images in session directories">
+                <span class="settings-item-label">Enable Globally</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsImageWatcherEnabled" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
           </div>
           <!-- Claude CLI Tab -->
@@ -803,6 +834,68 @@
               <label>Nice Value</label>
               <input type="number" id="appSettingsNiceValue" min="-20" max="19" value="10" style="width: 80px;">
               <span class="form-hint">Process priority (-20 to 19, higher = lower priority, default: 10)</span>
+            </div>
+          </div>
+          <!-- Models Tab -->
+          <div class="modal-tab-content hidden" id="settings-models">
+            <div class="form-row">
+              <label>Default Model</label>
+              <select id="appSettingsDefaultModel" class="form-select">
+                <option value="sonnet">Sonnet (Recommended - balanced)</option>
+                <option value="opus">Opus (Most capable)</option>
+                <option value="haiku">Haiku (Fast & cheap)</option>
+              </select>
+              <span class="form-hint">Model used for execution tasks. Optimizer suggestions are advisory only.</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Show Optimizer Recommendations</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsShowModelRecommendations" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Show what the optimizer recommends (doesn't override your choice)</span>
+            </div>
+            <div class="form-section-header">Agent Type Overrides</div>
+            <p class="form-hint" style="margin: 0 0 12px 0;">Optionally set specific models for each task type. Leave as "Use Default" to use your default model.</p>
+            <div class="form-row">
+              <label>Explore Tasks</label>
+              <select id="appSettingsModelExplore" class="form-select">
+                <option value="">Use Default</option>
+                <option value="haiku">Haiku</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+              </select>
+              <span class="form-hint">Quick searches, codebase exploration</span>
+            </div>
+            <div class="form-row">
+              <label>Implement Tasks</label>
+              <select id="appSettingsModelImplement" class="form-select">
+                <option value="">Use Default</option>
+                <option value="haiku">Haiku</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+              </select>
+              <span class="form-hint">Code writing, feature implementation</span>
+            </div>
+            <div class="form-row">
+              <label>Test Tasks</label>
+              <select id="appSettingsModelTest" class="form-select">
+                <option value="">Use Default</option>
+                <option value="haiku">Haiku</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+              </select>
+              <span class="form-hint">Writing and running tests</span>
+            </div>
+            <div class="form-row">
+              <label>Review Tasks</label>
+              <select id="appSettingsModelReview" class="form-select">
+                <option value="">Use Default</option>
+                <option value="haiku">Haiku</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+              </select>
+              <span class="form-hint">Code review, quality checks</span>
             </div>
           </div>
           <!-- Paths Tab -->

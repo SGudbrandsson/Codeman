@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1415 (must match `package.json`)
+**Version**: 0.1416 (must match `package.json`)
 
 ## Project Overview
 
@@ -122,7 +122,7 @@ journalctl --user -u claudeman-web -f
 
 **Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts`. Unit/integration tests pick unique ports manually. Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
 
-**E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config provides ports, timeouts, and helpers.
+**E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config (`test/e2e/e2e.config.ts`) provides ports (3183-3190), timeouts, and helpers.
 
 **Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits). Unit test timeout is 30s, teardown timeout is 60s. E2E tests have longer timeouts defined in `test/e2e/e2e.config.ts` (90s test, 30s session creation).
 
@@ -132,7 +132,7 @@ journalctl --user -u claudeman-web -f
 - Tracked resource cleanup (only kills screens/processes tests register)
 - Safe to run from within Claudeman-managed sessions
 
-Respawn tests use MockSession to avoid spawning real Claude processes.
+Respawn tests use MockSession to avoid spawning real Claude processes. See `test/respawn-test-utils.ts` for MockSession, MockAiIdleChecker, MockAiPlanChecker, state trackers, and terminal output generators.
 
 ## Debugging
 
@@ -209,3 +209,31 @@ The `claudeman-mcp` binary provides Model Context Protocol integration for Claud
 ```
 
 This enables Claude Desktop to spawn and manage agents via MCP tools.
+
+## Active Ralph Loop Task
+
+**Current Task**: Analyse the whole Start Ralph Loop Orchestrator from Claudeman! You have all files locally. 
+Does the Ralph Loop Orchestrator make sense like this? Should we force the agents to a pydantic json that all speak the same language or it good like this?
+How could we make the agents more smarter, working better together?
+Is the execution optimiser, really taking care of how it gets executed later? How is that managed? Recheck these logics and make it much better!
+Also go through all prompts and optimise them heavily for better results!
+Do the amount of agents make sense? Do we miss something, would it make sense to change its order? Would to make sense to limit their json output differently? Commit but don't push anything!
+
+**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+
+### Key Files
+- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
+- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
+- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
+
+### How to Work on This Task
+1. Read the plan summary to understand the overall approach
+2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
+3. Work through items in priority order (critical → high → medium → low)
+4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
+
+### Research Insights
+Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
+- External GitHub repos and documentation links to reference
+- Existing codebase patterns to follow
+- Technical recommendations from the research phase

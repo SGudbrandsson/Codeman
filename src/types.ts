@@ -139,6 +139,8 @@ export interface SessionState {
   autoCompactThreshold?: number;
   /** Auto-compact prompt */
   autoCompactPrompt?: string;
+  /** Image watcher enabled for this session */
+  imageWatcherEnabled?: boolean;
   /** Total cost in USD */
   totalCost?: number;
   /** Input tokens used */
@@ -1270,3 +1272,38 @@ export type {
   AgentContext,
   SpawnPersistedState,
 } from './spawn-types.js';
+
+// ========== Execution Bridge Re-exports ==========
+
+export type {
+  ExecutionStatus,
+  ExecutionProgress,
+  TaskAssignment as ExecutionTaskAssignment,
+  PlanItem,
+  ExecutionHistoryEntry,
+} from './execution-bridge.js';
+
+export type {
+  ModelTier,
+  AgentType,
+  ExecutionMode,
+  ModelConfig,
+  ModelSelection,
+  ExecutionModeSelection,
+  TaskCharacteristics,
+} from './model-selector.js';
+
+export type {
+  GroupTaskStatus,
+  ExecutionGroupStatus,
+  GroupTask,
+  ExecutionGroup,
+  ExecutionSchedule,
+} from './group-scheduler.js';
+
+export type {
+  ContextRefreshMethod,
+  ContextRefreshStatus,
+  ContextRefreshRequest,
+  ContextRefreshResult,
+} from './context-manager.js';

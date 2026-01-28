@@ -6193,6 +6193,7 @@ class ClaudemanApp {
     document.getElementById('modalAutoCompactPrompt').value = session.autoCompactPrompt ?? '';
     document.getElementById('modalAutoClearEnabled').checked = session.autoClearEnabled ?? false;
     document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
+    document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
 
     // Populate Ralph Wiggum form with current session values
     const ralphState = this.ralphStates.get(sessionId);
@@ -6232,6 +6233,26 @@ class ClaudemanApp {
         })
       });
     } catch { /* silent */ }
+  }
+
+  async toggleSessionImageWatcher() {
+    if (!this.editingSessionId) return;
+    const enabled = document.getElementById('modalImageWatcherEnabled').checked;
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/image-watcher`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+      // Update local session state
+      const session = this.sessions.get(this.editingSessionId);
+      if (session) {
+        session.imageWatcherEnabled = enabled;
+      }
+      this.showToast(`Image watcher ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to toggle image watcher', 'error');
+    }
   }
 
   async autoSaveRespawnConfig() {
@@ -6834,6 +6855,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? false;
+    document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -6848,6 +6870,8 @@ class ClaudemanApp {
     const niceSettings = settings.nice || {};
     document.getElementById('appSettingsNiceEnabled').checked = niceSettings.enabled ?? false;
     document.getElementById('appSettingsNiceValue').value = niceSettings.niceValue ?? 10;
+    // Model configuration (loaded from server)
+    this.loadModelConfigForSettings();
     // Notification settings
     const notifPrefs = this.notificationManager?.preferences || {};
     document.getElementById('appSettingsNotifEnabled').checked = notifPrefs.enabled ?? true;
@@ -6906,6 +6930,7 @@ class ClaudemanApp {
       showSubagents: document.getElementById('appSettingsShowSubagents').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
+      imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
@@ -6947,6 +6972,10 @@ class ClaudemanApp {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...settings, notificationPreferences: notifPrefsToSave })
       });
+
+      // Save model configuration separately
+      await this.saveModelConfigFromSettings();
+
       this.showToast('Settings saved', 'success');
     } catch (err) {
       // Server save failed but localStorage succeeded
@@ -6954,6 +6983,71 @@ class ClaudemanApp {
     }
 
     this.closeAppSettings();
+  }
+
+  // Load model configuration from server for the settings modal
+  async loadModelConfigForSettings() {
+    try {
+      const res = await fetch('/api/execution/model-config');
+      const data = await res.json();
+      if (data.success && data.data) {
+        const config = data.data;
+        // Default model
+        const defaultModelEl = document.getElementById('appSettingsDefaultModel');
+        if (defaultModelEl) {
+          defaultModelEl.value = config.defaultModel || 'sonnet';
+        }
+        // Show recommendations
+        const showRecsEl = document.getElementById('appSettingsShowModelRecommendations');
+        if (showRecsEl) {
+          showRecsEl.checked = config.showRecommendations ?? true;
+        }
+        // Agent type overrides
+        const overrides = config.agentTypeOverrides || {};
+        const exploreEl = document.getElementById('appSettingsModelExplore');
+        const implementEl = document.getElementById('appSettingsModelImplement');
+        const testEl = document.getElementById('appSettingsModelTest');
+        const reviewEl = document.getElementById('appSettingsModelReview');
+        if (exploreEl) exploreEl.value = overrides.explore || '';
+        if (implementEl) implementEl.value = overrides.implement || '';
+        if (testEl) testEl.value = overrides.test || '';
+        if (reviewEl) reviewEl.value = overrides.review || '';
+      }
+    } catch (err) {
+      console.warn('Failed to load model config:', err);
+    }
+  }
+
+  // Save model configuration from settings modal to server
+  async saveModelConfigFromSettings() {
+    const defaultModelEl = document.getElementById('appSettingsDefaultModel');
+    const showRecsEl = document.getElementById('appSettingsShowModelRecommendations');
+    const exploreEl = document.getElementById('appSettingsModelExplore');
+    const implementEl = document.getElementById('appSettingsModelImplement');
+    const testEl = document.getElementById('appSettingsModelTest');
+    const reviewEl = document.getElementById('appSettingsModelReview');
+
+    const agentTypeOverrides = {};
+    if (exploreEl?.value) agentTypeOverrides.explore = exploreEl.value;
+    if (implementEl?.value) agentTypeOverrides.implement = implementEl.value;
+    if (testEl?.value) agentTypeOverrides.test = testEl.value;
+    if (reviewEl?.value) agentTypeOverrides.review = reviewEl.value;
+
+    const config = {
+      defaultModel: defaultModelEl?.value || 'sonnet',
+      showRecommendations: showRecsEl?.checked ?? true,
+      agentTypeOverrides,
+    };
+
+    try {
+      await fetch('/api/execution/model-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+    } catch (err) {
+      console.warn('Failed to save model config:', err);
+    }
   }
 
   // Get the global Ralph tracker enabled setting
@@ -7065,6 +7159,40 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     settings.showSubagents = false;
     localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+  }
+
+  async clearAllSubagents() {
+    const count = this.subagents.size;
+    if (count === 0) {
+      this.showToast('No subagents to clear', 'info');
+      return;
+    }
+
+    if (!confirm(`Clear all ${count} tracked subagent(s)? This removes them from the UI but does not affect running processes.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/subagents', { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        // Clear local state
+        this.subagents.clear();
+        this.subagentActivity.clear();
+        this.subagentToolResults.clear();
+        // Close any open subagent windows
+        this.cleanupAllFloatingWindows();
+        // Update UI
+        this.renderSubagentPanel();
+        this.renderMonitorSubagents();
+        this.updateSubagentBadge();
+        this.showToast(`Cleared ${data.data.cleared} subagent(s)`, 'success');
+      } else {
+        this.showToast('Failed to clear subagents: ' + data.error, 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to clear subagents', 'error');
+    }
   }
 
   toggleSubagentsPanel() {
@@ -8712,6 +8840,9 @@ class ClaudemanApp {
 
     // Always update badge count
     this.updateSubagentBadge();
+
+    // Always update monitor panel (even if subagent panel is hidden)
+    this.renderMonitorSubagents();
 
     // If panel is not visible, don't render content
     if (!this.subagentPanelVisible) {
@@ -10994,6 +11125,49 @@ class ClaudemanApp {
           </div>
           <div class="process-actions">
             <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${screen.sessionId}')" title="Kill screen">Kill</button>
+          </div>
+        </div>
+      `;
+    }
+
+    body.innerHTML = html;
+  }
+
+  renderMonitorSubagents() {
+    const body = document.getElementById('monitorSubagentsBody');
+    const stats = document.getElementById('monitorSubagentStats');
+    if (!body) return;
+
+    const subagents = Array.from(this.subagents.values());
+    const activeCount = subagents.filter(s => s.status === 'active' || s.status === 'idle').length;
+
+    if (stats) {
+      stats.textContent = `${subagents.length} tracked` + (activeCount > 0 ? `, ${activeCount} active` : '');
+    }
+
+    if (subagents.length === 0) {
+      body.innerHTML = '<div class="monitor-empty">No background agents</div>';
+      return;
+    }
+
+    let html = '';
+    for (const agent of subagents) {
+      const statusClass = agent.status === 'active' ? 'active' : agent.status === 'idle' ? 'idle' : 'completed';
+      const modelBadge = agent.modelShort ? `<span class="model-badge ${agent.modelShort}">${agent.modelShort}</span>` : '';
+      const desc = agent.description ? this.escapeHtml(agent.description.substring(0, 40)) : agent.agentId;
+
+      html += `
+        <div class="process-item">
+          <span class="process-mode ${statusClass}">${agent.status}</span>
+          <div class="process-info">
+            <div class="process-name">${modelBadge} ${desc}</div>
+            <div class="process-meta">
+              <span>ID: ${agent.agentId}</span>
+              <span>${agent.toolCallCount || 0} tools</span>
+            </div>
+          </div>
+          <div class="process-actions">
+            ${agent.status !== 'completed' ? `<button class="btn-toolbar btn-sm btn-danger" onclick="app.killSubagent('${agent.agentId}')" title="Kill agent">Kill</button>` : ''}
           </div>
         </div>
       `;
