@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1411 (must match `package.json`)
+**Version**: 0.1412 (must match `package.json`)
 
 ## Project Overview
 
@@ -69,10 +69,22 @@ journalctl --user -u claudeman-web -f
 | `src/session-manager.ts` | Session lifecycle, cleanup |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos |
+| `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
+| `src/run-summary.ts` | Timeline events for "what happened while away" |
+| `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
+
+### Utility Files (`src/utils/`)
+
+| File | Purpose |
+|------|---------|
+| `lru-map.ts` | LRU eviction Map for bounded caches |
+| `stale-expiration-map.ts` | TTL-based Map with lazy expiration |
+| `cleanup-manager.ts` | Centralized resource disposal |
+| `buffer-accumulator.ts` | Chunk accumulator with size limits |
 
 ### Data Flow
 
@@ -140,13 +152,26 @@ The app must stay fast with 20 sessions and 50 agent windows:
 - Debounced state persistence (500ms)
 - SSE batching (16ms)
 
-## Buffer Limits
+## Resource Limits
 
+Limits are centralized in `src/config/buffer-limits.ts` and `src/config/map-limits.ts`.
+
+**Buffer limits** (per session):
 | Buffer | Max | Trim To |
 |--------|-----|---------|
 | Terminal | 2MB | 1.5MB |
 | Text output | 1MB | 768KB |
 | Messages | 1000 | 800 |
+
+**Map limits** (global):
+| Resource | Max |
+|----------|-----|
+| Tracked agents | 500 |
+| Concurrent sessions | 50 |
+| SSE clients total | 100 |
+| File watchers | 500 |
+
+Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-based cleanup.
 
 ## Where to Find More Information
 

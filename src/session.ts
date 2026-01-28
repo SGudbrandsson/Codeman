@@ -315,6 +315,7 @@ export class Session extends EventEmitter {
   private _isWorking: boolean = false;
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
+  private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
   private _taskTracker: TaskTracker;
 
   // Token tracking for auto-clear
@@ -922,34 +923,44 @@ export class Session extends EventEmitter {
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
       if (data.includes('❯') || data.includes('\u276f')) {
-        // Reset activity timeout - if no activity for 2 seconds after prompt, Claude is idle
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
-        this.activityTimeout = setTimeout(() => {
-          // Emit idle if either:
-          // 1. Claude was working and is now at prompt (normal case)
-          // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
-          const wasWorking = this._isWorking;
-          const isInitialReady = this._status === 'busy' && !this._isWorking;
-          if (wasWorking || isInitialReady) {
-            this._isWorking = false;
-            this._status = 'idle';
-            this._lastPromptTime = Date.now();
-            this.emit('idle');
-          }
-        }, IDLE_DETECTION_DELAY_MS);
+        // Only start a new timeout if we're not already awaiting idle confirmation
+        // This prevents status bar redraws (which include ❯) from resetting the timer
+        if (!this._awaitingIdleConfirmation) {
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          this._awaitingIdleConfirmation = true;
+          this.activityTimeout = setTimeout(() => {
+            this._awaitingIdleConfirmation = false;
+            // Emit idle if either:
+            // 1. Claude was working and is now at prompt (normal case)
+            // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
+            const wasWorking = this._isWorking;
+            const isInitialReady = this._status === 'busy' && !this._isWorking;
+            if (wasWorking || isInitialReady) {
+              this._isWorking = false;
+              this._status = 'idle';
+              this._lastPromptTime = Date.now();
+              this.emit('idle');
+            }
+          }, IDLE_DETECTION_DELAY_MS);
+        }
       }
 
       // Detect when Claude starts working (thinking, writing, etc)
-      if (data.includes('Thinking') || data.includes('Writing') || data.includes('Reading') ||
-          data.includes('Running') || data.includes('⠋') || data.includes('⠙') ||
-          data.includes('⠹') || data.includes('⠸') || data.includes('⠼') ||
-          data.includes('⠴') || data.includes('⠦') || data.includes('⠧')) {
+      // Strip ANSI/OSC sequences to avoid false positives from window titles like "3 File Reading Task"
+      const cleanDataForWorkingCheck = data.replace(ANSI_ESCAPE_PATTERN, '');
+      if (cleanDataForWorkingCheck.includes('Thinking') || cleanDataForWorkingCheck.includes('Writing') ||
+          cleanDataForWorkingCheck.includes('Reading') || cleanDataForWorkingCheck.includes('Running') ||
+          cleanDataForWorkingCheck.includes('⠋') || cleanDataForWorkingCheck.includes('⠙') ||
+          cleanDataForWorkingCheck.includes('⠹') || cleanDataForWorkingCheck.includes('⠸') ||
+          cleanDataForWorkingCheck.includes('⠼') || cleanDataForWorkingCheck.includes('⠴') ||
+          cleanDataForWorkingCheck.includes('⠦') || cleanDataForWorkingCheck.includes('⠧')) {
         if (!this._isWorking) {
           this._isWorking = true;
           this._status = 'busy';
           this.emit('working');
         }
-        // Reset timeout since Claude is active
+        // Reset timeout and idle confirmation flag since Claude is active
+        this._awaitingIdleConfirmation = false;
         if (this.activityTimeout) clearTimeout(this.activityTimeout);
       }
     });
@@ -959,6 +970,7 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
       this._pid = null;
       this._status = 'idle';
+      this._awaitingIdleConfirmation = false;
       // Clear all timers to prevent memory leaks
       if (this.activityTimeout) {
         clearTimeout(this.activityTimeout);
