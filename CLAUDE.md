@@ -72,7 +72,12 @@ journalctl --user -u claudeman-web -f
 | `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
 | `src/run-summary.ts` | Timeline events for "what happened while away" |
 | `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
-| `src/plan-orchestrator.ts` | Multi-agent plan generation |
+| `src/plan-orchestrator.ts` | Multi-agent plan generation (9 specialist subagents) |
+| `src/execution-bridge.ts` | Coordinates parallel task execution with GroupScheduler |
+| `src/group-scheduler.ts` | Topological ordering and dependency management |
+| `src/model-selector.ts` | Routes tasks to appropriate Claude models (opus/sonnet/haiku) |
+| `src/context-manager.ts` | Handles fresh context requirements for tasks |
+| `src/prompts/*.ts` | Specialist agent prompts (research, requirements, architecture, etc.) |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
@@ -173,6 +178,14 @@ Limits are centralized in `src/config/buffer-limits.ts` and `src/config/map-limi
 
 Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-based cleanup.
 
+**Execution limits** (parallel execution, in `src/config/execution-limits.ts`):
+| Resource | Default |
+|----------|---------|
+| Parallel tasks per group | 5 |
+| Group timeout | 30 minutes |
+| Task retries | 2 |
+| Session mode token threshold | 50k |
+
 ## Where to Find More Information
 
 | Topic | Location |
@@ -191,6 +204,9 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Test fixtures** | `test/e2e/fixtures/` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
+| **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
+| **Execution system** | `src/config/execution-limits.ts` |
+| **Agent prompts** | `src/prompts/` directory |
 
 ## MCP Server Integration
 
@@ -212,12 +228,7 @@ This enables Claude Desktop to spawn and manage agents via MCP tools.
 
 ## Active Ralph Loop Task
 
-**Current Task**: Analyse the whole Start Ralph Loop Orchestrator from Claudeman! You have all files locally. 
-Does the Ralph Loop Orchestrator make sense like this? Should we force the agents to a pydantic json that all speak the same language or it good like this?
-How could we make the agents more smarter, working better together?
-Is the execution optimiser, really taking care of how it gets executed later? How is that managed? Recheck these logics and make it much better!
-Also go through all prompts and optimise them heavily for better results!
-Do the amount of agents make sense? Do we miss something, would it make sense to change its order? Would to make sense to limit their json output differently? Commit but don't push anything!
+**Current Task**: build out installers for mac os x, any linux and windows at the end. I want it as easy as possible to install claudeman on these machines, explore the code of claudeman, its in your directory where you work. with windows make use of WSL to have the real screen gnu running
 
 **Case Folder**: `/home/arkon/claudeman-cases/claudeman`
 
