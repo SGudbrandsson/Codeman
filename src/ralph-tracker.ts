@@ -30,6 +30,7 @@ import {
   createInitialRalphTrackerState,
   createInitialCircuitBreakerStatus,
 } from './types.js';
+import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
 
 // ========== Enhanced Plan Task Interface ==========
 
@@ -286,12 +287,6 @@ const ALL_COUNT_PATTERN = /all\s+(\d+)\s+(?:tasks?|files?|items?)/i;
 const TASK_DONE_PATTERN = /(?:task|item|todo)\s*(?:#?\d+|"\s*[^"]+\s*")?\s*(?:is\s+)?(?:done|completed?|finished)|(?:completed?|done|finished)\s+(?:task|item)\s*(?:#?\d+)?|marking\s+(?:.*?\s+)?(?:as\s+)?completed?|marked\s+(?:.*?\s+)?(?:as\s+)?completed?/i;
 
 // ---------- Utility Patterns ----------
-
-/**
- * Removes ANSI escape codes from terminal output for cleaner parsing.
- * Matches: color codes (\x1b[...m), cursor movement (\x1b[...H, \x1b[...C), etc.
- */
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
 
 /** Maximum number of task number to content mappings to track */
 const MAX_TASK_MAPPINGS = 100;
@@ -909,7 +904,7 @@ export class RalphTracker extends EventEmitter {
    */
   processTerminalData(data: string): void {
     // Remove ANSI escape codes for cleaner parsing
-    const cleanData = data.replace(ANSI_ESCAPE_PATTERN, '');
+    const cleanData = data.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
 
     // If tracker is disabled, only check for patterns that should auto-enable it
     if (!this._loopState.enabled) {
@@ -1649,7 +1644,7 @@ export class RalphTracker extends EventEmitter {
 
     // Clean content: remove ANSI codes, collapse whitespace, trim
     const cleanContent = content
-      .replace(ANSI_ESCAPE_PATTERN, '')  // Remove ANSI escape codes
+      .replace(ANSI_ESCAPE_PATTERN_SIMPLE, '')  // Remove ANSI escape codes
       .replace(/\s+/g, ' ')              // Collapse whitespace
       .trim();
     if (cleanContent.length < 5) return;  // Skip very short content

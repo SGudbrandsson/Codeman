@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { getAugmentedPath } from './session.js';
+import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
 
 // ========== Types ==========
 
@@ -84,9 +85,6 @@ export interface AiCheckerEvents<R> {
 }
 
 // ========== Constants ==========
-
-/** ANSI escape code pattern for stripping terminal formatting */
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
 
 /** Poll interval for checking temp file completion */
 const POLL_INTERVAL_MS = 500;
@@ -354,7 +352,7 @@ export abstract class AiCheckerBase<
 
   private async runCheck(terminalBuffer: string): Promise<R> {
     // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
-    const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN, '');
+    const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
     const trimmed = stripped.length > this.config.maxContextChars
       ? stripped.slice(-this.config.maxContextChars)
       : stripped;

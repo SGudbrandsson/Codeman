@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkS
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
+import { MAX_SESSION_TOKENS } from './utils/index.js';
 
 /** Debounce delay for batching state writes (ms) */
 const SAVE_DEBOUNCE_MS = 500;
@@ -369,8 +370,7 @@ export class StateStore {
    * Call when a session is deleted to preserve its usage in lifetime stats.
    */
   addToGlobalStats(inputTokens: number, outputTokens: number, cost: number): void {
-    // Sanity check: reject absurdly large values (max 500k tokens per session)
-    const MAX_SESSION_TOKENS = 500_000;
+    // Sanity check: reject absurdly large values
     if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
       console.warn(`[StateStore] Rejected absurd global stats: input=${inputTokens}, output=${outputTokens}`);
       return;

@@ -40,6 +40,10 @@ import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import {
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  TOKEN_PATTERN,
+} from './utils/index.js';
+import {
   MAX_RESPAWN_BUFFER_SIZE,
   TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE,
 } from './config/buffer-limits.js';
@@ -56,20 +60,11 @@ import {
  */
 const COMPLETION_TIME_PATTERN = /\bWorked\s+for\s+\d+[hms](\s*\d+[hms])*/i;
 
-/**
- * Pattern to extract token count from Claude's status line.
- * Matches: "123.4k tokens", "5234 tokens", "1.2M tokens"
- */
-const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
-
 /** Pre-filter: numbered option pattern for plan mode detection */
 const PLAN_MODE_OPTION_PATTERN = /\d+\.\s+(Yes|No|Type|Cancel|Skip|Proceed|Approve|Reject)/i;
 
 /** Pre-filter: selection indicator arrow for plan mode detection */
 const PLAN_MODE_SELECTOR_PATTERN = /[❯>]\s*\d+\./;
-
-/** Pattern to strip ANSI escape codes from terminal output */
-const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
 
 // Note: The old '↵ send' indicator is no longer reliable in Claude Code 2024+
 // Detection now uses completion message patterns ("for Xm Xs") instead.
@@ -1223,8 +1218,8 @@ export class RespawnController extends EventEmitter {
     // This prevents false triggers when Claude pauses briefly mid-work.
     if (this._state === 'confirming_idle' || this._state === 'ai_checking') {
       // Strip ANSI escape codes to check if there's real content
-      ANSI_ESCAPE_PATTERN.lastIndex = 0;
-      const stripped = data.replace(ANSI_ESCAPE_PATTERN, '').trim();
+      ANSI_ESCAPE_PATTERN_SIMPLE.lastIndex = 0;
+      const stripped = data.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '').trim();
       if (stripped.length > 2) {
         if (this._state === 'ai_checking') {
           this.log(`Substantial output during AI check ("${stripped.substring(0, 40)}..."), cancelling`);
@@ -1871,8 +1866,8 @@ export class RespawnController extends EventEmitter {
     const tail = buffer.slice(-2000);
 
     // Strip ANSI codes for pattern matching
-    ANSI_ESCAPE_PATTERN.lastIndex = 0;
-    const stripped = tail.replace(ANSI_ESCAPE_PATTERN, '');
+    ANSI_ESCAPE_PATTERN_SIMPLE.lastIndex = 0;
+    const stripped = tail.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
 
     // Must find numbered option pattern
     if (!PLAN_MODE_OPTION_PATTERN.test(stripped)) return false;

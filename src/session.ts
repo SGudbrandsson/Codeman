@@ -28,6 +28,11 @@ import { BashToolParser } from './bash-tool-parser.js';
 import { ScreenManager } from './screen-manager.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import {
+  ANSI_ESCAPE_PATTERN_FULL,
+  TOKEN_PATTERN,
+  MAX_SESSION_TOKENS,
+} from './utils/index.js';
+import {
   MAX_TERMINAL_BUFFER_SIZE,
   TRIM_TERMINAL_TO as TERMINAL_BUFFER_TRIM_SIZE,
   MAX_TEXT_OUTPUT_SIZE,
@@ -69,14 +74,6 @@ const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
 const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 
-// Pre-compiled regex patterns for performance (avoid re-compilation on each call)
-// Comprehensive ANSI escape pattern:
-// - SGR (colors/styles): ESC [ params m
-// - CSI sequences (cursor, scroll, etc.): ESC [ params letter
-// - OSC sequences (title, etc.): ESC ] ... BEL or ESC ] ... ST
-// - Single-char escapes: ESC = or ESC >
-const ANSI_ESCAPE_PATTERN = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
-const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
 // Pattern to match Task tool invocations in terminal output
 // Matches: "Explore(Description)", "Task(Description)", "Bash(Description)", etc.
 // The prefix characters vary (●, ·, ✶, etc.) so we don't require them
@@ -610,8 +607,7 @@ export class Session extends EventEmitter {
    * Called when recovering sessions after server restart.
    */
   restoreTokens(inputTokens: number, outputTokens: number, totalCost: number): void {
-    // Sanity check: reject absurdly large values (max 500k tokens per session)
-    const MAX_SESSION_TOKENS = 500_000;
+    // Sanity check: reject absurdly large values
     if (inputTokens > MAX_SESSION_TOKENS || outputTokens > MAX_SESSION_TOKENS) {
       console.warn(`[Session ${this.id}] Rejected absurd restored tokens: input=${inputTokens}, output=${outputTokens}`);
       return;
@@ -959,7 +955,7 @@ export class Session extends EventEmitter {
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Strip ANSI/OSC sequences to avoid false positives from window titles like "3 File Reading Task"
-      const cleanDataForWorkingCheck = data.replace(ANSI_ESCAPE_PATTERN, '');
+      const cleanDataForWorkingCheck = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
       if (cleanDataForWorkingCheck.includes('Thinking') || cleanDataForWorkingCheck.includes('Writing') ||
           cleanDataForWorkingCheck.includes('Reading') || cleanDataForWorkingCheck.includes('Running') ||
           cleanDataForWorkingCheck.includes('⠋') || cleanDataForWorkingCheck.includes('⠙') ||
@@ -1349,7 +1345,7 @@ export class Session extends EventEmitter {
     for (const line of lines) {
       const trimmed = line.trim();
       // Remove ANSI escape codes for JSON parsing (use pre-compiled pattern)
-      const cleanLine = trimmed.replace(ANSI_ESCAPE_PATTERN, '');
+      const cleanLine = trimmed.replace(ANSI_ESCAPE_PATTERN_FULL, '');
 
       if (cleanLine.startsWith('{') && cleanLine.endsWith('}')) {
         try {
@@ -1438,7 +1434,7 @@ export class Session extends EventEmitter {
     if (!line.includes('(') || !line.includes(')')) return;
 
     // Strip ANSI codes before matching - terminal output has embedded codes like [1mExplore[0m
-    const cleanLine = line.replace(ANSI_ESCAPE_PATTERN, '');
+    const cleanLine = line.replace(ANSI_ESCAPE_PATTERN_FULL, '');
 
     // Reset regex lastIndex for global pattern
     TASK_TOOL_PATTERN.lastIndex = 0;
@@ -1537,7 +1533,7 @@ export class Session extends EventEmitter {
     if (!data.includes('token')) return;
 
     // Remove ANSI escape codes for cleaner parsing (use pre-compiled pattern)
-    const cleanData = data.replace(ANSI_ESCAPE_PATTERN, '');
+    const cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
 
     // Match patterns: "123.4k tokens", "5234 tokens", "1.2M tokens"
     // The status line typically shows total tokens like "1.2k tokens" near the prompt
@@ -1560,8 +1556,7 @@ export class Session extends EventEmitter {
         tokenCount *= 1000000;
       }
 
-      // Safety: Absolute maximum of 500k tokens per session
-      const MAX_SESSION_TOKENS = 500_000;
+      // Safety: Absolute maximum tokens per session
       if (tokenCount > MAX_SESSION_TOKENS) {
         console.warn(`[Session ${this.id}] Rejected token count exceeding max: ${tokenCount} > ${MAX_SESSION_TOKENS}`);
         return;

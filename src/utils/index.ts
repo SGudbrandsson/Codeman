@@ -10,3 +10,17 @@ export { BufferAccumulator } from './buffer-accumulator.js';
 export { LRUMap, type LRUMapOptions } from './lru-map.js';
 export { CleanupManager, type TimerOptions } from './cleanup-manager.js';
 export { StaleExpirationMap, type StaleExpirationMapOptions } from './stale-expiration-map.js';
+export {
+  ANSI_ESCAPE_PATTERN_FULL,
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  TOKEN_PATTERN,
+  createAnsiPatternFull,
+  createAnsiPatternSimple,
+  stripAnsi,
+  stripAnsiSimple,
+} from './regex-patterns.js';
+export {
+  MAX_SESSION_TOKENS,
+  validateTokenCounts,
+  validateTokensAndCost,
+} from './token-validation.js';
