@@ -48,7 +48,7 @@ Real-time desktop notifications when sessions need attention — never miss a pe
 - Tab blinking alerts: red for action-required, yellow for idle
 - Notifications include actual context (tool name, command, question text)
 - Hooks are auto-configured per case directory (`.claude/settings.local.json`)
-- Requires `--https` flag for browser notification API support
+- Works on HTTP for local use (localhost is a secure context)
 
 ---
 
@@ -298,10 +298,12 @@ npm install -g claudeman
 ## Getting Started
 
 ```bash
-claudeman web --https
-# Open https://localhost:3000
+claudeman web
+# Open http://localhost:3000
 # Press Ctrl+Enter to start your first session
 ```
+
+> **Note:** HTTP works fine for local use since `localhost` is treated as a secure context by browsers. Use `--https` only when accessing from another machine on your network.
 
 ---
 

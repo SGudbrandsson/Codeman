@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1423 (must match `package.json`)
+**Version**: 0.1424 (must match `package.json`)
 
 ## Project Overview
 
@@ -35,7 +35,7 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 ```bash
 # Development
 npx tsx src/index.ts web           # Dev server (RECOMMENDED)
-npx tsx src/index.ts web --https   # With TLS for notifications
+npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
 npm run typecheck                  # Type check
 
 # Testing

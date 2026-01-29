@@ -612,7 +612,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$node_path $INSTALL_DIR/dist/index.js web --https
+ExecStart=$node_path $INSTALL_DIR/dist/index.js web
 WorkingDirectory=$HOME
 Restart=always
 RestartSec=10
@@ -863,11 +863,11 @@ main() {
     echo -e "    ${CYAN}# Start the web server${NC}"
     echo -e "    claudeman web"
     echo ""
-    echo -e "    ${CYAN}# Start with HTTPS (enables browser notifications)${NC}"
+    echo -e "    ${CYAN}# Start with HTTPS (only needed for remote access)${NC}"
     echo -e "    claudeman web --https"
     echo ""
     echo -e "    ${CYAN}# Open in browser${NC}"
-    echo -e "    https://localhost:3000"
+    echo -e "    http://localhost:3000"
     echo ""
 
     if [[ "$os" == "linux" ]] && [[ -f "$HOME/.config/systemd/user/claudeman-web.service" ]]; then

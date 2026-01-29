@@ -185,8 +185,8 @@ if (hasErrors) {
 
 console.log(colors.bold('Next steps:'));
 console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
-console.log(colors.dim('  2. Start:  ') + colors.cyan('claudeman web --https'));
-console.log(colors.dim('  3. Open:   ') + colors.cyan('https://localhost:3000'));
+console.log(colors.dim('  2. Start:  ') + colors.cyan('claudeman web'));
+console.log(colors.dim('  3. Open:   ') + colors.cyan('http://localhost:3000'));
 
 if (hasWarnings) {
     console.log('');

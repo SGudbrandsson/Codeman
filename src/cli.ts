@@ -493,7 +493,7 @@ program
   .command('web')
   .description('Start the web interface')
   .option('-p, --port <port>', 'Port to listen on', '3000')
-  .option('--https', 'Enable HTTPS with a self-signed certificate (enables browser Notifications API)')
+  .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
   .action(async (options) => {
     const { startWebServer } = await import('./web/server.js');
     const port = parseInt(options.port, 10);

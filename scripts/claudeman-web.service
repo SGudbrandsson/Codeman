@@ -1,11 +1,11 @@
 [Unit]
-Description=Claudeman Web Server (HTTPS)
+Description=Claudeman Web Server
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/arkon/default/claudeman
-ExecStart=/usr/bin/node dist/index.js web --https
+ExecStart=/usr/bin/node dist/index.js web
 Restart=always
 RestartSec=5
 KillMode=process
