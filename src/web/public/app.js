@@ -9247,7 +9247,23 @@ class ClaudemanApp {
       }
     }
 
-    // Strategy 2: Find all sessions that match by workingDir
+    // Strategy 2: Match by claudeSessionId (most reliable)
+    // The subagent's sessionId is the Claude session that spawned it
+    // Match this to the Claudeman session's claudeSessionId
+    if (agent.sessionId) {
+      for (const [sessionId, session] of this.sessions) {
+        if (session.claudeSessionId === agent.sessionId) {
+          agent.parentSessionId = sessionId;
+          agent.parentSessionName = this.getSessionName(session);
+          this.subagents.set(agentId, agent);
+          this.updateSubagentWindowParent(agentId);
+          this.updateSubagentWindowVisibility();
+          return;
+        }
+      }
+    }
+
+    // Strategy 3: Fall back to workingDir matching (for sessions without claudeSessionId yet)
     const matchingSessions = [];
     for (const [sessionId, session] of this.sessions) {
       try {
@@ -9272,14 +9288,20 @@ class ClaudemanApp {
     let chosen = matchingSessions[0];
 
     if (matchingSessions.length > 1) {
-      // Multiple sessions with same workingDir - use heuristics to pick the right one
-      // Prefer the most recently created session (newest session likely spawned the subagent)
-      matchingSessions.sort((a, b) => {
-        const aTime = new Date(a.session.createdAt || 0).getTime();
-        const bTime = new Date(b.session.createdAt || 0).getTime();
-        return bTime - aTime; // Newest first
-      });
-      chosen = matchingSessions[0];
+      // Multiple sessions with same workingDir - prefer session with matching claudeSessionId
+      // If no match, fall back to oldest session (first created is more likely the original)
+      const byClaudeSession = matchingSessions.find(m => m.session.claudeSessionId === agent.sessionId);
+      if (byClaudeSession) {
+        chosen = byClaudeSession;
+      } else {
+        // Fall back to oldest session (not newest - oldest is more likely the original workspace)
+        matchingSessions.sort((a, b) => {
+          const aTime = new Date(a.session.createdAt || 0).getTime();
+          const bTime = new Date(b.session.createdAt || 0).getTime();
+          return aTime - bTime; // Oldest first
+        });
+        chosen = matchingSessions[0];
+      }
     }
 
     // Assign the parent

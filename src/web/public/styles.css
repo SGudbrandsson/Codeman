@@ -2368,53 +2368,91 @@ body {
 }
 
 /* Run Summary Modal */
+
+/* Summary tab scrollable container */
+#summary-tab {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(70vh - 120px);
+  overflow: hidden;
+}
+
+#summary-tab .run-summary-stats {
+  flex-shrink: 0;
+}
+
+#summary-tab .run-summary-filters {
+  flex-shrink: 0;
+}
+
+#summary-tab .run-summary-timeline {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+#summary-tab .run-summary-footer {
+  flex-shrink: 0;
+}
+
 .run-summary-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .run-summary-stats .stat-card {
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.75rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.04) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0.5rem 0.625rem;
   text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.run-summary-stats .stat-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.05) 100%);
 }
 
 .run-summary-stats .stat-value {
-  font-size: 1.5rem;
+  font-size: 1rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
+  font-family: 'SF Mono', Monaco, monospace;
+  letter-spacing: -0.02em;
 }
 
 .run-summary-stats .stat-label {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  margin-top: 0.25rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  margin-top: 0.125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .run-summary-filters {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
   flex-wrap: wrap;
 }
 
 .filter-btn {
-  padding: 0.375rem 0.75rem;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 0.25rem 0.625rem;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 100px;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   transition: all 0.15s;
 }
 
 .filter-btn:hover {
-  background: var(--bg-card);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
   color: var(--text);
 }
 
@@ -2427,17 +2465,41 @@ body {
 .run-summary-timeline {
   max-height: 400px;
   overflow-y: auto;
-  padding-right: 0.5rem;
+  padding-right: 0.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+.run-summary-timeline::-webkit-scrollbar {
+  width: 4px;
+}
+
+.run-summary-timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.run-summary-timeline::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.run-summary-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .timeline-event {
   display: flex;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  background: var(--bg-hover);
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  margin-bottom: 0.375rem;
+  background: rgba(255, 255, 255, 0.02);
   border-radius: 6px;
-  border-left: 3px solid var(--border);
+  border-left: 2px solid var(--border);
+  transition: background 0.15s;
+}
+
+.timeline-event:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .timeline-event.event-success {
@@ -2457,8 +2519,9 @@ body {
 }
 
 .event-icon {
-  font-size: 1.1rem;
+  font-size: 0.9rem;
   flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .event-content {
@@ -2475,19 +2538,21 @@ body {
 
 .event-title {
   font-weight: 500;
+  font-size: 0.8rem;
   color: var(--text);
 }
 
 .event-time {
-  font-size: 0.75rem;
-  color: var(--text-dim);
+  font-size: 0.65rem;
+  color: var(--text-muted);
   flex-shrink: 0;
+  font-family: 'SF Mono', Monaco, monospace;
 }
 
 .event-details {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   color: var(--text-dim);
-  margin-top: 0.25rem;
+  margin-top: 0.125rem;
 }
 
 .run-summary-session-info {
