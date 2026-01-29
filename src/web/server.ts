@@ -4600,7 +4600,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
-      subagents: subagentWatcher.getRecentSubagents(60), // Last hour of subagent activity
+      subagents: subagentWatcher.getRecentSubagents(15), // Last 15 min - filter out stale agents from previous runs
       timestamp: Date.now(),
     };
   }
@@ -4630,7 +4630,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
-      subagents: subagentWatcher.getRecentSubagents(60),
+      subagents: subagentWatcher.getRecentSubagents(15), // 15 min to avoid stale agents
       timestamp: Date.now(),
     };
   }

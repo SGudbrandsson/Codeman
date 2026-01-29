@@ -1792,8 +1792,14 @@ class ClaudemanApp {
 
     addListener('subagent:discovered', async (e) => {
       const data = JSON.parse(e.data);
+      // Clear all old data for this agentId (in case of ID reuse)
       this.subagents.set(data.agentId, data);
       this.subagentActivity.set(data.agentId, []);
+      this.subagentToolResults.delete(data.agentId);
+      // Close any existing window for this agentId (will be reopened fresh)
+      if (this.subagentWindows.has(data.agentId)) {
+        this.forceCloseSubagentWindow(data.agentId);
+      }
       this.renderSubagentPanel();
 
       // Find which Claudeman session owns this subagent (by working directory)
@@ -7447,11 +7453,17 @@ class ClaudemanApp {
     }
 
     // Restore minimized state, but verify session mapping is correct
+    // Skip old agents from previous runs to avoid confusion
+    const cutoffTime = Date.now() - 10 * 60 * 1000; // 10 minutes
     for (const [savedSessionId, agentIds] of Object.entries(states.minimized || {})) {
       if (Array.isArray(agentIds) && agentIds.length > 0) {
         for (const agentId of agentIds) {
           const agent = this.subagents.get(agentId);
           if (!agent) continue; // Agent no longer exists
+
+          // Skip completed or old agents
+          const agentStartTime = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
+          if (agent.status === 'completed' || agentStartTime < cutoffTime) continue;
 
           // Use discovered parentSessionId, or validate saved sessionId exists
           const correctSessionId = agent.parentSessionId ||
@@ -7467,11 +7479,14 @@ class ClaudemanApp {
       }
     }
 
-    // Restore open windows (for non-completed agents only)
+    // Restore open windows (for recent, non-completed agents only)
+    const now = Date.now();
+    const maxAgeMs = 10 * 60 * 1000; // 10 minutes - don't restore windows for old agents
     for (const { agentId, position } of (states.open || [])) {
       const agent = this.subagents.get(agentId);
-      // Only restore window if agent exists and is still active/idle (not completed)
-      if (agent && agent.status !== 'completed') {
+      // Only restore window if agent exists, is recent, and is still active/idle
+      const agentAge = agent?.startedAt ? now - new Date(agent.startedAt).getTime() : Infinity;
+      if (agent && agent.status !== 'completed' && agentAge < maxAgeMs) {
         this.openSubagentWindow(agentId);
         // Restore position if saved (with viewport bounds check)
         if (position) {
