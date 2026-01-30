@@ -27,10 +27,17 @@ import {
   RalphTestsStatus,
   RalphWorkType,
   CircuitBreakerStatus,
+  RalphTodoProgress,
+  CompletionConfidence,
   createInitialRalphTrackerState,
   createInitialCircuitBreakerStatus,
 } from './types.js';
-import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
+import {
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  fuzzyPhraseMatch,
+  todoContentHash,
+  stringSimilarity,
+} from './utils/index.js';
 
 // ========== Enhanced Plan Task Interface ==========
 
@@ -120,6 +127,14 @@ const TODO_EXPIRY_MS = 60 * 60 * 1000;
 const CLEANUP_THROTTLE_MS = 30 * 1000;
 
 /**
+ * Similarity threshold for todo deduplication.
+ * Todos with similarity >= this value are considered duplicates.
+ * Range: 0.0 (no similarity) to 1.0 (identical)
+ * Default: 0.85 (85% similar)
+ */
+const TODO_SIMILARITY_THRESHOLD = 0.85;
+
+/**
  * Debounce interval for event emissions (milliseconds).
  * Prevents UI jitter from rapid consecutive updates.
  * Default: 50ms
@@ -131,6 +146,24 @@ const EVENT_DEBOUNCE_MS = 50;
  * Prevents unbounded growth if many unique phrases are seen.
  */
 const MAX_COMPLETION_PHRASE_ENTRIES = 50;
+
+/**
+ * Common/generic completion phrases that may cause false positives.
+ * These phrases are likely to appear in Claude's natural output,
+ * making them unreliable as completion signals.
+ *
+ * P1-002: Configurable false positive prevention
+ */
+const COMMON_COMPLETION_PHRASES = new Set([
+  'DONE', 'COMPLETE', 'FINISHED', 'OK', 'YES', 'TRUE', 'SUCCESS',
+  'READY', 'COMPLETED', 'PASSED', 'END', 'STOP', 'EXIT',
+]);
+
+/**
+ * Minimum recommended phrase length for completion detection.
+ * Shorter phrases are more likely to cause false positives.
+ */
+const MIN_RECOMMENDED_PHRASE_LENGTH = 6;
 
 /**
  * Maximum line buffer size to prevent unbounded growth from long lines.
@@ -150,8 +183,20 @@ const MAX_LINE_BUFFER_SIZE = 64 * 1024;
  * - Numbers: TASK_123
  * - Underscores: ALL_TASKS_DONE
  * - Hyphens: TESTS-PASS, TIME-COMPLETE
+ *
+ * Now also tolerates:
+ * - Whitespace/newlines inside tags: <promise> COMPLETE </promise>
+ * - Case variations in tag names: <Promise>, <PROMISE>
  */
-const PROMISE_PATTERN = /<promise>([^<]+)<\/promise>/;
+const PROMISE_PATTERN = /<promise>\s*([^<]+?)\s*<\/promise>/i;
+
+/**
+ * Pattern for detecting partial/incomplete promise tags at end of buffer.
+ * Used for cross-chunk promise detection when tags are split across PTY writes.
+ * Captures:
+ * - Group 1: Partial opening tag content after <promise> (may be incomplete)
+ */
+const PROMISE_PARTIAL_PATTERN = /<promise>\s*([^<]*)$/i;
 
 // ---------- Todo Item Patterns ----------
 // Claude Code outputs todos in multiple formats; we detect all of them
@@ -390,6 +435,16 @@ export interface RalphTrackerEvents {
   circuitBreakerUpdate: (status: CircuitBreakerStatus) => void;
   /** Emitted when dual-condition exit gate is met (completion indicators >= 2 AND EXIT_SIGNAL: true) */
   exitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => void;
+  /** Emitted when iteration count hasn't changed for an extended period (stall warning) */
+  iterationStallWarning: (data: { iteration: number; stallDurationMs: number }) => void;
+  /** Emitted when iteration count hasn't changed for critical period (stall critical) */
+  iterationStallCritical: (data: { iteration: number; stallDurationMs: number }) => void;
+  /** Emitted when a common/risky completion phrase is detected (P1-002) */
+  phraseValidationWarning: (data: {
+    phrase: string;
+    reason: 'common' | 'short' | 'numeric';
+    suggestedPhrase: string;
+  }) => void;
 }
 
 /**
@@ -467,6 +522,16 @@ export class RalphTracker extends EventEmitter {
   /** Maps task numbers from "✔ Task #N" format to their content for status updates */
   private _taskNumberToContent: Map<number, string> = new Map();
 
+  /**
+   * Buffer for partial promise tags split across PTY chunks.
+   * Holds content after '<promise>' when closing tag hasn't arrived yet.
+   * Max 256 chars to prevent unbounded growth from malformed tags.
+   */
+  private _partialPromiseBuffer: string = '';
+
+  /** Maximum size of partial promise buffer */
+  private static readonly MAX_PARTIAL_PROMISE_SIZE = 256;
+
   // ========== RALPH_STATUS Block State ==========
 
   /** Circuit breaker state tracking */
@@ -535,6 +600,43 @@ export class RalphTracker extends EventEmitter {
   /** Last checkpoint iteration */
   private _lastCheckpointIteration: number = 0;
 
+  // ========== Iteration Stall Detection ==========
+
+  /** Timestamp when iteration count last changed */
+  private _lastIterationChangeTime: number = 0;
+
+  /** Last observed iteration count for stall detection */
+  private _lastObservedIteration: number = 0;
+
+  /** Timer for iteration stall detection */
+  private _iterationStallTimer: NodeJS.Timeout | null = null;
+
+  /** Iteration stall warning threshold (ms) - default 10 minutes */
+  private _iterationStallWarningMs: number = 10 * 60 * 1000;
+
+  /** Iteration stall critical threshold (ms) - default 20 minutes */
+  private _iterationStallCriticalMs: number = 20 * 60 * 1000;
+
+  /** Whether stall warning has been emitted */
+  private _iterationStallWarned: boolean = false;
+
+  /** Alternate completion phrases (P1-003: multi-phrase support) */
+  private _alternateCompletionPhrases: string[] = [];
+
+  // ========== P1-009: Progress Estimation ==========
+
+  /** History of todo completion times (ms) for averaging */
+  private _completionTimes: number[] = [];
+
+  /** Maximum number of completion times to track */
+  private static readonly MAX_COMPLETION_TIMES = 50;
+
+  /** Timestamp when todos started being tracked for this session */
+  private _todosStartedAt: number = 0;
+
+  /** Map of todo ID to timestamp when it started (for duration tracking) */
+  private _todoStartTimes: Map<string, number> = new Map();
+
   /**
    * Creates a new RalphTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
@@ -543,6 +645,60 @@ export class RalphTracker extends EventEmitter {
     super();
     this._loopState = createInitialRalphTrackerState();
     this._circuitBreaker = createInitialCircuitBreakerStatus();
+    this._lastIterationChangeTime = Date.now();
+  }
+
+  /**
+   * Add an alternate completion phrase (P1-003: multi-phrase support).
+   * Multiple phrases can trigger completion (useful for complex workflows).
+   * @param phrase - Additional phrase that can trigger completion
+   */
+  addAlternateCompletionPhrase(phrase: string): void {
+    if (!this._alternateCompletionPhrases.includes(phrase)) {
+      this._alternateCompletionPhrases.push(phrase);
+      this._loopState.alternateCompletionPhrases = [...this._alternateCompletionPhrases];
+      this.emit('loopUpdate', this.loopState);
+    }
+  }
+
+  /**
+   * Remove an alternate completion phrase.
+   * @param phrase - Phrase to remove
+   */
+  removeAlternateCompletionPhrase(phrase: string): void {
+    const index = this._alternateCompletionPhrases.indexOf(phrase);
+    if (index !== -1) {
+      this._alternateCompletionPhrases.splice(index, 1);
+      this._loopState.alternateCompletionPhrases = [...this._alternateCompletionPhrases];
+      this.emit('loopUpdate', this.loopState);
+    }
+  }
+
+  /**
+   * Check if a phrase matches any valid completion phrase (primary or alternate).
+   * @param phrase - Phrase to check
+   * @returns True if phrase matches any valid completion phrase
+   */
+  isValidCompletionPhrase(phrase: string): boolean {
+    return this.findMatchingCompletionPhrase(phrase) !== null;
+  }
+
+  /**
+   * Find which completion phrase (primary or alternate) matches the given phrase.
+   * @param phrase - Phrase to check
+   * @returns The matched canonical phrase, or null if no match
+   */
+  private findMatchingCompletionPhrase(phrase: string): string | null {
+    const primary = this._loopState.completionPhrase;
+    if (primary && this.isFuzzyPhraseMatch(phrase, primary)) {
+      return primary;
+    }
+    for (const alt of this._alternateCompletionPhrases) {
+      if (this.isFuzzyPhraseMatch(phrase, alt)) {
+        return alt;
+      }
+    }
+    return null;
   }
 
   /**
@@ -738,6 +894,7 @@ export class RalphTracker extends EventEmitter {
     this._completionPhraseCount.clear();
     this._taskNumberToContent.clear();
     this._lineBuffer = '';
+    this._partialPromiseBuffer = '';
     // Reset RALPH_STATUS block state
     this._statusBlockBuffer = [];
     this._inStatusBlock = false;
@@ -868,12 +1025,206 @@ export class RalphTracker extends EventEmitter {
    * Get a copy of the current loop state.
    * @returns Shallow copy of loop state (safe to modify)
    */
+  // ========== Iteration Stall Detection Methods ==========
+
+  /**
+   * Start iteration stall detection timer.
+   * Should be called when the loop becomes active.
+   */
+  startIterationStallDetection(): void {
+    this.stopIterationStallDetection();
+    this._lastIterationChangeTime = Date.now();
+    this._iterationStallWarned = false;
+
+    // Check every minute
+    this._iterationStallTimer = setInterval(() => {
+      this.checkIterationStall();
+    }, 60 * 1000);
+  }
+
+  /**
+   * Stop iteration stall detection timer.
+   */
+  stopIterationStallDetection(): void {
+    if (this._iterationStallTimer) {
+      clearInterval(this._iterationStallTimer);
+      this._iterationStallTimer = null;
+    }
+  }
+
+  /**
+   * Check for iteration stall and emit appropriate events.
+   */
+  private checkIterationStall(): void {
+    if (!this._loopState.active) return;
+
+    const stallDurationMs = Date.now() - this._lastIterationChangeTime;
+
+    // Critical stall (longer duration)
+    if (stallDurationMs >= this._iterationStallCriticalMs) {
+      this.emit('iterationStallCritical', {
+        iteration: this._loopState.cycleCount,
+        stallDurationMs,
+      });
+      return;
+    }
+
+    // Warning stall
+    if (stallDurationMs >= this._iterationStallWarningMs && !this._iterationStallWarned) {
+      this._iterationStallWarned = true;
+      this.emit('iterationStallWarning', {
+        iteration: this._loopState.cycleCount,
+        stallDurationMs,
+      });
+    }
+  }
+
+  /**
+   * Get iteration stall metrics for monitoring.
+   */
+  getIterationStallMetrics(): {
+    lastIterationChangeTime: number;
+    stallDurationMs: number;
+    warningThresholdMs: number;
+    criticalThresholdMs: number;
+    isWarned: boolean;
+    currentIteration: number;
+  } {
+    return {
+      lastIterationChangeTime: this._lastIterationChangeTime,
+      stallDurationMs: Date.now() - this._lastIterationChangeTime,
+      warningThresholdMs: this._iterationStallWarningMs,
+      criticalThresholdMs: this._iterationStallCriticalMs,
+      isWarned: this._iterationStallWarned,
+      currentIteration: this._loopState.cycleCount,
+    };
+  }
+
+  /**
+   * Configure iteration stall thresholds.
+   * @param warningMs - Warning threshold in milliseconds
+   * @param criticalMs - Critical threshold in milliseconds
+   */
+  configureIterationStallThresholds(warningMs: number, criticalMs: number): void {
+    this._iterationStallWarningMs = warningMs;
+    this._iterationStallCriticalMs = criticalMs;
+  }
+
   get loopState(): RalphTrackerState {
     return {
       ...this._loopState,
       planVersion: this._planVersion,
       planHistoryLength: this._planHistory.length,
+      completionConfidence: this._lastCompletionConfidence,
     };
+  }
+
+  /** Last calculated completion confidence */
+  private _lastCompletionConfidence: CompletionConfidence | undefined;
+
+  /** Confidence threshold for triggering completion (0-100) */
+  private static readonly COMPLETION_CONFIDENCE_THRESHOLD = 70;
+
+  /**
+   * Calculate confidence score for a potential completion signal.
+   *
+   * Scoring weights:
+   * - Promise tag with proper format: +30
+   * - Matches expected phrase: +25
+   * - All todos complete: +20
+   * - EXIT_SIGNAL: true: +15
+   * - Multiple completion indicators (>=2): +10
+   * - Context appropriate (not in prompt/explanation): +10
+   * - Loop was explicitly active: +10
+   *
+   * @param phrase - The detected phrase to evaluate
+   * @param context - Optional surrounding context for the phrase
+   * @returns CompletionConfidence assessment
+   */
+  calculateCompletionConfidence(phrase: string, context?: string): CompletionConfidence {
+    let score = 0;
+    const signals = {
+      hasPromiseTag: false,
+      matchesExpected: false,
+      allTodosComplete: false,
+      hasExitSignal: false,
+      multipleIndicators: false,
+      contextAppropriate: true, // Default to true, deduct if inappropriate
+    };
+
+    // Check for promise tag format (adds 30 points)
+    if (context && PROMISE_PATTERN.test(context)) {
+      signals.hasPromiseTag = true;
+      score += 30;
+    }
+
+    // Check if phrase matches expected completion phrase (adds 25 points)
+    const expectedPhrase = this._loopState.completionPhrase;
+    if (expectedPhrase) {
+      const matchedPhrase = this.findMatchingCompletionPhrase(phrase);
+      if (matchedPhrase) {
+        signals.matchesExpected = true;
+        score += 25;
+      }
+    }
+
+    // Check if all todos are complete (adds 20 points)
+    const todoArray = Array.from(this._todos.values());
+    if (todoArray.length > 0 && todoArray.every(t => t.status === 'completed')) {
+      signals.allTodosComplete = true;
+      score += 20;
+    }
+
+    // Check for EXIT_SIGNAL from RALPH_STATUS block (adds 15 points)
+    if (this._lastStatusBlock?.exitSignal === true) {
+      signals.hasExitSignal = true;
+      score += 15;
+    }
+
+    // Check for multiple completion indicators (adds 10 points)
+    if (this._completionIndicators >= 2) {
+      signals.multipleIndicators = true;
+      score += 10;
+    }
+
+    // Check context appropriateness (deduct if inappropriate)
+    if (context) {
+      const lowerContext = context.toLowerCase();
+      // Deduct points if phrase appears in prompt-like context
+      if (lowerContext.includes('output:') ||
+          lowerContext.includes('completion phrase') ||
+          lowerContext.includes('output exactly') ||
+          lowerContext.includes('when done')) {
+        signals.contextAppropriate = false;
+        score -= 20;
+      } else {
+        score += 10;
+      }
+    }
+
+    // Bonus for active loop state (adds 10 points)
+    if (this._loopState.active) {
+      score += 10;
+    }
+
+    // Bonus for 2nd+ occurrence (adds 15 points)
+    const count = this._completionPhraseCount.get(phrase) || 0;
+    if (count >= 2) {
+      score += 15;
+    }
+
+    // Clamp score to 0-100
+    score = Math.max(0, Math.min(100, score));
+
+    const confidence: CompletionConfidence = {
+      score,
+      isConfident: score >= RalphTracker.COMPLETION_CONFIDENCE_THRESHOLD,
+      signals,
+      calculatedAt: Date.now(),
+    };
+
+    this._lastCompletionConfidence = confidence;
+    return confidence;
   }
 
   /**
@@ -1163,13 +1514,42 @@ export class RalphTracker extends EventEmitter {
   /**
    * Check for multi-line patterns that might span line boundaries.
    * Completion phrases can be split across PTY chunks.
+   *
+   * Handles cross-chunk promise tags by:
+   * 1. Checking combined buffer + new data for complete tags
+   * 2. Detecting partial tags at end of chunk and buffering
+   * 3. Clearing buffer when complete tag found or buffer gets stale
+   *
    * @param data - The full data chunk (may contain multiple lines)
    */
   private checkMultiLinePatterns(data: string): void {
-    // Completion phrase can span lines, so check the whole chunk
-    const promiseMatch = data.match(PROMISE_PATTERN);
+    // If we have a partial promise buffer, prepend it to the new data
+    const combinedData = this._partialPromiseBuffer + data;
+
+    // Try to find a complete promise tag in combined data
+    const promiseMatch = combinedData.match(PROMISE_PATTERN);
     if (promiseMatch) {
-      this.handleCompletionPhrase(promiseMatch[1]);
+      // Found complete tag - extract phrase and clear buffer
+      const phrase = promiseMatch[1].trim();
+      this._partialPromiseBuffer = '';
+      this.handleCompletionPhrase(phrase);
+      return;
+    }
+
+    // Check for partial promise tag at end of combined data
+    const partialMatch = combinedData.match(PROMISE_PARTIAL_PATTERN);
+    if (partialMatch) {
+      // Buffer the partial content (with size limit)
+      const partialContent = partialMatch[0];
+      if (partialContent.length <= RalphTracker.MAX_PARTIAL_PROMISE_SIZE) {
+        this._partialPromiseBuffer = partialContent;
+      } else {
+        // Partial is too long, likely malformed - discard
+        this._partialPromiseBuffer = '';
+      }
+    } else {
+      // No partial tag - clear buffer
+      this._partialPromiseBuffer = '';
     }
   }
 
@@ -1267,9 +1647,10 @@ export class RalphTracker extends EventEmitter {
   /**
    * Handle a detected completion phrase
    *
-   * Uses occurrence-based detection to distinguish prompt from actual completion:
+   * Uses occurrence-based detection combined with confidence scoring
+   * to distinguish prompt from actual completion:
    * - 1st occurrence: Store as expected phrase (likely in prompt)
-   * - 2nd occurrence: Emit completionDetected (actual completion)
+   * - 2nd occurrence OR high confidence: Emit completionDetected (actual completion)
    * - If loop already active: Emit immediately (explicit loop start)
    */
   private handleCompletionPhrase(phrase: string): void {
@@ -1297,7 +1678,40 @@ export class RalphTracker extends EventEmitter {
     if (!this._loopState.completionPhrase) {
       this._loopState.completionPhrase = phrase;
       this._loopState.lastActivity = Date.now();
+
+      // P1-002: Validate phrase and emit warning if risky
+      this.validateCompletionPhrase(phrase);
+
       this.emit('loopUpdate', this.loopState);
+    }
+
+    // Check for fuzzy match with primary phrase or any alternate phrase (P1-003)
+    // This handles minor variations like whitespace, case, underscores vs hyphens
+    const matchedPhrase = this.findMatchingCompletionPhrase(phrase);
+
+    if (matchedPhrase) {
+      // Use the matched phrase (canonical) for tracking
+      const canonicalCount = (this._completionPhraseCount.get(matchedPhrase) || 0);
+      // If this is a match of an expected phrase, treat as if we saw it
+      if (canonicalCount >= 1 || this._loopState.active) {
+        // Mark as completion
+        this._loopState.active = false;
+        this._loopState.lastActivity = Date.now();
+        // Mark all todos as complete
+        let updated = false;
+        for (const todo of this._todos.values()) {
+          if (todo.status !== 'completed') {
+            todo.status = 'completed';
+            updated = true;
+          }
+        }
+        if (updated) {
+          this.emit('todoUpdate', this.todos);
+        }
+        this.emit('completionDetected', matchedPhrase);
+        this.emit('loopUpdate', this.loopState);
+        return;
+      }
     }
 
     // Emit completion if loop is active OR this is 2nd+ occurrence
@@ -1318,6 +1732,76 @@ export class RalphTracker extends EventEmitter {
       this._loopState.lastActivity = Date.now();
       this.emit('completionDetected', phrase);
       this.emit('loopUpdate', this.loopState);
+    }
+  }
+
+  /**
+   * Check if two phrases match with fuzzy tolerance.
+   * Handles variations in:
+   * - Case (COMPLETE vs Complete)
+   * - Whitespace (TASK_DONE vs TASK DONE)
+   * - Separators (TASK_DONE vs TASK-DONE)
+   * - Minor typos with Levenshtein distance (COMPLET vs COMPLETE)
+   *
+   * @param phrase1 - First phrase to compare
+   * @param phrase2 - Second phrase to compare
+   * @param maxDistance - Maximum edit distance for fuzzy match (default: 2)
+   * @returns True if phrases are fuzzy-equal
+   */
+  private isFuzzyPhraseMatch(phrase1: string, phrase2: string, maxDistance = 2): boolean {
+    return fuzzyPhraseMatch(phrase1, phrase2, maxDistance);
+  }
+
+  /**
+   * Validate a completion phrase and emit warnings if it's risky.
+   *
+   * P1-002: Configurable false positive prevention
+   *
+   * Checks for:
+   * - Common/generic phrases (DONE, COMPLETE, etc.)
+   * - Short phrases (< MIN_RECOMMENDED_PHRASE_LENGTH)
+   * - Numeric-only phrases
+   *
+   * @param phrase - The completion phrase to validate
+   * @fires phraseValidationWarning - When a risky phrase is detected
+   */
+  private validateCompletionPhrase(phrase: string): void {
+    const normalized = phrase.toUpperCase().replace(/[\s_\-\.]+/g, '');
+
+    // Generate a suggested unique phrase
+    const uniqueSuffix = Date.now().toString(36).slice(-4).toUpperCase();
+    const suggestedPhrase = `${phrase}_${uniqueSuffix}`;
+
+    // Check for common phrases
+    if (COMMON_COMPLETION_PHRASES.has(normalized)) {
+      console.warn(`[RalphTracker] Warning: Completion phrase "${phrase}" is very common and may cause false positives. Consider using: "${suggestedPhrase}"`);
+      this.emit('phraseValidationWarning', {
+        phrase,
+        reason: 'common',
+        suggestedPhrase,
+      });
+      return;
+    }
+
+    // Check for short phrases
+    if (normalized.length < MIN_RECOMMENDED_PHRASE_LENGTH) {
+      console.warn(`[RalphTracker] Warning: Completion phrase "${phrase}" is too short (${normalized.length} chars). Consider using: "${suggestedPhrase}"`);
+      this.emit('phraseValidationWarning', {
+        phrase,
+        reason: 'short',
+        suggestedPhrase,
+      });
+      return;
+    }
+
+    // Check for numeric-only phrases
+    if (/^\d+$/.test(normalized)) {
+      console.warn(`[RalphTracker] Warning: Completion phrase "${phrase}" is numeric-only and may cause false positives. Consider using: "${suggestedPhrase}"`);
+      this.emit('phraseValidationWarning', {
+        phrase,
+        reason: 'numeric',
+        suggestedPhrase,
+      });
     }
   }
 
@@ -1386,6 +1870,29 @@ export class RalphTracker extends EventEmitter {
 
       if (!isNaN(currentIter)) {
         this.activateLoopIfNeeded();
+        // Track iteration changes for stall detection
+        if (currentIter !== this._lastObservedIteration) {
+          this._lastIterationChangeTime = Date.now();
+          this._lastObservedIteration = currentIter;
+          this._iterationStallWarned = false;  // Reset warning on iteration change
+
+          // P1-004: Reset circuit breaker on successful iteration progress
+          // If we're making progress, the loop is healthy
+          if (this._circuitBreaker.state === 'HALF_OPEN' ||
+              this._circuitBreaker.consecutiveNoProgress > 0 ||
+              this._circuitBreaker.consecutiveSameError > 0 ||
+              this._circuitBreaker.consecutiveTestsFailure > 0) {
+            this._circuitBreaker.consecutiveNoProgress = 0;
+            this._circuitBreaker.consecutiveSameError = 0;
+            this._circuitBreaker.lastProgressIteration = currentIter;
+            if (this._circuitBreaker.state === 'HALF_OPEN') {
+              this._circuitBreaker.state = 'CLOSED';
+              this._circuitBreaker.reason = 'Iteration progress detected';
+              this._circuitBreaker.reasonCode = 'progress_detected';
+              this.emit('circuitBreakerUpdate', { ...this._circuitBreaker });
+            }
+          }
+        }
         this._loopState.cycleCount = currentIter;
         if (maxIter !== null && !isNaN(maxIter)) {
           this._loopState.maxIterations = maxIter;
@@ -1601,8 +2108,12 @@ export class RalphTracker extends EventEmitter {
 
   /**
    * Parse priority from todo content.
-   * Looks for patterns like: "P0:", "P1:", "P2:", "(P0)", "(P1)", "(P2)",
-   * "Critical:", "Blocker:", "High Priority:", etc.
+   * P1-008: Enhanced keyword-based priority inference.
+   *
+   * Priority levels:
+   * - P0 (Critical): Explicit P0, "critical", "blocker", "urgent", "security", "crash", "broken"
+   * - P1 (High): Explicit P1, "important", "high priority", "bug", "fix", "error", "fail"
+   * - P2 (Medium): Explicit P2, "nice to have", "low priority", "refactor", "cleanup", "improve"
    *
    * @param content - Todo content text
    * @returns Parsed priority level or null
@@ -1610,15 +2121,71 @@ export class RalphTracker extends EventEmitter {
   private parsePriority(content: string): RalphTodoPriority {
     const upper = content.toUpperCase();
 
-    // Direct P0/P1/P2 patterns
-    if (/\bP0\b|^\(P0\)|:?\s*P0\s*:|\bCRITICAL\b|\bBLOCKER\b/.test(upper)) {
-      return 'P0';
+    // P0 patterns - Critical issues
+    const p0Patterns = [
+      /\bP0\b|\(P0\)|:?\s*P0\s*:/,           // Explicit P0
+      /\bCRITICAL\b/,                         // Critical keyword
+      /\bBLOCKER\b/,                          // Blocker
+      /\bURGENT\b/,                           // Urgent
+      /\bSECURITY\b/,                         // Security issues
+      /\bCRASH(?:ES|ING)?\b/,                 // Crash, crashes, crashing
+      /\bBROKEN\b/,                           // Broken
+      /\bDATA\s*LOSS\b/,                      // Data loss
+      /\bPRODUCTION\s*(?:DOWN|ISSUE|BUG)\b/,  // Production issues
+      /\bHOTFIX\b/,                           // Hotfix
+      /\bSEVERITY\s*1\b/,                     // Severity 1
+    ];
+
+    // P1 patterns - High priority issues
+    const p1Patterns = [
+      /\bP1\b|\(P1\)|:?\s*P1\s*:/,           // Explicit P1
+      /\bHIGH\s*PRIORITY\b/,                  // High priority
+      /\bIMPORTANT\b/,                        // Important
+      /\bBUG\b/,                              // Bug
+      /\bFIX\b/,                              // Fix (as task type)
+      /\bERROR\b/,                            // Error
+      /\bFAIL(?:S|ED|ING|URE)?\b/,           // Fail variants
+      /\bREGRESSION\b/,                       // Regression
+      /\bMUST\s*(?:HAVE|FIX|DO)\b/,          // Must have/fix/do
+      /\bSEVERITY\s*2\b/,                     // Severity 2
+      /\bREQUIRED\b/,                         // Required
+    ];
+
+    // P2 patterns - Lower priority
+    const p2Patterns = [
+      /\bP2\b|\(P2\)|:?\s*P2\s*:/,           // Explicit P2
+      /\bNICE\s*TO\s*HAVE\b/,                 // Nice to have
+      /\bLOW\s*PRIORITY\b/,                   // Low priority
+      /\bREFACTOR\b/,                         // Refactor
+      /\bCLEANUP\b/,                          // Cleanup
+      /\bIMPROVE(?:MENT)?\b/,                 // Improve/Improvement
+      /\bOPTIMIZ(?:E|ATION)\b/,              // Optimize/Optimization
+      /\bCONSIDER\b/,                         // Consider
+      /\bWOULD\s*BE\s*NICE\b/,               // Would be nice
+      /\bENHANCE(?:MENT)?\b/,                 // Enhance/Enhancement
+      /\bTECH(?:NICAL)?\s*DEBT\b/,           // Tech debt
+      /\bDOCUMENT(?:ATION)?\b/,              // Documentation
+    ];
+
+    // Check P0 first (highest priority wins)
+    for (const pattern of p0Patterns) {
+      if (pattern.test(upper)) {
+        return 'P0';
+      }
     }
-    if (/\bP1\b|^\(P1\)|:?\s*P1\s*:|\bHIGH\s*PRIORITY\b/.test(upper)) {
-      return 'P1';
+
+    // Check P1
+    for (const pattern of p1Patterns) {
+      if (pattern.test(upper)) {
+        return 'P1';
+      }
     }
-    if (/\bP2\b|^\(P2\)|:?\s*P2\s*:|\bNICE\s*TO\s*HAVE\b|\bLOW\s*PRIORITY\b/.test(upper)) {
-      return 'P2';
+
+    // Check P2
+    for (const pattern of p2Patterns) {
+      if (pattern.test(upper)) {
+        return 'P2';
+      }
     }
 
     return null;
@@ -1652,17 +2219,70 @@ export class RalphTracker extends EventEmitter {
     // Parse priority from content
     const priority = this.parsePriority(cleanContent);
 
+    // P1-009: Estimate complexity for duration tracking
+    const estimatedComplexity = this.estimateComplexity(cleanContent);
+
     // Generate a stable ID from normalized content
     const id = this.generateTodoId(cleanContent);
 
     const existing = this._todos.get(id);
     if (existing) {
-      // Update existing todo
+      // P1-009: Track status transitions for progress estimation
+      const wasCompleted = existing.status === 'completed';
+      const isNowCompleted = status === 'completed';
+      const wasInProgress = existing.status === 'in_progress';
+      const isNowInProgress = status === 'in_progress';
+
+      // Update existing todo (exact match by ID)
       existing.status = status;
       existing.detectedAt = Date.now();
       // Update priority if parsed (don't overwrite with null)
       if (priority) existing.priority = priority;
+      // Update complexity estimate if not already set
+      if (!existing.estimatedComplexity) {
+        existing.estimatedComplexity = estimatedComplexity;
+      }
+
+      // P1-009: Track completion time
+      if (!wasCompleted && isNowCompleted) {
+        this.recordTodoCompletion(id);
+      }
+      // P1-009: Start tracking when status changes to in_progress
+      if (!wasInProgress && isNowInProgress) {
+        this.startTrackingTodo(id);
+      }
     } else {
+      // P1-007: Check for similar existing todo (deduplication)
+      const similar = this.findSimilarTodo(cleanContent);
+      if (similar) {
+        // P1-009: Track status transitions on similar todo
+        const wasCompleted = similar.status === 'completed';
+        const isNowCompleted = status === 'completed';
+        const wasInProgress = similar.status === 'in_progress';
+        const isNowInProgress = status === 'in_progress';
+
+        // Update similar todo instead of creating duplicate
+        similar.status = status;
+        similar.detectedAt = Date.now();
+        // Update priority if new content has priority and existing doesn't
+        if (priority && !similar.priority) {
+          similar.priority = priority;
+        }
+        // Keep the longer/more descriptive content
+        if (cleanContent.length > similar.content.length) {
+          similar.content = cleanContent;
+        }
+
+        // P1-009: Track completion time
+        if (!wasCompleted && isNowCompleted) {
+          this.recordTodoCompletion(similar.id);
+        }
+        if (!wasInProgress && isNowInProgress) {
+          this.startTrackingTodo(similar.id);
+        }
+        return;
+      }
+
       // Add new todo
       if (this._todos.size >= MAX_TODO_ITEMS) {
         // Remove oldest todo to make room
@@ -1672,13 +2292,22 @@ export class RalphTracker extends EventEmitter {
         }
       }
 
+      const estimatedDurationMs = this.getEstimatedDuration(estimatedComplexity);
+
       this._todos.set(id, {
         id,
         content: cleanContent,
         status,
         detectedAt: Date.now(),
         priority,
+        estimatedComplexity,
+        estimatedDurationMs,
       });
+
+      // P1-009: Start tracking if already in_progress
+      if (status === 'in_progress') {
+        this.startTrackingTodo(id);
+      }
     }
   }
 
@@ -1706,6 +2335,327 @@ export class RalphTracker extends EventEmitter {
   }
 
   /**
+   * Calculate similarity between two strings.
+   *
+   * P1-007: Uses a hybrid approach combining:
+   * 1. Levenshtein-based similarity for edit-distance tolerance
+   * 2. Bigram (Dice coefficient) for reordering tolerance
+   * Returns the maximum of both methods.
+   *
+   * @param str1 - First string (will be normalized)
+   * @param str2 - Second string (will be normalized)
+   * @returns Similarity score from 0.0 (no similarity) to 1.0 (identical)
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    const norm1 = this.normalizeTodoContent(str1);
+    const norm2 = this.normalizeTodoContent(str2);
+
+    // Identical after normalization
+    if (norm1 === norm2) return 1.0;
+
+    // If either is empty, no similarity
+    if (!norm1 || !norm2) return 0.0;
+
+    // Method 1: Levenshtein-based similarity (good for typos/minor edits)
+    const levenshteinSim = stringSimilarity(norm1, norm2);
+
+    // Method 2: Bigram/Dice similarity (good for word reordering)
+    const bigramSim = this.calculateBigramSimilarity(norm1, norm2);
+
+    // Return the higher of the two scores
+    return Math.max(levenshteinSim, bigramSim);
+  }
+
+  /**
+   * Calculate bigram (Dice coefficient) similarity.
+   * Good for detecting near-duplicates with word reordering.
+   *
+   * @param norm1 - First normalized string
+   * @param norm2 - Second normalized string
+   * @returns Similarity score from 0.0 to 1.0
+   */
+  private calculateBigramSimilarity(norm1: string, norm2: string): number {
+    // Short strings: use simple character overlap
+    if (norm1.length < 3 || norm2.length < 3) {
+      const shorter = norm1.length <= norm2.length ? norm1 : norm2;
+      const longer = norm1.length > norm2.length ? norm1 : norm2;
+      return longer.includes(shorter) ? 0.9 : 0.0;
+    }
+
+    // Extract bigrams (pairs of consecutive characters)
+    const getBigrams = (s: string): Set<string> => {
+      const bigrams = new Set<string>();
+      for (let i = 0; i < s.length - 1; i++) {
+        bigrams.add(s.substring(i, i + 2));
+      }
+      return bigrams;
+    };
+
+    const bigrams1 = getBigrams(norm1);
+    const bigrams2 = getBigrams(norm2);
+
+    // Count intersection
+    let intersection = 0;
+    for (const bigram of bigrams1) {
+      if (bigrams2.has(bigram)) {
+        intersection++;
+      }
+    }
+
+    // Dice coefficient: 2 * intersection / (total bigrams)
+    const totalBigrams = bigrams1.size + bigrams2.size;
+    if (totalBigrams === 0) return 0.0;
+
+    return (2 * intersection) / totalBigrams;
+  }
+
+  /**
+   * Find an existing todo that is similar to the given content.
+   * Returns the most similar todo if similarity >= threshold.
+   *
+   * Deduplication is intentionally conservative:
+   * - Short strings (< 30 chars): require 95% similarity (nearly identical)
+   * - Medium strings (30-60 chars): require 90% similarity
+   * - Longer strings: use default 85% threshold
+   *
+   * This prevents over-aggressive deduplication of brief, numbered items
+   * like "Task 1", "Task 2" while still catching true duplicates.
+   *
+   * @param content - New todo content to check against existing todos
+   * @returns Similar todo item if found, undefined otherwise
+   */
+  private findSimilarTodo(content: string): RalphTodoItem | undefined {
+    const normalized = this.normalizeTodoContent(content);
+
+    // Determine appropriate threshold based on string length
+    // Shorter strings need higher threshold to avoid false positives
+    let threshold: number;
+    if (normalized.length < 30) {
+      threshold = 0.95; // Very strict for short strings
+    } else if (normalized.length < 60) {
+      threshold = 0.90; // Strict for medium strings
+    } else {
+      threshold = TODO_SIMILARITY_THRESHOLD; // 0.85 for longer strings
+    }
+
+    let bestMatch: RalphTodoItem | undefined;
+    let bestSimilarity = 0;
+
+    for (const todo of this._todos.values()) {
+      const similarity = this.calculateSimilarity(content, todo.content);
+      if (similarity >= threshold && similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestMatch = todo;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  // ========== P1-009: Progress Estimation Methods ==========
+
+  /**
+   * Estimate complexity of a todo based on content keywords.
+   * Used for duration estimation.
+   *
+   * @param content - Todo content text
+   * @returns Complexity category
+   */
+  private estimateComplexity(content: string): 'trivial' | 'simple' | 'moderate' | 'complex' {
+    const lower = content.toLowerCase();
+
+    // Trivial: Simple fixes, typos, documentation
+    const trivialPatterns = [
+      /\btypo\b/,
+      /\bspelling\b/,
+      /\bcomment\b/,
+      /\bupdate\s+(?:version|readme)\b/,
+      /\brename\b/,
+      /\bformat(?:ting)?\b/,
+    ];
+
+    // Complex: Architecture, refactoring, security, testing
+    const complexPatterns = [
+      /\barchitect(?:ure)?\b/,
+      /\brefactor\b/,
+      /\brewrite\b/,
+      /\bsecurity\b/,
+      /\bmigrat(?:e|ion)\b/,
+      /\btest(?:s|ing)?\b/,
+      /\bintegrat(?:e|ion)\b/,
+      /\bperformance\b/,
+      /\boptimiz(?:e|ation)\b/,
+      /\bmultiple\s+files?\b/,
+    ];
+
+    // Moderate: Bugs, features, enhancements
+    const moderatePatterns = [
+      /\bbug\b/,
+      /\bfeature\b/,
+      /\benhance(?:ment)?\b/,
+      /\bimplement\b/,
+      /\badd\b/,
+      /\bfix\b/,
+    ];
+
+    for (const pattern of complexPatterns) {
+      if (pattern.test(lower)) return 'complex';
+    }
+
+    for (const trivialPattern of trivialPatterns) {
+      if (trivialPattern.test(lower)) return 'trivial';
+    }
+
+    for (const moderatePattern of moderatePatterns) {
+      if (moderatePattern.test(lower)) return 'moderate';
+    }
+
+    return 'simple';
+  }
+
+  /**
+   * Get estimated duration for a complexity level (ms).
+   * Based on historical patterns from similar tasks.
+   *
+   * @param complexity - Complexity category
+   * @returns Estimated duration in milliseconds
+   */
+  private getEstimatedDuration(complexity: 'trivial' | 'simple' | 'moderate' | 'complex'): number {
+    // If we have historical data, use average adjusted by complexity
+    const avgTime = this.getAverageCompletionTime();
+    if (avgTime !== null) {
+      const multipliers = {
+        trivial: 0.25,
+        simple: 0.5,
+        moderate: 1.0,
+        complex: 2.0,
+      };
+      return Math.round(avgTime * multipliers[complexity]);
+    }
+
+    // Default estimates (in ms) based on typical task durations
+    const defaults = {
+      trivial: 1 * 60 * 1000,    // 1 minute
+      simple: 3 * 60 * 1000,     // 3 minutes
+      moderate: 10 * 60 * 1000,  // 10 minutes
+      complex: 30 * 60 * 1000,   // 30 minutes
+    };
+    return defaults[complexity];
+  }
+
+  /**
+   * Get average completion time from historical data.
+   * @returns Average time in ms, or null if no data
+   */
+  private getAverageCompletionTime(): number | null {
+    if (this._completionTimes.length === 0) return null;
+    const sum = this._completionTimes.reduce((a, b) => a + b, 0);
+    return Math.round(sum / this._completionTimes.length);
+  }
+
+  /**
+   * Record a todo completion for progress tracking.
+   * @param todoId - ID of the completed todo
+   */
+  private recordTodoCompletion(todoId: string): void {
+    const startTime = this._todoStartTimes.get(todoId);
+    if (startTime) {
+      const duration = Date.now() - startTime;
+      this._completionTimes.push(duration);
+
+      // Keep only recent completion times
+      while (this._completionTimes.length > RalphTracker.MAX_COMPLETION_TIMES) {
+        this._completionTimes.shift();
+      }
+
+      this._todoStartTimes.delete(todoId);
+    }
+  }
+
+  /**
+   * Start tracking a todo for duration estimation.
+   * @param todoId - ID of the todo being started
+   */
+  private startTrackingTodo(todoId: string): void {
+    if (!this._todoStartTimes.has(todoId)) {
+      this._todoStartTimes.set(todoId, Date.now());
+    }
+
+    // Initialize session tracking if needed
+    if (this._todosStartedAt === 0) {
+      this._todosStartedAt = Date.now();
+    }
+  }
+
+  /**
+   * Get progress estimation for the todo list.
+   * P1-009: Provides completion percentage, estimated remaining time,
+   * and projected completion timestamp.
+   *
+   * @returns Progress estimation object
+   */
+  public getTodoProgress(): RalphTodoProgress {
+    const todos = Array.from(this._todos.values());
+    const total = todos.length;
+    const completed = todos.filter(t => t.status === 'completed').length;
+    const inProgress = todos.filter(t => t.status === 'in_progress').length;
+    const pending = todos.filter(t => t.status === 'pending').length;
+
+    const percentComplete = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    // Calculate estimated remaining time
+    let estimatedRemainingMs: number | null = null;
+    let avgCompletionTimeMs: number | null = null;
+    let projectedCompletionAt: number | null = null;
+
+    avgCompletionTimeMs = this.getAverageCompletionTime();
+
+    if (total > 0 && completed > 0) {
+      // Method 1: Use historical average if available
+      if (avgCompletionTimeMs !== null) {
+        const remaining = total - completed;
+        estimatedRemainingMs = remaining * avgCompletionTimeMs;
+      } else {
+        // Method 2: Calculate based on elapsed time and progress
+        const elapsed = Date.now() - this._todosStartedAt;
+        if (elapsed > 0 && completed > 0) {
+          const timePerTodo = elapsed / completed;
+          avgCompletionTimeMs = Math.round(timePerTodo);
+          const remaining = total - completed;
+          estimatedRemainingMs = Math.round(remaining * timePerTodo);
+        }
+      }
+
+      // Calculate projected completion timestamp
+      if (estimatedRemainingMs !== null) {
+        projectedCompletionAt = Date.now() + estimatedRemainingMs;
+      }
+    } else if (total > 0 && completed === 0) {
+      // No completions yet - use complexity-based estimates
+      let totalEstimate = 0;
+      for (const todo of todos) {
+        if (todo.status !== 'completed') {
+          const complexity = todo.estimatedComplexity || this.estimateComplexity(todo.content);
+          totalEstimate += this.getEstimatedDuration(complexity);
+        }
+      }
+      estimatedRemainingMs = totalEstimate;
+      projectedCompletionAt = Date.now() + totalEstimate;
+    }
+
+    return {
+      total,
+      completed,
+      inProgress,
+      pending,
+      percentComplete,
+      estimatedRemainingMs,
+      avgCompletionTimeMs,
+      projectedCompletionAt,
+    };
+  }
+
+  /**
    * Generate a stable ID from todo content using djb2 hash.
    *
    * Uses the djb2 hash algorithm for good distribution across strings.
@@ -1714,20 +2664,21 @@ export class RalphTracker extends EventEmitter {
    * @param content - Todo content text
    * @returns Stable ID in format `todo-{hash}` (base36 encoded)
    */
+  /**
+   * Generate a stable ID from todo content using content hashing.
+   *
+   * P1-007: Uses centralized todoContentHash utility for consistency
+   * with deduplication logic.
+   *
+   * @param content - Todo content text
+   * @returns Unique ID string prefixed with "todo-"
+   */
   private generateTodoId(content: string): string {
     if (!content) return 'todo-empty';
 
-    // Normalize content for consistent hashing
-    const normalized = this.normalizeTodoContent(content);
-    if (!normalized) return 'todo-empty';
-
-    // djb2 hash algorithm - good distribution for strings
-    let hash = 5381;
-    for (let i = 0; i < normalized.length; i++) {
-      hash = ((hash << 5) + hash) ^ normalized.charCodeAt(i);
-      hash = hash | 0; // Convert to 32-bit integer
-    }
-    return `todo-${Math.abs(hash).toString(36)}`;
+    // Use centralized hashing utility
+    const hash = todoContentHash(content);
+    return `todo-${hash}`;
   }
 
   /**
@@ -1888,6 +2839,7 @@ export class RalphTracker extends EventEmitter {
     this._todos.clear();
     this._taskNumberToContent.clear();
     this._lineBuffer = '';
+    this._partialPromiseBuffer = '';
     this._completionPhraseCount.clear();
     // Clear RALPH_STATUS block and circuit breaker state
     this._statusBlockBuffer = [];
@@ -2000,6 +2952,8 @@ export class RalphTracker extends EventEmitter {
   /**
    * Parse buffered RALPH_STATUS block lines into structured data.
    *
+   * P1-004: Enhanced with schema validation and error recovery
+   *
    * @param lines - Array of lines between block markers
    * @fires statusBlockDetected - When parsing succeeds
    */
@@ -2007,75 +2961,129 @@ export class RalphTracker extends EventEmitter {
     const block: Partial<RalphStatusBlock> = {
       parsedAt: Date.now(),
     };
+    const parseErrors: string[] = [];
+    const unknownFields: string[] = [];
 
     for (const line of lines) {
-      // STATUS field
-      const statusMatch = line.match(RALPH_STATUS_FIELD_PATTERN);
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+
+      // Track whether this line matched any known field
+      let matched = false;
+
+      // STATUS field (required)
+      const statusMatch = trimmedLine.match(RALPH_STATUS_FIELD_PATTERN);
       if (statusMatch) {
-        block.status = statusMatch[1].toUpperCase() as RalphStatusValue;
-        continue;
+        const value = statusMatch[1].toUpperCase();
+        if (['IN_PROGRESS', 'COMPLETE', 'BLOCKED'].includes(value)) {
+          block.status = value as RalphStatusValue;
+        } else {
+          parseErrors.push(`Invalid STATUS value: "${value}". Expected: IN_PROGRESS, COMPLETE, or BLOCKED`);
+        }
+        matched = true;
       }
 
       // TASKS_COMPLETED_THIS_LOOP field
-      const tasksMatch = line.match(RALPH_TASKS_COMPLETED_PATTERN);
+      const tasksMatch = trimmedLine.match(RALPH_TASKS_COMPLETED_PATTERN);
       if (tasksMatch) {
-        block.tasksCompletedThisLoop = parseInt(tasksMatch[1], 10);
-        continue;
+        const value = parseInt(tasksMatch[1], 10);
+        if (!isNaN(value) && value >= 0) {
+          block.tasksCompletedThisLoop = value;
+        } else {
+          parseErrors.push(`Invalid TASKS_COMPLETED_THIS_LOOP value: "${tasksMatch[1]}". Expected: non-negative integer`);
+        }
+        matched = true;
       }
 
       // FILES_MODIFIED field
-      const filesMatch = line.match(RALPH_FILES_MODIFIED_PATTERN);
+      const filesMatch = trimmedLine.match(RALPH_FILES_MODIFIED_PATTERN);
       if (filesMatch) {
-        block.filesModified = parseInt(filesMatch[1], 10);
-        continue;
+        const value = parseInt(filesMatch[1], 10);
+        if (!isNaN(value) && value >= 0) {
+          block.filesModified = value;
+        } else {
+          parseErrors.push(`Invalid FILES_MODIFIED value: "${filesMatch[1]}". Expected: non-negative integer`);
+        }
+        matched = true;
       }
 
       // TESTS_STATUS field
-      const testsMatch = line.match(RALPH_TESTS_STATUS_PATTERN);
+      const testsMatch = trimmedLine.match(RALPH_TESTS_STATUS_PATTERN);
       if (testsMatch) {
-        block.testsStatus = testsMatch[1].toUpperCase() as RalphTestsStatus;
-        continue;
+        const value = testsMatch[1].toUpperCase();
+        if (['PASSING', 'FAILING', 'NOT_RUN'].includes(value)) {
+          block.testsStatus = value as RalphTestsStatus;
+        } else {
+          parseErrors.push(`Invalid TESTS_STATUS value: "${value}". Expected: PASSING, FAILING, or NOT_RUN`);
+        }
+        matched = true;
       }
 
       // WORK_TYPE field
-      const workMatch = line.match(RALPH_WORK_TYPE_PATTERN);
+      const workMatch = trimmedLine.match(RALPH_WORK_TYPE_PATTERN);
       if (workMatch) {
-        block.workType = workMatch[1].toUpperCase() as RalphWorkType;
-        continue;
+        const value = workMatch[1].toUpperCase();
+        if (['IMPLEMENTATION', 'TESTING', 'DOCUMENTATION', 'REFACTORING'].includes(value)) {
+          block.workType = value as RalphWorkType;
+        } else {
+          parseErrors.push(`Invalid WORK_TYPE value: "${value}". Expected: IMPLEMENTATION, TESTING, DOCUMENTATION, or REFACTORING`);
+        }
+        matched = true;
       }
 
       // EXIT_SIGNAL field
-      const exitMatch = line.match(RALPH_EXIT_SIGNAL_PATTERN);
+      const exitMatch = trimmedLine.match(RALPH_EXIT_SIGNAL_PATTERN);
       if (exitMatch) {
         block.exitSignal = exitMatch[1].toLowerCase() === 'true';
-        continue;
+        matched = true;
       }
 
       // RECOMMENDATION field
-      const recMatch = line.match(RALPH_RECOMMENDATION_PATTERN);
+      const recMatch = trimmedLine.match(RALPH_RECOMMENDATION_PATTERN);
       if (recMatch) {
         block.recommendation = recMatch[1].trim();
-        continue;
+        matched = true;
+      }
+
+      // Track unknown fields for debugging (only if looks like a field)
+      if (!matched && trimmedLine.includes(':')) {
+        const fieldName = trimmedLine.split(':')[0].trim().toUpperCase();
+        if (fieldName && !['#', '//'].some(c => fieldName.startsWith(c))) {
+          unknownFields.push(fieldName);
+        }
       }
     }
 
-    // Only process if we have at least the STATUS field
-    if (block.status !== undefined) {
-      // Fill in defaults for missing fields
-      const fullBlock: RalphStatusBlock = {
-        status: block.status,
-        tasksCompletedThisLoop: block.tasksCompletedThisLoop ?? 0,
-        filesModified: block.filesModified ?? 0,
-        testsStatus: block.testsStatus ?? 'NOT_RUN',
-        workType: block.workType ?? 'IMPLEMENTATION',
-        exitSignal: block.exitSignal ?? false,
-        recommendation: block.recommendation ?? '',
-        parsedAt: block.parsedAt!,
-      };
-
-      this._lastStatusBlock = fullBlock;
-      this.handleStatusBlock(fullBlock);
+    // Log parse errors if any
+    if (parseErrors.length > 0) {
+      console.warn(`[RalphTracker] RALPH_STATUS parse errors:\n  - ${parseErrors.join('\n  - ')}`);
     }
+
+    // Log unknown fields if any
+    if (unknownFields.length > 0) {
+      console.warn(`[RalphTracker] RALPH_STATUS unknown fields: ${unknownFields.join(', ')}`);
+    }
+
+    // Validate required field: STATUS
+    if (block.status === undefined) {
+      console.warn('[RalphTracker] RALPH_STATUS block missing required STATUS field, skipping');
+      return;
+    }
+
+    // Fill in defaults for missing optional fields
+    const fullBlock: RalphStatusBlock = {
+      status: block.status,
+      tasksCompletedThisLoop: block.tasksCompletedThisLoop ?? 0,
+      filesModified: block.filesModified ?? 0,
+      testsStatus: block.testsStatus ?? 'NOT_RUN',
+      workType: block.workType ?? 'IMPLEMENTATION',
+      exitSignal: block.exitSignal ?? false,
+      recommendation: block.recommendation ?? '',
+      parsedAt: block.parsedAt!,
+    };
+
+    this._lastStatusBlock = fullBlock;
+    this.handleStatusBlock(fullBlock);
   }
 
   /**

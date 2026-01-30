@@ -727,6 +727,7 @@ export class Session extends EventEmitter {
       inputTokens: this._totalInputTokens,
       outputTokens: this._totalOutputTokens,
       ralphEnabled: this._ralphTracker.enabled,
+      ralphAutoEnableDisabled: this._ralphTracker.autoEnableDisabled || undefined,
       ralphCompletionPhrase: this._ralphTracker.loopState.completionPhrase || undefined,
       parentAgentId: this._parentAgentId || undefined,
       childAgentIds: this._childAgentIds.length > 0 ? this._childAgentIds : undefined,

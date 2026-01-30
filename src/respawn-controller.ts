@@ -47,6 +47,14 @@ import {
   MAX_RESPAWN_BUFFER_SIZE,
   TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE,
 } from './config/buffer-limits.js';
+import type {
+  RespawnCycleMetrics,
+  RespawnAggregateMetrics,
+  RalphLoopHealthScore,
+  TimingHistory,
+  CycleOutcome,
+  HealthStatus,
+} from './types.js';
 
 // ========== Constants ==========
 
@@ -137,6 +145,22 @@ export interface DetectionStatus {
 
   /** Next expected action */
   nextAction: string;
+
+  /** Stuck-state detection metrics */
+  stuckState: {
+    /** How long the controller has been in the current state (ms) */
+    currentStateDurationMs: number;
+    /** Warning threshold (ms) */
+    warningThresholdMs: number;
+    /** Recovery threshold (ms) */
+    recoveryThresholdMs: number;
+    /** Number of recovery attempts made */
+    recoveryAttempts: number;
+    /** Maximum allowed recoveries */
+    maxRecoveries: number;
+    /** Whether a warning has been emitted for current state */
+    isWarned: boolean;
+  };
 }
 
 // ========== Type Definitions ==========
@@ -332,6 +356,109 @@ export interface RespawnConfig {
    * @default 30000 (30 seconds)
    */
   aiPlanCheckCooldownMs: number;
+
+  /**
+   * Enable stuck-state detection.
+   * Detects when the controller stays in the same state for too long.
+   * @default true
+   */
+  stuckStateDetectionEnabled: boolean;
+
+  /**
+   * Threshold for stuck-state warning in ms.
+   * If state doesn't change for this duration, emits a warning.
+   * @default 300000 (5 minutes)
+   */
+  stuckStateWarningMs: number;
+
+  /**
+   * Threshold for stuck-state recovery in ms.
+   * If state doesn't change for this duration, triggers recovery action.
+   * @default 600000 (10 minutes)
+   */
+  stuckStateRecoveryMs: number;
+
+  /**
+   * Maximum consecutive stuck-state recoveries before giving up.
+   * @default 3
+   */
+  maxStuckRecoveries: number;
+
+  // ========== P2-001: Adaptive Timing ==========
+
+  /**
+   * Enable adaptive timing based on historical patterns.
+   * Adjusts completion confirm timeout dynamically.
+   * @default true
+   */
+  adaptiveTimingEnabled?: boolean;
+
+  /**
+   * Minimum adaptive completion confirm timeout (ms).
+   * @default 5000
+   */
+  adaptiveMinConfirmMs?: number;
+
+  /**
+   * Maximum adaptive completion confirm timeout (ms).
+   * @default 30000
+   */
+  adaptiveMaxConfirmMs?: number;
+
+  // ========== P2-002: Skip-Clear Optimization ==========
+
+  /**
+   * Skip /clear when context usage is low.
+   * @default true
+   */
+  skipClearWhenLowContext?: boolean;
+
+  /**
+   * Context threshold percentage below which to skip /clear.
+   * @default 30
+   */
+  skipClearThresholdPercent?: number;
+
+  // ========== P2-004: Cycle Metrics ==========
+
+  /**
+   * Enable tracking of respawn cycle metrics.
+   * @default true
+   */
+  trackCycleMetrics?: boolean;
+
+  // ========== P2-001: Confidence Scoring ==========
+
+  /**
+   * Minimum confidence level required to trigger idle detection.
+   * Below this threshold, the controller waits for more signals.
+   * @default 65
+   */
+  minIdleConfidence?: number;
+
+  /**
+   * Confidence weight for completion message detection.
+   * @default 40
+   */
+  confidenceWeightCompletion?: number;
+
+  /**
+   * Confidence weight for output silence.
+   * @default 25
+   */
+  confidenceWeightSilence?: number;
+
+  /**
+   * Confidence weight for token stability.
+   * @default 20
+   */
+  confidenceWeightTokens?: number;
+
+  /**
+   * Confidence weight for working pattern absence.
+   * @default 15
+   */
+  confidenceWeightNoWorking?: number;
 }
 
 /**
@@ -402,6 +529,12 @@ export interface RespawnEvents {
   error: (error: Error) => void;
   /** Debug log message */
   log: (message: string) => void;
+  /** Stuck state warning emitted */
+  stuckStateWarning: (state: RespawnState, durationMs: number) => void;
+  /** Stuck state recovery triggered */
+  stuckStateRecovery: (state: RespawnState, durationMs: number, attempt: number) => void;
+  /** Respawn blocked by external signal */
+  respawnBlocked: (data: { reason: string; details: string }) => void;
 }
 
 /** Default configuration values */
@@ -426,6 +559,25 @@ const DEFAULT_CONFIG: RespawnConfig = {
   aiPlanCheckMaxContext: 8000,   // ~2k tokens (plan mode UI is compact)
   aiPlanCheckTimeoutMs: 60000,   // 60 seconds (thinking can be slow)
   aiPlanCheckCooldownMs: 30000,  // 30 seconds after NOT_PLAN_MODE
+  stuckStateDetectionEnabled: true,  // detect stuck states
+  stuckStateWarningMs: 300000,       // 5 minutes warning threshold
+  stuckStateRecoveryMs: 600000,      // 10 minutes recovery threshold
+  maxStuckRecoveries: 3,             // max recovery attempts
+  // P2-001: Adaptive timing
+  adaptiveTimingEnabled: true,       // Use adaptive timing based on historical patterns
+  adaptiveMinConfirmMs: 5000,        // Minimum 5 seconds
+  adaptiveMaxConfirmMs: 30000,       // Maximum 30 seconds
+  // P2-002: Skip-clear optimization
+  skipClearWhenLowContext: true,     // Skip /clear when token count is low
+  skipClearThresholdPercent: 30,     // Skip if below 30% of max context
+  // P2-004: Cycle metrics
+  trackCycleMetrics: true,           // Track and persist cycle metrics
+  // P2-001: Confidence scoring
+  minIdleConfidence: 65,             // Minimum confidence to trigger idle (0-100)
+  confidenceWeightCompletion: 40,    // Weight for completion message
+  confidenceWeightSilence: 25,       // Weight for output silence
+  confidenceWeightTokens: 20,        // Weight for token stability
+  confidenceWeightNoWorking: 15,     // Weight for working pattern absence
 };
 
 /**
@@ -580,6 +732,60 @@ export class RespawnController extends EventEmitter {
 
   /** Recent action log entries (for UI display, max 20) */
   private recentActions: ActionLogEntry[] = [];
+
+  // ========== Stuck-State Detection State ==========
+
+  /** Timestamp when the current state was entered */
+  private stateEnteredAt: number = 0;
+
+  /** Timer for stuck-state detection */
+  private stuckStateTimer: NodeJS.Timeout | null = null;
+
+  /** Whether a stuck-state warning has been emitted for current state */
+  private stuckStateWarned: boolean = false;
+
+  /** Number of stuck-state recovery attempts */
+  private stuckRecoveryCount: number = 0;
+
+  // ========== P2-001: Adaptive Timing State ==========
+
+  /** Historical timing data for adaptive adjustments */
+  private timingHistory: TimingHistory = {
+    recentIdleDetectionMs: [],
+    recentCycleDurationMs: [],
+    adaptiveCompletionConfirmMs: 10000, // Start with default
+    sampleCount: 0,
+    maxSamples: 20, // Keep last 20 samples for rolling average
+    lastUpdatedAt: Date.now(),
+  };
+
+  // ========== P2-004: Cycle Metrics State ==========
+
+  /** Current cycle being tracked */
+  private currentCycleMetrics: Partial<RespawnCycleMetrics> | null = null;
+
+  /** Timestamp when idle detection started for current cycle */
+  private idleDetectionStartTime: number = 0;
+
+  /** Recent cycle metrics (rolling window for aggregate calculation) */
+  private recentCycleMetrics: RespawnCycleMetrics[] = [];
+
+  /** Maximum number of cycle metrics to keep in memory */
+  private static readonly MAX_CYCLE_METRICS_IN_MEMORY = 100;
+
+  /** Aggregate metrics across all tracked cycles */
+  private aggregateMetrics: RespawnAggregateMetrics = {
+    totalCycles: 0,
+    successfulCycles: 0,
+    stuckRecoveryCycles: 0,
+    blockedCycles: 0,
+    errorCycles: 0,
+    avgCycleDurationMs: 0,
+    avgIdleDetectionMs: 0,
+    p90CycleDurationMs: 0,
+    successRate: 100,
+    lastUpdatedAt: Date.now(),
+  };
 
   // ========== Multi-Layer Detection State ==========
 
@@ -786,17 +992,33 @@ export class RespawnController extends EventEmitter {
     const tokensStable = msSinceTokenChange >= this.config.completionConfirmMs;
     const workingPatternsAbsent = msSinceLastWorking >= RespawnController.MIN_WORKING_PATTERN_ABSENCE_MS;
 
-    // Calculate confidence level (0-100)
+    // Calculate confidence level (0-100) using configurable weights
+    // P2-001: Configurable confidence scoring
     // Hook signals are definitive (100% confidence)
     let confidence = 0;
     if (this.stopHookReceived || this.idlePromptReceived) {
       confidence = 100;
     } else {
-      if (completionMessageDetected) confidence += 40;
-      if (outputSilent) confidence += 25;
-      if (tokensStable) confidence += 20;
-      if (workingPatternsAbsent) confidence += 15;
+      // Use configured weights (with fallback to defaults)
+      const weightCompletion = this.config.confidenceWeightCompletion ?? 40;
+      const weightSilence = this.config.confidenceWeightSilence ?? 25;
+      const weightTokens = this.config.confidenceWeightTokens ?? 20;
+      const weightNoWorking = this.config.confidenceWeightNoWorking ?? 15;
+
+      if (completionMessageDetected) confidence += weightCompletion;
+      if (outputSilent) confidence += weightSilence;
+      if (tokensStable) confidence += weightTokens;
+      if (workingPatternsAbsent) confidence += weightNoWorking;
+
+      // Confidence decay: if no output for extended time, add bonus confidence
+      // This helps detect stuck states where Claude is truly idle but no completion message
+      const extendedSilenceBonus = Math.min(20, Math.floor(msSinceLastOutput / 30000) * 5);
+      if (msSinceLastOutput > 30000) {
+        confidence += extendedSilenceBonus;
+      }
     }
+    // Cap at 100
+    confidence = Math.min(100, confidence);
 
     // Determine status text and what we're waiting for
     let statusText: string;
@@ -923,6 +1145,7 @@ export class RespawnController extends EventEmitter {
       recentActions: this.recentActions.slice(0, 10),
       currentPhase,
       nextAction,
+      stuckState: this.getStuckStateMetrics(),
     };
   }
 
@@ -962,9 +1185,19 @@ export class RespawnController extends EventEmitter {
 
     const prevState = this._state;
     this._state = newState;
+    this.stateEnteredAt = Date.now();
+    this.stuckStateWarned = false;  // Reset warning for new state
     this.log(`State: ${prevState} → ${newState}`);
     this.logAction('state', `${prevState} → ${newState}`);
     this.emit('stateChanged', newState, prevState);
+
+    // Reset stuck recovery count on successful state transition to normal states
+    if (newState === 'watching' && prevState !== 'stopped') {
+      this.stuckRecoveryCount = 0;
+    }
+
+    // Start/restart stuck-state detection timer
+    this.startStuckStateTimer();
   }
 
   /**
@@ -1035,6 +1268,9 @@ export class RespawnController extends EventEmitter {
     if (this.config.autoAcceptPrompts) {
       this.startAutoAcceptTimer();
     }
+
+    // P2-001: Initialize idle detection start time
+    this.idleDetectionStartTime = Date.now();
   }
 
   /**
@@ -1283,8 +1519,24 @@ export class RespawnController extends EventEmitter {
     this.log('Update completed (ready indicator)');
     this.emit('stepCompleted', 'update');
 
+    // P2-004: Record step completion
+    this.recordCycleStep('update');
+
     if (this.config.sendClear) {
-      this.sendClear();
+      // P2-002: Check if we should skip /clear
+      if (this.shouldSkipClear()) {
+        if (this.currentCycleMetrics) {
+          this.currentCycleMetrics.clearSkipped = true;
+        }
+        // Skip /clear, go directly to /init or complete
+        if (this.config.sendInit) {
+          this.sendInit();
+        } else {
+          this.completeCycle();
+        }
+      } else {
+        this.sendClear();
+      }
     } else if (this.config.sendInit) {
       this.sendInit();
     } else {
@@ -1305,6 +1557,9 @@ export class RespawnController extends EventEmitter {
     this.logAction('step', '/clear completed');
     this.emit('stepCompleted', 'clear');
 
+    // P2-004: Record step completion
+    this.recordCycleStep('clear');
+
     if (this.config.sendInit) {
       this.sendInit();
     } else {
@@ -1321,6 +1576,9 @@ export class RespawnController extends EventEmitter {
   private checkInitComplete(): void {
     this.clearIdleTimer();
     this.log('/init completed (ready indicator)');
+
+    // P2-004: Record step completion
+    this.recordCycleStep('init');
 
     // If kickstart prompt is configured, monitor to see if /init triggered work
     if (this.config.kickstartPrompt) {
@@ -1408,6 +1666,10 @@ export class RespawnController extends EventEmitter {
     this.clearIdleTimer();
     this.log('Kickstart completed (ready indicator)');
     this.emit('stepCompleted', 'kickstart');
+
+    // P2-004: Record step completion
+    this.recordCycleStep('kickstart');
+
     this.completeCycle();
   }
 
@@ -1457,8 +1719,160 @@ export class RespawnController extends EventEmitter {
       clearTimeout(this.hookConfirmTimer);
       this.hookConfirmTimer = null;
     }
+    if (this.stuckStateTimer) {
+      clearTimeout(this.stuckStateTimer);
+      this.stuckStateTimer = null;
+    }
     // Clear all tracked timers
     this.activeTimers.clear();
+  }
+
+  // ========== Stuck-State Detection Methods ==========
+
+  /**
+   * Start or restart the stuck-state detection timer.
+   * Emits warning after stuckStateWarningMs, triggers recovery after stuckStateRecoveryMs.
+   */
+  private startStuckStateTimer(): void {
+    if (!this.config.stuckStateDetectionEnabled) return;
+    if (this._state === 'stopped') return;
+
+    // Clear existing timer
+    if (this.stuckStateTimer) {
+      clearTimeout(this.stuckStateTimer);
+      this.stuckStateTimer = null;
+    }
+
+    // Check interval for stuck state
+    const checkIntervalMs = Math.min(this.config.stuckStateWarningMs, 60000); // Check every minute max
+
+    this.stuckStateTimer = setInterval(() => {
+      this.checkStuckState();
+    }, checkIntervalMs);
+  }
+
+  /**
+   * Check if the controller is stuck in the current state.
+   * Emits warnings and triggers recovery actions as appropriate.
+   */
+  private checkStuckState(): void {
+    if (this._state === 'stopped') return;
+
+    const durationMs = Date.now() - this.stateEnteredAt;
+
+    // Check for recovery threshold (more severe)
+    if (durationMs >= this.config.stuckStateRecoveryMs) {
+      if (this.stuckRecoveryCount < this.config.maxStuckRecoveries) {
+        this.stuckRecoveryCount++;
+        this.logAction('stuck', `Recovery attempt ${this.stuckRecoveryCount}/${this.config.maxStuckRecoveries}`);
+        this.log(`Stuck-state recovery triggered (state: ${this._state}, duration: ${Math.round(durationMs / 1000)}s, attempt: ${this.stuckRecoveryCount})`);
+        this.emit('stuckStateRecovery', this._state, durationMs, this.stuckRecoveryCount);
+        this.handleStuckStateRecovery();
+      } else {
+        this.logAction('stuck', `Max recoveries (${this.config.maxStuckRecoveries}) reached - manual intervention needed`);
+        this.log(`Stuck-state: max recoveries reached, manual intervention needed`);
+      }
+      return;
+    }
+
+    // Check for warning threshold
+    if (durationMs >= this.config.stuckStateWarningMs && !this.stuckStateWarned) {
+      this.stuckStateWarned = true;
+      this.logAction('stuck', `Warning: in state '${this._state}' for ${Math.round(durationMs / 1000)}s`);
+      this.log(`Stuck-state warning: state '${this._state}' for ${Math.round(durationMs / 1000)}s without progress`);
+      this.emit('stuckStateWarning', this._state, durationMs);
+    }
+  }
+
+  /**
+   * Handle stuck-state recovery by resetting to a known good state.
+   * Uses escalating recovery strategies based on current state.
+   */
+  private handleStuckStateRecovery(): void {
+    const currentState = this._state;
+
+    // P2-004: Complete current cycle metrics with stuck_recovery outcome
+    if (this.currentCycleMetrics) {
+      this.completeCycleMetrics('stuck_recovery', `Stuck in state: ${currentState}`);
+    }
+
+    // Cancel any running AI checks
+    if (this.aiChecker.status === 'checking') {
+      this.aiChecker.cancel();
+    }
+    if (this.planChecker.status === 'checking') {
+      this.planChecker.cancel();
+    }
+
+    // Clear all timers and reset detection state
+    this.clearTimers();
+    this.completionMessageTime = null;
+    this.promptDetected = false;
+    this.workingDetected = false;
+    this.resetHookState();
+
+    // Escalating recovery strategies
+    switch (currentState) {
+      case 'watching':
+      case 'confirming_idle':
+      case 'ai_checking':
+        // For detection states, try forcing idle confirmation
+        this.log('Recovery: forcing idle confirmation');
+        this.onIdleConfirmed(`stuck-state recovery (was ${currentState})`);
+        break;
+
+      case 'waiting_update':
+      case 'waiting_clear':
+      case 'waiting_init':
+      case 'waiting_kickstart':
+      case 'monitoring_init':
+        // For waiting states, skip to next step or complete cycle
+        this.log('Recovery: skipping stuck step');
+        this.completeCycle();
+        break;
+
+      case 'sending_update':
+      case 'sending_clear':
+      case 'sending_init':
+      case 'sending_kickstart':
+        // For sending states, retry the send
+        this.log('Recovery: returning to watching state');
+        this.setState('watching');
+        this.startNoOutputTimer();
+        this.startPreFilterTimer();
+        if (this.config.autoAcceptPrompts) {
+          this.startAutoAcceptTimer();
+        }
+        break;
+
+      default:
+        // Fallback: reset to watching
+        this.log('Recovery: fallback to watching state');
+        this.setState('watching');
+        this.startNoOutputTimer();
+        this.startPreFilterTimer();
+    }
+  }
+
+  /**
+   * Get stuck-state metrics for UI display.
+   */
+  getStuckStateMetrics(): {
+    currentStateDurationMs: number;
+    warningThresholdMs: number;
+    recoveryThresholdMs: number;
+    recoveryAttempts: number;
+    maxRecoveries: number;
+    isWarned: boolean;
+  } {
+    return {
+      currentStateDurationMs: this._state !== 'stopped' ? Date.now() - this.stateEnteredAt : 0,
+      warningThresholdMs: this.config.stuckStateWarningMs,
+      recoveryThresholdMs: this.config.stuckStateRecoveryMs,
+      recoveryAttempts: this.stuckRecoveryCount,
+      maxRecoveries: this.config.maxStuckRecoveries,
+      isWarned: this.stuckStateWarned,
+    };
   }
 
   // ========== Timer Tracking Methods ==========
@@ -1676,6 +2090,13 @@ export class RespawnController extends EventEmitter {
    * @param reason - What triggered this attempt (for logging)
    */
   private tryStartAiCheck(reason: string): void {
+    // P0-006: Check Session.isWorking first to skip expensive AI call if session reports working
+    if (this.session.isWorking) {
+      this.log(`Skipping AI check - Session reports isWorking=true (reason: ${reason})`);
+      this.logAction('detection', 'Skipped AI check: Session is working');
+      return;
+    }
+
     // If AI check is disabled or errored out, fall back to direct idle confirmation
     if (!this.config.aiIdleCheckEnabled || this.aiChecker.status === 'disabled') {
       this.log(`AI check unavailable (${this.aiChecker.status}), confirming idle directly via: ${reason}`);
@@ -2266,18 +2687,21 @@ export class RespawnController extends EventEmitter {
 
     // ========== RALPH_STATUS Integration ==========
     // Check circuit breaker status - if OPEN, pause respawn
-    const circuitBreaker = this.session.ralphTracker.circuitBreakerStatus;
-    if (circuitBreaker.state === 'OPEN') {
-      this.log(`Respawn blocked - Circuit breaker OPEN: ${circuitBreaker.reason}`);
-      this.logAction('ralph', `Circuit breaker OPEN: ${circuitBreaker.reason}`);
-      this.emit('respawnBlocked', { reason: 'circuit_breaker_open', details: circuitBreaker.reason });
-      this.setState('watching');
-      // Don't restart timers - wait for manual reset or circuit breaker resolution
-      return;
+    const ralphTracker = this.session.ralphTracker;
+    if (ralphTracker) {
+      const circuitBreaker = ralphTracker.circuitBreakerStatus;
+      if (circuitBreaker.state === 'OPEN') {
+        this.log(`Respawn blocked - Circuit breaker OPEN: ${circuitBreaker.reason}`);
+        this.logAction('ralph', `Circuit breaker OPEN: ${circuitBreaker.reason}`);
+        this.emit('respawnBlocked', { reason: 'circuit_breaker_open', details: circuitBreaker.reason });
+        this.setState('watching');
+        // Don't restart timers - wait for manual reset or circuit breaker resolution
+        return;
+      }
     }
 
     // Check RALPH_STATUS EXIT_SIGNAL - if true, loop is complete
-    const statusBlock = this.session.ralphTracker.lastStatusBlock;
+    const statusBlock = ralphTracker?.lastStatusBlock;
     if (statusBlock?.exitSignal) {
       this.log(`Respawn paused - RALPH_STATUS EXIT_SIGNAL=true`);
       this.logAction('ralph', `Exit signal detected: ${statusBlock.recommendation || 'Task complete'}`);
@@ -2315,10 +2739,40 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
+    // P1-006: Session health check before respawn cycle
+    // Skip if session is in error state or not running
+    if (this.session.status === 'error') {
+      this.log('Skipping respawn cycle - session is in error state');
+      this.logAction('health', 'Respawn skipped: Session error state');
+      this.emit('respawnBlocked', { reason: 'session_error', details: 'Session is in error state' });
+      this.setState('watching');
+      return;
+    }
+
+    if (this.session.status === 'stopped') {
+      this.log('Skipping respawn cycle - session is stopped');
+      this.logAction('health', 'Respawn skipped: Session stopped');
+      this.emit('respawnBlocked', { reason: 'session_stopped', details: 'Session is stopped' });
+      this.setState('watching');
+      return;
+    }
+
+    // Check if session PTY is still alive (via PID)
+    if (!this.session.pid) {
+      this.log('Skipping respawn cycle - session PTY not running (no PID)');
+      this.logAction('health', 'Respawn skipped: No PTY process');
+      this.emit('respawnBlocked', { reason: 'no_pty', details: 'Session PTY process not running' });
+      this.setState('watching');
+      return;
+    }
+
     // Start the respawn cycle
     this.cycleCount++;
     this.log(`Starting respawn cycle #${this.cycleCount}`);
     this.emit('respawnCycleStarted', this.cycleCount);
+
+    // P2-004: Start tracking cycle metrics
+    this.startCycleMetrics('idle_confirmed');
 
     this.sendUpdateDocs();
   }
@@ -2340,7 +2794,7 @@ export class RespawnController extends EventEmitter {
         this.stepTimer = null;
 
         // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
-        const statusBlock = this.session.ralphTracker.lastStatusBlock;
+        const statusBlock = this.session.ralphTracker?.lastStatusBlock;
         let updatePrompt = this.config.updatePrompt;
 
         if (statusBlock?.recommendation) {
@@ -2440,6 +2894,9 @@ export class RespawnController extends EventEmitter {
     this.log(`Respawn cycle #${this.cycleCount} completed`);
     this.emit('respawnCycleCompleted', this.cycleCount);
 
+    // P2-004: Complete cycle metrics with success outcome
+    this.completeCycleMetrics('success');
+
     // Go back to watching state for next cycle
     this.setState('watching');
     this.terminalBuffer.clear();
@@ -2447,6 +2904,9 @@ export class RespawnController extends EventEmitter {
     this.promptDetected = false;
     this.workingDetected = false;
     this.resetHookState(); // Clear hook signals for next cycle
+
+    // P2-001: Reset idle detection start time for next cycle
+    this.idleDetectionStartTime = Date.now();
 
     // Restart detection timers for next cycle
     this.startNoOutputTimer();
@@ -2547,5 +3007,425 @@ export class RespawnController extends EventEmitter {
       detection: this.getDetectionStatus(),
       config: this.config,
     };
+  }
+
+  // ========== P2-001: Adaptive Timing Methods ==========
+
+  /**
+   * Get the current completion confirm timeout, potentially adjusted by adaptive timing.
+   * Uses historical idle detection durations to calculate an optimal timeout.
+   *
+   * @returns Completion confirm timeout in milliseconds
+   */
+  getAdaptiveCompletionConfirmMs(): number {
+    if (!this.config.adaptiveTimingEnabled) {
+      return this.config.completionConfirmMs ?? 10000;
+    }
+
+    // Need at least 5 samples before adjusting
+    if (this.timingHistory.sampleCount < 5) {
+      return this.config.completionConfirmMs ?? 10000;
+    }
+
+    return this.timingHistory.adaptiveCompletionConfirmMs;
+  }
+
+  /**
+   * Record timing data from a completed cycle for adaptive adjustments.
+   *
+   * @param idleDetectionMs - Time spent detecting idle
+   * @param cycleDurationMs - Total cycle duration
+   */
+  private recordTimingData(idleDetectionMs: number, cycleDurationMs: number): void {
+    if (!this.config.adaptiveTimingEnabled) return;
+
+    const history = this.timingHistory;
+
+    // Add to rolling windows
+    history.recentIdleDetectionMs.push(idleDetectionMs);
+    history.recentCycleDurationMs.push(cycleDurationMs);
+
+    // Trim to max samples
+    if (history.recentIdleDetectionMs.length > history.maxSamples) {
+      history.recentIdleDetectionMs.shift();
+    }
+    if (history.recentCycleDurationMs.length > history.maxSamples) {
+      history.recentCycleDurationMs.shift();
+    }
+
+    history.sampleCount = history.recentIdleDetectionMs.length;
+    history.lastUpdatedAt = Date.now();
+
+    // Recalculate adaptive timing
+    this.updateAdaptiveTiming();
+  }
+
+  /**
+   * Recalculate the adaptive completion confirm timeout based on historical data.
+   * Uses the 75th percentile of recent idle detection times as the new timeout,
+   * with a 20% buffer for safety.
+   */
+  private updateAdaptiveTiming(): void {
+    const history = this.timingHistory;
+    const minMs = this.config.adaptiveMinConfirmMs ?? 5000;
+    const maxMs = this.config.adaptiveMaxConfirmMs ?? 30000;
+
+    if (history.recentIdleDetectionMs.length < 5) return;
+
+    // Sort for percentile calculation
+    const sorted = [...history.recentIdleDetectionMs].sort((a, b) => a - b);
+
+    // Use 75th percentile with 20% buffer
+    const p75Index = Math.floor(sorted.length * 0.75);
+    const p75Value = sorted[p75Index];
+    const withBuffer = Math.round(p75Value * 1.2);
+
+    // Clamp to configured bounds
+    const clamped = Math.max(minMs, Math.min(maxMs, withBuffer));
+
+    history.adaptiveCompletionConfirmMs = clamped;
+    this.log(`Adaptive timing updated: ${clamped}ms (p75=${p75Value}ms, samples=${sorted.length})`);
+  }
+
+  /**
+   * Get the current timing history for monitoring.
+   * @returns Copy of timing history
+   */
+  getTimingHistory(): TimingHistory {
+    return { ...this.timingHistory };
+  }
+
+  // ========== P2-002: Skip-Clear Optimization Methods ==========
+
+  /**
+   * Determine whether to skip the /clear step based on current context usage.
+   * Skips if token count is below the configured threshold percentage.
+   *
+   * @returns True if /clear should be skipped
+   */
+  private shouldSkipClear(): boolean {
+    if (!this.config.skipClearWhenLowContext) return false;
+
+    const thresholdPercent = this.config.skipClearThresholdPercent ?? 30;
+    const maxContext = 200000; // Approximate max context for Claude
+
+    // Use the session's token count if available
+    const currentTokens = this.lastTokenCount;
+    if (currentTokens === 0) return false; // Can't determine, don't skip
+
+    const usagePercent = (currentTokens / maxContext) * 100;
+
+    if (usagePercent < thresholdPercent) {
+      this.log(`Skip-clear optimization: ${usagePercent.toFixed(1)}% < ${thresholdPercent}% threshold`);
+      this.logAction('optimization', `Skipping /clear (${usagePercent.toFixed(1)}% context used)`);
+      return true;
+    }
+
+    return false;
+  }
+
+  // ========== P2-004: Cycle Metrics Methods ==========
+
+  /**
+   * Start tracking metrics for a new cycle.
+   * Called when a respawn cycle begins.
+   */
+  private startCycleMetrics(idleReason: string): void {
+    if (!this.config.trackCycleMetrics) return;
+
+    const now = Date.now();
+    this.currentCycleMetrics = {
+      cycleId: `${this.session.id}:${this.cycleCount}`,
+      sessionId: this.session.id,
+      cycleNumber: this.cycleCount,
+      startedAt: now,
+      idleReason,
+      idleDetectionMs: now - this.idleDetectionStartTime,
+      stepsCompleted: [],
+      clearSkipped: false,
+      tokenCountAtStart: this.lastTokenCount,
+      completionConfirmMsUsed: this.getAdaptiveCompletionConfirmMs(),
+    };
+  }
+
+  /**
+   * Record a completed step in the current cycle.
+   * @param step - Name of the step (e.g., 'update', 'clear', 'init')
+   */
+  private recordCycleStep(step: string): void {
+    if (!this.config.trackCycleMetrics || !this.currentCycleMetrics) return;
+    this.currentCycleMetrics.stepsCompleted?.push(step);
+  }
+
+  /**
+   * Complete the current cycle metrics with outcome.
+   * Adds to recent metrics and updates aggregates.
+   *
+   * @param outcome - Outcome of the cycle
+   * @param errorMessage - Optional error message if outcome is 'error'
+   */
+  private completeCycleMetrics(outcome: CycleOutcome, errorMessage?: string): void {
+    if (!this.config.trackCycleMetrics || !this.currentCycleMetrics) return;
+
+    const now = Date.now();
+    const metrics: RespawnCycleMetrics = {
+      ...this.currentCycleMetrics as RespawnCycleMetrics,
+      completedAt: now,
+      durationMs: now - (this.currentCycleMetrics.startedAt ?? now),
+      outcome,
+      errorMessage,
+      tokenCountAtEnd: this.lastTokenCount,
+    };
+
+    // Add to recent metrics
+    this.recentCycleMetrics.push(metrics);
+    if (this.recentCycleMetrics.length > RespawnController.MAX_CYCLE_METRICS_IN_MEMORY) {
+      this.recentCycleMetrics.shift();
+    }
+
+    // Record timing data for adaptive timing
+    this.recordTimingData(metrics.idleDetectionMs, metrics.durationMs);
+
+    // Update aggregate metrics
+    this.updateAggregateMetrics(metrics);
+
+    // Clear current cycle
+    this.currentCycleMetrics = null;
+
+    this.log(`Cycle #${metrics.cycleNumber} metrics: ${outcome}, duration=${metrics.durationMs}ms, idle_detection=${metrics.idleDetectionMs}ms`);
+  }
+
+  /**
+   * Update aggregate metrics with a new cycle's data.
+   * @param metrics - The completed cycle metrics
+   */
+  private updateAggregateMetrics(metrics: RespawnCycleMetrics): void {
+    const agg = this.aggregateMetrics;
+
+    agg.totalCycles++;
+
+    switch (metrics.outcome) {
+      case 'success':
+        agg.successfulCycles++;
+        break;
+      case 'stuck_recovery':
+        agg.stuckRecoveryCycles++;
+        break;
+      case 'blocked':
+        agg.blockedCycles++;
+        break;
+      case 'error':
+        agg.errorCycles++;
+        break;
+    }
+
+    // Recalculate averages using all recent metrics
+    const durations = this.recentCycleMetrics.map(m => m.durationMs);
+    const idleTimes = this.recentCycleMetrics.map(m => m.idleDetectionMs);
+
+    if (durations.length > 0) {
+      agg.avgCycleDurationMs = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+      agg.avgIdleDetectionMs = Math.round(idleTimes.reduce((a, b) => a + b, 0) / idleTimes.length);
+
+      // Calculate P90
+      const sortedDurations = [...durations].sort((a, b) => a - b);
+      const p90Index = Math.floor(sortedDurations.length * 0.9);
+      agg.p90CycleDurationMs = sortedDurations[p90Index];
+    }
+
+    // Calculate success rate
+    agg.successRate = agg.totalCycles > 0
+      ? Math.round((agg.successfulCycles / agg.totalCycles) * 100)
+      : 100;
+
+    agg.lastUpdatedAt = Date.now();
+  }
+
+  /**
+   * Get aggregate metrics for monitoring.
+   * @returns Copy of aggregate metrics
+   */
+  getAggregateMetrics(): RespawnAggregateMetrics {
+    return { ...this.aggregateMetrics };
+  }
+
+  /**
+   * Get recent cycle metrics for analysis.
+   * @param limit - Maximum number of metrics to return (default: 20)
+   * @returns Recent cycle metrics, newest first
+   */
+  getRecentCycleMetrics(limit: number = 20): RespawnCycleMetrics[] {
+    return this.recentCycleMetrics.slice(-limit).reverse();
+  }
+
+  // ========== P2-005: Health Score Methods ==========
+
+  /**
+   * Calculate a comprehensive health score for the Ralph Loop system.
+   * Aggregates multiple health signals into a single score (0-100).
+   *
+   * @returns Health score with component breakdown
+   */
+  calculateHealthScore(): RalphLoopHealthScore {
+    const now = Date.now();
+    const components = {
+      cycleSuccess: this.calculateCycleSuccessScore(),
+      circuitBreaker: this.calculateCircuitBreakerScore(),
+      iterationProgress: this.calculateIterationProgressScore(),
+      aiChecker: this.calculateAiCheckerScore(),
+      stuckRecovery: this.calculateStuckRecoveryScore(),
+    };
+
+    // Weighted average (cycle success is most important)
+    const weights = {
+      cycleSuccess: 0.35,
+      circuitBreaker: 0.20,
+      iterationProgress: 0.20,
+      aiChecker: 0.15,
+      stuckRecovery: 0.10,
+    };
+
+    const score = Math.round(
+      components.cycleSuccess * weights.cycleSuccess +
+      components.circuitBreaker * weights.circuitBreaker +
+      components.iterationProgress * weights.iterationProgress +
+      components.aiChecker * weights.aiChecker +
+      components.stuckRecovery * weights.stuckRecovery
+    );
+
+    // Determine status
+    let status: HealthStatus;
+    if (score >= 90) status = 'excellent';
+    else if (score >= 70) status = 'good';
+    else if (score >= 50) status = 'degraded';
+    else status = 'critical';
+
+    // Generate recommendations
+    const recommendations = this.generateHealthRecommendations(components);
+
+    // Generate summary
+    const summary = this.generateHealthSummary(score, status, components);
+
+    return {
+      score,
+      status,
+      components,
+      summary,
+      recommendations,
+      calculatedAt: now,
+    };
+  }
+
+  /**
+   * Calculate score based on recent cycle success rate.
+   */
+  private calculateCycleSuccessScore(): number {
+    if (this.aggregateMetrics.totalCycles === 0) return 100; // No data = assume healthy
+    return this.aggregateMetrics.successRate;
+  }
+
+  /**
+   * Calculate score based on circuit breaker state.
+   */
+  private calculateCircuitBreakerScore(): number {
+    const tracker = this.session.ralphTracker;
+    if (!tracker) return 100;
+
+    const cb = tracker.circuitBreakerStatus;
+    switch (cb.state) {
+      case 'CLOSED': return 100;
+      case 'HALF_OPEN': return 50;
+      case 'OPEN': return 0;
+      default: return 100;
+    }
+  }
+
+  /**
+   * Calculate score based on iteration progress.
+   */
+  private calculateIterationProgressScore(): number {
+    const tracker = this.session.ralphTracker;
+    if (!tracker) return 100;
+
+    const stallMetrics = tracker.getIterationStallMetrics();
+    const { stallDurationMs, warningThresholdMs, criticalThresholdMs } = stallMetrics;
+
+    if (stallDurationMs >= criticalThresholdMs) return 0;
+    if (stallDurationMs >= warningThresholdMs) return 30;
+    if (stallDurationMs >= warningThresholdMs / 2) return 70;
+    return 100;
+  }
+
+  /**
+   * Calculate score based on AI checker health.
+   */
+  private calculateAiCheckerScore(): number {
+    const state = this.aiChecker.getState();
+    if (state.status === 'disabled') return 30;
+    if (state.status === 'cooldown') return 70;
+    if (state.consecutiveErrors > 0) return 50;
+    return 100;
+  }
+
+  /**
+   * Calculate score based on stuck-state recovery count.
+   */
+  private calculateStuckRecoveryScore(): number {
+    const maxRecoveries = this.config.maxStuckRecoveries ?? 3;
+    if (this.stuckRecoveryCount === 0) return 100;
+    if (this.stuckRecoveryCount >= maxRecoveries) return 0;
+    return Math.round(100 - (this.stuckRecoveryCount / maxRecoveries) * 100);
+  }
+
+  /**
+   * Generate health recommendations based on component scores.
+   */
+  private generateHealthRecommendations(components: RalphLoopHealthScore['components']): string[] {
+    const recommendations: string[] = [];
+
+    if (components.cycleSuccess < 70) {
+      recommendations.push('Cycle success rate is low. Check for recurring errors or stuck states.');
+    }
+    if (components.circuitBreaker < 50) {
+      recommendations.push('Circuit breaker is open or half-open. Review recent errors and consider manual reset.');
+    }
+    if (components.iterationProgress < 50) {
+      recommendations.push('Iteration progress has stalled. Check if Claude is stuck on a task.');
+    }
+    if (components.aiChecker < 50) {
+      recommendations.push('AI idle checker has errors. May need to check Claude CLI availability.');
+    }
+    if (components.stuckRecovery < 50) {
+      recommendations.push('Multiple stuck-state recoveries occurred. Consider increasing timeouts.');
+    }
+
+    if (recommendations.length === 0) {
+      recommendations.push('System is healthy. No action needed.');
+    }
+
+    return recommendations;
+  }
+
+  /**
+   * Generate a human-readable health summary.
+   */
+  private generateHealthSummary(
+    score: number,
+    status: HealthStatus,
+    components: RalphLoopHealthScore['components']
+  ): string {
+    const lowest = Object.entries(components).reduce((min, [key, val]) =>
+      val < min.val ? { key, val } : min, { key: '', val: 100 });
+
+    if (status === 'excellent') {
+      return `Ralph Loop is operating excellently (${score}/100). All systems healthy.`;
+    }
+    if (status === 'good') {
+      return `Ralph Loop is operating well (${score}/100). Minor issues in ${lowest.key}.`;
+    }
+    if (status === 'degraded') {
+      return `Ralph Loop is degraded (${score}/100). Primary issue: ${lowest.key} (${lowest.val}/100).`;
+    }
+    return `Ralph Loop is in critical state (${score}/100). Immediate attention needed: ${lowest.key}.`;
   }
 }

@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1437 (must match `package.json`)
+**Version**: 0.1438 (must match `package.json`)
 
 ## Project Overview
 
@@ -35,10 +35,14 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 **Default port**: `3000` (web UI at `http://localhost:3000`)
 
 ```bash
+# Setup
+npm install                        # Install dependencies
+
 # Development
 npx tsx src/index.ts web           # Dev server (RECOMMENDED)
 npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
 npm run typecheck                  # Type check
+tsc --noEmit --watch               # Continuous type checking
 
 # Testing
 npx vitest run                     # All tests
@@ -46,6 +50,7 @@ npx vitest run test/<file>.test.ts # Single file
 npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
 npm run test:e2e                   # Browser E2E (requires: npx playwright install chromium)
+npm run test:e2e:quick             # Quick E2E (just quick-start workflow)
 
 # Production
 npm run build
@@ -73,20 +78,35 @@ journalctl --user -u claudeman-web -f
 | `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
 | `src/run-summary.ts` | Timeline events for "what happened while away" |
 | `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
+| `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
+| `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
+| `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
+| `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
 | `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
 
+### Config Files (`src/config/`)
+
+| File | Purpose |
+|------|---------|
+| `buffer-limits.ts` | Terminal/text buffer size limits |
+| `map-limits.ts` | Global limits for Maps, sessions, watchers |
+
 ### Utility Files (`src/utils/`)
 
 | File | Purpose |
 |------|---------|
+| `index.ts` | Re-exports all utilities (standard import point) |
 | `lru-map.ts` | LRU eviction Map for bounded caches |
 | `stale-expiration-map.ts` | TTL-based Map with lazy expiration |
 | `cleanup-manager.ts` | Centralized resource disposal |
 | `buffer-accumulator.ts` | Chunk accumulator with size limits |
+| `string-similarity.ts` | String matching utilities (fuzzy matching) |
+| `token-validation.ts` | Token count parsing and validation |
+| `regex-patterns.ts` | Shared regex patterns for parsing |
 
 ### Data Flow
 
@@ -103,14 +123,16 @@ journalctl --user -u claudeman-web -f
 
 **Token tracking**: Interactive mode parses status line ("123.4k tokens"), estimates 60/40 input/output split.
 
-**Memory leak prevention**: Frontend runs long; clear all Maps/timers on SSE reconnect in `handleInit()`. Backend clears `_recentTaskDescriptions` in Session.stop(), nulls promise callbacks on error, and removes watcher listeners on shutdown.
+**Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete). See `src/hooks-config.ts`.
 
 ## Adding Features
 
-- **API endpoint**: Types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()`
+- **API endpoint**: Types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()`. Validate request bodies with Zod schemas.
 - **SSE event**: Emit via `broadcast()`, handle in `app.js:handleSSEEvent()`
 - **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
 - **New test**: Pick unique port (see below), add port comment to test file header
+
+**Validation**: Uses Zod v4 for request validation. Define schemas near route handlers and use `.parse()` or `.safeParse()`.
 
 ## State Files
 
@@ -120,13 +142,41 @@ journalctl --user -u claudeman-web -f
 | `~/.claudeman/screens.json` | Screen metadata for recovery |
 | `~/.claudeman/settings.json` | User preferences |
 
+## Default Settings
+
+UI defaults are optimized for minimal distraction. Set in `src/web/public/app.js` (using `??` operator).
+
+**Display Settings** (default values):
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `showFontControls` | `false` | Font size controls in header |
+| `showSystemStats` | `true` | CPU/memory stats in header |
+| `showTokenCount` | `true` | Token counter in header |
+| `showCost` | `false` | Cost display |
+| `showMonitor` | `true` | Monitor panel |
+| `showProjectInsights` | `false` | Project insights panel |
+| `showFileBrowser` | `false` | File browser panel |
+| `showSubagents` | `false` | Subagent windows panel |
+
+**Tracking Settings**:
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ralphTrackerEnabled` | `false` | Ralph/Todo loop tracking |
+| `subagentTrackingEnabled` | `true` | Background agent monitoring |
+| `subagentActiveTabOnly` | `true` | Show subagents only for active session |
+| `imageWatcherEnabled` | `false` | Watch for image file creation |
+
+**Notification Defaults**: Browser notifications enabled, audio alerts disabled. Critical events (permission prompts, questions) notify by default; info events (respawn cycles, token milestones) are silent.
+
+To change defaults, edit the `??` fallback values in `openAppSettings()` and `apply*Visibility()` functions.
+
 ## Testing
 
 **Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts`. Unit/integration tests pick unique ports manually. Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config (`test/e2e/e2e.config.ts`) provides ports (3183-3190), timeouts, and helpers.
 
-**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits). Unit test timeout is 30s, teardown timeout is 60s. E2E tests have longer timeouts defined in `test/e2e/e2e.config.ts` (90s test, 30s session creation).
+**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`/`vi`) and `fileParallelism: false` (files run sequentially to respect screen limits). Unit test timeout is 30s, teardown timeout is 60s. E2E tests have longer timeouts defined in `test/e2e/e2e.config.ts` (90s test, 30s session creation).
 
 **Test safety**: `test/setup.ts` provides:
 - Screen concurrency limiter (max 10)
@@ -183,7 +233,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Browser/E2E testing** | `docs/browser-testing-guide.md` |
-| **API routes** | `src/web/server.ts:buildServer()` or README.md |
+| **API routes** | `src/web/server.ts:buildServer()` or README.md (full endpoint tables) |
 | **SSE events** | Search `broadcast(` in `server.ts` |
 | **CLI commands** | `claudeman --help` |
 | **Frontend patterns** | `src/web/public/app.js` (subagent windows, notifications) |
@@ -193,6 +243,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
+| **Mobile/SSH access** | README.md (Claudeman Screens / `sc` command) |
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Agent prompts** | `src/prompts/` directory |
 
@@ -201,7 +252,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | Script | Purpose |
 |--------|---------|
 | `scripts/screen-manager.sh` | Safe screen management (use instead of direct kill commands) |
-| `scripts/screen-chooser.sh` | Mobile-friendly screen session picker for Termius/iPhone |
+| `scripts/screen-chooser.sh` | Claudeman Screens - mobile-friendly session picker (`sc` alias, see README for usage) |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 
@@ -209,19 +260,9 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 
 The TUI (Terminal UI) has been removed in favor of the web interface. Files in `src/tui/` are excluded from compilation via `tsconfig.json`.
 
-## Recent Memory Leak Fixes (2026-01-30)
+## Memory Leak Prevention
 
-All P0 memory leak issues have been fixed in commit `e3e0d22`:
-
-### Backend Fixes
-- **Session._recentTaskDescriptions**: Now cleared in `stop()` and `clearBuffers()`
-- **Session promise callbacks**: Nulled after rejection in `runPrompt()` catch block
-- **Watcher listeners**: SubagentWatcher and ImageWatcher listeners stored and removed on server shutdown
-
-### Frontend Fixes
-- **Plan file windows**: Drag/resize handlers stored on elements and cleaned up via `closePlanFileWindow()`
-- **Plan file manager**: Drag handler stored and cleaned up via `closePlanFileManager()`
-- **cleanupAllFloatingWindows()**: Now cleans up plan file windows
+Frontend runs long (24+ hour sessions); all Maps/timers must be cleaned up.
 
 ### Cleanup Patterns
 When adding new event listeners or timers:
@@ -229,8 +270,8 @@ When adding new event listeners or timers:
 2. Add cleanup to appropriate `stop()` or `cleanup*()` method
 3. For singleton watchers, store refs in class properties and remove in server `stop()`
 
-### Verification Tests
-Memory leak prevention patterns are tested in `test/memory-leak-prevention.test.ts`. Run with:
-```bash
-npx vitest run test/memory-leak-prevention.test.ts
-```
+**Backend**: Clear Maps in `stop()`, null promise callbacks on error, remove watcher listeners on shutdown.
+
+**Frontend**: Store drag/resize handlers on elements, clean up in `close*()` functions. SSE reconnect calls `handleInit()` which resets state.
+
+Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.

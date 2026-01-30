@@ -282,6 +282,37 @@ claudeman web
 
 ---
 
+## Mobile Access (Termius/SSH)
+
+**Claudeman Screens** (`sc`) is a mobile-friendly screen session chooser, optimized for Termius on iPhone.
+
+```bash
+sc              # Interactive chooser
+sc 2            # Quick attach to session 2
+sc -l           # List sessions
+sc -h           # Help
+```
+
+**Features:**
+- Single-digit selection (1-9) for fast thumb typing
+- Color-coded status indicators (attached/detached/respawn)
+- Token count display
+- Session names from Claudeman state
+- Pagination for many sessions
+- Auto-refresh every 60 seconds
+
+**Indicators:**
+| Symbol | Meaning |
+|--------|---------|
+| `*` / `●` | Attached (someone connected) |
+| `-` / `○` | Detached (available) |
+| `R` | Respawn enabled |
+| `45k` | Token count |
+
+**Tip:** Detach from a screen with `Ctrl+A D`
+
+---
+
 ## API
 
 ### Sessions

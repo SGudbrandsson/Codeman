@@ -24,3 +24,12 @@ export {
   validateTokenCounts,
   validateTokensAndCost,
 } from './token-validation.js';
+export {
+  levenshteinDistance,
+  stringSimilarity,
+  isSimilar,
+  isSimilarByDistance,
+  normalizePhrase,
+  fuzzyPhraseMatch,
+  todoContentHash,
+} from './string-similarity.js';

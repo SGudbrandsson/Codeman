@@ -588,6 +588,32 @@ add_to_path() {
     success "Added to $profile - restart your shell or run: source $profile"
 }
 
+setup_sc_alias() {
+    local profile
+    profile=$(detect_shell_profile)
+
+    # Check if alias already exists
+    if [[ -f "$profile" ]] && grep -qE "^alias sc=" "$profile" 2>/dev/null; then
+        info "Alias 'sc' already configured in $profile"
+        return 0
+    fi
+
+    local shell_name
+    shell_name="$(basename "${SHELL:-/bin/bash}")"
+
+    if [[ "$shell_name" == "fish" ]]; then
+        echo "" >> "$profile"
+        echo "# Claudeman Screens shortcut" >> "$profile"
+        echo "alias sc='screen-chooser'" >> "$profile"
+    else
+        echo "" >> "$profile"
+        echo "# Claudeman Screens shortcut" >> "$profile"
+        echo "alias sc='screen-chooser'" >> "$profile"
+    fi
+
+    info "Added 'sc' alias for screen-chooser"
+}
+
 # ============================================================================
 # Screen Configuration
 # ============================================================================
@@ -876,6 +902,14 @@ main() {
         ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/claudeman"
         info "Created symlink: $symlink_dir/claudeman"
 
+        # Install screen-chooser as 'screen-chooser' command
+        if [[ -f "$INSTALL_DIR/scripts/screen-chooser.sh" ]]; then
+            ln -sf "$INSTALL_DIR/scripts/screen-chooser.sh" "$symlink_dir/screen-chooser"
+            info "Created symlink: $symlink_dir/screen-chooser"
+            # Add 'sc' alias for quick access
+            setup_sc_alias
+        fi
+
         # Add ~/.local/bin to PATH if not already there
         if [[ ":$PATH:" != *":$symlink_dir:"* ]]; then
             add_to_path "$symlink_dir"
@@ -918,6 +952,12 @@ main() {
     echo ""
     echo -e "    ${CYAN}# Open in browser${NC}"
     echo -e "    http://localhost:3000"
+    echo ""
+    echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
+    echo ""
+    echo -e "    ${CYAN}sc${NC}              # Interactive screen session chooser"
+    echo -e "    ${CYAN}sc 2${NC}            # Quick attach to session 2"
+    echo -e "    ${CYAN}sc -h${NC}           # Help"
     echo ""
 
     if [[ "$os" == "linux" ]] && [[ -f "$HOME/.config/systemd/user/claudeman-web.service" ]]; then

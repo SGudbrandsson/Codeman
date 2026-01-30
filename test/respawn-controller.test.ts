@@ -15,6 +15,8 @@ class MockSession extends EventEmitter {
   id = 'mock-session-id';
   workingDir = '/tmp';
   status = 'idle';
+  pid = 12345; // Mock PID for P1-006 health check
+  isWorking = false; // P0-006 Session.isWorking integration
   writeBuffer: string[] = [];
 
   write(data: string): void {

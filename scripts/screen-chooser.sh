@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
-# Screen Chooser for iPhone/Termius
-# Optimized for iPhone 17 Pro (portrait ~45 chars, landscape ~95 chars)
+# Claudeman Screens - Mobile-friendly Screen Session Chooser
+# Optimized for iPhone/Termius (portrait ~45 chars, landscape ~95 chars)
 # ============================================================================
 #
 # Design principles:
@@ -12,12 +12,12 @@
 #   - Minimal keystrokes to attach
 #
 # Usage:
-#   ./screen-chooser.sh          # Interactive chooser
-#   ./screen-chooser.sh 1        # Quick attach to session 1
-#   ./screen-chooser.sh -l       # List only (no interactive)
-#   ./screen-chooser.sh -h       # Help
+#   screen-chooser          # Interactive chooser
+#   screen-chooser 1        # Quick attach to session 1
+#   screen-chooser -l       # List only (non-interactive)
+#   screen-chooser -h       # Help
 #
-# Alias: alias sc='path/to/screen-chooser.sh'
+# Alias (added by installer): alias sc='screen-chooser'
 #   Then: sc      (interactive)
 #         sc 2    (attach session 2)
 #
@@ -343,7 +343,7 @@ clear_screen() {
 # Print header
 print_header() {
     local count=${#SCREEN_PIDS[@]}
-    echo -e "${B}${CYAN}${ICON_SCREEN} Screens${R} ${D}($count)${R}"
+    echo -e "${B}${CYAN}Claudeman Screens${R} ${D}($count)${R}"
     echo -e "${D}$(printf '%.0s─' {1..32})${R}"
 }
 
@@ -423,7 +423,7 @@ print_footer() {
 # Print no screens message
 print_no_screens() {
     clear_screen
-    echo -e "${B}${CYAN}${ICON_SCREEN} Screens${R}"
+    echo -e "${B}${CYAN}Claudeman Screens${R}"
     echo -e "${D}$(printf '%.0s─' {1..32})${R}"
     echo ""
     echo -e "  ${YELLOW}No screen sessions found${R}"
@@ -631,7 +631,7 @@ quick_attach() {
 
 show_help() {
     cat << 'EOF'
-Screen Chooser for iPhone/Termius
+Claudeman Screens - Mobile-friendly Screen Session Chooser
 
 USAGE:
   sc              Interactive chooser
@@ -653,9 +653,9 @@ INDICATORS:
   45k      Token count
 
 TIPS:
-  - Alias: alias sc='path/to/screen-chooser.sh'
-  - Detach: Ctrl+A D
+  - Detach from screen: Ctrl+A D
   - Session names from Claudeman state
+  - Optimized for Termius/iPhone
 
 EOF
 }

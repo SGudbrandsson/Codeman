@@ -1121,8 +1121,12 @@ export class WebServer extends EventEmitter {
       if (enabled !== undefined) {
         if (enabled) {
           session.ralphTracker.enable();
+          // Allow re-enabling on restart if user explicitly enabled
+          session.ralphTracker.enableAutoEnable();
         } else {
           session.ralphTracker.disable();
+          // Prevent re-enabling on restart when user explicitly disabled
+          session.ralphTracker.disableAutoEnable();
         }
         // Persist Ralph enabled state
         this.screenManager.updateRalphEnabled(id, enabled);
@@ -1369,8 +1373,8 @@ export class WebServer extends EventEmitter {
       }
 
       try {
-        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled)
-        if (this.store.getConfig().ralphEnabled) {
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
+        if (this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -1688,8 +1692,8 @@ export class WebServer extends EventEmitter {
       }
 
       try {
-        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled)
-        if (this.store.getConfig().ralphEnabled) {
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
+        if (this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -2288,6 +2292,7 @@ export class WebServer extends EventEmitter {
         autoConfigureRalph(session, casePath, () => {}); // no broadcast yet
         if (!session.ralphTracker.enabled) {
           session.ralphTracker.enable();
+          session.ralphTracker.enableAutoEnable(); // Allow re-enabling on restart
         }
       }
 
@@ -4561,6 +4566,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 }
               }
               // Ralph / Todo tracker
+              if (savedState.ralphAutoEnableDisabled) {
+                session.ralphTracker.disableAutoEnable();
+                console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
+              } else if (savedState.ralphEnabled) {
+                // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
+                session.ralphTracker.enableAutoEnable();
+              }
               if (savedState.ralphEnabled) {
                 session.ralphTracker.enable();
                 if (savedState.ralphCompletionPhrase) {
@@ -4594,8 +4606,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               }
             }
 
-            // Fallback: restore Ralph state from state-inner.json if not already set
-            if (!session.ralphTracker.enabled) {
+            // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
+            if (!session.ralphTracker.enabled && !session.ralphTracker.autoEnableDisabled) {
               const ralphState = this.store.getRalphState(screen.sessionId);
               if (ralphState?.loop?.enabled) {
                 session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);

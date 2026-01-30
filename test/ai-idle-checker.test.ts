@@ -295,6 +295,12 @@ describe('AiIdleChecker', () => {
     });
 
     it('should disable after maxConsecutiveErrors', async () => {
+      // With P1-005 exponential backoff, cooldowns increase:
+      // Error 1: 1000ms * 2^0 = 1000ms
+      // Error 2: 1000ms * 2^1 = 2000ms
+      // Error 3: disabled (no cooldown)
+      const cooldowns = [1100, 2100]; // Wait slightly longer than each cooldown
+
       for (let i = 0; i < 3; i++) {
         mockedReadFileSync.mockReturnValueOnce('')
           .mockReturnValueOnce('garbage\n__AICHECK_DONE__');
@@ -305,7 +311,7 @@ describe('AiIdleChecker', () => {
 
         // Clear cooldown for next check (except after the last one which disables)
         if (i < 2) {
-          await vi.advanceTimersByTimeAsync(1100);
+          await vi.advanceTimersByTimeAsync(cooldowns[i]);
         }
       }
 
@@ -464,13 +470,19 @@ describe('AiIdleChecker', () => {
       const handler = vi.fn();
       checker.on('disabled', handler);
 
+      // With exponential backoff (P1-005), cooldown increases:
+      // Error 1: 1000ms * 2^0 = 1000ms
+      // Error 2: 1000ms * 2^1 = 2000ms
+      // Error 3: disabled (no cooldown needed)
+      const cooldowns = [1100, 2100]; // Wait longer than exponential backoff
+
       for (let i = 0; i < 3; i++) {
         mockedReadFileSync.mockReturnValueOnce('')
           .mockReturnValueOnce('garbage\n__AICHECK_DONE__');
         const checkPromise = checker.check('output');
         await vi.advanceTimersByTimeAsync(1000);
         await checkPromise;
-        if (i < 2) await vi.advanceTimersByTimeAsync(1100);
+        if (i < 2) await vi.advanceTimersByTimeAsync(cooldowns[i]);
       }
 
       expect(handler).toHaveBeenCalledWith(expect.stringContaining('consecutive errors'));

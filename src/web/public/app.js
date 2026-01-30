@@ -6504,8 +6504,14 @@ class ClaudemanApp {
     if (total > 0) {
       tokensEl.style.display = '';
       const tokenStr = this.formatTokens(total);
-      const estimatedCost = this.estimateCost(input, output);
-      tokensEl.textContent = `${tokenStr} tokens · $${estimatedCost.toFixed(2)}`;
+      const settings = this.loadAppSettingsFromStorage();
+      const showCost = settings.showCost ?? false;
+      if (showCost) {
+        const estimatedCost = this.estimateCost(input, output);
+        tokensEl.textContent = `${tokenStr} tokens · $${estimatedCost.toFixed(2)}`;
+      } else {
+        tokensEl.textContent = `${tokenStr} tokens`;
+      }
     } else {
       tokensEl.style.display = 'none';
     }
@@ -6865,10 +6871,14 @@ class ClaudemanApp {
     const estimatedCost = this.estimateCost(totalInput, totalOutput);
     const tokenEl = this.$('headerTokens');
     if (tokenEl) {
-      tokenEl.textContent = total > 0 ? `${display} tokens · $${estimatedCost.toFixed(2)}` : '0 tokens';
+      const settings = this.loadAppSettingsFromStorage();
+      const showCost = settings.showCost ?? false;
+      tokenEl.textContent = total > 0
+        ? (showCost ? `${display} tokens · $${estimatedCost.toFixed(2)}` : `${display} tokens`)
+        : '0 tokens';
       tokenEl.title = this.globalStats
-        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created\nEstimated cost based on Claude Opus pricing`
-        : 'Token usage across active sessions\nEstimated cost based on Claude Opus pricing';
+        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`
+        : `Token usage across active sessions${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`;
     }
   }
 
@@ -7781,16 +7791,17 @@ class ClaudemanApp {
     document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
     document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? false;
     // Header visibility settings (default to true/enabled)
-    document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? true;
+    document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? false;
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
+    document.getElementById('appSettingsShowCost').checked = settings.showCost ?? false;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
-    document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? true;
+    document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? false;
     document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? false;
-    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
+    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? false;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
-    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? false;
-    document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? true;
+    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? true;
+    document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -7906,6 +7917,7 @@ class ClaudemanApp {
       showFontControls: document.getElementById('appSettingsShowFontControls').checked,
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
+      showCost: document.getElementById('appSettingsShowCost').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
       showFileBrowser: document.getElementById('appSettingsShowFileBrowser').checked,
@@ -8107,7 +8119,7 @@ class ClaudemanApp {
   applyHeaderVisibilitySettings() {
     const settings = this.loadAppSettingsFromStorage();
     // Default all to true (enabled) if not set
-    const showFontControls = settings.showFontControls ?? true;
+    const showFontControls = settings.showFontControls ?? false;
     const showSystemStats = settings.showSystemStats ?? true;
     const showTokenCount = settings.showTokenCount ?? true;
 
@@ -8141,7 +8153,7 @@ class ClaudemanApp {
   applyMonitorVisibility() {
     const settings = this.loadAppSettingsFromStorage();
     const showMonitor = settings.showMonitor ?? true;
-    const showSubagents = settings.showSubagents ?? true;
+    const showSubagents = settings.showSubagents ?? false;
     const showFileBrowser = settings.showFileBrowser ?? false;
 
     const monitorPanel = document.getElementById('monitorPanel');
@@ -10679,7 +10691,7 @@ class ClaudemanApp {
    */
   updateSubagentWindowVisibility() {
     const settings = this.loadAppSettingsFromStorage();
-    const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+    const activeTabOnly = settings.subagentActiveTabOnly ?? true;
 
     for (const [agentId, windowInfo] of this.subagentWindows) {
       // Get parent from PERSISTENT map (THE source of truth)
@@ -10722,7 +10734,7 @@ class ClaudemanApp {
       const existing = this.subagentWindows.get(agentId);
       const agent = this.subagents.get(agentId);
       const settings = this.loadAppSettingsFromStorage();
-      const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+      const activeTabOnly = settings.subagentActiveTabOnly ?? true;
 
       // If window is hidden (different tab) and activeTabOnly is enabled, switch to parent tab
       if (existing.hidden && agent?.parentSessionId && activeTabOnly) {
@@ -10883,7 +10895,7 @@ class ClaudemanApp {
     // Check if this window should be visible based on settings
     // Use the PERSISTENT parent map for accurate tab-based visibility
     const settings = this.loadAppSettingsFromStorage();
-    const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+    const activeTabOnly = settings.subagentActiveTabOnly ?? true;
     let shouldHide = false;
     if (activeTabOnly) {
       const storedParent = this.subagentParentMap.get(agentId);
@@ -11132,7 +11144,7 @@ class ClaudemanApp {
 
     if (windowData) {
       const settings = this.loadAppSettingsFromStorage();
-      const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+      const activeTabOnly = settings.subagentActiveTabOnly ?? true;
 
       // Get parent from PERSISTENT map (THE source of truth)
       const storedParent = this.subagentParentMap.get(agentId);
@@ -11559,7 +11571,7 @@ class ClaudemanApp {
 
     // Check if panel is enabled in settings
     const settings = this.loadAppSettingsFromStorage();
-    const showProjectInsights = settings.showProjectInsights ?? true;
+    const showProjectInsights = settings.showProjectInsights ?? false;
     if (!showProjectInsights) {
       panel.classList.remove('visible');
       this.projectInsightsPanelVisible = false;

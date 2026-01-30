@@ -508,7 +508,15 @@ export abstract class AiCheckerBase<
     if (this.consecutiveErrors >= this.config.maxConsecutiveErrors) {
       this.disable(`${this.config.maxConsecutiveErrors} consecutive errors: ${errorMsg}`);
     } else {
-      this.startCooldown(this.config.errorCooldownMs);
+      // P1-005: Exponential backoff for errors
+      // Base cooldown * 2^(consecutiveErrors-1), capped at 5 minutes
+      const backoffMultiplier = Math.pow(2, this.consecutiveErrors - 1);
+      const backoffCooldownMs = Math.min(
+        this.config.errorCooldownMs * backoffMultiplier,
+        5 * 60 * 1000 // Max 5 minutes
+      );
+      this.log(`Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`);
+      this.startCooldown(backoffCooldownMs);
     }
   }
 

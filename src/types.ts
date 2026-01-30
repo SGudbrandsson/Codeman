@@ -166,6 +166,8 @@ export interface SessionState {
   respawnConfig?: RespawnConfig & { durationMinutes?: number };
   /** Ralph / Todo tracker enabled */
   ralphEnabled?: boolean;
+  /** Ralph auto-enable disabled (user explicitly turned off Ralph) */
+  ralphAutoEnableDisabled?: boolean;
   /** Ralph completion phrase (if set) */
   ralphCompletionPhrase?: string;
   /** Parent agent ID if this session is a spawned agent */
@@ -394,6 +396,159 @@ export interface RespawnConfig {
   aiPlanCheckTimeoutMs?: number;
   /** Cooldown after NOT_PLAN_MODE verdict in ms */
   aiPlanCheckCooldownMs?: number;
+
+  // ========== P2-001: Adaptive Timing ==========
+
+  /** Whether to use adaptive timing based on historical patterns */
+  adaptiveTimingEnabled?: boolean;
+  /** Minimum value for adaptive completion confirm (ms) */
+  adaptiveMinConfirmMs?: number;
+  /** Maximum value for adaptive completion confirm (ms) */
+  adaptiveMaxConfirmMs?: number;
+
+  // ========== P2-002: Skip-Clear Optimization ==========
+
+  /** Whether to skip /clear when context is below threshold */
+  skipClearWhenLowContext?: boolean;
+  /** Token percentage threshold below which /clear is skipped (0-100) */
+  skipClearThresholdPercent?: number;
+
+  // ========== P2-004: Cycle Metrics ==========
+
+  /** Whether to track and persist cycle metrics */
+  trackCycleMetrics?: boolean;
+}
+
+// ========== P2-004: Respawn Cycle Metrics ==========
+
+/**
+ * Outcome of a respawn cycle
+ */
+export type CycleOutcome =
+  | 'success'           // Cycle completed normally
+  | 'stuck_recovery'    // Stuck-state recovery triggered
+  | 'blocked'           // Blocked by circuit breaker or exit signal
+  | 'error'             // Error during cycle
+  | 'cancelled';        // Cancelled (e.g., controller stopped)
+
+/**
+ * Metrics for a single respawn cycle.
+ * Persisted for post-mortem analysis of long-running loops.
+ */
+export interface RespawnCycleMetrics {
+  /** Unique cycle ID (session-id:cycle-number) */
+  cycleId: string;
+  /** Session ID this cycle belongs to */
+  sessionId: string;
+  /** Cycle number within the session */
+  cycleNumber: number;
+  /** Timestamp when cycle started */
+  startedAt: number;
+  /** Timestamp when cycle completed */
+  completedAt: number;
+  /** Total duration of cycle (ms) */
+  durationMs: number;
+  /** What triggered idle detection */
+  idleReason: string;
+  /** Time spent detecting idle (from start of watching to idle confirmed) */
+  idleDetectionMs: number;
+  /** Steps completed in this cycle */
+  stepsCompleted: string[];
+  /** Whether /clear was skipped (P2-002) */
+  clearSkipped: boolean;
+  /** Outcome of the cycle */
+  outcome: CycleOutcome;
+  /** Error message if outcome is 'error' */
+  errorMessage?: string;
+  /** Token count at start of cycle */
+  tokenCountAtStart?: number;
+  /** Token count at end of cycle */
+  tokenCountAtEnd?: number;
+  /** Completion confirm time used (may be adaptive) */
+  completionConfirmMsUsed: number;
+}
+
+/**
+ * Aggregate metrics across multiple cycles for health scoring.
+ */
+export interface RespawnAggregateMetrics {
+  /** Total cycles tracked */
+  totalCycles: number;
+  /** Successful cycles */
+  successfulCycles: number;
+  /** Cycles that required stuck-state recovery */
+  stuckRecoveryCycles: number;
+  /** Blocked cycles */
+  blockedCycles: number;
+  /** Error cycles */
+  errorCycles: number;
+  /** Average cycle duration (ms) */
+  avgCycleDurationMs: number;
+  /** Average idle detection time (ms) */
+  avgIdleDetectionMs: number;
+  /** 90th percentile cycle duration (ms) */
+  p90CycleDurationMs: number;
+  /** Success rate (0-100) */
+  successRate: number;
+  /** Last updated timestamp */
+  lastUpdatedAt: number;
+}
+
+// ========== P2-005: Ralph Loop Health Score ==========
+
+/**
+ * Health status levels for the Ralph Loop system.
+ */
+export type HealthStatus = 'excellent' | 'good' | 'degraded' | 'critical';
+
+/**
+ * Comprehensive health score for a Ralph Loop session.
+ * Aggregates multiple health signals into a single score.
+ */
+export interface RalphLoopHealthScore {
+  /** Overall health score (0-100) */
+  score: number;
+  /** Health status based on score thresholds */
+  status: HealthStatus;
+  /** Individual component scores (0-100 each) */
+  components: {
+    /** Based on recent cycle success rate */
+    cycleSuccess: number;
+    /** Based on circuit breaker state */
+    circuitBreaker: number;
+    /** Based on iteration stall metrics */
+    iterationProgress: number;
+    /** Based on AI checker error rate */
+    aiChecker: number;
+    /** Based on stuck-state recovery count */
+    stuckRecovery: number;
+  };
+  /** Human-readable summary of health */
+  summary: string;
+  /** Recommendations for improvement */
+  recommendations: string[];
+  /** Timestamp when score was calculated */
+  calculatedAt: number;
+}
+
+// ========== Timing History for Adaptive Timing ==========
+
+/**
+ * Historical timing data for adaptive adjustments.
+ */
+export interface TimingHistory {
+  /** Rolling window of recent idle detection durations (ms) */
+  recentIdleDetectionMs: number[];
+  /** Rolling window of recent cycle durations (ms) */
+  recentCycleDurationMs: number[];
+  /** Calculated adaptive completion confirm value (ms) */
+  adaptiveCompletionConfirmMs: number;
+  /** Number of samples in rolling windows */
+  sampleCount: number;
+  /** Maximum samples to keep */
+  maxSamples: number;
+  /** Last updated timestamp */
+  lastUpdatedAt: number;
 }
 
 /**
@@ -829,13 +984,43 @@ export type RalphTodoStatus = 'pending' | 'in_progress' | 'completed';
 /**
  * State of per-session Ralph / Todo tracking (detected from Claude output)
  */
+/**
+ * Confidence scoring for completion detection.
+ * Helps distinguish genuine completion signals from false positives.
+ */
+export interface CompletionConfidence {
+  /** Overall confidence level (0-100) */
+  score: number;
+  /** Whether score is above threshold for triggering completion */
+  isConfident: boolean;
+  /** Individual signal contributions */
+  signals: {
+    /** Promise tag detected with proper formatting */
+    hasPromiseTag: boolean;
+    /** Phrase matches expected completion phrase */
+    matchesExpected: boolean;
+    /** All todos are marked complete */
+    allTodosComplete: boolean;
+    /** EXIT_SIGNAL: true in RALPH_STATUS block */
+    hasExitSignal: boolean;
+    /** Multiple completion indicators present */
+    multipleIndicators: boolean;
+    /** Output context suggests completion (not in prompt/explanation) */
+    contextAppropriate: boolean;
+  };
+  /** Timestamp of last confidence calculation */
+  calculatedAt: number;
+}
+
 export interface RalphTrackerState {
   /** Whether the tracker is actively monitoring (disabled by default) */
   enabled: boolean;
   /** Whether a loop is currently active */
   active: boolean;
-  /** Detected completion phrase */
+  /** Detected completion phrase (primary) */
   completionPhrase: string | null;
+  /** Additional valid completion phrases (P1-003: multi-phrase support) */
+  alternateCompletionPhrases?: string[];
   /** Timestamp when loop started */
   startedAt: number | null;
   /** Number of cycles/iterations detected */
@@ -850,6 +1035,8 @@ export interface RalphTrackerState {
   planVersion?: number;
   /** Number of versions in history (for versioning UI) */
   planHistoryLength?: number;
+  /** Last completion confidence assessment */
+  completionConfidence?: CompletionConfidence;
 }
 
 /**
@@ -872,6 +1059,32 @@ export interface RalphTodoItem {
   detectedAt: number;
   /** Priority level (P0=critical, P1=high, P2=normal) */
   priority: RalphTodoPriority;
+  /** P1-009: Estimated time to complete (ms), based on historical patterns */
+  estimatedDurationMs?: number;
+  /** P1-009: Complexity category for progress estimation */
+  estimatedComplexity?: 'trivial' | 'simple' | 'moderate' | 'complex';
+}
+
+/**
+ * Progress estimation for the todo list
+ */
+export interface RalphTodoProgress {
+  /** Total number of todos */
+  total: number;
+  /** Number completed */
+  completed: number;
+  /** Number in progress */
+  inProgress: number;
+  /** Number pending */
+  pending: number;
+  /** Completion percentage (0-100) */
+  percentComplete: number;
+  /** Estimated remaining time (ms), based on historical completion rate */
+  estimatedRemainingMs: number | null;
+  /** Average time per todo completion (ms) */
+  avgCompletionTimeMs: number | null;
+  /** Projected completion timestamp (epoch ms) */
+  projectedCompletionAt: number | null;
 }
 
 /**

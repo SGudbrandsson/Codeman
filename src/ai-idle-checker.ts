@@ -70,33 +70,66 @@ const DEFAULT_AI_CHECK_CONFIG: AiIdleCheckConfig = {
 /** Pattern to match IDLE or WORKING as the first word of output */
 const VERDICT_PATTERN = /^\s*(IDLE|WORKING)\b/i;
 
-/** The prompt sent to the AI checker */
-const AI_CHECK_PROMPT = `Analyze this terminal output from a running Claude Code session. Determine if the session is IDLE (done working, waiting for new input) or WORKING (still actively processing).
+/**
+ * The prompt sent to the AI idle checker.
+ *
+ * P1-005: Enhanced with more specific working pattern examples and clearer structure.
+ */
+const AI_CHECK_PROMPT = `You are analyzing terminal output from a Claude Code CLI session. Determine if Claude has FINISHED working (IDLE) or is STILL WORKING (WORKING).
 
-IMPORTANT: When in doubt, answer WORKING. Brief pauses between tool executions do NOT mean the session is idle. Claude may be processing or about to output more.
+CRITICAL RULE: When in doubt, ALWAYS answer WORKING. False positives (saying IDLE when Claude is working) cause session interruptions. It's safer to wait longer than to interrupt active work.
 
-IDLE indicators (need MULTIPLE of these to confirm idle):
-- Completion summary shown (e.g., "✻ Worked for 2m 46s", "Worked for 5s")
-- Prompt character visible at the end (❯ or similar)
-- Cost summary displayed (e.g., "$0.12 spent")
-- Clear end of output with no pending work
+## IDLE Indicators (need AT LEAST 2 of these together)
 
-WORKING indicators (ANY of these means WORKING):
-- Spinner characters (⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏ or similar)
-- Activity text: Thinking, Writing, Reading, Running, Searching, Editing, Creating, Deleting, Analyzing, Executing, Synthesizing, Compiling, Building, Processing, Loading, Generating, Testing, Checking, Validating
-- Tool execution in progress (commands being run)
-- Truncated or partial lines at the end
-- File operations in progress
-- Output that appears mid-stream or incomplete
-- No completion summary visible yet
+1. **Completion Summary** - The most reliable signal:
+   - "✻ Worked for Xm Ys" (e.g., "✻ Worked for 2m 46s")
+   - "Worked for Xs" (e.g., "Worked for 5s")
+   - Cost summary: "$X.XX spent" or "X tokens used"
 
-Terminal output (most recent at bottom):
+2. **Input Prompt Visible**:
+   - The ❯ prompt character at the very end
+   - Empty line after completion summary
+   - Waiting cursor position
+
+3. **Task Completion Language**:
+   - "All done", "Finished", "Completed successfully"
+   - Explicit "waiting for input" or similar
+
+## WORKING Indicators (ANY ONE of these = answer WORKING)
+
+### Active Processing Indicators:
+- **Spinners**: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏ (Braille), ◐ ◓ ◑ ◒ (quarter), ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
+- **Activity Words**: Thinking, Writing, Reading, Running, Searching, Editing, Creating, Deleting, Analyzing, Executing, Synthesizing, Compiling, Building, Processing, Loading, Generating, Testing, Checking, Validating, Brewing, Formatting, Linting, Installing, Fetching, Downloading
+
+### Tool Execution in Progress:
+- Bash commands with no result shown yet
+- "Running: npm test", "Executing command..."
+- File read/write operations incomplete
+- Progress bars or percentage indicators
+- Test suite running (dots appearing, "Test Suites: X passed")
+
+### Output Structure Issues:
+- Truncated lines without completion
+- JSON/code blocks not closed
+- Multi-line output clearly incomplete
+- "..." indicating more to come
+- Output ending mid-sentence or mid-word
+
+### Claude Planning/Thinking:
+- "Let me...", "I'll...", "Now I need to..."
+- TodoWrite updates without completion
+- Plan mode approval prompts (numbered options)
+
+## Terminal Output to Analyze
 ---
 {TERMINAL_BUFFER}
 ---
 
-Answer with EXACTLY one word on the first line: IDLE or WORKING
-If uncertain, answer WORKING. Then briefly explain why.`;
+## Your Response
+First line: EXACTLY "IDLE" or "WORKING" (nothing else)
+Second line onwards: Brief explanation of your reasoning.
+
+Remember: When uncertain, answer WORKING.`;
 
 // ========== AiIdleChecker Class ==========
 
