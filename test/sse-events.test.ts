@@ -37,7 +37,7 @@ describe('SSE Events', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT);
+    server = new WebServer(TEST_PORT, false, true);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT}`;
   });
@@ -180,7 +180,7 @@ describe('SSE Event Types', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1);
+    server = new WebServer(TEST_PORT + 1, false, true);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT + 1}`;
   });

@@ -17,7 +17,7 @@ export interface ServerFixture {
  * @returns ServerFixture with server instance and connection info
  */
 export async function createServerFixture(port: number): Promise<ServerFixture> {
-  const server = new WebServer(port);
+  const server = new WebServer(port, false, true);
   await server.start();
 
   // Wait for server to be fully ready

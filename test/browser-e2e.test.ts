@@ -92,7 +92,7 @@ describe('Browser E2E Tests', () => {
   beforeAll(async () => {
     closeBrowser();
 
-    server = new WebServer(TEST_PORT_BROWSER);
+    server = new WebServer(TEST_PORT_BROWSER, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
 
@@ -211,7 +211,7 @@ describe('SSE Events API', () => {
   let createdSessions: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT_SSE);
+    server = new WebServer(TEST_PORT_SSE, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
   }, 30000);
@@ -280,7 +280,7 @@ describe('Hook Events API', () => {
   let createdSessions: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT_HOOK);
+    server = new WebServer(TEST_PORT_HOOK, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
   }, 30000);
@@ -345,7 +345,7 @@ describe('Ralph API', () => {
   let createdSessions: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT_RALPH);
+    server = new WebServer(TEST_PORT_RALPH, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
   }, 30000);

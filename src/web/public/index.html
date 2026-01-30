@@ -583,6 +583,16 @@
               </label>
               <span class="form-hint">Auto-popup new images (screenshots, generated files) in this session's directory</span>
             </div>
+
+            <div class="form-section-header">Performance</div>
+            <div class="form-row form-row-switch">
+              <label>Flicker Filter</label>
+              <label class="switch">
+                <input type="checkbox" id="modalFlickerFilterEnabled" onchange="app.toggleFlickerFilter()">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Buffers output after screen clears to reduce Ink UI flickering (adds ~50ms latency)</span>
+            </div>
           </div><!-- End context-tab -->
 
           <!-- Ralph Wiggum Tab Content -->

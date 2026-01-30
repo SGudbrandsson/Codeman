@@ -631,6 +631,7 @@ class ClaudemanApp {
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
     this.ralphStatePanelCollapsed = true; // Default to collapsed
+    this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
     // Plan subagent windows (visible agents during plan generation)
     this.planSubagents = new Map(); // Map<agentId, { type, model, status, startTime, element, relativePos }>
@@ -666,6 +667,11 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
+
+    // Flicker filter state (buffers output after screen clears)
+    this.flickerFilterBuffer = '';
+    this.flickerFilterActive = false;
+    this.flickerFilterTimeout = null;
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
@@ -1053,6 +1059,44 @@ class ClaudemanApp {
       this._wasAtBottomBeforeWrite = this.isTerminalAtBottom();
     }
 
+    // Check if flicker filter is enabled for current session
+    const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
+    const flickerFilterEnabled = session?.flickerFilterEnabled ?? false;
+
+    // Flicker filter: detect screen clear patterns and buffer output
+    if (flickerFilterEnabled) {
+      // Detect Ink's screen clear patterns:
+      // - ESC[2J (clear entire screen)
+      // - ESC[H ESC[J (cursor home + clear to end)
+      // - ESC[?25l ESC[H (hide cursor + home - common Ink pattern)
+      const hasScreenClear = data.includes('\x1b[2J') ||
+                             data.includes('\x1b[H\x1b[J') ||
+                             (data.includes('\x1b[H') && data.includes('\x1b[?25l'));
+
+      if (hasScreenClear) {
+        // Screen clear detected - activate flicker filter
+        this.flickerFilterActive = true;
+        this.flickerFilterBuffer += data;
+
+        // Clear any existing timeout and set a new one
+        if (this.flickerFilterTimeout) {
+          clearTimeout(this.flickerFilterTimeout);
+        }
+        this.flickerFilterTimeout = setTimeout(() => {
+          this.flickerFilterTimeout = null;
+          this.flushFlickerBuffer();
+        }, SYNC_WAIT_TIMEOUT_MS); // 50ms buffer window
+
+        return; // Don't process normally, wait for buffer window
+      }
+
+      if (this.flickerFilterActive) {
+        // Filter is active, accumulate data
+        this.flickerFilterBuffer += data;
+        return; // Continue buffering
+      }
+    }
+
     // Accumulate raw data (may contain DEC 2026 markers)
     this.pendingWrites += data;
 
@@ -1085,6 +1129,28 @@ class ClaudemanApp {
 
           this.flushPendingWrites();
         }
+        this.writeFrameScheduled = false;
+      });
+    }
+  }
+
+  /**
+   * Flush the flicker filter buffer to the terminal.
+   * Called after the buffer window expires.
+   */
+  flushFlickerBuffer() {
+    if (!this.flickerFilterBuffer) return;
+
+    // Transfer buffered data to normal pending writes
+    this.pendingWrites += this.flickerFilterBuffer;
+    this.flickerFilterBuffer = '';
+    this.flickerFilterActive = false;
+
+    // Trigger a normal flush
+    if (!this.writeFrameScheduled) {
+      this.writeFrameScheduled = true;
+      requestAnimationFrame(() => {
+        this.flushPendingWrites();
         this.writeFrameScheduled = false;
       });
     }
@@ -1366,6 +1432,7 @@ class ClaudemanApp {
       }
       this.terminalBuffers.delete(data.id);
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
+      this.ralphClosedSessions.delete(data.id);  // Clean up closed tracking for this session
       this.projectInsights.delete(data.id);  // Clean up project insights for this session
       this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
       this.closeSessionImagePopups(data.id);  // Close image popup windows for this session
@@ -1803,16 +1870,22 @@ class ClaudemanApp {
     // Ralph loop/todo events
     addListener('session:ralphLoopUpdate', (e) => {
       const data = JSON.parse(e.data);
+      // Skip if user explicitly closed this session's Ralph panel
+      if (this.ralphClosedSessions.has(data.sessionId)) return;
       this.updateRalphState(data.sessionId, { loop: data.state });
     });
 
     addListener('session:ralphTodoUpdate', (e) => {
       const data = JSON.parse(e.data);
+      // Skip if user explicitly closed this session's Ralph panel
+      if (this.ralphClosedSessions.has(data.sessionId)) return;
       this.updateRalphState(data.sessionId, { todos: data.todos });
     });
 
     addListener('session:ralphCompletionDetected', (e) => {
       const data = JSON.parse(e.data);
+      // Skip if user explicitly closed this session's Ralph panel
+      if (this.ralphClosedSessions.has(data.sessionId)) return;
       // Prevent duplicate notifications for the same completion
       const completionKey = `${data.sessionId}:${data.phrase}`;
       if (this._shownCompletions?.has(completionKey)) {
@@ -1846,11 +1919,15 @@ class ClaudemanApp {
     // RALPH_STATUS block and circuit breaker events
     addListener('session:ralphStatusUpdate', (e) => {
       const data = JSON.parse(e.data);
+      // Skip if user explicitly closed this session's Ralph panel
+      if (this.ralphClosedSessions.has(data.sessionId)) return;
       this.updateRalphState(data.sessionId, { statusBlock: data.block });
     });
 
     addListener('session:circuitBreakerUpdate', (e) => {
       const data = JSON.parse(e.data);
+      // Skip if user explicitly closed this session's Ralph panel
+      if (this.ralphClosedSessions.has(data.sessionId)) return;
       this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
       // Notify if circuit breaker opens
       if (data.status.state === 'OPEN') {
@@ -2222,6 +2299,13 @@ class ClaudemanApp {
       clearTimeout(timer);
     }
     this.idleTimers.clear();
+    // Clear flicker filter state
+    if (this.flickerFilterTimeout) {
+      clearTimeout(this.flickerFilterTimeout);
+      this.flickerFilterTimeout = null;
+    }
+    this.flickerFilterBuffer = '';
+    this.flickerFilterActive = false;
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear tab alerts
@@ -2250,8 +2334,8 @@ class ClaudemanApp {
     }
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
-      // Load ralph state from session data
-      if (s.ralphLoop || s.ralphTodos) {
+      // Load ralph state from session data (only if not explicitly closed by user)
+      if ((s.ralphLoop || s.ralphTodos) && !this.ralphClosedSessions.has(s.id)) {
         this.ralphStates.set(s.id, {
           loop: s.ralphLoop || null,
           todos: s.ralphTodos || []
@@ -2841,6 +2925,14 @@ class ClaudemanApp {
 
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
+
+    // Clean up flicker filter state when switching sessions
+    if (this.flickerFilterTimeout) {
+      clearTimeout(this.flickerFilterTimeout);
+      this.flickerFilterTimeout = null;
+    }
+    this.flickerFilterBuffer = '';
+    this.flickerFilterActive = false;
 
     this.activeSessionId = sessionId;
     this.hideWelcome();
@@ -5754,6 +5846,9 @@ class ClaudemanApp {
 
       const sessionId = data.sessionId;
 
+      // Clear from closed set in case user previously closed Ralph for this session
+      this.ralphClosedSessions.delete(sessionId);
+
       // Step 2: Configure Ralph tracker for this session
       await fetch(`/api/sessions/${sessionId}/ralph-config`, {
         method: 'POST',
@@ -6932,6 +7027,7 @@ class ClaudemanApp {
     document.getElementById('modalAutoClearEnabled').checked = session.autoClearEnabled ?? false;
     document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
+    document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
@@ -7007,6 +7103,26 @@ class ClaudemanApp {
       this.showToast(`Image watcher ${enabled ? 'enabled' : 'disabled'}`, 'success');
     } catch (err) {
       this.showToast('Failed to toggle image watcher', 'error');
+    }
+  }
+
+  async toggleFlickerFilter() {
+    if (!this.editingSessionId) return;
+    const enabled = document.getElementById('modalFlickerFilterEnabled').checked;
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/flicker-filter`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+      // Update local session state
+      const session = this.sessions.get(this.editingSessionId);
+      if (session) {
+        session.flickerFilterEnabled = enabled;
+      }
+      this.showToast(`Flicker filter ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to toggle flicker filter', 'error');
     }
   }
 
@@ -7714,6 +7830,11 @@ class ClaudemanApp {
     }
 
     const config = this.getRalphConfig();
+
+    // If user is enabling Ralph, clear from closed set
+    if (config.enabled) {
+      this.ralphClosedSessions.delete(this.editingSessionId);
+    }
 
     try {
       const res = await fetch(`/api/sessions/${this.editingSessionId}/ralph-config`, {
@@ -9045,6 +9166,9 @@ class ClaudemanApp {
   async closeRalphTracker() {
     if (!this.activeSessionId) return;
 
+    // Mark this session as explicitly closed - will stay hidden until user re-enables
+    this.ralphClosedSessions.add(this.activeSessionId);
+
     // Disable tracker via API
     await fetch(`/api/sessions/${this.activeSessionId}/ralph-config`, {
       method: 'POST',
@@ -9342,6 +9466,12 @@ class ClaudemanApp {
     const toggle = this.$('ralphToggle');
 
     if (!panel) return;
+
+    // If user explicitly closed this session's Ralph panel, keep it hidden
+    if (this.ralphClosedSessions.has(this.activeSessionId)) {
+      panel.style.display = 'none';
+      return;
+    }
 
     const state = this.ralphStates.get(this.activeSessionId);
 

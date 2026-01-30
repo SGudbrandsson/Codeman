@@ -93,7 +93,7 @@ describe('File Link Click Tests', () => {
     testLogFile = join(testDir, 'test.log');
     writeFileSync(testLogFile, '=== Test Log Started ===\n');
 
-    server = new WebServer(TEST_PORT);
+    server = new WebServer(TEST_PORT, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
 

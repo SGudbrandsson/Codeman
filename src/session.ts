@@ -338,6 +338,9 @@ export class Session extends EventEmitter {
   // Image watcher setting (per-session toggle)
   private _imageWatcherEnabled: boolean = true;
 
+  // Flicker filter setting (per-session toggle, applied on frontend)
+  private _flickerFilterEnabled: boolean = false;
+
   // Timer tracking for cleanup (prevents memory leaks)
   private _autoCompactTimer: NodeJS.Timeout | null = null;
   private _autoClearTimer: NodeJS.Timeout | null = null;
@@ -694,6 +697,14 @@ export class Session extends EventEmitter {
     this._imageWatcherEnabled = enabled;
   }
 
+  get flickerFilterEnabled(): boolean {
+    return this._flickerFilterEnabled;
+  }
+
+  set flickerFilterEnabled(enabled: boolean) {
+    this._flickerFilterEnabled = enabled;
+  }
+
   isIdle(): boolean {
     return this._status === 'idle';
   }
@@ -734,6 +745,7 @@ export class Session extends EventEmitter {
       niceEnabled: this._niceConfig.enabled,
       niceValue: this._niceConfig.niceValue,
       color: this._color,
+      flickerFilterEnabled: this._flickerFilterEnabled,
     };
   }
 

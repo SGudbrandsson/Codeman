@@ -280,6 +280,7 @@ export class WebServer extends EventEmitter {
   private store = getStore();
   private port: number;
   private https: boolean;
+  private testMode: boolean;
   private screenManager: ScreenManager;
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
@@ -325,10 +326,11 @@ export class WebServer extends EventEmitter {
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
 
-  constructor(port: number = 3000, https: boolean = false) {
+  constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
     super();
     this.port = port;
     this.https = https;
+    this.testMode = testMode;
 
     if (https) {
       const { key, cert } = getOrCreateSelfSignedCert();
@@ -1875,6 +1877,32 @@ export class WebServer extends EventEmitter {
         success: true,
         data: {
           imageWatcherEnabled: body.enabled,
+        },
+      };
+    });
+
+    // Toggle flicker filter for a session
+    this.app.post('/api/sessions/:id/flicker-filter', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { enabled: boolean };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      if (body.enabled === undefined) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'enabled field is required');
+      }
+
+      session.flickerFilterEnabled = body.enabled;
+      this.persistSessionState(session);
+      this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+
+      return {
+        success: true,
+        data: {
+          flickerFilterEnabled: body.enabled,
         },
       };
     });
@@ -4414,7 +4442,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Restore screen sessions BEFORE accepting connections
     // This prevents race conditions where clients connect before state is ready
-    await this.restoreScreenSessions();
+    // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
+    if (!this.testMode) {
+      await this.restoreScreenSessions();
+    }
 
     // Clean up stale sessions from state file that don't have active screens
     this.cleanupStaleSessions();
@@ -4587,6 +4618,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                   niceValue: savedState.niceValue,
                 });
               }
+              // Flicker filter (frontend-applied but persisted)
+              if (savedState.flickerFilterEnabled !== undefined) {
+                session.flickerFilterEnabled = savedState.flickerFilterEnabled;
+              }
               // Respawn controller
               if (savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
@@ -4751,8 +4786,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 }
 
-export async function startWebServer(port: number = 3000, https: boolean = false): Promise<WebServer> {
-  const server = new WebServer(port, https);
+export async function startWebServer(port: number = 3000, https: boolean = false, testMode: boolean = false): Promise<WebServer> {
+  const server = new WebServer(port, https, testMode);
   await server.start();
   return server;
 }

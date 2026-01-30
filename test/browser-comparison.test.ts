@@ -135,7 +135,7 @@ describe('Browser Framework Comparison Benchmark', () => {
 
     // Start web servers for each framework
     for (const [name, port] of Object.entries(PORTS)) {
-      const server = new WebServer(port);
+      const server = new WebServer(port, false, true);
       await server.start();
       servers.push(server);
       console.log(`✅ Started server for ${name} on port ${port}`);

@@ -180,6 +180,8 @@ export interface SessionState {
   niceValue?: number;
   /** User-assigned color for visual differentiation */
   color?: SessionColor;
+  /** Flicker filter enabled (buffers output after screen clears) */
+  flickerFilterEnabled?: boolean;
 }
 
 // ========== Global Stats Types ==========

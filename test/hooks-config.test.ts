@@ -200,7 +200,7 @@ describe('Hook Event API', () => {
   let testSessionId: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT);
+    server = new WebServer(TEST_PORT, false, true);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT}`;
 
@@ -382,7 +382,7 @@ describe('Hook Data Sanitization', () => {
   let testSessionId: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1); // Port 3131
+    server = new WebServer(TEST_PORT + 1, false, true); // Port 3131
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT + 1}`;
 

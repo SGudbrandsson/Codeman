@@ -171,7 +171,7 @@ describe('Agent-Browser Enhanced Tests', () => {
     closeBrowser();
 
     // Start web server
-    server = new WebServer(TEST_PORT);
+    server = new WebServer(TEST_PORT, false, true);
     await server.start();
     await new Promise(r => setTimeout(r, 1000));
 
