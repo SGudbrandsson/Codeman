@@ -191,6 +191,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
 | **Test fixtures** | `test/e2e/fixtures/` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
+| **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Agent prompts** | `src/prompts/` directory |
@@ -227,3 +228,9 @@ When adding new event listeners or timers:
 1. Store handler references for later removal
 2. Add cleanup to appropriate `stop()` or `cleanup*()` method
 3. For singleton watchers, store refs in class properties and remove in server `stop()`
+
+### Verification Tests
+Memory leak prevention patterns are tested in `test/memory-leak-prevention.test.ts`. Run with:
+```bash
+npx vitest run test/memory-leak-prevention.test.ts
+```
