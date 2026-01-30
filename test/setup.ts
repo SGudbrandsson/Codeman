@@ -179,28 +179,36 @@ function listClaudemanScreens(): string[] {
 }
 
 /**
- * Kill detached claudeman screens that were created during the test run
+ * Kill detached claudeman screens that were EXPLICITLY registered by tests.
+ *
+ * SAFETY: We no longer kill "orphaned" screens based on detached status.
+ * The previous approach was dangerous because:
+ * 1. User screens can become temporarily detached (web server reconnect)
+ * 2. Tests might start before user creates sessions (not in preExistingScreens)
+ * 3. Race conditions between screen status and cleanup timing
+ *
+ * Now we ONLY kill screens that tests explicitly registered via registerTestScreen().
  */
 function killOrphanedTestScreens(): number {
-  let killed = 0;
+  // This function now only reports - actual killing happens in killTrackedTestScreens()
+  // which only kills explicitly registered screens
+  let orphanCount = 0;
   try {
     const output = execSync('screen -ls 2>/dev/null || true', { encoding: 'utf-8' });
     for (const line of output.split('\n')) {
-      // Only kill detached screens (never attached/user sessions)
       if (!line.includes('Detached')) continue;
       const match = line.match(/(\d+\.(claudeman-\S+))/);
       if (!match) continue;
-      const fullName = match[1];
       const screenName = match[2];
-      // Skip screens that existed before tests started
-      if (preExistingScreens.has(screenName)) continue;
-      try {
-        execSync(`screen -S ${fullName} -X quit 2>/dev/null || true`, { encoding: 'utf-8' });
-        killed++;
-      } catch { /* ignore */ }
+      // Count screens that look like test screens but weren't registered
+      // (These are "leaked" test screens but we won't kill them to be safe)
+      if (!preExistingScreens.has(screenName) && !activeTestScreens.has(screenName)) {
+        orphanCount++;
+        console.warn(`[Test Setup] Warning: Possible leaked test screen: ${screenName} (not killing for safety)`);
+      }
     }
   } catch { /* ignore */ }
-  return killed;
+  return orphanCount;
 }
 
 beforeAll(async () => {
@@ -214,13 +222,13 @@ beforeAll(async () => {
 afterAll(async () => {
   console.log('[Test Setup] Final cleanup of test-created resources...');
 
-  // Only cleanup resources that tests have registered
+  // Only cleanup resources that tests have EXPLICITLY registered
   forceCleanupAllTestResources();
 
-  // Kill orphaned screens created during the test run (not registered but detached)
-  const orphansKilled = killOrphanedTestScreens();
-  if (orphansKilled > 0) {
-    console.log(`[Test Setup] Killed ${orphansKilled} orphaned test screens`);
+  // Check for leaked test screens (but don't kill them - just warn)
+  const orphanCount = killOrphanedTestScreens();
+  if (orphanCount > 0) {
+    console.warn(`[Test Setup] ${orphanCount} possible leaked test screens detected (not killed for safety)`);
   }
 
   // Wait for cleanup
