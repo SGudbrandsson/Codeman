@@ -216,6 +216,78 @@ Run **20 parallel sessions** with full visibility:
 
 ---
 
+### ⚡ Zero-Flicker Terminal Rendering
+
+**The problem:** Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals), which redraws the entire screen on every state change. Without special handling, you'd see constant flickering — unusable for monitoring multiple sessions.
+
+**The solution:** Claudeman implements a 6-layer antiflicker system that delivers butter-smooth 60fps terminal output:
+
+```
+PTY Output → 16ms Batch → DEC 2026 Wrap → SSE → rAF Batch → xterm.js → 60fps Canvas
+```
+
+#### How Each Layer Works
+
+| Layer | Location | Technique | Purpose |
+|-------|----------|-----------|---------|
+| **1. Server Batching** | server.ts | 16ms collection window | Combines rapid PTY writes into single packets |
+| **2. DEC Mode 2026** | server.ts | `\x1b[?2026h`...`\x1b[?2026l` | Marks atomic update boundaries (terminal standard) |
+| **3. Client rAF** | app.js | `requestAnimationFrame` | Syncs writes to 60Hz display refresh |
+| **4. Sync Block Parser** | app.js | DEC 2026 extraction | Parses atomic segments for xterm.js |
+| **5. Flicker Filter** | app.js | Ink pattern detection | Buffers screen-clear sequences (optional) |
+| **6. Chunked Loading** | app.js | 64KB/frame writes | Large buffers don't freeze UI |
+
+#### Technical Implementation
+
+**Server-side (16ms batching + DEC 2026):**
+```typescript
+// Accumulate PTY output per-session
+const newBatch = existing + data;
+terminalBatches.set(sessionId, newBatch);
+
+// Flush every 16ms (60fps) or immediately if >1KB
+if (!terminalBatchTimer) {
+  terminalBatchTimer = setTimeout(() => {
+    for (const [id, data] of terminalBatches) {
+      // Wrap with synchronized output markers
+      const syncData = '\x1b[?2026h' + data + '\x1b[?2026l';
+      broadcast('session:terminal', { id, data: syncData });
+    }
+    terminalBatches.clear();
+  }, 16);
+}
+```
+
+**Client-side (rAF batching + sync block handling):**
+```javascript
+batchTerminalWrite(data) {
+  pendingWrites += data;
+
+  if (!writeFrameScheduled) {
+    writeFrameScheduled = true;
+    requestAnimationFrame(() => {
+      // Wait up to 50ms for incomplete sync blocks
+      if (hasStartMarker && !hasEndMarker) {
+        setTimeout(flushPendingWrites, 50);
+        return;
+      }
+
+      // Extract atomic segments, strip markers, write to xterm
+      const segments = extractSyncSegments(pendingWrites);
+      for (const segment of segments) {
+        terminal.write(segment);
+      }
+    });
+  }
+}
+```
+
+**Optional flicker filter** detects Ink's screen-clear patterns (`ESC[2J`, `ESC[H ESC[J`) and buffers 50ms of subsequent output for extra smoothness on problematic terminals.
+
+**Result:** Watch 20 Claude sessions simultaneously without any visual artifacts, even during heavy tool use.
+
+---
+
 ### 📈 Run Summary ("What Happened While You Were Away")
 
 Click the chart icon on any session tab to see a complete timeline of what happened:

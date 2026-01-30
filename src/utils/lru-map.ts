@@ -42,6 +42,8 @@ export interface LRUMapOptions<K, V> {
 export class LRUMap<K, V> extends Map<K, V> {
   private readonly maxSize: number;
   private readonly onEvict?: (key: K, value: V) => void;
+  /** Tracks the newest key for O(1) newest() access */
+  private _newestKey: K | undefined = undefined;
 
   /**
    * Creates a new LRUMap.
@@ -71,6 +73,8 @@ export class LRUMap<K, V> extends Map<K, V> {
 
     // Add the entry (will be at end = most recent)
     super.set(key, value);
+    // Track newest key for O(1) newest() access
+    this._newestKey = key;
 
     // Evict oldest entries if over capacity
     while (super.size > this.maxSize) {
@@ -100,6 +104,8 @@ export class LRUMap<K, V> extends Map<K, V> {
     const value = super.get(key)!;
     super.delete(key);
     super.set(key, value);
+    // Track newest key for O(1) newest() access
+    this._newestKey = key;
     return value;
   }
 
@@ -112,6 +118,36 @@ export class LRUMap<K, V> extends Map<K, V> {
    */
   override has(key: K): boolean {
     return super.has(key);
+  }
+
+  /**
+   * Delete a key-value pair.
+   * Updates _newestKey if the deleted key was the newest.
+   *
+   * @param key - Key to delete
+   * @returns True if the key existed and was deleted
+   */
+  override delete(key: K): boolean {
+    const existed = super.delete(key);
+    // If we deleted the newest key, we need to find the new newest
+    // This is O(n) but delete is rare; set/get are the hot paths
+    if (existed && this._newestKey === key) {
+      this._newestKey = undefined;
+      // Find the new newest by iterating (last entry)
+      for (const k of super.keys()) {
+        this._newestKey = k;
+      }
+    }
+    return existed;
+  }
+
+  /**
+   * Clear all entries.
+   * Resets _newestKey to undefined.
+   */
+  override clear(): void {
+    super.clear();
+    this._newestKey = undefined;
   }
 
   /**
@@ -138,15 +174,17 @@ export class LRUMap<K, V> extends Map<K, V> {
 
   /**
    * Get the newest entry (most recently accessed).
+   * O(1) operation using tracked newest key.
    *
    * @returns [key, value] of newest entry, or undefined if empty
    */
   newest(): [K, V] | undefined {
-    let last: [K, V] | undefined;
-    for (const entry of super.entries()) {
-      last = entry;
+    if (this._newestKey === undefined || !super.has(this._newestKey)) {
+      return undefined;
     }
-    return last;
+    // Use super.get to avoid refreshing the position
+    const value = super.get(this._newestKey)!;
+    return [this._newestKey, value];
   }
 
   /**

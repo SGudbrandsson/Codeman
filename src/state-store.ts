@@ -166,9 +166,9 @@ export class StateStore {
         JSON.parse(currentContent); // Validate
         writeFileSync(backupPath, currentContent, 'utf-8');
       }
-    } catch {
+    } catch (err) {
       // Backup failed - current file may be corrupt, continue with write
-      console.warn('[StateStore] Could not create backup (current file may be corrupt)');
+      console.warn('[StateStore] Could not create backup (current file may be corrupt):', err);
     }
 
     // Step 3: Atomic write: write to temp file, then rename
@@ -191,7 +191,9 @@ export class StateStore {
         if (existsSync(tempPath)) {
           unlinkSync(tempPath);
         }
-      } catch { /* ignore cleanup errors */ }
+      } catch (cleanupErr) {
+        console.warn('[StateStore] Failed to cleanup temp file during save error:', cleanupErr);
+      }
 
       // Check circuit breaker threshold
       if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -604,7 +606,9 @@ export class StateStore {
         if (existsSync(tempPath)) {
           unlinkSync(tempPath);
         }
-      } catch { /* ignore cleanup errors */ }
+      } catch (cleanupErr) {
+        console.warn('[StateStore] Failed to cleanup temp file during Ralph state save error:', cleanupErr);
+      }
       throw err;
     }
   }

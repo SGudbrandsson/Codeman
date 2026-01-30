@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1440 (must match `package.json`)
+**Version**: 0.1441 (must match `package.json`)
 
 ## Project Overview
 
@@ -255,10 +255,6 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/screen-chooser.sh` | Claudeman Screens - mobile-friendly session picker (`sc` alias, see README for usage) |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
-
-## Deprecated Code
-
-The TUI (Terminal UI) has been removed in favor of the web interface. Files in `src/tui/` are excluded from compilation via `tsconfig.json`.
 
 ## Memory Leak Prevention
 

@@ -1159,6 +1159,60 @@ describe('SubagentWatcher', () => {
       expect(updatedInfo.description).toBeDefined();
       expect(updatedInfo.description).toContain('Create unit tests');
     });
+
+    it('should extract description from parent transcript toolUseResult', async () => {
+      // Create parent transcript with toolUseResult containing agentId and description
+      const parentTranscript = JSON.stringify({
+        type: 'user',
+        timestamp: new Date().toISOString(),
+        message: { role: 'user', content: [] },
+        toolUseResult: {
+          isAsync: true,
+          status: 'async_launched',
+          agentId: 'parentdesc',
+          description: 'Research codebase cleanups',
+        },
+      });
+
+      const mockRl = new EventEmitter();
+      mockCreateInterface.mockReturnValue(mockRl);
+      mockCreateReadStream.mockReturnValue({});
+
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((path: string) => {
+        if (path.includes('subagents')) return ['agent-parentdesc.jsonl'];
+        if (path.includes('session1')) return ['subagents'];
+        if (path.includes('project1')) return ['session1'];
+        return ['project1'];
+      });
+      mockStatSync.mockReturnValue({
+        isDirectory: () => true,
+        birthtime: new Date(),
+        mtime: new Date(),
+        size: 100,
+      });
+      // Return parent transcript when reading the session transcript
+      // Return empty for subagent file (will fall back, but we want to test parent extraction)
+      mockReadFileSync.mockImplementation((filepath: string) => {
+        if (filepath.includes('session1.jsonl')) {
+          return parentTranscript;
+        }
+        return ''; // Empty subagent file
+      });
+
+      const discoveredHandler = vi.fn();
+      watcher.on('subagent:discovered', discoveredHandler);
+
+      watcher.start();
+      mockRl.emit('close');
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(discoveredHandler).toHaveBeenCalled();
+      const info = discoveredHandler.mock.calls[0][0] as SubagentInfo;
+      // Should have extracted description from parent transcript
+      expect(info.description).toBe('Research codebase cleanups');
+    });
   });
 
   describe('getRecentSubagents', () => {

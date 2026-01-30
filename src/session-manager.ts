@@ -100,10 +100,12 @@ export class SessionManager extends EventEmitter {
     }
 
     // Create a new lock promise that others will wait on
-    let unlock: () => void;
-    this._sessionCreationLock = new Promise<void>(resolve => {
+    // Define unlock first to ensure it's always in scope before promise assignment
+    let unlock!: () => void;
+    const lockPromise = new Promise<void>(resolve => {
       unlock = resolve;
     });
+    this._sessionCreationLock = lockPromise;
 
     try {
       const config = this.store.getConfig();
@@ -152,7 +154,7 @@ export class SessionManager extends EventEmitter {
     } finally {
       // Release the lock so other createSession calls can proceed
       this._sessionCreationLock = null;
-      unlock!();
+      unlock();
     }
   }
 

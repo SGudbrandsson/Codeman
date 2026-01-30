@@ -31,6 +31,8 @@ import {
   CompletionConfidence,
   createInitialRalphTrackerState,
   createInitialCircuitBreakerStatus,
+  PlanTaskStatus,
+  TddPhase,
 } from './types.js';
 import {
   ANSI_ESCAPE_PATTERN_SIMPLE,
@@ -38,14 +40,12 @@ import {
   todoContentHash,
   stringSimilarity,
 } from './utils/index.js';
+import { MAX_LINE_BUFFER_SIZE } from './config/buffer-limits.js';
+import { MAX_TODOS_PER_SESSION } from './config/map-limits.js';
 
 // ========== Enhanced Plan Task Interface ==========
 
-/** Task execution status for plan tracking */
-export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
-
-/** TDD phase categories */
-export type TddPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
+// Note: PlanTaskStatus and TddPhase are imported from types.ts
 
 /**
  * Enhanced plan task with verification criteria, dependencies, and execution tracking.
@@ -106,12 +106,7 @@ export interface CheckpointReview {
 }
 
 // ========== Configuration Constants ==========
-
-/**
- * Maximum number of todo items to track per session.
- * Older items are removed when this limit is reached.
- */
-const MAX_TODO_ITEMS = 50;
+// Note: MAX_TODOS_PER_SESSION and MAX_LINE_BUFFER_SIZE are imported from config modules
 
 /**
  * Todo items older than this duration (in milliseconds) will be auto-expired.
@@ -164,11 +159,6 @@ const COMMON_COMPLETION_PHRASES = new Set([
  * Shorter phrases are more likely to cause false positives.
  */
 const MIN_RECOMMENDED_PHRASE_LENGTH = 6;
-
-/**
- * Maximum line buffer size to prevent unbounded growth from long lines.
- */
-const MAX_LINE_BUFFER_SIZE = 64 * 1024;
 
 // ========== Pre-compiled Regex Patterns ==========
 // Pre-compiled for performance (avoid re-compilation on each call)
@@ -904,9 +894,13 @@ export class RalphTracker extends EventEmitter {
     this._totalFilesModified = 0;
     this._totalTasksCompleted = 0;
     // Keep circuit breaker state on soft reset (it tracks across iterations)
-    // Emit immediately on reset (no debounce)
-    this.emit('loopUpdate', this.loopState);
-    this.emit('todoUpdate', this.todos);
+    // Emit on next tick to prevent listeners from modifying state during reset (non-reentrant)
+    const loopState = this.loopState;
+    const todos = this.todos;
+    process.nextTick(() => {
+      this.emit('loopUpdate', loopState);
+      this.emit('todoUpdate', todos);
+    });
   }
 
   /**
@@ -934,9 +928,13 @@ export class RalphTracker extends EventEmitter {
     this._totalFilesModified = 0;
     this._totalTasksCompleted = 0;
     this._circuitBreaker = createInitialCircuitBreakerStatus();
-    // Emit immediately on reset (no debounce)
-    this.emit('loopUpdate', this.loopState);
-    this.emit('todoUpdate', this.todos);
+    // Emit on next tick to prevent listeners from modifying state during reset (non-reentrant)
+    const loopState = this.loopState;
+    const todos = this.todos;
+    process.nextTick(() => {
+      this.emit('loopUpdate', loopState);
+      this.emit('todoUpdate', todos);
+    });
   }
 
   /**
@@ -2200,7 +2198,7 @@ export class RalphTracker extends EventEmitter {
    * - ID is generated from normalized content (stable hash)
    * - Priority is parsed from content (P0/P1/P2, Critical, High Priority, etc.)
    * - Existing item: Updates status and timestamp
-   * - New item: Adds to map, evicts oldest if at MAX_TODO_ITEMS
+   * - New item: Adds to map, evicts oldest if at MAX_TODOS_PER_SESSION
    *
    * @param content - Raw todo content text
    * @param status - Status to set
@@ -2284,7 +2282,7 @@ export class RalphTracker extends EventEmitter {
       }
 
       // Add new todo
-      if (this._todos.size >= MAX_TODO_ITEMS) {
+      if (this._todos.size >= MAX_TODOS_PER_SESSION) {
         // Remove oldest todo to make room
         const oldest = this.findOldestTodo();
         if (oldest) {
@@ -2683,7 +2681,7 @@ export class RalphTracker extends EventEmitter {
 
   /**
    * Find the todo item with the oldest detectedAt timestamp.
-   * Used for LRU eviction when at MAX_TODO_ITEMS limit.
+   * Used for LRU eviction when at MAX_TODOS_PER_SESSION limit.
    * @returns Oldest todo item, or undefined if map is empty
    */
   private findOldestTodo(): RalphTodoItem | undefined {

@@ -10,10 +10,10 @@
  * The transcript path is provided by Claude Code hooks in the `transcript_path` field.
  */
 
-import { EventEmitter } from 'events';
-import { watch, statSync, existsSync, FSWatcher } from 'fs';
-import { createReadStream } from 'fs';
-import { createInterface } from 'readline';
+import { EventEmitter } from 'node:events';
+import { watch, statSync, existsSync, FSWatcher } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 
 // ========== Types ==========
 

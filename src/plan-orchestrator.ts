@@ -23,16 +23,14 @@ import {
   RESEARCH_AGENT_PROMPT,
   PLANNER_PROMPT,
 } from './prompts/index.js';
+import { PlanTaskStatus, TddPhase } from './types.js';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/** Development phase in TDD cycle */
-export type PlanPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
-
-/** Task execution status */
-export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+/** Development phase in TDD cycle (alias for TddPhase) */
+export type PlanPhase = TddPhase;
 
 /**
  * Plan item with TDD structure.
@@ -260,7 +258,9 @@ export class PlanOrchestrator {
     for (const session of this.runningSessions) {
       try {
         session.stop();
-      } catch {}
+      } catch (err) {
+        console.error('[PlanOrchestrator] Failed to stop session during cancel:', err);
+      }
     }
     this.runningSessions.clear();
   }

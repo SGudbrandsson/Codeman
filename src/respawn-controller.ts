@@ -35,6 +35,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
@@ -715,6 +716,9 @@ export class RespawnController extends EventEmitter {
 
   /** Timestamp when plan check was started (to detect stale results) */
   private planCheckStartTime: number = 0;
+
+  /** Unique ID for current AI check request (to detect stale results) */
+  private _currentAiCheckId: string | null = null;
 
   /** Timer for /clear step fallback (sends /init if no prompt detected) */
   private clearFallbackTimer: NodeJS.Timeout | null = null;
@@ -2131,6 +2135,10 @@ export class RespawnController extends EventEmitter {
     this.logAction('ai-check', `Spawning AI idle checker (${reason})`);
     this.emit('aiCheckStarted');
 
+    // Generate unique ID for this check to detect stale results
+    const checkId = randomUUID();
+    this._currentAiCheckId = checkId;
+
     // Get the terminal buffer for analysis
     const buffer = this.terminalBuffer.value;
 
@@ -2138,6 +2146,12 @@ export class RespawnController extends EventEmitter {
       // If state changed while checking (e.g., cancelled), ignore result
       if (this._state !== 'ai_checking') {
         this.log(`AI check result ignored (state is now ${this._state})`);
+        return;
+      }
+
+      // Validate this is the result for the current check (not a stale one)
+      if (this._currentAiCheckId !== checkId) {
+        this.log(`AI check result ignored (stale check ID: ${checkId.substring(0, 8)})`);
         return;
       }
 
@@ -2173,6 +2187,10 @@ export class RespawnController extends EventEmitter {
         this.startPreFilterTimer();
       }
     }).catch((err) => {
+      // Validate this is the error for the current check
+      if (this._currentAiCheckId !== checkId) {
+        return; // Stale check, ignore error
+      }
       if (this._state === 'ai_checking') {
         const errorMsg = err instanceof Error ? err.message : String(err);
         this.logAction('ai-check', `Failed: ${errorMsg.substring(0, 50)}`);

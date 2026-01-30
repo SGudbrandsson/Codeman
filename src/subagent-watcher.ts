@@ -5,13 +5,14 @@
  * and emits structured events for tool calls, progress, and messages.
  */
 
-import { EventEmitter } from 'events';
-import { watch, statSync, readdirSync, existsSync, readFileSync, FSWatcher } from 'fs';
-import { createReadStream } from 'fs';
-import { createInterface } from 'readline';
-import { homedir } from 'os';
-import { join, basename } from 'path';
-import { execSync } from 'child_process';
+import { EventEmitter } from 'node:events';
+import { watch, statSync, readdirSync, existsSync, readFileSync, FSWatcher } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
+import { join, basename } from 'node:path';
+import { execSync } from 'node:child_process';
+import { PENDING_TOOL_CALL_TTL_MS } from './config/map-limits.js';
 
 // ========== Types ==========
 
@@ -160,8 +161,9 @@ export class SubagentWatcher extends EventEmitter {
   private livenessInterval: NodeJS.Timeout | null = null;
   private _isRunning = false;
   private knownSubagentDirs = new Set<string>();
-  // Map of agentId -> Map of toolUseId -> tool name (for linking tool_result to tool_call)
-  private pendingToolCalls = new Map<string, Map<string, string>>();
+  // Map of agentId -> Map of toolUseId -> { toolName, timestamp } (for linking tool_result to tool_call)
+  // Includes timestamp for TTL-based cleanup of orphaned entries
+  private pendingToolCalls = new Map<string, Map<string, { toolName: string; timestamp: number }>>();
 
   constructor() {
     super();
@@ -312,6 +314,7 @@ export class SubagentWatcher extends EventEmitter {
    * - Completed agents: removed after STALE_COMPLETED_MAX_AGE_MS (1 hour)
    * - Idle agents: removed after STALE_IDLE_MAX_AGE_MS (4 hours)
    * Also enforces MAX_TRACKED_AGENTS limit with LRU eviction.
+   * Also cleans up orphaned pending tool calls older than PENDING_TOOL_CALL_TTL_MS.
    */
   private cleanupStaleAgents(): void {
     const now = Date.now();
@@ -347,6 +350,24 @@ export class SubagentWatcher extends EventEmitter {
     // Perform cleanup
     for (const agentId of agentsToDelete) {
       this.removeAgent(agentId);
+    }
+
+    // Clean up orphaned pending tool calls (older than TTL)
+    // These can accumulate if tool_result is never received (e.g., agent crashed)
+    for (const [agentId, agentCalls] of this.pendingToolCalls) {
+      const idsToDelete: string[] = [];
+      for (const [toolUseId, callInfo] of agentCalls) {
+        if (now - callInfo.timestamp > PENDING_TOOL_CALL_TTL_MS) {
+          idsToDelete.push(toolUseId);
+        }
+      }
+      for (const id of idsToDelete) {
+        agentCalls.delete(id);
+      }
+      // If agent has no more pending calls, remove the agent entry from the map
+      if (agentCalls.size === 0) {
+        this.pendingToolCalls.delete(agentId);
+      }
     }
   }
 
@@ -719,12 +740,15 @@ export class SubagentWatcher extends EventEmitter {
 
   /**
    * Extract the short description from the parent session's transcript.
-   * This is the most reliable method because it reads the actual Task tool call
-   * that spawned this agent, which contains the description parameter.
+   * This is the most reliable method because it reads the actual Task tool result
+   * that spawned this agent, which contains the description directly.
    *
-   * The parent transcript contains:
-   * 1. An assistant message with tool_use for Task, containing input.description
-   * 2. A progress entry with data.agentId and parentToolUseID linking them
+   * The parent transcript contains a 'user' entry with toolUseResult that has:
+   * - agentId: the spawned agent's ID
+   * - description: the Task description parameter
+   *
+   * We look for this format:
+   * { "type": "user", "toolUseResult": { "agentId": "xxx", "description": "..." } }
    */
   private extractDescriptionFromParentTranscript(
     projectHash: string,
@@ -739,40 +763,16 @@ export class SubagentWatcher extends EventEmitter {
       const content = readFileSync(transcriptPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
 
-      // First pass: Find the progress entry for this agent to get parentToolUseID
-      let parentToolUseID: string | undefined;
+      // Look for user entry with toolUseResult containing the agentId
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
-          if (entry.type === 'progress' && entry.data?.agentId === agentId && entry.parentToolUseID) {
-            parentToolUseID = entry.parentToolUseID;
-            break;
-          }
-        } catch {
-          // Skip malformed lines
-        }
-      }
-
-      if (!parentToolUseID) return undefined;
-
-      // Second pass: Find the Task tool_use with this ID and extract description
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line);
-          if (entry.type === 'assistant' && entry.message?.content) {
-            const content = entry.message.content;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  block.type === 'tool_use' &&
-                  block.id === parentToolUseID &&
-                  block.name === 'Task' &&
-                  block.input?.description
-                ) {
-                  return block.input.description;
-                }
-              }
-            }
+          if (
+            entry.type === 'user' &&
+            entry.toolUseResult?.agentId === agentId &&
+            entry.toolUseResult?.description
+          ) {
+            return entry.toolUseResult.description;
           }
         } catch {
           // Skip malformed lines
@@ -1169,12 +1169,15 @@ export class SubagentWatcher extends EventEmitter {
       } else {
         for (const content of entry.message.content) {
           if (content.type === 'tool_use' && content.name) {
-            // Store toolUseId for linking to results
+            // Store toolUseId for linking to results, with timestamp for TTL cleanup
             if (content.id) {
               if (!this.pendingToolCalls.has(agentId)) {
                 this.pendingToolCalls.set(agentId, new Map());
               }
-              this.pendingToolCalls.get(agentId)!.set(content.id, content.name);
+              this.pendingToolCalls.get(agentId)!.set(content.id, {
+                toolName: content.name,
+                timestamp: Date.now(),
+              });
             }
 
             const toolCall: SubagentToolCall = {
@@ -1197,7 +1200,8 @@ export class SubagentWatcher extends EventEmitter {
             // Extract tool result
             const resultContent = this.extractToolResultContent(content.content);
             const agentPendingCalls = this.pendingToolCalls.get(agentId);
-            const toolName = agentPendingCalls?.get(content.tool_use_id);
+            const pendingCall = agentPendingCalls?.get(content.tool_use_id);
+            const toolName = pendingCall?.toolName;
             // Delete after lookup to prevent memory leak
             agentPendingCalls?.delete(content.tool_use_id);
 
@@ -1247,7 +1251,8 @@ export class SubagentWatcher extends EventEmitter {
           if (content.type === 'tool_result' && content.tool_use_id) {
             const resultContent = this.extractToolResultContent(content.content);
             const agentPendingCalls = this.pendingToolCalls.get(agentId);
-            const toolName = agentPendingCalls?.get(content.tool_use_id);
+            const pendingCall = agentPendingCalls?.get(content.tool_use_id);
+            const toolName = pendingCall?.toolName;
             // Delete after lookup to prevent memory leak
             agentPendingCalls?.delete(content.tool_use_id);
 

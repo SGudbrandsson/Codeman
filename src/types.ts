@@ -93,6 +93,12 @@ export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 /** Status of the Ralph Loop controller */
 export type RalphLoopStatus = 'stopped' | 'running' | 'paused';
 
+/** Task execution status for plan tracking */
+export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+
+/** TDD phase categories */
+export type TddPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
+
 // ========== Session Types ==========
 
 /**

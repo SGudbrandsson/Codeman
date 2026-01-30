@@ -8,10 +8,10 @@
  * to ensure files are fully written before emitting detection events.
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { watch, type FSWatcher } from 'chokidar';
-import { basename, extname } from 'path';
-import { statSync } from 'fs';
+import { basename, extname } from 'node:path';
+import { statSync } from 'node:fs';
 import type { ImageDetectedEvent } from './types.js';
 
 // ========== Types ==========

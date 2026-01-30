@@ -123,8 +123,9 @@ export function getAugmentedPath(): string {
     if (result && existsSync(result)) {
       claudeDir = dirname(result);
     }
-  } catch {
-    // not in PATH, check common locations
+  } catch (err) {
+    // Claude not in PATH, will check common locations
+    console.warn('[Session] Claude not found via which command, checking common locations:', err instanceof Error ? err.message : err);
   }
 
   // Fallback: check common installation directories
@@ -1441,8 +1442,9 @@ export class Session extends EventEmitter {
           if (msg.type === 'result' && msg.total_cost_usd) {
             this._totalCost = msg.total_cost_usd;
           }
-        } catch {
-          // Not JSON, just regular output
+        } catch (parseErr) {
+          // Not JSON, just regular output - this is expected for non-JSON lines
+          console.debug('[Session] Line not JSON (expected for text output):', parseErr instanceof Error ? parseErr.message : parseErr);
           this._textOutput.append(line + '\n');
         }
       } else if (trimmed) {
@@ -1636,7 +1638,8 @@ export class Session extends EventEmitter {
 
   // Check if we should auto-compact based on token threshold
   private checkAutoCompact(): void {
-    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing || this._isStopped) return;
+    if (this._isStopped) return; // Early exit check
+    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
 
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoCompactThreshold) {
@@ -1645,10 +1648,14 @@ export class Session extends EventEmitter {
 
       // Wait for Claude to be idle before compacting
       const checkAndCompact = () => {
-        // Check if session is still valid (not stopped)
-        if (!this._isCompacting || this._isStopped) return;
+        // Check if session is still valid (not stopped) - must be first check
+        if (this._isStopped) return;
+        if (!this._isCompacting) return;
 
         if (!this._isWorking) {
+          // Re-check stopped state after async operation might have completed
+          if (this._isStopped) return;
+
           // Send /compact command with optional prompt
           const compactCmd = this._autoCompactPrompt
             ? `/compact ${this._autoCompactPrompt}\r`
@@ -1663,6 +1670,7 @@ export class Session extends EventEmitter {
           // Wait a moment then re-enable (longer than clear since compact takes time)
           if (!this._isStopped) {
             this._autoCompactTimer = setTimeout(() => {
+              if (this._isStopped) return; // Check at callback start
               this._autoCompactTimer = null;
               this._isCompacting = false;
             }, 10000);
@@ -1684,7 +1692,8 @@ export class Session extends EventEmitter {
 
   // Check if we should auto-clear based on token threshold
   private checkAutoClear(): void {
-    if (!this._autoClearEnabled || this._isClearing || this._isCompacting || this._isStopped) return;
+    if (this._isStopped) return; // Early exit check
+    if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
 
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoClearThreshold) {
@@ -1693,10 +1702,14 @@ export class Session extends EventEmitter {
 
       // Wait for Claude to be idle before clearing
       const checkAndClear = () => {
-        // Check if session is still valid (not stopped)
-        if (!this._isClearing || this._isStopped) return;
+        // Check if session is still valid (not stopped) - must be first check
+        if (this._isStopped) return;
+        if (!this._isClearing) return;
 
         if (!this._isWorking) {
+          // Re-check stopped state after async operation might have completed
+          if (this._isStopped) return;
+
           // Send /clear command
           this.writeViaScreen('/clear\r');
           // Reset token counts
@@ -1707,6 +1720,7 @@ export class Session extends EventEmitter {
           // Wait a moment then re-enable
           if (!this._isStopped) {
             this._autoClearTimer = setTimeout(() => {
+              if (this._isStopped) return; // Check at callback start
               this._autoClearTimer = null;
               this._isClearing = false;
             }, 5000);
@@ -1921,8 +1935,8 @@ export class Session extends EventEmitter {
       // First try graceful SIGTERM
       try {
         this.ptyProcess.kill();
-      } catch {
-        // Process may already be dead
+      } catch (err) {
+        console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
       }
 
       // Give it a moment to terminate gracefully
@@ -1933,8 +1947,8 @@ export class Session extends EventEmitter {
         if (pid) {
           process.kill(pid, 'SIGKILL');
         }
-      } catch {
-        // Process already terminated
+      } catch (err) {
+        console.warn('[Session] Failed to send SIGKILL to process (already terminated):', err);
       }
 
       // Also try to kill any child processes in the process group
@@ -1942,8 +1956,8 @@ export class Session extends EventEmitter {
         if (pid) {
           process.kill(-pid, 'SIGKILL');
         }
-      } catch {
-        // Process group may not exist or already terminated
+      } catch (err) {
+        console.warn('[Session] Failed to send SIGKILL to process group (may not exist):', err);
       }
 
       this.ptyProcess = null;

@@ -11243,6 +11243,21 @@ class ClaudemanApp {
       this.planGenerationAbortController = null;
     }
 
+    // Clean up wizard-specific timers (leak fix: not cleared on SSE reconnect)
+    if (this.wizardMinimizedTimer) {
+      clearInterval(this.wizardMinimizedTimer);
+      this.wizardMinimizedTimer = null;
+    }
+
+    // Clean up wizard drag listeners (leak fix: document-level handlers)
+    this.cleanupWizardDragging();
+
+    // Deactivate focus trap if wizard was open (leak fix: keydown listener)
+    if (this.activeFocusTrap) {
+      this.activeFocusTrap.deactivate();
+      this.activeFocusTrap = null;
+    }
+
     // Clear minimized agents tracking
     this.minimizedSubagents.clear();
 
