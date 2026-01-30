@@ -73,12 +73,8 @@ journalctl --user -u claudeman-web -f
 | `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
 | `src/run-summary.ts` | Timeline events for "what happened while away" |
 | `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
-| `src/plan-orchestrator.ts` | Multi-agent plan generation (9 specialist subagents) |
-| `src/execution-bridge.ts` | Coordinates parallel task execution with GroupScheduler |
-| `src/group-scheduler.ts` | Topological ordering and dependency management |
-| `src/model-selector.ts` | Routes tasks to appropriate Claude models (opus/sonnet/haiku) |
-| `src/context-manager.ts` | Handles fresh context requirements for tasks |
-| `src/prompts/*.ts` | Specialist agent prompts (research, requirements, architecture, etc.) |
+| `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
+| `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
@@ -107,7 +103,7 @@ journalctl --user -u claudeman-web -f
 
 **Token tracking**: Interactive mode parses status line ("123.4k tokens"), estimates 60/40 input/output split.
 
-**Memory leak prevention**: Frontend runs long; clear all Maps/timers on SSE reconnect in `handleInit()`.
+**Memory leak prevention**: Frontend runs long; clear all Maps/timers on SSE reconnect in `handleInit()`. Backend clears `_recentTaskDescriptions` in Session.stop(), nulls promise callbacks on error, and removes watcher listeners on shutdown.
 
 ## Adding Features
 
@@ -179,14 +175,6 @@ Limits are centralized in `src/config/buffer-limits.ts` and `src/config/map-limi
 
 Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-based cleanup.
 
-**Execution limits** (parallel execution, in `src/config/execution-limits.ts`):
-| Resource | Default |
-|----------|---------|
-| Parallel tasks per group | 5 |
-| Group timeout | 30 minutes |
-| Task retries | 2 |
-| Session mode token threshold | 50k |
-
 ## Where to Find More Information
 
 | Topic | Location |
@@ -205,7 +193,6 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
-| **Execution system** | `src/config/execution-limits.ts` |
 | **Agent prompts** | `src/prompts/` directory |
 
 ## Scripts
@@ -213,6 +200,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | Script | Purpose |
 |--------|---------|
 | `scripts/screen-manager.sh` | Safe screen management (use instead of direct kill commands) |
+| `scripts/screen-chooser.sh` | Mobile-friendly screen session picker for Termius/iPhone |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 
@@ -220,25 +208,22 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 
 The TUI (Terminal UI) has been removed in favor of the web interface. Files in `src/tui/` are excluded from compilation via `tsconfig.json`.
 
-## Active Ralph Loop Task
+## Recent Memory Leak Fixes (2026-01-30)
 
-**Current Task**: built out the mac os installation script for claudeman, check if there is something available in your working directory and then optimize it and make a really clean, easy, simple and fully working installation script for claudeman for mac os x
+All P0 memory leak issues have been fixed in commit `e3e0d22`:
 
-**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+### Backend Fixes
+- **Session._recentTaskDescriptions**: Now cleared in `stop()` and `clearBuffers()`
+- **Session promise callbacks**: Nulled after rejection in `runPrompt()` catch block
+- **Watcher listeners**: SubagentWatcher and ImageWatcher listeners stored and removed on server shutdown
 
-### Key Files
-- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
-- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
-- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
+### Frontend Fixes
+- **Plan file windows**: Drag/resize handlers stored on elements and cleaned up via `closePlanFileWindow()`
+- **Plan file manager**: Drag handler stored and cleaned up via `closePlanFileManager()`
+- **cleanupAllFloatingWindows()**: Now cleans up plan file windows
 
-### How to Work on This Task
-1. Read the plan summary to understand the overall approach
-2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
-3. Work through items in priority order (critical → high → medium → low)
-4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
-
-### Research Insights
-Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
-- External GitHub repos and documentation links to reference
-- Existing codebase patterns to follow
-- Technical recommendations from the research phase
+### Cleanup Patterns
+When adding new event listeners or timers:
+1. Store handler references for later removal
+2. Add cleanup to appropriate `stop()` or `cleanup*()` method
+3. For singleton watchers, store refs in class properties and remove in server `stop()`
