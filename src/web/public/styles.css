@@ -1854,6 +1854,31 @@ body {
   color: #a8d8a8;
 }
 
+/* Mobile case button - hidden on desktop, shown on mobile */
+.btn-toolbar.btn-case-mobile {
+  display: none;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #9ca3af;
+  gap: 4px;
+}
+
+.btn-toolbar.btn-case-mobile:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.btn-toolbar.btn-case-mobile svg {
+  flex-shrink: 0;
+}
+
+.btn-toolbar.btn-case-mobile #mobileCaseName {
+  max-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Button icon styling */
 .btn-toolbar .btn-icon {
   display: inline-flex;
@@ -2625,6 +2650,148 @@ body {
 
 .modal-content.modal-lg {
   max-width: 520px;
+}
+
+/* Mobile Case Picker - Base Styles */
+.mobile-case-picker-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #1a1a1a;
+  border-radius: 16px 16px 0 0;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  z-index: 1001;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.mobile-case-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mobile-case-picker-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.mobile-case-picker-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 0;
+  max-height: 50vh;
+}
+
+.mobile-case-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-case-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: transparent;
+  border: none;
+  color: #e5e5e5;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+  width: 100%;
+}
+
+.mobile-case-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mobile-case-item:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobile-case-item.selected {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.mobile-case-item-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.mobile-case-item.selected .mobile-case-item-icon {
+  color: #22c55e;
+}
+
+.mobile-case-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-case-item-check {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #22c55e;
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.mobile-case-item.selected .mobile-case-item-check {
+  opacity: 1;
+}
+
+.mobile-case-picker-footer {
+  padding: 12px 20px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-case-create-mobile {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-case-create-mobile:hover {
+  background: var(--bg-hover);
+}
+
+.btn-case-create-mobile:active {
+  background: var(--bg-hover);
+}
+
+.btn-case-create-mobile svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* Fix Plan Modal */
@@ -8039,12 +8206,12 @@ kbd {
   /* Smaller tabs for mobile */
   .session-tab {
     flex-shrink: 0;
-    min-height: 22px;
-    max-height: 22px;
-    padding: 0.1rem 0.4rem;
-    font-size: 0.65rem;
-    gap: 0.2rem;
-    border-radius: 3px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.7rem;
+    gap: 0.25rem;
+    border-radius: 4px;
   }
 
   /* Smaller status indicator on mobile */
@@ -8216,25 +8383,39 @@ kbd {
     display: none !important;
   }
 
-  /* Simplified toolbar layout - just Run Claude and Run Shell */
+  /* Simplified toolbar layout - Run Claude, Shell, and Case */
   .toolbar-left .toolbar-group:first-child {
     width: 100%;
     justify-content: center;
-    gap: 12px;
+    gap: 8px;
   }
 
   .btn-toolbar.btn-claude {
     flex: 0 0 auto;
     min-width: fit-content;
     white-space: nowrap;
-    padding: 0 12px !important;
+    padding: 0 10px !important;
   }
 
   .btn-toolbar.btn-shell {
     flex: 0 0 auto;
     min-width: fit-content;
     white-space: nowrap;
-    padding: 0 12px !important;
+    padding: 0 10px !important;
+  }
+
+  /* Mobile case button - visible on mobile */
+  .btn-toolbar.btn-case-mobile {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 8px !important;
+    order: 2; /* Between Run Claude and Run Shell */
+  }
+
+  .btn-toolbar.btn-case-mobile #mobileCaseName {
+    max-width: 50px;
   }
 
   /* Keyboard Accessory Bar - quick actions above keyboard */
@@ -8557,6 +8738,36 @@ kbd {
   .keyboard-visible .modal-body {
     max-height: 40vh;
     overflow-y: auto;
+  }
+
+  /* Mobile Case Picker - Mobile-specific overrides */
+  .mobile-case-picker .modal-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .mobile-case-picker-sheet {
+    max-height: 60vh;
+    padding-bottom: var(--safe-area-bottom);
+    animation: slideUp 0.2s ease-out;
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  .mobile-case-picker-header .modal-close {
+    width: 32px;
+    height: 32px;
+    font-size: 1.5rem;
+  }
+
+  .mobile-case-picker-footer {
+    padding-bottom: calc(12px + var(--safe-area-bottom));
   }
 }
 

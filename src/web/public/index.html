@@ -286,6 +286,11 @@
             </select>
             <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
           </div>
+          <!-- Mobile-only case button -->
+          <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span id="mobileCaseName">Case</span>
+          </button>
         </div>
 
         <!-- Directory (hidden) -->
@@ -1088,6 +1093,28 @@
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeCreateCaseModal()">Cancel</button>
           <button class="btn-toolbar btn-primary" id="caseModalSubmit" onclick="app.submitCaseModal()">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile Case Picker (Bottom Sheet) -->
+    <div class="modal mobile-case-picker" id="mobileCasePickerModal">
+      <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>
+      <div class="mobile-case-picker-sheet">
+        <div class="mobile-case-picker-header">
+          <h3>Select Case</h3>
+          <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close case picker">&times;</button>
+        </div>
+        <div class="mobile-case-picker-body">
+          <div class="mobile-case-list" id="mobileCaseList">
+            <!-- Cases populated by JS -->
+          </div>
+        </div>
+        <div class="mobile-case-picker-footer">
+          <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Create New Case
+          </button>
         </div>
       </div>
     </div>

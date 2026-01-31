@@ -6717,19 +6717,23 @@ class ClaudemanApp {
       if (selectCaseName) {
         select.value = selectCaseName;
         this.updateDirDisplayForCase(selectCaseName);
+        this.updateMobileCaseLabel(selectCaseName);
       } else if (lastUsedCase && cases.some(c => c.name === lastUsedCase)) {
         // Use lastUsedCase if available and exists
         select.value = lastUsedCase;
         this.updateDirDisplayForCase(lastUsedCase);
+        this.updateMobileCaseLabel(lastUsedCase);
       } else if (cases.length > 0) {
         // Fallback to testcase or first case
         const firstCase = cases.find(c => c.name === 'testcase') || cases[0];
         select.value = firstCase.name;
         this.updateDirDisplayForCase(firstCase.name);
+        this.updateMobileCaseLabel(firstCase.name);
       } else {
         // No cases exist yet - show the default case name as directory
         select.value = 'testcase';
         document.getElementById('dirDisplay').textContent = '~/claudeman-cases/testcase';
+        this.updateMobileCaseLabel('testcase');
       }
 
       // Only add event listener once (on first load)
@@ -6737,6 +6741,7 @@ class ClaudemanApp {
         select.addEventListener('change', () => {
           this.updateDirDisplayForCase(select.value);
           this.saveLastUsedCase(select.value);
+          this.updateMobileCaseLabel(select.value);
         });
         select.dataset.listenerAdded = 'true';
       }
@@ -13378,6 +13383,90 @@ class ClaudemanApp {
       console.error('Failed to link case:', err);
       this.showToast('Failed to link case: ' + err.message, 'error');
     }
+  }
+
+  // ============================================================================
+  // Mobile Case Picker
+  // ============================================================================
+
+  showMobileCasePicker() {
+    const modal = document.getElementById('mobileCasePickerModal');
+    const listContainer = document.getElementById('mobileCaseList');
+    const select = document.getElementById('quickStartCase');
+    const currentCase = select.value;
+
+    // Build case list HTML
+    let html = '';
+    const cases = this.cases || [];
+
+    // Add testcase if not in list
+    const hasTestcase = cases.some(c => c.name === 'testcase');
+    const allCases = hasTestcase ? cases : [{ name: 'testcase' }, ...cases];
+
+    for (const c of allCases) {
+      const isSelected = c.name === currentCase;
+      html += `
+        <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
+                onclick="app.selectMobileCase('${this.escapeHtml(c.name)}')">
+          <span class="mobile-case-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </span>
+          <span class="mobile-case-item-name">${this.escapeHtml(c.name)}</span>
+          <span class="mobile-case-item-check">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </span>
+        </button>
+      `;
+    }
+
+    listContainer.innerHTML = html;
+    modal.classList.add('active');
+  }
+
+  closeMobileCasePicker() {
+    document.getElementById('mobileCasePickerModal').classList.remove('active');
+  }
+
+  selectMobileCase(caseName) {
+    // Update the desktop select (source of truth)
+    const select = document.getElementById('quickStartCase');
+    select.value = caseName;
+
+    // Update mobile button label
+    this.updateMobileCaseLabel(caseName);
+
+    // Update directory display
+    this.updateDirDisplayForCase(caseName);
+
+    // Save as last used
+    this.saveLastUsedCase(caseName);
+
+    // Close the picker
+    this.closeMobileCasePicker();
+
+    this.showToast(`Selected: ${caseName}`, 'success');
+  }
+
+  updateMobileCaseLabel(caseName) {
+    const label = document.getElementById('mobileCaseName');
+    if (label) {
+      // Truncate for mobile display
+      const maxLen = 6;
+      label.textContent = caseName.length > maxLen
+        ? caseName.substring(0, maxLen) + '…'
+        : caseName;
+    }
+  }
+
+  showCreateCaseFromMobile() {
+    // Close mobile picker first
+    this.closeMobileCasePicker();
+    // Open the create case modal
+    this.showCreateCaseModal();
   }
 
   renderScreenSessions() {
