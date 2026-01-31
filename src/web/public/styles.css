@@ -7815,11 +7815,11 @@ kbd {
 
   /* Add top margin to main content to account for fixed header */
   .main {
-    margin-top: 48px;
+    margin-top: 54px;
   }
 
   .ios-device .main {
-    margin-top: calc(48px + var(--safe-area-top));
+    margin-top: calc(54px + var(--safe-area-top));
   }
 
   /* Hide some header elements on tablet for more space */
@@ -7955,11 +7955,11 @@ kbd {
 
   /* Add top margin to main content to account for fixed header */
   .main {
-    margin-top: 36px;
+    margin-top: 42px;
   }
 
   .ios-device .main {
-    margin-top: calc(36px + var(--safe-area-top));
+    margin-top: calc(42px + var(--safe-area-top));
   }
 
   .header-right {
