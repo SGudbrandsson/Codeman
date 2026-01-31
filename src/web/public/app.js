@@ -185,18 +185,20 @@ function getEventCoords(e) {
 /**
  * KeyboardHandler - Simple handler to scroll inputs into view when keyboard appears.
  * Uses focusin event and scrollIntoView - keeps it simple and reliable.
- * Also handles terminal scrolling via visualViewport API.
+ * Also handles terminal scrolling and toolbar repositioning via visualViewport API.
  */
 const KeyboardHandler = {
   lastViewportHeight: 0,
   keyboardVisible: false,
+  initialViewportHeight: 0,
 
   /** Initialize keyboard handling */
   init() {
     // Only initialize on touch devices
     if (!MobileDetection.isTouchDevice()) return;
 
-    this.lastViewportHeight = window.visualViewport?.height || window.innerHeight;
+    this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
+    this.lastViewportHeight = this.initialViewportHeight;
 
     // Simple focus handler - scroll input into view after keyboard appears
     document.addEventListener('focusin', (e) => {
@@ -209,10 +211,14 @@ const KeyboardHandler = {
       }, 400);
     });
 
-    // Use visualViewport to detect keyboard for terminal scrolling
+    // Use visualViewport to detect keyboard and reposition toolbar
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', () => {
         this.handleViewportResize();
+      });
+      // Also handle scroll (iOS scrolls viewport when keyboard appears)
+      window.visualViewport.addEventListener('scroll', () => {
+        this.updateToolbarPosition();
       });
     }
   },
@@ -220,19 +226,51 @@ const KeyboardHandler = {
   /** Handle viewport resize (keyboard show/hide) */
   handleViewportResize() {
     const currentHeight = window.visualViewport?.height || window.innerHeight;
-    const heightDiff = this.lastViewportHeight - currentHeight;
+    const heightDiff = this.initialViewportHeight - currentHeight;
 
     // Keyboard appeared (viewport shrunk by more than 150px)
     if (heightDiff > 150 && !this.keyboardVisible) {
       this.keyboardVisible = true;
+      document.body.classList.add('keyboard-visible');
       this.onKeyboardShow();
     }
-    // Keyboard hidden (viewport grew back)
-    else if (heightDiff < -150 && this.keyboardVisible) {
+    // Keyboard hidden (viewport grew back close to initial)
+    else if (heightDiff < 50 && this.keyboardVisible) {
       this.keyboardVisible = false;
+      document.body.classList.remove('keyboard-visible');
+      this.onKeyboardHide();
     }
 
+    this.updateToolbarPosition();
     this.lastViewportHeight = currentHeight;
+  },
+
+  /** Update toolbar position based on visual viewport */
+  updateToolbarPosition() {
+    if (!window.visualViewport) return;
+
+    const toolbar = document.querySelector('.toolbar');
+    if (!toolbar) return;
+
+    // Only reposition on mobile
+    if (!MobileDetection.isSmallScreen() && !MobileDetection.isMediumScreen()) {
+      toolbar.style.transform = '';
+      return;
+    }
+
+    if (this.keyboardVisible) {
+      // The toolbar is fixed at bottom: 0 (relative to layout viewport)
+      // We need to move it up to be at the bottom of the visual viewport
+      // Distance from visual viewport bottom to layout viewport bottom:
+      const layoutHeight = window.innerHeight;
+      const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
+      const offsetFromBottom = layoutHeight - visualBottom;
+
+      // Move toolbar up by this offset (negative translateY moves up)
+      toolbar.style.transform = `translateY(${-offsetFromBottom}px)`;
+    } else {
+      toolbar.style.transform = '';
+    }
   },
 
   /** Called when keyboard appears */
@@ -246,6 +284,15 @@ const KeyboardHandler = {
         }
       }
     }, 100);
+  },
+
+  /** Called when keyboard hides */
+  onKeyboardHide() {
+    // Reset toolbar position
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar) {
+      toolbar.style.transform = '';
+    }
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */
@@ -12803,7 +12850,7 @@ class ClaudemanApp {
    * Called automatically when image:detected SSE event is received.
    */
   openImagePopup(imageEvent) {
-    const { sessionId, filePath, fileName, timestamp, size } = imageEvent;
+    const { sessionId, filePath, relativePath, fileName, timestamp, size } = imageEvent;
 
     // Create unique window ID
     const imageId = `${sessionId}-${timestamp}`;
@@ -12830,7 +12877,8 @@ class ClaudemanApp {
     const sizeKB = (size / 1024).toFixed(1);
 
     // Build image URL using the existing file-raw endpoint
-    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(fileName)}`;
+    // Use relativePath (path from working dir) instead of fileName (basename) for subdirectory images
+    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(relativePath || fileName)}`;
 
     // Create window element
     const win = document.createElement('div');

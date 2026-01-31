@@ -1511,6 +1511,8 @@ export interface ImageDetectedEvent {
   sessionId: string;
   /** Full path to the detected image file */
   filePath: string;
+  /** Path relative to the session's working directory (for file-raw endpoint) */
+  relativePath: string;
   /** Image file name (basename) */
   fileName: string;
   /** Timestamp when the image was detected */

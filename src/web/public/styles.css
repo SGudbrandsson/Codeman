@@ -8056,7 +8056,7 @@ kbd {
 
   /* Clean dark toolbar - positioned near bottom */
   .toolbar {
-    position: absolute;
+    position: fixed;
     bottom: var(--safe-area-bottom);
     left: 0;
     right: 0;
@@ -8073,6 +8073,10 @@ kbd {
     background: #111111;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     z-index: 50;
+    /* Smooth transition for keyboard show/hide */
+    transition: transform 0.15s ease-out;
+    /* Ensure transform works properly */
+    will-change: transform;
   }
 
   /* Show case selector in center */
@@ -8437,6 +8441,18 @@ kbd {
   input, textarea, [contenteditable] {
     scroll-margin-bottom: 200px;
     scroll-margin-top: 80px;
+  }
+
+  /* When keyboard is visible, adjust content to account for moved toolbar */
+  .keyboard-visible .terminal-container {
+    /* Reduce terminal height when keyboard is up so it doesn't overlap toolbar */
+    padding-bottom: 50px;
+  }
+
+  /* Ensure modals scroll properly when keyboard is visible */
+  .keyboard-visible .modal-body {
+    max-height: 40vh;
+    overflow-y: auto;
   }
 }
 

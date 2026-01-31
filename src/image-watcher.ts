@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'node:events';
 import { watch, type FSWatcher } from 'chokidar';
-import { basename, extname } from 'node:path';
+import { basename, extname, relative } from 'node:path';
 import { statSync } from 'node:fs';
 import type { ImageDetectedEvent } from './types.js';
 
@@ -265,10 +265,14 @@ export class ImageWatcher extends EventEmitter {
     try {
       const stat = statSync(filePath);
       const fileName = basename(filePath);
+      const workingDir = this.sessionDirs.get(sessionId);
+      // Compute relative path from working directory (for file-raw endpoint)
+      const relativePath = workingDir ? relative(workingDir, filePath) : fileName;
 
       const event: ImageDetectedEvent = {
         sessionId,
         filePath,
+        relativePath,
         fileName,
         timestamp: Date.now(),
         size: stat.size,

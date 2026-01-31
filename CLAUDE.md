@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1460 (must match `package.json`)
+**Version**: 0.1461 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -58,12 +58,6 @@ systemctl --user restart claudeman-web
 journalctl --user -u claudeman-web -f
 ```
 
-## Binaries
-
-| Binary | Purpose |
-|--------|---------|
-| `claudeman` | Main CLI and web server |
-
 ## Architecture
 
 ### Core Files
@@ -73,17 +67,26 @@ journalctl --user -u claudeman-web -f
 | `src/session.ts` | PTY wrapper: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
+| `src/state-store.ts` | State persistence to `~/.claudeman/state.json` |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos |
+| `src/ralph-loop.ts` | Autonomous task execution loop (polls queue, assigns tasks) |
+| `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` plugin config |
+| `src/task.ts` | Task model for prompt execution |
+| `src/task-queue.ts` | Priority queue for tasks with dependencies |
+| `src/task-tracker.ts` | Background task tracker for subagent detection |
 | `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
 | `src/run-summary.ts` | Timeline events for "what happened while away" |
 | `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
+| `src/ai-plan-checker.ts` | AI-powered plan completion checker |
 | `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
 | `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
 | `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
+| `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
 | `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
+| `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
 | `src/types.ts` | All TypeScript interfaces |
@@ -275,3 +278,11 @@ When adding new event listeners or timers:
 **Frontend**: Store drag/resize handlers on elements, clean up in `close*()` functions. SSE reconnect calls `handleInit()` which resets state.
 
 Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
+
+## Common Workflows
+
+**Investigating a bug**: Start dev server (`npx tsx src/index.ts web`), reproduce in browser, check terminal output and `~/.claudeman/state.json` for clues.
+
+**Adding a new API endpoint**: Define types in `types.ts`, add route in `server.ts:buildServer()`, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
+
+**Modifying respawn behavior**: Study `docs/respawn-state-machine.md` first. The state machine is in `respawn-controller.ts`. Use MockSession from `test/respawn-test-utils.ts` for testing.
