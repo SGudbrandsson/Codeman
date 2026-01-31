@@ -179,6 +179,156 @@ function getEventCoords(e) {
 }
 
 // ============================================================================
+// Mobile Keyboard Handler
+// ============================================================================
+
+/**
+ * KeyboardHandler - Detects virtual keyboard visibility and scrolls inputs into view.
+ * Uses visualViewport API (works on iOS Safari and Android Chrome).
+ * Sets CSS custom property --keyboard-height and toggles .keyboard-visible class.
+ */
+const KeyboardHandler = {
+  initialViewportHeight: null,
+  isKeyboardVisible: false,
+  keyboardHeight: 0,
+  resizeHandler: null,
+  scrollHandler: null,
+
+  /** Initialize keyboard detection */
+  init() {
+    // Only initialize on touch devices
+    if (!MobileDetection.isTouchDevice()) return;
+
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    // Store initial height (update on orientation change)
+    this.initialViewportHeight = vv.height;
+
+    // Create bound handlers for cleanup
+    this.resizeHandler = this.handleResize.bind(this);
+    this.scrollHandler = this.handleVisualViewportScroll.bind(this);
+
+    // Listen for visualViewport resize (keyboard open/close)
+    vv.addEventListener('resize', this.resizeHandler);
+    vv.addEventListener('scroll', this.scrollHandler);
+
+    // Update initial height on orientation change
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => {
+        if (window.visualViewport) {
+          this.initialViewportHeight = window.visualViewport.height;
+        }
+      }, 200);
+    });
+
+    // Focus event handling for scrolling inputs into view
+    document.addEventListener('focusin', this.handleFocusIn.bind(this));
+  },
+
+  /** Handle visualViewport resize - detect keyboard */
+  handleResize() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    const heightDiff = this.initialViewportHeight - vv.height;
+    const threshold = 150; // Minimum height difference to consider keyboard open
+
+    if (heightDiff > threshold) {
+      this.updateKeyboardState(true, heightDiff);
+    } else {
+      this.updateKeyboardState(false, 0);
+    }
+  },
+
+  /** Handle visualViewport scroll - keep fixed elements positioned on iOS */
+  handleVisualViewportScroll() {
+    const vv = window.visualViewport;
+    if (!vv || !this.isKeyboardVisible) return;
+
+    // Update CSS property for any elements that need to track viewport offset
+    document.documentElement.style.setProperty('--viewport-offset-top', `${vv.offsetTop}px`);
+  },
+
+  /** Update keyboard visibility state */
+  updateKeyboardState(visible, height) {
+    if (this.isKeyboardVisible === visible && this.keyboardHeight === height) return;
+
+    this.isKeyboardVisible = visible;
+    this.keyboardHeight = height;
+
+    // Update CSS custom property
+    document.documentElement.style.setProperty('--keyboard-height', `${height}px`);
+
+    // Toggle class for CSS targeting
+    document.body.classList.toggle('keyboard-visible', visible);
+
+    // Dispatch custom event for any listeners
+    window.dispatchEvent(new CustomEvent('keyboardchange', {
+      detail: { visible, height }
+    }));
+  },
+
+  /** Handle focus on input elements - scroll into view after keyboard appears */
+  handleFocusIn(e) {
+    const target = e.target;
+    if (!this.isInputElement(target)) return;
+
+    // Wait for keyboard to appear before scrolling
+    setTimeout(() => {
+      this.scrollInputIntoView(target);
+    }, 350);
+  },
+
+  /** Check if element is an input that triggers keyboard */
+  isInputElement(el) {
+    if (!el) return false;
+    const tagName = el.tagName?.toLowerCase();
+    return (
+      tagName === 'input' ||
+      tagName === 'textarea' ||
+      tagName === 'select' ||
+      el.isContentEditable
+    );
+  },
+
+  /** Scroll input into view above the keyboard */
+  scrollInputIntoView(input) {
+    const vv = window.visualViewport;
+
+    // Find scrollable container (modal-body or main viewport)
+    const modalBody = input.closest('.modal-body');
+    const scrollContainer = modalBody || document.scrollingElement || document.body;
+
+    if (vv) {
+      const rect = input.getBoundingClientRect();
+      const visibleHeight = vv.height;
+      const inputBottom = rect.bottom;
+      const inputTop = rect.top;
+
+      // If input is in bottom 40% of visible area or below it, scroll up
+      if (inputBottom > visibleHeight * 0.6 || inputTop > visibleHeight * 0.5) {
+        // For modal body, scroll within the modal
+        if (modalBody) {
+          const inputOffsetTop = input.offsetTop;
+          const targetScroll = inputOffsetTop - (visibleHeight * 0.3);
+          modalBody.scrollTo({
+            top: Math.max(0, targetScroll),
+            behavior: 'smooth'
+          });
+        } else {
+          // For page-level scroll
+          input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }
+    } else {
+      // Fallback for browsers without visualViewport
+      input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+};
+
+// ============================================================================
 // Accessibility: Focus Trap for Modals
 // ============================================================================
 
@@ -884,6 +1034,8 @@ class ClaudemanApp {
   init() {
     // Initialize mobile detection first (adds device classes to body)
     MobileDetection.init();
+    // Initialize keyboard handler for mobile input visibility
+    KeyboardHandler.init();
     this.initTerminal();
     this.loadFontSize();
     this.applyHeaderVisibilitySettings();

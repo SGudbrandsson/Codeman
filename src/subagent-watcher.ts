@@ -133,8 +133,9 @@ const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when ex
 const INTERNAL_AGENT_PATTERNS = [
   /^\[?SUGGESTION MODE/i,  // Claude Code's internal suggestion mode
   /^Suggest what user might/i,  // Suggestion mode prompt variant
-  /^aprompt$/i,  // Internal prompt agent
+  /aprompt/i,  // Internal prompt agent (anywhere in string)
   /^a\s?prompt/i,  // Variants of internal prompt agent
+  /^prompt$/i,  // Just "prompt"
 ];
 
 // Minimum description length - very short descriptions are likely internal or malformed

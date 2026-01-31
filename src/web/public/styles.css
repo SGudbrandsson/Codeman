@@ -7879,6 +7879,17 @@ kbd {
   .project-insights-panel {
     display: none;
   }
+
+  /* Tablet Keyboard Input Visibility */
+  input, textarea, select, [contenteditable] {
+    scroll-margin-bottom: 200px;
+    scroll-margin-top: 80px;
+  }
+
+  .keyboard-visible .modal-body {
+    max-height: calc(60vh - var(--keyboard-height) / 2);
+    overflow-y: auto;
+  }
 }
 
 /* ============================================================================
@@ -7957,6 +7968,7 @@ kbd {
   /* App container - prevent scrolling, strict layout */
   .app {
     overflow: hidden;
+    position: relative;
   }
 
   /* Ultra-compact session tabs */
@@ -8015,21 +8027,25 @@ kbd {
     height: 14px;
   }
 
-  /* Clean dark toolbar - simple black/gray with white text */
+  /* Clean dark toolbar - overlaps terminal to hide Claude's status/input */
   .toolbar {
+    position: absolute;
+    bottom: calc(30px + var(--safe-area-bottom));
+    left: 0;
+    right: 0;
     height: 40px;
     min-height: 40px;
     max-height: 40px;
     padding: 0.3rem 0.4rem;
     padding-left: calc(0.4rem + var(--safe-area-left));
     padding-right: calc(0.4rem + var(--safe-area-right));
-    padding-bottom: calc(0.3rem + var(--safe-area-bottom));
     flex-wrap: nowrap;
     gap: 0.3rem;
     align-items: center;
     justify-content: space-between;
     background: #111111;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 50;
   }
 
   /* Show case selector in center */
@@ -8389,11 +8405,55 @@ kbd {
     padding-right: var(--safe-area-right);
     padding-bottom: var(--safe-area-bottom);
   }
+
+  /* -------------------------------------------------------------------------
+     Mobile Keyboard Input Visibility
+     ------------------------------------------------------------------------- */
+
+  /* Scroll margin for inputs - ensures they scroll above keyboard */
+  input, textarea, select, [contenteditable] {
+    scroll-margin-bottom: 250px;
+    scroll-margin-top: 100px;
+  }
+
+  /* Modal adjustments when keyboard is visible */
+  .keyboard-visible .modal-content {
+    /* Don't take full height - resize with keyboard */
+    height: auto;
+    max-height: calc(100dvh - var(--keyboard-height) - var(--safe-area-top));
+    /* Anchor to top */
+    top: var(--safe-area-top);
+    bottom: auto;
+  }
+
+  .keyboard-visible .modal-body {
+    /* Limit modal body height when keyboard up - make room for header/footer */
+    max-height: calc(50dvh - var(--keyboard-height) / 3);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Ensure modal footer stays visible above keyboard */
+  .keyboard-visible .modal-footer,
+  .keyboard-visible .wizard-footer,
+  .keyboard-visible .form-actions {
+    padding-bottom: 0.5rem;
+  }
+
+  /* Smooth transition for keyboard appearance */
+  .modal-content {
+    transition: max-height 0.2s ease-out, top 0.2s ease-out;
+  }
 }
 
 /* ============================================================================
    Virtual Keyboard Handling
    ============================================================================ */
+:root {
+  --keyboard-height: 0px;
+  --viewport-offset-top: 0px;
+}
+
 .keyboard-visible .toolbar {
   display: none;
 }
