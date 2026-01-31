@@ -7886,7 +7886,7 @@ kbd {
     scroll-margin-top: 80px;
   }
 
-  .keyboard-visible .modal-body {
+  .keyboard-visible .modal.active .modal-body {
     max-height: calc(60vh - var(--keyboard-height) / 2);
     overflow-y: auto;
   }
@@ -8417,15 +8417,15 @@ kbd {
   }
 
   /* Modal adjustments when keyboard is visible */
-  .keyboard-visible .modal-content {
+  .keyboard-visible .modal.active .modal-content {
     /* Don't take full height - resize with keyboard */
     height: auto;
-    max-height: calc(100dvh - var(--keyboard-height));
+    max-height: calc(100vh - var(--keyboard-height));
   }
 
-  .keyboard-visible .modal-body {
+  .keyboard-visible .modal.active .modal-body {
     /* Limit modal body height when keyboard up - make room for header/footer */
-    max-height: calc(50dvh - var(--keyboard-height) / 3);
+    max-height: calc(50vh - var(--keyboard-height) / 3);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -8436,7 +8436,6 @@ kbd {
    ============================================================================ */
 :root {
   --keyboard-height: 0px;
-  --viewport-offset-top: 0px;
 }
 
 .keyboard-visible .toolbar {

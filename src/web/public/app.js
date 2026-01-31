@@ -192,7 +192,6 @@ const KeyboardHandler = {
   isKeyboardVisible: false,
   keyboardHeight: 0,
   resizeHandler: null,
-  scrollHandler: null,
 
   /** Initialize keyboard detection */
   init() {
@@ -202,16 +201,16 @@ const KeyboardHandler = {
     const vv = window.visualViewport;
     if (!vv) return;
 
-    // Store initial height (update on orientation change)
-    this.initialViewportHeight = vv.height;
+    // Store initial height after a brief delay to let viewport stabilize
+    setTimeout(() => {
+      this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
+    }, 500);
 
-    // Create bound handlers for cleanup
+    // Create bound handler for cleanup
     this.resizeHandler = this.handleResize.bind(this);
-    this.scrollHandler = this.handleVisualViewportScroll.bind(this);
 
     // Listen for visualViewport resize (keyboard open/close)
     vv.addEventListener('resize', this.resizeHandler);
-    vv.addEventListener('scroll', this.scrollHandler);
 
     // Update initial height on orientation change
     window.addEventListener('orientationchange', () => {
@@ -219,7 +218,15 @@ const KeyboardHandler = {
         if (window.visualViewport) {
           this.initialViewportHeight = window.visualViewport.height;
         }
-      }, 200);
+      }, 300);
+    });
+
+    // Also update on regular resize (address bar hide/show)
+    window.addEventListener('resize', () => {
+      // Only update if keyboard is NOT visible (address bar change)
+      if (!this.isKeyboardVisible && window.visualViewport) {
+        this.initialViewportHeight = window.visualViewport.height;
+      }
     });
 
     // Focus event handling for scrolling inputs into view
@@ -244,15 +251,6 @@ const KeyboardHandler = {
     }
   },
 
-  /** Handle visualViewport scroll - keep fixed elements positioned on iOS */
-  handleVisualViewportScroll() {
-    const vv = window.visualViewport;
-    if (!vv || !this.isKeyboardVisible) return;
-
-    // Update CSS property for any elements that need to track viewport offset
-    document.documentElement.style.setProperty('--viewport-offset-top', `${vv.offsetTop}px`);
-  },
-
   /** Update keyboard visibility state */
   updateKeyboardState(visible, height) {
     if (this.isKeyboardVisible === visible && this.keyboardHeight === height) return;
@@ -260,13 +258,8 @@ const KeyboardHandler = {
     this.isKeyboardVisible = visible;
     this.keyboardHeight = height;
 
-    // Update CSS custom properties
+    // Update CSS custom property
     document.documentElement.style.setProperty('--keyboard-height', `${height}px`);
-
-    // Reset viewport offset when keyboard closes
-    if (!visible) {
-      document.documentElement.style.setProperty('--viewport-offset-top', '0px');
-    }
 
     // Toggle class for CSS targeting
     document.body.classList.toggle('keyboard-visible', visible);
