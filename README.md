@@ -385,6 +385,47 @@ sc -h           # Help
 
 ---
 
+## Mobile UI
+
+Claudeman's web interface is fully optimized for mobile browsers (iPhone, Android). Access the dashboard from any device on your network using `--https` mode.
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Fixed Toolbar** | Run Claude / Run Shell buttons fixed at bottom, above safe area |
+| **Smart Keyboard Handling** | Toolbar and terminal content move up when virtual keyboard appears |
+| **Swipe Navigation** | Swipe left/right on terminal to switch between sessions |
+| **Quick Commands** | Keyboard accessory bar with /init, /clear, /compact buttons |
+| **Confirmation Dialogs** | Accidental taps on commands prompt for confirmation |
+| **Touch Targets** | 44px minimum touch targets per iOS Human Interface Guidelines |
+
+### Keyboard Accessory Bar
+
+When the virtual keyboard is open, a quick-action bar appears above the toolbar:
+
+| Button | Action | Confirmation |
+|--------|--------|--------------|
+| `/init` | Send /init to reinitialize context | "Run /init command?" |
+| `/clear` | Send /clear to clear conversation | "Clear conversation history?" |
+| `/compact` | Send /compact to summarize context | "Compact context?" |
+| `⌄` | Dismiss keyboard | — |
+
+### Swipe Gestures
+
+- **Swipe left** → Next session
+- **Swipe right** → Previous session
+
+Gestures require 80px minimum horizontal movement within 300ms.
+
+### Mobile-Only Simplifications
+
+- Case selector hidden (use desktop for case management)
+- Monitor and subagent panels hidden by default
+- Full-screen modals for settings
+
+---
+
 ## API
 
 ### Sessions
