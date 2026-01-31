@@ -2503,12 +2503,17 @@ class ClaudemanApp {
   }
 
   handleInit(data) {
-    // Update version display
+    // Update version displays (header and toolbar)
     if (data.version) {
       const versionEl = this.$('versionDisplay');
+      const headerVersionEl = this.$('headerVersion');
       if (versionEl) {
         versionEl.textContent = `v${data.version}`;
         versionEl.title = `Claudeman v${data.version}`;
+      }
+      if (headerVersionEl) {
+        headerVersionEl.textContent = `v${data.version}`;
+        headerVersionEl.title = `Claudeman v${data.version}`;
       }
     }
 
