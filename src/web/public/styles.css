@@ -8044,16 +8044,26 @@ kbd {
     display: none;
   }
 
-  /* Only show close/gear buttons on active tab - properly sized for mobile */
-  .session-tab.active .tab-close,
+  /* Close button on active tab - larger for easy tapping */
+  .session-tab.active .tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    padding: 0.2rem 0.3rem;
+    min-width: 24px;
+    height: 24px;
+  }
+
+  /* Gear icon on active tab - smaller, less prominent */
   .session-tab.active .tab-gear {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.7rem;
-    padding: 0.15rem 0.25rem;
-    min-width: 20px;
-    height: 20px;
+    font-size: 0.55rem;
+    padding: 0.1rem 0.2rem;
+    min-width: 16px;
+    height: 16px;
   }
 
   /* Clean dark toolbar - positioned near bottom */
