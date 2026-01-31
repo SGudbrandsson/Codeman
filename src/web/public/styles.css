@@ -8057,16 +8057,16 @@ kbd {
     opacity: 0.6;
   }
 
-  /* Close button on active tab - prominent for easy tapping */
+  /* Close button on active tab - large for easy tapping */
   .session-tab.active .tab-close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.9rem;
+    font-size: 1.1rem;
     line-height: 1;
-    width: 18px;
-    height: 16px;
-    margin-left: 6px;
+    width: 20px;
+    height: 18px;
+    margin-left: 2px;
   }
 
   /* Clean dark toolbar - positioned near bottom */
