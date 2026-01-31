@@ -7879,17 +7879,6 @@ kbd {
   .project-insights-panel {
     display: none;
   }
-
-  /* Tablet Keyboard Input Visibility */
-  input, textarea, select, [contenteditable] {
-    scroll-margin-bottom: 200px;
-    scroll-margin-top: 80px;
-  }
-
-  .keyboard-visible .modal.active .modal-body {
-    max-height: calc(60vh - var(--keyboard-height) / 2);
-    overflow-y: auto;
-  }
 }
 
 /* ============================================================================
@@ -8406,51 +8395,13 @@ kbd {
     padding-bottom: var(--safe-area-bottom);
   }
 
-  /* -------------------------------------------------------------------------
-     Mobile Keyboard Input Visibility
-     ------------------------------------------------------------------------- */
-
-  /* Scroll margin for inputs - ensures they scroll above keyboard */
-  input, textarea, select, [contenteditable] {
-    scroll-margin-bottom: 250px;
-    scroll-margin-top: 100px;
-  }
-
-  /* Modal adjustments when keyboard is visible */
-  .keyboard-visible .modal.active .modal-content {
-    /* Don't take full height - resize with keyboard */
-    height: auto;
-    max-height: calc(100vh - var(--keyboard-height));
-  }
-
-  .keyboard-visible .modal.active .modal-body {
-    /* Limit modal body height when keyboard up - make room for header/footer */
-    max-height: calc(50vh - var(--keyboard-height) / 3);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+  /* Scroll margin for inputs - helps with keyboard visibility */
+  input, textarea, [contenteditable] {
+    scroll-margin-bottom: 200px;
+    scroll-margin-top: 80px;
   }
 }
 
-/* ============================================================================
-   Virtual Keyboard Handling
-   ============================================================================ */
-:root {
-  --keyboard-height: 0px;
-}
-
-.keyboard-visible .toolbar {
-  display: none;
-}
-
-.keyboard-visible .monitor-panel,
-.keyboard-visible .subagents-panel {
-  display: none;
-}
-
-/* Ensure terminal fills space when keyboard is visible */
-.keyboard-visible .main {
-  height: 100%;
-}
 
 /* ============================================================================
    iOS Safari Specific Fixes

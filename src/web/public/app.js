@@ -183,169 +183,66 @@ function getEventCoords(e) {
 // ============================================================================
 
 /**
- * KeyboardHandler - Detects virtual keyboard visibility and scrolls inputs into view.
- * Uses visualViewport API (works on iOS Safari and Android Chrome).
- * Sets CSS custom property --keyboard-height and toggles .keyboard-visible class.
+ * KeyboardHandler - Simple handler to scroll inputs into view when keyboard appears.
+ * Uses focusin event and scrollIntoView - keeps it simple and reliable.
  */
 const KeyboardHandler = {
-  initialViewportHeight: null,
-  isKeyboardVisible: false,
-  keyboardHeight: 0,
-  resizeHandler: null,
-
-  /** Initialize keyboard detection */
+  /** Initialize keyboard handling */
   init() {
     // Only initialize on touch devices
     if (!MobileDetection.isTouchDevice()) return;
 
-    const vv = window.visualViewport;
-    if (!vv) return;
+    // Simple focus handler - scroll input into view after keyboard appears
+    document.addEventListener('focusin', (e) => {
+      const target = e.target;
+      if (!this.isInputElement(target)) return;
 
-    // Store initial height after a brief delay to let viewport stabilize
-    setTimeout(() => {
-      this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
-    }, 500);
-
-    // Create bound handler for cleanup
-    this.resizeHandler = this.handleResize.bind(this);
-
-    // Listen for visualViewport resize (keyboard open/close)
-    vv.addEventListener('resize', this.resizeHandler);
-
-    // Update initial height on orientation change
-    window.addEventListener('orientationchange', () => {
+      // Wait for keyboard animation, then scroll input into view
       setTimeout(() => {
-        if (window.visualViewport) {
-          this.initialViewportHeight = window.visualViewport.height;
-        }
-      }, 300);
+        this.scrollInputIntoView(target);
+      }, 400);
     });
-
-    // Also update on regular resize (address bar hide/show)
-    window.addEventListener('resize', () => {
-      // Only update if keyboard is NOT visible (address bar change)
-      if (!this.isKeyboardVisible && window.visualViewport) {
-        this.initialViewportHeight = window.visualViewport.height;
-      }
-    });
-
-    // Focus event handling for scrolling inputs into view
-    document.addEventListener('focusin', this.handleFocusIn.bind(this));
-
-    // Focusout handler to help reset state when leaving all inputs
-    document.addEventListener('focusout', this.handleFocusOut.bind(this));
-  },
-
-  /** Handle visualViewport resize - detect keyboard */
-  handleResize() {
-    const vv = window.visualViewport;
-    if (!vv) return;
-
-    const heightDiff = this.initialViewportHeight - vv.height;
-    const threshold = 150; // Minimum height difference to consider keyboard open
-
-    if (heightDiff > threshold) {
-      this.updateKeyboardState(true, heightDiff);
-    } else {
-      this.updateKeyboardState(false, 0);
-    }
-  },
-
-  /** Update keyboard visibility state */
-  updateKeyboardState(visible, height) {
-    if (this.isKeyboardVisible === visible && this.keyboardHeight === height) return;
-
-    this.isKeyboardVisible = visible;
-    this.keyboardHeight = height;
-
-    // Update CSS custom property
-    document.documentElement.style.setProperty('--keyboard-height', `${height}px`);
-
-    // Toggle class for CSS targeting
-    document.body.classList.toggle('keyboard-visible', visible);
-
-    // Dispatch custom event for any listeners
-    window.dispatchEvent(new CustomEvent('keyboardchange', {
-      detail: { visible, height }
-    }));
-  },
-
-  /** Handle focus on input elements - scroll into view after keyboard appears */
-  handleFocusIn(e) {
-    const target = e.target;
-    if (!this.isInputElement(target)) return;
-
-    // Wait for keyboard to appear before scrolling
-    setTimeout(() => {
-      this.scrollInputIntoView(target);
-    }, 350);
-  },
-
-  /** Handle focus leaving input elements - help reset keyboard state */
-  handleFocusOut(e) {
-    if (!this.isInputElement(e.target)) return;
-
-    // Small delay to check if focus moved to another input
-    setTimeout(() => {
-      const activeEl = document.activeElement;
-      // If focus left all inputs, ensure keyboard state is reset
-      if (!this.isInputElement(activeEl)) {
-        // The visualViewport resize event should handle this,
-        // but we reset just in case on iOS where it can be flaky
-        if (this.isKeyboardVisible && window.visualViewport) {
-          const vv = window.visualViewport;
-          const heightDiff = this.initialViewportHeight - vv.height;
-          if (heightDiff < 100) {
-            this.updateKeyboardState(false, 0);
-          }
-        }
-      }
-    }, 300);
   },
 
   /** Check if element is an input that triggers keyboard */
   isInputElement(el) {
     if (!el) return false;
     const tagName = el.tagName?.toLowerCase();
+    // Exclude type=range, type=checkbox, type=radio (don't trigger keyboard)
+    if (tagName === 'input') {
+      const type = el.type?.toLowerCase();
+      if (type === 'checkbox' || type === 'radio' || type === 'range' || type === 'file') {
+        return false;
+      }
+    }
     return (
       tagName === 'input' ||
       tagName === 'textarea' ||
-      tagName === 'select' ||
       el.isContentEditable
     );
   },
 
   /** Scroll input into view above the keyboard */
   scrollInputIntoView(input) {
-    const vv = window.visualViewport;
+    // Check if input is still focused (user might have tapped away)
+    if (document.activeElement !== input) return;
 
-    // Find scrollable container (modal-body or main viewport)
-    const modalBody = input.closest('.modal-body');
-    const scrollContainer = modalBody || document.scrollingElement || document.body;
+    // Find if we're in a modal
+    const modal = input.closest('.modal.active');
+    const modalBody = modal?.querySelector('.modal-body');
 
-    if (vv) {
-      const rect = input.getBoundingClientRect();
-      const visibleHeight = vv.height;
-      const inputBottom = rect.bottom;
-      const inputTop = rect.top;
+    if (modalBody) {
+      // For modals - scroll within the modal body
+      const inputRect = input.getBoundingClientRect();
+      const modalRect = modalBody.getBoundingClientRect();
 
-      // If input is in bottom 40% of visible area or below it, scroll up
-      if (inputBottom > visibleHeight * 0.6 || inputTop > visibleHeight * 0.5) {
-        // For modal body, scroll within the modal
-        if (modalBody) {
-          const inputOffsetTop = input.offsetTop;
-          const targetScroll = inputOffsetTop - (visibleHeight * 0.3);
-          modalBody.scrollTo({
-            top: Math.max(0, targetScroll),
-            behavior: 'smooth'
-          });
-        } else {
-          // For page-level scroll
-          input.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        }
+      // If input is below middle of modal, scroll it up
+      if (inputRect.top > modalRect.top + modalRect.height * 0.4) {
+        const scrollAmount = inputRect.top - modalRect.top - 100;
+        modalBody.scrollBy({ top: scrollAmount, behavior: 'smooth' });
       }
     } else {
-      // Fallback for browsers without visualViewport
+      // For page-level - use scrollIntoView
       input.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   }
