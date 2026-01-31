@@ -7790,13 +7790,36 @@ kbd {
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
 @media (max-width: 768px) and (min-width: 430px) {
-  /* Compact header for tablet - includes safe area padding */
+  /* Compact header for tablet - fixed at top, includes safe area padding */
   .header {
-    min-height: 44px;
-    max-height: 64px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: 48px;
+    max-height: 48px;
     padding: 0.35rem 0.5rem;
     padding-left: calc(0.5rem + var(--safe-area-left));
     padding-right: calc(0.5rem + var(--safe-area-right));
+    background: #0a0a0a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 200;
+  }
+
+  /* iOS safe area adjustment for fixed header - header extends into notch area */
+  .ios-device .header {
+    padding-top: calc(0.35rem + var(--safe-area-top));
+    min-height: calc(48px + var(--safe-area-top));
+    max-height: calc(48px + var(--safe-area-top));
+  }
+
+  /* Add top margin to main content to account for fixed header */
+  .main {
+    margin-top: 48px;
+  }
+
+  .ios-device .main {
+    margin-top: calc(48px + var(--safe-area-top));
   }
 
   /* Hide some header elements on tablet for more space */
@@ -7885,11 +7908,6 @@ kbd {
    Phone Breakpoint (<430px)
    ============================================================================ */
 @media (max-width: 430px) {
-  /* iOS safe area - only top padding on app, sides go to header/toolbar */
-  .ios-device .app {
-    padding-top: var(--safe-area-top);
-  }
-
   /* Hide header brand on phones */
   .header-brand {
     display: none;
@@ -7910,18 +7928,38 @@ kbd {
     display: none;
   }
 
-  /* Ultra-compact header for mobile */
+  /* Ultra-compact header for mobile - fixed at top */
   .header {
-    min-height: 32px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: 36px;
     max-height: 36px;
     padding: 0.15rem 0.3rem;
     padding-left: calc(0.3rem + var(--safe-area-left));
     padding-right: calc(0.3rem + var(--safe-area-right));
     gap: 0.15rem;
-    flex-shrink: 0;
     overflow: hidden;
     background: #0a0a0a;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 200;
+  }
+
+  /* iOS safe area adjustment for fixed header - header extends into notch area */
+  .ios-device .header {
+    padding-top: calc(0.15rem + var(--safe-area-top));
+    min-height: calc(36px + var(--safe-area-top));
+    max-height: calc(36px + var(--safe-area-top));
+  }
+
+  /* Add top margin to main content to account for fixed header */
+  .main {
+    margin-top: 36px;
+  }
+
+  .ios-device .main {
+    margin-top: calc(36px + var(--safe-area-top));
   }
 
   .header-right {
