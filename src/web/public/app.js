@@ -224,6 +224,9 @@ const KeyboardHandler = {
 
     // Focus event handling for scrolling inputs into view
     document.addEventListener('focusin', this.handleFocusIn.bind(this));
+
+    // Focusout handler to help reset state when leaving all inputs
+    document.addEventListener('focusout', this.handleFocusOut.bind(this));
   },
 
   /** Handle visualViewport resize - detect keyboard */
@@ -257,8 +260,13 @@ const KeyboardHandler = {
     this.isKeyboardVisible = visible;
     this.keyboardHeight = height;
 
-    // Update CSS custom property
+    // Update CSS custom properties
     document.documentElement.style.setProperty('--keyboard-height', `${height}px`);
+
+    // Reset viewport offset when keyboard closes
+    if (!visible) {
+      document.documentElement.style.setProperty('--viewport-offset-top', '0px');
+    }
 
     // Toggle class for CSS targeting
     document.body.classList.toggle('keyboard-visible', visible);
@@ -278,6 +286,28 @@ const KeyboardHandler = {
     setTimeout(() => {
       this.scrollInputIntoView(target);
     }, 350);
+  },
+
+  /** Handle focus leaving input elements - help reset keyboard state */
+  handleFocusOut(e) {
+    if (!this.isInputElement(e.target)) return;
+
+    // Small delay to check if focus moved to another input
+    setTimeout(() => {
+      const activeEl = document.activeElement;
+      // If focus left all inputs, ensure keyboard state is reset
+      if (!this.isInputElement(activeEl)) {
+        // The visualViewport resize event should handle this,
+        // but we reset just in case on iOS where it can be flaky
+        if (this.isKeyboardVisible && window.visualViewport) {
+          const vv = window.visualViewport;
+          const heightDiff = this.initialViewportHeight - vv.height;
+          if (heightDiff < 100) {
+            this.updateKeyboardState(false, 0);
+          }
+        }
+      }
+    }, 300);
   },
 
   /** Check if element is an input that triggers keyboard */

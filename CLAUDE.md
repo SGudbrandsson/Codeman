@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1451 (must match `package.json`)
+**Version**: 0.1452 (must match `package.json`)
 
 ## Project Overview
 
@@ -194,7 +194,11 @@ screen -r <name>                    # Attach (Ctrl+A D to detach)
 curl localhost:3000/api/sessions    # Check sessions
 curl localhost:3000/api/status | jq # Full app state
 cat ~/.claudeman/state.json | jq    # View persisted state
+curl localhost:3000/api/subagents   # List background agents
+curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 ```
+
+**Avoid port 3000 during E2E tests** - tests use ports 3183-3190 (see `test/e2e/e2e.config.ts`).
 
 ## Performance Constraints
 

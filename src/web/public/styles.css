@@ -8420,10 +8420,7 @@ kbd {
   .keyboard-visible .modal-content {
     /* Don't take full height - resize with keyboard */
     height: auto;
-    max-height: calc(100dvh - var(--keyboard-height) - var(--safe-area-top));
-    /* Anchor to top */
-    top: var(--safe-area-top);
-    bottom: auto;
+    max-height: calc(100dvh - var(--keyboard-height));
   }
 
   .keyboard-visible .modal-body {
@@ -8431,18 +8428,6 @@ kbd {
     max-height: calc(50dvh - var(--keyboard-height) / 3);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-  }
-
-  /* Ensure modal footer stays visible above keyboard */
-  .keyboard-visible .modal-footer,
-  .keyboard-visible .wizard-footer,
-  .keyboard-visible .form-actions {
-    padding-bottom: 0.5rem;
-  }
-
-  /* Smooth transition for keyboard appearance */
-  .modal-content {
-    transition: max-height 0.2s ease-out, top 0.2s ease-out;
   }
 }
 
