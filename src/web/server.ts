@@ -583,10 +583,12 @@ export class WebServer extends EventEmitter {
       this.sendSSE(reply, 'init', this.getLightState());
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
-      try {
-        reply.raw.write(SSE_PADDING);
-      } catch {
-        /* client gone */
+      if (this.tunnelManager.getUrl()) {
+        try {
+          reply.raw.write(SSE_PADDING);
+        } catch {
+          /* client gone */
+        }
       }
 
       req.raw.on('close', () => {
@@ -1870,11 +1872,12 @@ export class WebServer extends EventEmitter {
       this.cachedSessionsList = null;
     }
     // Performance optimization: serialize JSON once for all clients.
-    // Append padding to flush Cloudflare tunnel buffers for all non-terminal events.
-    // Terminal data is high-volume and already exceeds buffer thresholds naturally.
+    // Only append Cloudflare tunnel padding when tunnel is actually active —
+    // direct/Tailscale clients don't need 8KB padding on every event.
+    const padding = this.tunnelManager.getUrl() ? SSE_PADDING : '';
     let message: string;
     try {
-      message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` + SSE_PADDING;
+      message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` + padding;
     } catch (err) {
       // Handle circular references or non-serializable values
       console.error(`[Server] Failed to serialize SSE event "${event}":`, err);
@@ -2144,9 +2147,11 @@ export class WebServer extends EventEmitter {
         if (!socket || socket.destroyed || !socket.writable) {
           deadClients.push(client);
         } else {
-          // Send padded SSE comment as keep-alive — the padding flushes
-          // Cloudflare tunnel buffers so subsequent events arrive promptly.
-          client.raw.write(':keepalive\n' + SSE_PADDING);
+          // Send SSE comment as keep-alive. Only add padding when tunnel is
+          // active — it flushes Cloudflare proxy buffers but wastes bandwidth
+          // for direct/Tailscale connections.
+          const ka = this.tunnelManager.getUrl() ? ':keepalive\n' + SSE_PADDING : ':keepalive\n\n';
+          client.raw.write(ka);
         }
       } catch {
         // Error accessing socket means client is dead

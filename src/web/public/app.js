@@ -2150,9 +2150,9 @@ class CodemanApp {
         this.renderSubagentDetail();
       }
       this.renderSubagentPanel();
-      // Update floating window
+      // Update floating window (debounced — tool_call events fire rapidly)
       if (this.subagentWindows.has(data.agentId)) {
-        this.renderSubagentWindowContent(data.agentId);
+        this.scheduleSubagentWindowRender(data.agentId);
       }
     });
 
@@ -2165,9 +2165,9 @@ class CodemanApp {
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
       }
-      // Update floating window
+      // Update floating window (debounced)
       if (this.subagentWindows.has(data.agentId)) {
-        this.renderSubagentWindowContent(data.agentId);
+        this.scheduleSubagentWindowRender(data.agentId);
       }
     });
 
@@ -2180,9 +2180,9 @@ class CodemanApp {
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
       }
-      // Update floating window
+      // Update floating window (debounced)
       if (this.subagentWindows.has(data.agentId)) {
-        this.renderSubagentWindowContent(data.agentId);
+        this.scheduleSubagentWindowRender(data.agentId);
       }
     });
 
@@ -2208,9 +2208,9 @@ class CodemanApp {
       if (this.activeSubagentId === data.agentId) {
         this.renderSubagentDetail();
       }
-      // Update floating window
+      // Update floating window (debounced)
       if (this.subagentWindows.has(data.agentId)) {
-        this.renderSubagentWindowContent(data.agentId);
+        this.scheduleSubagentWindowRender(data.agentId);
       }
     });
 
@@ -6054,6 +6054,24 @@ class CodemanApp {
       display.textContent = '';
       display.onclick = null;
     }
+    // Upload URL row
+    const uploadRow = document.getElementById('tunnelUploadUrlRow');
+    const uploadDisplay = document.getElementById('tunnelUploadUrlDisplay');
+    if (!uploadRow || !uploadDisplay) return;
+    if (url) {
+      const uploadUrl = url + '/upload.html';
+      uploadRow.style.display = '';
+      uploadDisplay.textContent = uploadUrl;
+      uploadDisplay.onclick = () => {
+        navigator.clipboard.writeText(uploadUrl).then(() => {
+          this.showToast('Upload URL copied', 'success');
+        });
+      };
+    } else {
+      uploadRow.style.display = 'none';
+      uploadDisplay.textContent = '';
+      uploadDisplay.onclick = null;
+    }
   }
 
   showTunnelQR() {
@@ -9212,6 +9230,19 @@ class CodemanApp {
     }
   }
 
+
+  // Debounced wrapper — coalesces rapid subagent events (tool_call, progress,
+  // message) into a single DOM update per 100ms per agent window.
+  scheduleSubagentWindowRender(agentId) {
+    if (!this._subagentWindowRenderTimeouts) this._subagentWindowRenderTimeouts = new Map();
+    if (this._subagentWindowRenderTimeouts.has(agentId)) {
+      clearTimeout(this._subagentWindowRenderTimeouts.get(agentId));
+    }
+    this._subagentWindowRenderTimeouts.set(agentId, setTimeout(() => {
+      this._subagentWindowRenderTimeouts.delete(agentId);
+      scheduleBackground(() => this.renderSubagentWindowContent(agentId));
+    }, 100));
+  }
 
   renderSubagentWindowContent(agentId) {
     // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
