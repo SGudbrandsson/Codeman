@@ -1,3 +1,78 @@
+/**
+ * @fileoverview Core UI controller for Codeman — tab-based terminal manager with xterm.js.
+ *
+ * This is the main application module (~11,500 lines). It defines the CodemanApp class which
+ * manages the entire frontend: terminal rendering, SSE event handling, session lifecycle,
+ * settings UI, and all panel systems. Additional methods are mixed in from api-client.js,
+ * ralph-wizard.js, and subagent-windows.js via Object.assign on CodemanApp.prototype.
+ *
+ * ═══ Major Sections ═══
+ *
+ *   SSE Handler Map (line ~80)        — Event-to-method routing table
+ *   CodemanApp Class (line ~189)      — Constructor and global state
+ *   Pending Hooks (line ~368)         — Hook state machine for tab alerts
+ *   Init (line ~408)                  — App bootstrap and mobile setup
+ *   Terminal Setup (line ~483)        — xterm.js config and input handling
+ *   Terminal Rendering (line ~1053)   — batchTerminalWrite, flushPendingWrites, chunkedTerminalWrite
+ *   Event Listeners (line ~1390)      — Keyboard shortcuts, resize, beforeunload
+ *   SSE Connection (line ~1474)       — connectSSE with exponential backoff (1-30s)
+ *   SSE Event Handlers (line ~1570)   — ~60 handler methods (_onSessionCreated, _onRespawnStateChanged, etc.)
+ *   Connection Status (line ~2553)    — Online detection, handleInit (full state sync on reconnect)
+ *   Session Tabs (line ~2911)         — Tab rendering, selection, drag-and-drop reordering
+ *   Tab Order & Drag-and-Drop (~3143) — Persistent tab ordering with drag reorder
+ *   Session Lifecycle (line ~3268)    — Select, close, navigate sessions
+ *   Navigation (line ~3673)           — goHome, Ralph wizard stub
+ *   Quick Start (line ~3709)          — Case loading, session spawning (Claude, Shell, OpenCode)
+ *   Respawn Banner (line ~4205)       — Respawn state display, countdown timers, action log
+ *   Kill Sessions (line ~4640)        — Kill active/all sessions
+ *   Terminal Controls (line ~4678)    — Clear, resize, copy, font size, sendInput
+ *   Timer / Tokens (line ~4833)       — Session timer, token/cost display
+ *   Session Options Modal (line ~4939) — Per-session settings, respawn config, color picker
+ *   Respawn Presets (line ~5188)      — Preset CRUD, load/save/delete
+ *   Run Summary Modal (line ~5506)    — Timeline events, filtering, export (JSON/Markdown)
+ *   Session Options Tabs (line ~5762) — Ralph config tab within session options
+ *   Web Push (line ~5882)             — Service worker registration, push subscribe/unsubscribe
+ *   App Settings Modal (line ~6024)   — Global settings, tunnel management, QR auth, voice config
+ *   Session Lifecycle Log (line ~6536) — JSONL audit log viewer
+ *   Visibility Settings (line ~6859)  — Header/panel visibility, device-specific defaults
+ *   Persistent Parent Assoc (line ~7218) — Parent session tracking for subagent windows
+ *   Help Modal (line ~7326)           — Keyboard shortcuts help
+ *   Token Statistics (line ~7363)     — Aggregate token/cost stats across sessions
+ *   Monitor Panel (line ~7490)        — Mux sessions + background tasks, detachable panel
+ *   Subagents Panel (line ~7614)      — Detachable subagent list panel
+ *   Ralph Panel (line ~7799)          — Ralph Loop status, @fix_plan.md integration
+ *   Plan Versioning (line ~8638)      — Plan checkpoint/rollback/diff UI
+ *   Subagent Panel (line ~8780)       — Agent discovery, window open/close, connection lines
+ *   Subagent Parent Tracking (~9101)  — Tab-based agent grouping
+ *   Agent Teams (line ~9595)          — Team tasks panel, teammate badges
+ *   Project Insights (line ~9995)     — Bash tool tracking with clickable file paths
+ *   File Browser (line ~10310)        — Directory tree panel with file preview
+ *   Log Viewer (line ~10619)          — Floating file streamer windows (tail -f)
+ *   Image Popups (line ~10768)        — Auto-popup windows for detected screenshots
+ *   Mux Sessions (line ~10909)        — tmux session list in monitor panel
+ *   Case Settings (line ~10986)       — Case CRUD and link management
+ *   Mobile Case Picker (line ~11221)  — Touch-friendly case selection modal
+ *   Plan Wizard Agents (line ~11480)  — Plan orchestrator subagent display in monitor
+ *   Toast (line ~11566)               — Toast notification popups
+ *   System Stats (line ~11618)        — CPU/memory polling display
+ *   Module Init (line ~11696)         — localStorage migration and app start
+ *
+ * After the class: localStorage migration (claudeman-* → codeman-*), app instantiation,
+ * and window.app / window.MobileDetection exports.
+ *
+ * @class CodemanApp
+ * @globals {CodemanApp} app - Singleton instance (also on window.app)
+ *
+ * @dependency constants.js (SSE_EVENTS, timing constants, escapeHtml, extractSyncSegments, DEC sync markers)
+ * @dependency mobile-handlers.js (MobileDetection, KeyboardHandler, SwipeHandler)
+ * @dependency voice-input.js (VoiceInput, DeepgramProvider)
+ * @dependency notification-manager.js (NotificationManager class)
+ * @dependency keyboard-accessory.js (KeyboardAccessoryBar, FocusTrap)
+ * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
+ * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
+ * @loadorder 6 of 9 — loaded after keyboard-accessory.js, before ralph-wizard.js
+ */
+
 // Codeman App - Tab-based Terminal UI
 // Constants, utilities, and escapeHtml() are in constants.js (loaded before this file)
 // MobileDetection, KeyboardHandler, SwipeHandler are in mobile-handlers.js
@@ -5,6 +80,118 @@
 
 
 
+
+// ═══════════════════════════════════════════════════════════════
+// SSE Handler Map — event-to-method routing table
+// ═══════════════════════════════════════════════════════════════
+// connectSSE() iterates this array to register all listeners in a single loop.
+// Omitted no-op events (registered by server but unused in UI):
+//   respawn:stepSent, respawn:aiCheckStarted, respawn:aiCheckCompleted,
+//   respawn:aiCheckFailed, respawn:aiCheckCooldown
+const _SSE_HANDLER_MAP = [
+  // Core
+  [SSE_EVENTS.INIT, '_onInit'],
+
+  // Session lifecycle
+  [SSE_EVENTS.SESSION_CREATED, '_onSessionCreated'],
+  [SSE_EVENTS.SESSION_UPDATED, '_onSessionUpdated'],
+  [SSE_EVENTS.SESSION_DELETED, '_onSessionDeleted'],
+  [SSE_EVENTS.SESSION_TERMINAL, '_onSessionTerminal'],
+  [SSE_EVENTS.SESSION_NEEDS_REFRESH, '_onSessionNeedsRefresh'],
+  [SSE_EVENTS.SESSION_CLEAR_TERMINAL, '_onSessionClearTerminal'],
+  [SSE_EVENTS.SESSION_COMPLETION, '_onSessionCompletion'],
+  [SSE_EVENTS.SESSION_ERROR, '_onSessionError'],
+  [SSE_EVENTS.SESSION_EXIT, '_onSessionExit'],
+  [SSE_EVENTS.SESSION_IDLE, '_onSessionIdle'],
+  [SSE_EVENTS.SESSION_WORKING, '_onSessionWorking'],
+  [SSE_EVENTS.SESSION_AUTO_CLEAR, '_onSessionAutoClear'],
+  [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
+
+  // Scheduled runs
+  [SSE_EVENTS.SCHEDULED_CREATED, '_onScheduledCreated'],
+  [SSE_EVENTS.SCHEDULED_UPDATED, '_onScheduledUpdated'],
+  [SSE_EVENTS.SCHEDULED_COMPLETED, '_onScheduledCompleted'],
+  [SSE_EVENTS.SCHEDULED_STOPPED, '_onScheduledStopped'],
+
+  // Respawn
+  [SSE_EVENTS.RESPAWN_STARTED, '_onRespawnStarted'],
+  [SSE_EVENTS.RESPAWN_STOPPED, '_onRespawnStopped'],
+  [SSE_EVENTS.RESPAWN_STATE_CHANGED, '_onRespawnStateChanged'],
+  [SSE_EVENTS.RESPAWN_CYCLE_STARTED, '_onRespawnCycleStarted'],
+  [SSE_EVENTS.RESPAWN_BLOCKED, '_onRespawnBlocked'],
+  [SSE_EVENTS.RESPAWN_AUTO_ACCEPT_SENT, '_onRespawnAutoAcceptSent'],
+  [SSE_EVENTS.RESPAWN_DETECTION_UPDATE, '_onRespawnDetectionUpdate'],
+  [SSE_EVENTS.RESPAWN_TIMER_STARTED, '_onRespawnTimerStarted'],
+  [SSE_EVENTS.RESPAWN_TIMER_CANCELLED, '_onRespawnTimerCancelled'],
+  [SSE_EVENTS.RESPAWN_TIMER_COMPLETED, '_onRespawnTimerCompleted'],
+  [SSE_EVENTS.RESPAWN_ERROR, '_onRespawnError'],
+  [SSE_EVENTS.RESPAWN_ACTION_LOG, '_onRespawnActionLog'],
+
+  // Tasks
+  [SSE_EVENTS.TASK_CREATED, '_onTaskCreated'],
+  [SSE_EVENTS.TASK_COMPLETED, '_onTaskCompleted'],
+  [SSE_EVENTS.TASK_FAILED, '_onTaskFailed'],
+  [SSE_EVENTS.TASK_UPDATED, '_onTaskUpdated'],
+
+  // Mux (tmux)
+  [SSE_EVENTS.MUX_CREATED, '_onMuxCreated'],
+  [SSE_EVENTS.MUX_KILLED, '_onMuxKilled'],
+  [SSE_EVENTS.MUX_DIED, '_onMuxDied'],
+  [SSE_EVENTS.MUX_STATS_UPDATED, '_onMuxStatsUpdated'],
+
+  // Ralph
+  [SSE_EVENTS.SESSION_RALPH_LOOP_UPDATE, '_onRalphLoopUpdate'],
+  [SSE_EVENTS.SESSION_RALPH_TODO_UPDATE, '_onRalphTodoUpdate'],
+  [SSE_EVENTS.SESSION_RALPH_COMPLETION_DETECTED, '_onRalphCompletionDetected'],
+  [SSE_EVENTS.SESSION_RALPH_STATUS_UPDATE, '_onRalphStatusUpdate'],
+  [SSE_EVENTS.SESSION_CIRCUIT_BREAKER_UPDATE, '_onCircuitBreakerUpdate'],
+  [SSE_EVENTS.SESSION_EXIT_GATE_MET, '_onExitGateMet'],
+
+  // Bash tools
+  [SSE_EVENTS.SESSION_BASH_TOOL_START, '_onBashToolStart'],
+  [SSE_EVENTS.SESSION_BASH_TOOL_END, '_onBashToolEnd'],
+  [SSE_EVENTS.SESSION_BASH_TOOLS_UPDATE, '_onBashToolsUpdate'],
+
+  // Hooks (Claude Code hook events)
+  [SSE_EVENTS.HOOK_IDLE_PROMPT, '_onHookIdlePrompt'],
+  [SSE_EVENTS.HOOK_PERMISSION_PROMPT, '_onHookPermissionPrompt'],
+  [SSE_EVENTS.HOOK_ELICITATION_DIALOG, '_onHookElicitationDialog'],
+  [SSE_EVENTS.HOOK_STOP, '_onHookStop'],
+  [SSE_EVENTS.HOOK_TEAMMATE_IDLE, '_onHookTeammateIdle'],
+  [SSE_EVENTS.HOOK_TASK_COMPLETED, '_onHookTaskCompleted'],
+
+  // Subagents (Claude Code background agents)
+  [SSE_EVENTS.SUBAGENT_DISCOVERED, '_onSubagentDiscovered'],
+  [SSE_EVENTS.SUBAGENT_UPDATED, '_onSubagentUpdated'],
+  [SSE_EVENTS.SUBAGENT_TOOL_CALL, '_onSubagentToolCall'],
+  [SSE_EVENTS.SUBAGENT_PROGRESS, '_onSubagentProgress'],
+  [SSE_EVENTS.SUBAGENT_MESSAGE, '_onSubagentMessage'],
+  [SSE_EVENTS.SUBAGENT_TOOL_RESULT, '_onSubagentToolResult'],
+  [SSE_EVENTS.SUBAGENT_COMPLETED, '_onSubagentCompleted'],
+
+  // Images
+  [SSE_EVENTS.IMAGE_DETECTED, '_onImageDetected'],
+
+  // Tunnel
+  [SSE_EVENTS.TUNNEL_STARTED, '_onTunnelStarted'],
+  [SSE_EVENTS.TUNNEL_STOPPED, '_onTunnelStopped'],
+  [SSE_EVENTS.TUNNEL_PROGRESS, '_onTunnelProgress'],
+  [SSE_EVENTS.TUNNEL_ERROR, '_onTunnelError'],
+  [SSE_EVENTS.TUNNEL_QR_ROTATED, '_onTunnelQrRotated'],
+  [SSE_EVENTS.TUNNEL_QR_REGENERATED, '_onTunnelQrRegenerated'],
+  [SSE_EVENTS.TUNNEL_QR_AUTH_USED, '_onTunnelQrAuthUsed'],
+
+  // Plan orchestration
+  [SSE_EVENTS.PLAN_SUBAGENT, '_onPlanSubagent'],
+  [SSE_EVENTS.PLAN_PROGRESS, '_onPlanProgress'],
+  [SSE_EVENTS.PLAN_STARTED, '_onPlanStarted'],
+  [SSE_EVENTS.PLAN_CANCELLED, '_onPlanCancelled'],
+  [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
+];
+
+// ═══════════════════════════════════════════════════════════════
+// CodemanApp Class — constructor and global state
+// ═══════════════════════════════════════════════════════════════
 
 class CodemanApp {
   constructor() {
@@ -182,7 +369,9 @@ class CodemanApp {
     return inputCost + outputCost;
   }
 
-  // ========== Pending Hooks State Machine ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Pending Hooks State Machine
+  // ═══════════════════════════════════════════════════════════════
   // Track pending hook events per session to determine tab alerts.
   // Action hooks (permission_prompt, elicitation_dialog) take priority over idle_prompt.
 
@@ -219,6 +408,10 @@ class CodemanApp {
     }
     this.renderSessionTabs();
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Init — app bootstrap and mobile setup
+  // ═══════════════════════════════════════════════════════════════
 
   init() {
     // Initialize mobile detection first (adds device classes to body)
@@ -290,6 +483,10 @@ class CodemanApp {
     // Hide loading skeleton now that the app shell is ready
     document.body.classList.add('app-loaded');
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Setup — xterm.js config and input handling
+  // ═══════════════════════════════════════════════════════════════
 
   initTerminal() {
     // Load scrollback setting from localStorage (default 5000)
@@ -857,6 +1054,10 @@ class CodemanApp {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Rendering
+  // ═══════════════════════════════════════════════════════════════
+
   /**
    * Check if terminal viewport is at or near the bottom.
    * Used to implement "sticky scroll" behavior - keep user at bottom if they were there.
@@ -1190,6 +1391,10 @@ class CodemanApp {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Event Listeners (Keyboard Shortcuts, Resize, Beforeunload)
+  // ═══════════════════════════════════════════════════════════════
+
   setupEventListeners() {
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -1270,7 +1475,9 @@ class CodemanApp {
     this.setupColorPicker();
   }
 
-  // ========== SSE Connection ==========
+  // ═══════════════════════════════════════════════════════════════
+  // SSE Connection
+  // ═══════════════════════════════════════════════════════════════
 
   connectSSE() {
     // Check if browser is offline
@@ -1351,359 +1558,369 @@ class CodemanApp {
       this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
     };
 
-    addListener('init', (e) => {
-      try {
-        this.handleInit(JSON.parse(e.data));
-      } catch (err) {
-        console.error('[SSE] Failed to parse init event:', err);
-      }
-    });
+    // Register all SSE event handlers via centralized map
+    for (const [event, method] of _SSE_HANDLER_MAP) {
+      const fn = this[method];
+      addListener(event, (e) => {
+        try {
+          fn.call(this, e.data ? JSON.parse(e.data) : {});
+        } catch (err) {
+          console.error(`[SSE] Error handling ${event}:`, err);
+        }
+      });
+    }
+  }
 
-    addListener('session:created', (e) => {
-      const data = JSON.parse(e.data);
-      this.sessions.set(data.id, data);
-      // Add new session to end of tab order
-      if (!this.sessionOrder.includes(data.id)) {
-        this.sessionOrder.push(data.id);
-        this.saveSessionOrder();
-      }
-      this.renderSessionTabs();
-      this.updateCost();
-      // Start stats polling when first session appears
-      if (this.sessions.size === 1) this.startSystemStatsPolling();
-    });
+  // ═══════════════════════════════════════════════════════════════
+  // SSE Event Handlers
+  // ═══════════════════════════════════════════════════════════════
+  // Each _on* method receives pre-parsed SSE data (JSON.parse done in connectSSE loop).
+  // Async handlers have their own internal try/catch for fetch errors.
 
-    addListener('session:updated', (e) => {
-      const data = JSON.parse(e.data);
-      const session = data.session || data;
-      const oldSession = this.sessions.get(session.id);
-      const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
-      this.sessions.set(session.id, session);
-      this.renderSessionTabs();
-      this.updateCost();
-      // Update tokens display if this is the active session
-      if (session.id === this.activeSessionId && session.tokens) {
-        this.updateRespawnTokens(session.tokens);
-      }
-      // Update parentSessionName for any subagents belonging to this session
-      // (fixes stale name display after session rename)
-      this.updateSubagentParentNames(session.id);
-      // If claudeSessionId was just set, re-check orphan subagents
-      // This connects subagents that were waiting for the session to identify itself
-      if (claudeSessionIdJustSet) {
-        this.recheckOrphanSubagents();
-        // Update connection lines after DOM settles (ensure tabs are rendered)
-        requestAnimationFrame(() => {
-          this.updateConnectionLines();
-        });
-      }
-    });
+  _onInit(data) {
+    this.handleInit(data);
+  }
 
-    addListener('session:deleted', (e) => {
-      const data = JSON.parse(e.data);
-      this._cleanupSessionData(data.id);
-      if (this.activeSessionId === data.id) {
-        this.activeSessionId = null;
-        try { localStorage.removeItem('codeman-active-session'); } catch {}
-        this.terminal.clear();
-        this.showWelcome();
-      }
-      this.renderSessionTabs();
-      this.renderRalphStatePanel();  // Update ralph panel after session deleted
-      this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
-      // Stop stats polling when no sessions remain
-      if (this.sessions.size === 0) this.stopSystemStatsPolling();
-    });
+  _onSessionCreated(data) {
+    this.sessions.set(data.id, data);
+    // Add new session to end of tab order
+    if (!this.sessionOrder.includes(data.id)) {
+      this.sessionOrder.push(data.id);
+      this.saveSessionOrder();
+    }
+    this.renderSessionTabs();
+    this.updateCost();
+    // Start stats polling when first session appears
+    if (this.sessions.size === 1) this.startSystemStatsPolling();
+  }
 
-    addListener('session:terminal', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.id === this.activeSessionId) {
-        this.batchTerminalWrite(data.data);
-      }
-    });
+  _onSessionUpdated(data) {
+    const session = data.session || data;
+    const oldSession = this.sessions.get(session.id);
+    const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
+    this.sessions.set(session.id, session);
+    this.renderSessionTabs();
+    this.updateCost();
+    // Update tokens display if this is the active session
+    if (session.id === this.activeSessionId && session.tokens) {
+      this.updateRespawnTokens(session.tokens);
+    }
+    // Update parentSessionName for any subagents belonging to this session
+    // (fixes stale name display after session rename)
+    this.updateSubagentParentNames(session.id);
+    // If claudeSessionId was just set, re-check orphan subagents
+    // This connects subagents that were waiting for the session to identify itself
+    if (claudeSessionIdJustSet) {
+      this.recheckOrphanSubagents();
+      // Update connection lines after DOM settles (ensure tabs are rendered)
+      requestAnimationFrame(() => {
+        this.updateConnectionLines();
+      });
+    }
+  }
 
+  _onSessionDeleted(data) {
+    this._cleanupSessionData(data.id);
+    if (this.activeSessionId === data.id) {
+      this.activeSessionId = null;
+      try { localStorage.removeItem('codeman-active-session'); } catch {}
+      this.terminal.clear();
+      this.showWelcome();
+    }
+    this.renderSessionTabs();
+    this.renderRalphStatePanel();  // Update ralph panel after session deleted
+    this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
+    // Stop stats polling when no sessions remain
+    if (this.sessions.size === 0) this.stopSystemStatsPolling();
+  }
+
+  _onSessionTerminal(data) {
+    if (data.id === this.activeSessionId) {
+      this.batchTerminalWrite(data.data);
+    }
+  }
+
+  async _onSessionNeedsRefresh() {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
-    addListener('session:needsRefresh', async () => {
-      if (!this.activeSessionId || !this.terminal) return;
+    if (!this.activeSessionId || !this.terminal) return;
+    try {
+      const tailSize = 256 * 1024;
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
+      const data = await res.json();
+      if (data.terminalBuffer) {
+        this.terminal.clear();
+        this.terminal.reset();
+        await this.chunkedTerminalWrite(data.terminalBuffer);
+        this.terminal.scrollToBottom();
+        // Re-position local echo overlay at new prompt location
+        this._localEchoOverlay?.rerender();
+        // Resize PTY to match actual browser dimensions (critical for OpenCode
+        // TUI sessions that render at fixed 120x40 until told the real size)
+        if (this.activeSessionId) {
+          this.sendResize(this.activeSessionId);
+        }
+      }
+    } catch (err) {
+      console.error('needsRefresh reload failed:', err);
+    }
+  }
+
+  async _onSessionClearTerminal(data) {
+    if (data.id === this.activeSessionId) {
+      // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
       try {
-        const tailSize = 256 * 1024;
-        const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
-        const data = await res.json();
-        if (data.terminalBuffer) {
-          this.terminal.clear();
-          this.terminal.reset();
-          await this.chunkedTerminalWrite(data.terminalBuffer);
-          this.terminal.scrollToBottom();
-          // Re-position local echo overlay at new prompt location
-          this._localEchoOverlay?.rerender();
-          // Resize PTY to match actual browser dimensions (critical for OpenCode
-          // TUI sessions that render at fixed 120x40 until told the real size)
-          if (this.activeSessionId) {
-            this.sendResize(this.activeSessionId);
-          }
+        const res = await fetch(`/api/sessions/${data.id}/terminal`);
+        const termData = await res.json();
+
+        this.terminal.clear();
+        this.terminal.reset();
+        if (termData.terminalBuffer) {
+          // Strip any DEC 2026 markers and write raw content
+          // (markers don't help here - this is a static buffer reload, not live Ink redraws)
+          const cleanBuffer = termData.terminalBuffer.replace(DEC_SYNC_STRIP_RE, '');
+          // Use chunked write to avoid UI freeze with large buffers (can be 1-2MB)
+          await this.chunkedTerminalWrite(cleanBuffer);
         }
+
+        // Fire-and-forget resize — don't block on it
+        this.sendResize(data.id);
+        // Re-position local echo overlay at new prompt location
+        this._localEchoOverlay?.rerender();
       } catch (err) {
-        console.error('needsRefresh reload failed:', err);
+        console.error('clearTerminal refresh failed:', err);
       }
+    }
+  }
+
+  _onSessionCompletion(data) {
+    this.totalCost += data.cost || 0;
+    this.updateCost();
+    if (data.id === this.activeSessionId) {
+      this.terminal.writeln('');
+      this.terminal.writeln(`\x1b[1;32m Done (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
+    }
+  }
+
+  _onSessionError(data) {
+    if (data.id === this.activeSessionId) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
+    }
+    const session = this.sessions.get(data.id);
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'session-error',
+      sessionId: data.id,
+      sessionName: session?.name || data.id?.slice(0, 8),
+      title: 'Session Error',
+      message: data.error || 'Unknown error',
     });
+  }
 
-    addListener('session:clearTerminal', async (e) => {
-      const data = JSON.parse(e.data);
-      if (data.id === this.activeSessionId) {
-        // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
-        try {
-          const res = await fetch(`/api/sessions/${data.id}/terminal`);
-          const termData = await res.json();
-
-          this.terminal.clear();
-          this.terminal.reset();
-          if (termData.terminalBuffer) {
-            // Strip any DEC 2026 markers and write raw content
-            // (markers don't help here - this is a static buffer reload, not live Ink redraws)
-            const cleanBuffer = termData.terminalBuffer.replace(DEC_SYNC_STRIP_RE, '');
-            // Use chunked write to avoid UI freeze with large buffers (can be 1-2MB)
-            await this.chunkedTerminalWrite(cleanBuffer);
-          }
-
-          // Fire-and-forget resize — don't block on it
-          this.sendResize(data.id);
-          // Re-position local echo overlay at new prompt location
-          this._localEchoOverlay?.rerender();
-        } catch (err) {
-          console.error('clearTerminal refresh failed:', err);
-        }
-      }
-    });
-
-    addListener('session:completion', (e) => {
-      const data = JSON.parse(e.data);
-      this.totalCost += data.cost || 0;
-      this.updateCost();
-      if (data.id === this.activeSessionId) {
-        this.terminal.writeln('');
-        this.terminal.writeln(`\x1b[1;32m Done (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
-      }
-    });
-
-    addListener('session:error', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.id === this.activeSessionId) {
-        this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
-      }
-      const session = this.sessions.get(data.id);
+  _onSessionExit(data) {
+    const session = this.sessions.get(data.id);
+    if (session) {
+      session.status = 'stopped';
+      this.renderSessionTabs();
+      if (data.id === this.activeSessionId) this._updateLocalEchoState();
+    }
+    // Notify on unexpected exit (non-zero code)
+    if (data.code && data.code !== 0) {
       this.notificationManager?.notify({
         urgency: 'critical',
-        category: 'session-error',
+        category: 'session-crash',
         sessionId: data.id,
         sessionName: session?.name || data.id?.slice(0, 8),
-        title: 'Session Error',
-        message: data.error || 'Unknown error',
+        title: 'Session Crashed',
+        message: `Exited with code ${data.code}`,
       });
-    });
+    }
+  }
 
-    addListener('session:exit', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.id);
-      if (session) {
-        session.status = 'stopped';
-        this.renderSessionTabs();
-        if (data.id === this.activeSessionId) this._updateLocalEchoState();
-      }
-      // Notify on unexpected exit (non-zero code)
-      if (data.code && data.code !== 0) {
+  _onSessionIdle(data) {
+    const session = this.sessions.get(data.id);
+    if (session) {
+      session.status = 'idle';
+      this.renderSessionTabs();
+      this.sendPendingCtrlL(data.id);
+      if (data.id === this.activeSessionId) this._updateLocalEchoState();
+    }
+    // Start stuck detection timer (only if no respawn running)
+    if (!this.respawnStatus[data.id]?.enabled) {
+      const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
+      clearTimeout(this.idleTimers.get(data.id));
+      this.idleTimers.set(data.id, setTimeout(() => {
+        const s = this.sessions.get(data.id);
         this.notificationManager?.notify({
-          urgency: 'critical',
-          category: 'session-crash',
+          urgency: 'warning',
+          category: 'session-stuck',
           sessionId: data.id,
-          sessionName: session?.name || data.id?.slice(0, 8),
-          title: 'Session Crashed',
-          message: `Exited with code ${data.code}`,
+          sessionName: s?.name || data.id?.slice(0, 8),
+          title: 'Session Idle',
+          message: `Idle for ${Math.round(threshold / 60000)}+ minutes`,
         });
-      }
-    });
-
-    addListener('session:idle', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.id);
-      if (session) {
-        session.status = 'idle';
-        this.renderSessionTabs();
-        this.sendPendingCtrlL(data.id);
-        if (data.id === this.activeSessionId) this._updateLocalEchoState();
-      }
-      // Start stuck detection timer (only if no respawn running)
-      if (!this.respawnStatus[data.id]?.enabled) {
-        const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
-        clearTimeout(this.idleTimers.get(data.id));
-        this.idleTimers.set(data.id, setTimeout(() => {
-          const s = this.sessions.get(data.id);
-          this.notificationManager?.notify({
-            urgency: 'warning',
-            category: 'session-stuck',
-            sessionId: data.id,
-            sessionName: s?.name || data.id?.slice(0, 8),
-            title: 'Session Idle',
-            message: `Idle for ${Math.round(threshold / 60000)}+ minutes`,
-          });
-          this.idleTimers.delete(data.id);
-        }, threshold));
-      }
-    });
-
-    addListener('session:working', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.id);
-      if (session) {
-        session.status = 'busy';
-        // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
-        if (!this.pendingHooks.has(data.id)) {
-          this.tabAlerts.delete(data.id);
-        }
-        this.renderSessionTabs();
-        this.sendPendingCtrlL(data.id);
-        if (data.id === this.activeSessionId) this._updateLocalEchoState();
-      }
-      // Clear stuck detection timer
-      const timer = this.idleTimers.get(data.id);
-      if (timer) {
-        clearTimeout(timer);
         this.idleTimers.delete(data.id);
+      }, threshold));
+    }
+  }
+
+  _onSessionWorking(data) {
+    const session = this.sessions.get(data.id);
+    if (session) {
+      session.status = 'busy';
+      // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
+      if (!this.pendingHooks.has(data.id)) {
+        this.tabAlerts.delete(data.id);
       }
-    });
+      this.renderSessionTabs();
+      this.sendPendingCtrlL(data.id);
+      if (data.id === this.activeSessionId) this._updateLocalEchoState();
+    }
+    // Clear stuck detection timer
+    const timer = this.idleTimers.get(data.id);
+    if (timer) {
+      clearTimeout(timer);
+      this.idleTimers.delete(data.id);
+    }
+  }
 
-    // Scheduled run events
-    addListener('scheduled:created', (e) => {
-      this.currentRun = JSON.parse(e.data);
-      this.showTimer();
+  _onSessionAutoClear(data) {
+    if (data.sessionId === this.activeSessionId) {
+      this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
+      this.updateRespawnTokens(0);
+    }
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'auto-clear',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      title: 'Auto-Cleared',
+      message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
+  }
 
-    addListener('scheduled:updated', (e) => {
-      this.currentRun = JSON.parse(e.data);
-      this.updateTimer();
+  _onSessionCliInfo(data) {
+    const session = this.sessions.get(data.sessionId);
+    if (session) {
+      if (data.version) session.cliVersion = data.version;
+      if (data.model) session.cliModel = data.model;
+      if (data.accountType) session.cliAccountType = data.accountType;
+      if (data.latestVersion) session.cliLatestVersion = data.latestVersion;
+    }
+    if (data.sessionId === this.activeSessionId) {
+      this.updateCliInfoDisplay();
+    }
+  }
+
+  // Scheduled runs
+  _onScheduledCreated(data) {
+    this.currentRun = data;
+    this.showTimer();
+  }
+
+  _onScheduledUpdated(data) {
+    this.currentRun = data;
+    this.updateTimer();
+  }
+
+  _onScheduledCompleted(data) {
+    this.currentRun = data;
+    this.hideTimer();
+    this.showToast('Scheduled run completed!', 'success');
+  }
+
+  _onScheduledStopped() {
+    this.currentRun = null;
+    this.hideTimer();
+  }
+
+  // Respawn
+  _onRespawnStarted(data) {
+    this.respawnStatus[data.sessionId] = data.status;
+    if (data.sessionId === this.activeSessionId) {
+      this.showRespawnBanner();
+    }
+  }
+
+  _onRespawnStopped(data) {
+    delete this.respawnStatus[data.sessionId];
+    if (data.sessionId === this.activeSessionId) {
+      this.hideRespawnBanner();
+    }
+  }
+
+  _onRespawnStateChanged(data) {
+    if (this.respawnStatus[data.sessionId]) {
+      this.respawnStatus[data.sessionId].state = data.state;
+    }
+    if (data.sessionId === this.activeSessionId) {
+      this.updateRespawnBanner(data.state);
+    }
+  }
+
+  _onRespawnCycleStarted(data) {
+    if (this.respawnStatus[data.sessionId]) {
+      this.respawnStatus[data.sessionId].cycleCount = data.cycleNumber;
+    }
+    if (data.sessionId === this.activeSessionId) {
+      document.getElementById('respawnCycleCount').textContent = data.cycleNumber;
+    }
+  }
+
+  _onRespawnBlocked(data) {
+    const session = this.sessions.get(data.sessionId);
+    const reasonMap = {
+      circuit_breaker_open: 'Circuit Breaker Open',
+      exit_signal: 'Exit Signal Detected',
+      status_blocked: 'Claude Reported BLOCKED',
+    };
+    const title = reasonMap[data.reason] || 'Respawn Blocked';
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'respawn-blocked',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      title,
+      message: data.details,
     });
-
-    addListener('scheduled:completed', (e) => {
-      this.currentRun = JSON.parse(e.data);
-      this.hideTimer();
-      this.showToast('Scheduled run completed!', 'success');
-    });
-
-    addListener('scheduled:stopped', (e) => {
-      this.currentRun = null;
-      this.hideTimer();
-    });
-
-    // Respawn events
-    addListener('respawn:started', (e) => {
-      const data = JSON.parse(e.data);
-      this.respawnStatus[data.sessionId] = data.status;
-      if (data.sessionId === this.activeSessionId) {
-        this.showRespawnBanner();
+    // Update respawn panel to show blocked state
+    if (data.sessionId === this.activeSessionId) {
+      const stateEl = document.getElementById('respawnStateLabel');
+      if (stateEl) {
+        stateEl.textContent = title;
+        stateEl.classList.add('respawn-blocked');
       }
-    });
+    }
+  }
 
-    addListener('respawn:stopped', (e) => {
-      const data = JSON.parse(e.data);
-      delete this.respawnStatus[data.sessionId];
-      if (data.sessionId === this.activeSessionId) {
-        this.hideRespawnBanner();
-      }
+  _onRespawnAutoAcceptSent(data) {
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'auto-accept',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      title: 'Plan Accepted',
+      message: `Accepted plan mode for ${session?.name || 'session'}`,
     });
+  }
 
-    addListener('respawn:stateChanged', (e) => {
-      const data = JSON.parse(e.data);
-      if (this.respawnStatus[data.sessionId]) {
-        this.respawnStatus[data.sessionId].state = data.state;
-      }
-      if (data.sessionId === this.activeSessionId) {
-        this.updateRespawnBanner(data.state);
-      }
-    });
+  _onRespawnDetectionUpdate(data) {
+    if (this.respawnStatus[data.sessionId]) {
+      this.respawnStatus[data.sessionId].detection = data.detection;
+    }
+    if (data.sessionId === this.activeSessionId) {
+      this.updateDetectionDisplay(data.detection);
+    }
+  }
 
-    addListener('respawn:cycleStarted', (e) => {
-      const data = JSON.parse(e.data);
-      if (this.respawnStatus[data.sessionId]) {
-        this.respawnStatus[data.sessionId].cycleCount = data.cycleNumber;
-      }
-      if (data.sessionId === this.activeSessionId) {
-        document.getElementById('respawnCycleCount').textContent = data.cycleNumber;
-      }
-    });
-
-    addListener('respawn:blocked', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      const reasonMap = {
-        circuit_breaker_open: 'Circuit Breaker Open',
-        exit_signal: 'Exit Signal Detected',
-        status_blocked: 'Claude Reported BLOCKED',
-      };
-      const title = reasonMap[data.reason] || 'Respawn Blocked';
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'respawn-blocked',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title,
-        message: data.details,
-      });
-      // Update respawn panel to show blocked state
-      if (data.sessionId === this.activeSessionId) {
-        const stateEl = document.getElementById('respawnStateLabel');
-        if (stateEl) {
-          stateEl.textContent = title;
-          stateEl.classList.add('respawn-blocked');
-        }
-      }
-    });
-
-    addListener('respawn:stepSent', (_e) => {
-      // Step info is shown via state label (e.g., "Sending prompt", "Clearing context")
-    });
-
-    addListener('respawn:autoAcceptSent', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'auto-accept',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title: 'Plan Accepted',
-        message: `Accepted plan mode for ${session?.name || 'session'}`,
-      });
-    });
-
-    addListener('respawn:detectionUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      if (this.respawnStatus[data.sessionId]) {
-        this.respawnStatus[data.sessionId].detection = data.detection;
-      }
-      if (data.sessionId === this.activeSessionId) {
-        this.updateDetectionDisplay(data.detection);
-      }
-    });
-
-    addListener('respawn:aiCheckStarted', (_e) => {
-      // AI check status shown via updateDetectionDisplay
-    });
-
-    addListener('respawn:aiCheckCompleted', (_e) => {
-      // AI check status shown via updateDetectionDisplay
-    });
-
-    addListener('respawn:aiCheckFailed', (_e) => {
-      // AI check status shown via updateDetectionDisplay
-    });
-
-    addListener('respawn:aiCheckCooldown', (_e) => {
-      // AI check status shown via updateDetectionDisplay
-    });
-
-    // Respawn run timer events (timed respawn runs)
-    addListener('respawn:timerStarted', (e) => {
-      const data = JSON.parse(e.data);
+  // Merged handler for respawn:timerStarted — handles both run timers (data.endAt)
+  // and controller countdown timers (data.timer). Previously registered as two
+  // separate addListener calls (duplicate event bug).
+  _onRespawnTimerStarted(data) {
+    // Run timer (timed respawn runs)
+    if (data.endAt) {
       this.respawnTimers[data.sessionId] = {
         endAt: data.endAt,
         startedAt: data.startedAt,
@@ -1712,726 +1929,634 @@ class CodemanApp {
       if (data.sessionId === this.activeSessionId) {
         this.showRespawnTimer();
       }
-    });
-
-    // Respawn controller countdown timer events (internal timers)
-    addListener('respawn:timerStarted', (e) => {
-      const data = JSON.parse(e.data);
-      // This may fire for both run timers and controller timers - check for timer object
-      if (data.timer) {
-        const { sessionId, timer } = data;
-        if (!this.respawnCountdownTimers[sessionId]) {
-          this.respawnCountdownTimers[sessionId] = {};
-        }
-        this.respawnCountdownTimers[sessionId][timer.name] = {
-          endsAt: timer.endsAt,
-          totalMs: timer.durationMs,
-          reason: timer.reason
-        };
-        if (sessionId === this.activeSessionId) {
-          this.updateCountdownTimerDisplay();
-          this.startCountdownInterval();
-        }
+    }
+    // Controller countdown timer (internal timers)
+    if (data.timer) {
+      const { sessionId, timer } = data;
+      if (!this.respawnCountdownTimers[sessionId]) {
+        this.respawnCountdownTimers[sessionId] = {};
       }
-    });
-
-    addListener('respawn:timerCancelled', (e) => {
-      const data = JSON.parse(e.data);
-      const { sessionId, timerName } = data;
-      if (this.respawnCountdownTimers[sessionId]) {
-        delete this.respawnCountdownTimers[sessionId][timerName];
-      }
+      this.respawnCountdownTimers[sessionId][timer.name] = {
+        endsAt: timer.endsAt,
+        totalMs: timer.durationMs,
+        reason: timer.reason
+      };
       if (sessionId === this.activeSessionId) {
         this.updateCountdownTimerDisplay();
+        this.startCountdownInterval();
       }
-    });
-
-    addListener('respawn:timerCompleted', (e) => {
-      const data = JSON.parse(e.data);
-      const { sessionId, timerName } = data;
-      if (this.respawnCountdownTimers[sessionId]) {
-        delete this.respawnCountdownTimers[sessionId][timerName];
-      }
-      if (sessionId === this.activeSessionId) {
-        this.updateCountdownTimerDisplay();
-      }
-    });
-
-    addListener('respawn:error', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'session-error',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Respawn Error',
-        message: data.error || data.message || 'Respawn encountered an error',
-      });
-    });
-
-    addListener('respawn:actionLog', (e) => {
-      const data = JSON.parse(e.data);
-      const { sessionId, action } = data;
-      this.addActionLogEntry(sessionId, action);
-      if (sessionId === this.activeSessionId) {
-        this.updateCountdownTimerDisplay(); // Show row if hidden
-        this.updateActionLogDisplay();
-      }
-    });
-
-    // Auto-clear event
-    addListener('session:autoClear', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
-        this.updateRespawnTokens(0);
-      }
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'auto-clear',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title: 'Auto-Cleared',
-        message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
-      });
-    });
-
-    // Claude Code CLI info (version, model) parsed from terminal
-    addListener('session:cliInfo', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      if (session) {
-        if (data.version) session.cliVersion = data.version;
-        if (data.model) session.cliModel = data.model;
-        if (data.accountType) session.cliAccountType = data.accountType;
-        if (data.latestVersion) session.cliLatestVersion = data.latestVersion;
-      }
-      if (data.sessionId === this.activeSessionId) {
-        this.updateCliInfoDisplay();
-      }
-    });
-
-    // Background task events
-    addListener('task:created', (e) => {
-      const data = JSON.parse(e.data);
-      this.renderSessionTabs();
-      if (data.sessionId === this.activeSessionId) {
-        this.renderTaskPanel();
-      }
-    });
-
-    addListener('task:completed', (e) => {
-      const data = JSON.parse(e.data);
-      this.renderSessionTabs();
-      if (data.sessionId === this.activeSessionId) {
-        this.renderTaskPanel();
-      }
-    });
-
-    addListener('task:failed', (e) => {
-      const data = JSON.parse(e.data);
-      this.renderSessionTabs();
-      if (data.sessionId === this.activeSessionId) {
-        this.renderTaskPanel();
-      }
-    });
-
-    addListener('task:updated', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.sessionId === this.activeSessionId) {
-        this.renderTaskPanel();
-      }
-    });
-
-    // Screen events
-    addListener('mux:created', (e) => {
-      const screen = JSON.parse(e.data);
-      this.muxSessions.push(screen);
-      this.renderMuxSessions();
-    });
-
-    addListener('mux:killed', (e) => {
-      const data = JSON.parse(e.data);
-      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
-      this.renderMuxSessions();
-    });
-
-    addListener('mux:died', (e) => {
-      const data = JSON.parse(e.data);
-      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
-      this.renderMuxSessions();
-      this.showToast('Mux session died: ' + data.sessionId.slice(0, 8), 'warning');
-    });
-
-    addListener('mux:statsUpdated', (e) => {
-      this.muxSessions = JSON.parse(e.data);
-      if (document.getElementById('monitorPanel').classList.contains('open')) {
-        this.renderMuxSessions();
-      }
-    });
-
-    // Ralph loop/todo events
-    addListener('session:ralphLoopUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      // Skip if user explicitly closed this session's Ralph panel
-      if (this.ralphClosedSessions.has(data.sessionId)) return;
-      this.updateRalphState(data.sessionId, { loop: data.state });
-    });
-
-    addListener('session:ralphTodoUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      // Skip if user explicitly closed this session's Ralph panel
-      if (this.ralphClosedSessions.has(data.sessionId)) return;
-      this.updateRalphState(data.sessionId, { todos: data.todos });
-    });
-
-    addListener('session:ralphCompletionDetected', (e) => {
-      const data = JSON.parse(e.data);
-      // Skip if user explicitly closed this session's Ralph panel
-      if (this.ralphClosedSessions.has(data.sessionId)) return;
-      // Prevent duplicate notifications for the same completion
-      const completionKey = `${data.sessionId}:${data.phrase}`;
-      if (this._shownCompletions?.has(completionKey)) {
-        return;
-      }
-      if (!this._shownCompletions) {
-        this._shownCompletions = new Set();
-      }
-      this._shownCompletions.add(completionKey);
-      // Clear after 30 seconds to allow re-notification if loop restarts
-      setTimeout(() => this._shownCompletions?.delete(completionKey), 30000);
-
-      // Update ralph state to mark loop as inactive
-      const existing = this.ralphStates.get(data.sessionId) || {};
-      if (existing.loop) {
-        existing.loop.active = false;
-        this.updateRalphState(data.sessionId, existing);
-      }
-
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'warning',
-        category: 'ralph-complete',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title: 'Loop Complete',
-        message: `Completion: ${data.phrase || 'unknown'}`,
-      });
-    });
-
-    // RALPH_STATUS block and circuit breaker events
-    addListener('session:ralphStatusUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      // Skip if user explicitly closed this session's Ralph panel
-      if (this.ralphClosedSessions.has(data.sessionId)) return;
-      this.updateRalphState(data.sessionId, { statusBlock: data.block });
-    });
-
-    addListener('session:circuitBreakerUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      // Skip if user explicitly closed this session's Ralph panel
-      if (this.ralphClosedSessions.has(data.sessionId)) return;
-      this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
-      // Notify if circuit breaker opens
-      if (data.status.state === 'OPEN') {
-        const session = this.sessions.get(data.sessionId);
-        this.notificationManager?.notify({
-          urgency: 'critical',
-          category: 'circuit-breaker',
-          sessionId: data.sessionId,
-          sessionName: session?.name || data.sessionId?.slice(0, 8),
-          title: 'Circuit Breaker Open',
-          message: data.status.reason || 'Loop stuck - no progress detected',
-        });
-      }
-    });
-
-    addListener('session:exitGateMet', (e) => {
-      const data = JSON.parse(e.data);
-      // Notify when exit gate is met
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'warning',
-        category: 'exit-gate',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId?.slice(0, 8),
-        title: 'Exit Gate Met',
-        message: `Loop ready to exit (indicators: ${data.completionIndicators})`,
-      });
-    });
-
-    // Active Bash tool events (for clickable file paths)
-    addListener('session:bashToolStart', (e) => {
-      const data = JSON.parse(e.data);
-      this.handleBashToolStart(data.sessionId, data.tool);
-    });
-
-    addListener('session:bashToolEnd', (e) => {
-      const data = JSON.parse(e.data);
-      this.handleBashToolEnd(data.sessionId, data.tool);
-    });
-
-    addListener('session:bashToolsUpdate', (e) => {
-      const data = JSON.parse(e.data);
-      this.handleBashToolsUpdate(data.sessionId, data.tools);
-    });
-
-    // Hook events (from Claude Code hooks system)
-    // Use pendingHooks state machine to track hook events and derive tab alerts.
-    // This ensures alerts persist even when session:working events fire.
-    addListener('hook:idle_prompt', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      // Always track pending hook - alert will show when switching away from session
-      if (data.sessionId) {
-        this.setPendingHook(data.sessionId, 'idle_prompt');
-      }
-      this.notificationManager?.notify({
-        urgency: 'warning',
-        category: 'hook-idle',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Waiting for Input',
-        message: data.message || 'Claude is idle and waiting for a prompt',
-      });
-    });
-
-    addListener('hook:permission_prompt', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      // Always track pending hook - action alerts need user interaction to clear
-      if (data.sessionId) {
-        this.setPendingHook(data.sessionId, 'permission_prompt');
-      }
-      const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'hook-permission',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Permission Required',
-        message: toolInfo || 'Claude needs tool approval to continue',
-      });
-    });
-
-    addListener('hook:elicitation_dialog', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      // Always track pending hook - action alerts need user interaction to clear
-      if (data.sessionId) {
-        this.setPendingHook(data.sessionId, 'elicitation_dialog');
-      }
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'hook-elicitation',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Question Asked',
-        message: data.question || 'Claude is asking a question and waiting for your answer',
-      });
-    });
-
-    addListener('hook:stop', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      // Clear all pending hooks when Claude finishes responding
-      if (data.sessionId) {
-        this.clearPendingHooks(data.sessionId);
-      }
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'hook-stop',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Response Complete',
-        message: data.reason || 'Claude has finished responding',
-      });
-    });
-
-    addListener('hook:teammate_idle', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'warning',
-        category: 'hook-teammate-idle',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Teammate Idle',
-        message: `A teammate is idle in ${session?.name || data.sessionId}`,
-      });
-    });
-
-    addListener('hook:task_completed', (e) => {
-      const data = JSON.parse(e.data);
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'hook-task-completed',
-        sessionId: data.sessionId,
-        sessionName: session?.name || data.sessionId,
-        title: 'Task Completed',
-        message: `A team task completed in ${session?.name || data.sessionId}`,
-      });
-    });
-
-    // ========== Subagent Events (Claude Code Background Agents) ==========
-
-    addListener('subagent:discovered', (e) => {
-      const data = JSON.parse(e.data);
-      // Clear all old data for this agentId (in case of ID reuse)
-      this.subagents.set(data.agentId, data);
-      this.subagentActivity.set(data.agentId, []);
-      this.subagentToolResults.delete(data.agentId);
-      // Close any existing window for this agentId (will be reopened fresh)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.forceCloseSubagentWindow(data.agentId);
-      }
-      this.renderSubagentPanel();
-
-      // Find which Codeman session owns this subagent (direct claudeSessionId match only)
-      this.findParentSessionForSubagent(data.agentId);
-
-      // Auto-open window for new active agents — but ONLY if they belong to a Codeman session tab.
-      // Agents from external Claude sessions (not managed by Codeman) should not pop up.
-      if (data.status === 'active') {
-        const agentForCheck = this.subagents.get(data.agentId);
-        const hasMatchingTab = agentForCheck?.sessionId &&
-          Array.from(this.sessions.values()).some(s => s.claudeSessionId === agentForCheck.sessionId);
-        if (hasMatchingTab) {
-          this.openSubagentWindow(data.agentId);
-        }
-      }
-
-      // Ensure connection lines are updated after window is created and DOM settles
-      requestAnimationFrame(() => {
-        this.updateConnectionLines();
-      });
-
-      // Notify about new subagent discovery
-      const parentId = this.subagentParentMap.get(data.agentId);
-      const parentSession = parentId ? this.sessions.get(parentId) : null;
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'subagent-spawn',
-        sessionId: parentId || data.sessionId,
-        sessionName: parentSession?.name || parentId || data.sessionId,
-        title: 'Subagent Spawned',
-        message: data.description || 'New background agent started',
-      });
-    });
-
-    addListener('subagent:updated', (e) => {
-      const data = JSON.parse(e.data);
-      const existing = this.subagents.get(data.agentId);
-      if (existing) {
-        // Merge updated fields (especially description)
-        Object.assign(existing, data);
-        this.subagents.set(data.agentId, existing);
-      } else {
-        this.subagents.set(data.agentId, data);
-      }
-      this.renderSubagentPanel();
-      // Update floating window if open (content + header/title)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.renderSubagentWindowContent(data.agentId);
-        this.updateSubagentWindowHeader(data.agentId);
-      }
-    });
-
-    addListener('subagent:tool_call', (e) => {
-      const data = JSON.parse(e.data);
-      const activity = this.subagentActivity.get(data.agentId) || [];
-      activity.push({ type: 'tool', ...data });
-      if (activity.length > 50) activity.shift(); // Keep last 50 entries
-      this.subagentActivity.set(data.agentId, activity);
-      if (this.activeSubagentId === data.agentId) {
-        this.renderSubagentDetail();
-      }
-      this.renderSubagentPanel();
-      // Update floating window (debounced — tool_call events fire rapidly)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.scheduleSubagentWindowRender(data.agentId);
-      }
-    });
-
-    addListener('subagent:progress', (e) => {
-      const data = JSON.parse(e.data);
-      const activity = this.subagentActivity.get(data.agentId) || [];
-      activity.push({ type: 'progress', ...data });
-      if (activity.length > 50) activity.shift();
-      this.subagentActivity.set(data.agentId, activity);
-      if (this.activeSubagentId === data.agentId) {
-        this.renderSubagentDetail();
-      }
-      // Update floating window (debounced)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.scheduleSubagentWindowRender(data.agentId);
-      }
-    });
-
-    addListener('subagent:message', (e) => {
-      const data = JSON.parse(e.data);
-      const activity = this.subagentActivity.get(data.agentId) || [];
-      activity.push({ type: 'message', ...data });
-      if (activity.length > 50) activity.shift();
-      this.subagentActivity.set(data.agentId, activity);
-      if (this.activeSubagentId === data.agentId) {
-        this.renderSubagentDetail();
-      }
-      // Update floating window (debounced)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.scheduleSubagentWindowRender(data.agentId);
-      }
-    });
-
-    addListener('subagent:tool_result', (e) => {
-      const data = JSON.parse(e.data);
-      // Store tool result by toolUseId for later lookup (cap at 50 per agent)
-      if (!this.subagentToolResults.has(data.agentId)) {
-        this.subagentToolResults.set(data.agentId, new Map());
-      }
-      const resultsMap = this.subagentToolResults.get(data.agentId);
-      resultsMap.set(data.toolUseId, data);
-      if (resultsMap.size > 50) {
-        const oldest = resultsMap.keys().next().value;
-        resultsMap.delete(oldest);
-      }
-
-      // Add to activity stream
-      const activity = this.subagentActivity.get(data.agentId) || [];
-      activity.push({ type: 'tool_result', ...data });
-      if (activity.length > 50) activity.shift();
-      this.subagentActivity.set(data.agentId, activity);
-
-      if (this.activeSubagentId === data.agentId) {
-        this.renderSubagentDetail();
-      }
-      // Update floating window (debounced)
-      if (this.subagentWindows.has(data.agentId)) {
-        this.scheduleSubagentWindowRender(data.agentId);
-      }
-    });
-
-    addListener('subagent:completed', async (e) => {
-      const data = JSON.parse(e.data);
-      const existing = this.subagents.get(data.agentId);
-      if (existing) {
-        existing.status = 'completed';
-        this.subagents.set(data.agentId, existing);
-      }
-      this.renderSubagentPanel();
-      this.updateSubagentWindows();
-
-      // Auto-minimize completed subagent windows
-      if (this.subagentWindows.has(data.agentId)) {
-        const windowData = this.subagentWindows.get(data.agentId);
-        if (windowData && !windowData.minimized) {
-          await this.closeSubagentWindow(data.agentId); // This minimizes to tab
-          this.saveSubagentWindowStates(); // Persist the minimized state
-        }
-      }
-
-      // Notify about subagent completion
-      const parentId = this.subagentParentMap.get(data.agentId);
-      const parentSession = parentId ? this.sessions.get(parentId) : null;
-      this.notificationManager?.notify({
-        urgency: 'info',
-        category: 'subagent-complete',
-        sessionId: parentId || existing?.sessionId || data.sessionId,
-        sessionName: parentSession?.name || parentId || data.sessionId,
-        title: 'Subagent Completed',
-        message: existing?.description || data.description || 'Background agent finished',
-      });
-
-      // Clean up activity/tool data for completed agents after 5 minutes
-      // This prevents memory leaks from long-running sessions with many subagents
-      setTimeout(() => {
-        const agent = this.subagents.get(data.agentId);
-        // Only clean up if agent is still completed (not restarted)
-        if (agent?.status === 'completed') {
-          this.subagentActivity.delete(data.agentId);
-          this.subagentToolResults.delete(data.agentId);
-        }
-      }, 5 * 60 * 1000); // 5 minutes
-
-      // Prune stale completed agents from main maps after 30 minutes
-      // Keeps subagents/subagentParentMap from growing unbounded in 24h sessions
-      setTimeout(() => {
-        const agent = this.subagents.get(data.agentId);
-        if (agent?.status === 'completed' && !this.subagentWindows.has(data.agentId)) {
-          this.subagents.delete(data.agentId);
-          this.subagentParentMap.delete(data.agentId);
-        }
-      }, 30 * 60 * 1000); // 30 minutes
-    });
-
-    // ========== Image Detection Events (Screenshots & Generated Images) ==========
-
-    addListener('image:detected', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Image Detected]', data);
-      this.openImagePopup(data);
-    });
-
-    // ========== Tunnel Events ==========
-
-    addListener('tunnel:started', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Tunnel] Started:', data.url);
-      this._dismissTunnelConnecting();
-      this._updateTunnelUrlDisplay(data.url);
-      const welcomeVisible = document.getElementById('welcomeOverlay')?.classList.contains('visible');
-      if (welcomeVisible) {
-        // On welcome screen: QR appears inline, expanded first
-        this._updateWelcomeTunnelBtn(true, data.url, true);
-        this.showToast(`Tunnel active`, 'success');
-      } else {
-        // Not on welcome screen: popup QR overlay
-        this._updateWelcomeTunnelBtn(true, data.url);
-        this.showToast(`Tunnel active: ${data.url}`, 'success');
-        this.showTunnelQR();
-      }
-    });
-
-    addListener('tunnel:stopped', () => {
-      console.log('[Tunnel] Stopped');
-      this._dismissTunnelConnecting();
-      this._updateTunnelUrlDisplay(null);
-      this._updateWelcomeTunnelBtn(false);
-      this.closeTunnelQR();
-    });
-
-    addListener('tunnel:progress', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Tunnel] Progress:', data.message);
-      const toast = document.getElementById('tunnelConnectingToast');
-      if (toast) {
-        toast.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
-      }
-      // Also update button text if on welcome screen
-      const btn = document.getElementById('welcomeTunnelBtn');
-      if (btn?.classList.contains('connecting')) {
-        btn.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
-      }
-    });
-
-    addListener('tunnel:error', (e) => {
-      const data = JSON.parse(e.data);
-      console.warn('[Tunnel] Error:', data.message);
-      this._dismissTunnelConnecting();
-      this.showToast(`Tunnel error: ${data.message}`, 'error');
-      const btn = document.getElementById('welcomeTunnelBtn');
-      if (btn) { btn.disabled = false; btn.classList.remove('connecting'); }
-    });
-
-    // QR auto-refresh — inline SVG from SSE (no extra fetch)
-    addListener('tunnel:qrRotated', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.svg) {
-        const container = document.getElementById('tunnelQrContainer');
-        if (container) container.innerHTML = data.svg;
-        const welcomeInner = document.getElementById('welcomeQrInner');
-        if (welcomeInner) welcomeInner.innerHTML = data.svg;
-      } else {
-        this._refreshTunnelQrFromApi();
-      }
-      this._resetQrCountdown();
-    });
-
-    addListener('tunnel:qrRegenerated', (e) => {
-      const data = JSON.parse(e.data);
-      if (data.svg) {
-        const container = document.getElementById('tunnelQrContainer');
-        if (container) container.innerHTML = data.svg;
-        const welcomeInner = document.getElementById('welcomeQrInner');
-        if (welcomeInner) welcomeInner.innerHTML = data.svg;
-      } else {
-        this._refreshTunnelQrFromApi();
-      }
-      this._resetQrCountdown();
-    });
-
-    // QR auth consumed — notify desktop user (QRLjacking detection)
-    addListener('tunnel:qrAuthUsed', (e) => {
-      const data = JSON.parse(e.data);
-      const ua = data.ua || 'Unknown device';
-      const family = ua.match(/Chrome|Firefox|Safari|Edge|Mobile/)?.[0] || 'Browser';
-      this.showToast(`Device authenticated via QR (${family}, ${data.ip}). Not you?`, 'warning', {
-        duration: 10000,
-        action: { label: 'Revoke All', onClick: () => {
-          fetch('/api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-            .then(() => this.showToast('All sessions revoked', 'success'))
-            .catch(() => this.showToast('Failed to revoke sessions', 'error'));
-        }},
-      });
-    });
-
-    // Plan subagent visibility events (show Opus agents during plan generation)
-    addListener('plan:subagent', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Plan Subagent]', data);
-      this.handlePlanSubagentEvent(data);
-    });
-
-    // Plan generation progress events (for detailed mode with subagents)
-    addListener('plan:progress', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Plan Progress]', data);
-
-      // Update UI if we have a progress handler registered
-      if (this._planProgressHandler) {
-        this._planProgressHandler({ type: 'plan:progress', data });
-      }
-
-      // Also update the loading display directly for better feedback
-      const titleEl = document.getElementById('planLoadingTitle');
-      const hintEl = document.getElementById('planLoadingHint');
-
-      if (titleEl && data.phase) {
-        const phaseLabels = {
-          'parallel-analysis': 'Running parallel analysis...',
-          'subagent': data.detail || 'Subagent working...',
-          'synthesis': 'Synthesizing results...',
-          'verification': 'Running verification...',
-        };
-        titleEl.textContent = phaseLabels[data.phase] || data.phase;
-      }
-      if (hintEl && data.detail) {
-        hintEl.textContent = data.detail;
-      }
-    });
-
-    // Plan generation started - store orchestrator ID for cancellation
-    addListener('plan:started', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Plan Started]', data);
-      this.activePlanOrchestratorId = data.orchestratorId;
-      this.planGenerationStopped = false; // Reset flag for new generation
-      this.renderMonitorPlanAgents();
-    });
-
-    // Plan generation cancelled
-    addListener('plan:cancelled', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Plan Cancelled]', data);
-      if (this.activePlanOrchestratorId === data.orchestratorId) {
-        this.activePlanOrchestratorId = null;
-      }
-      this.renderMonitorPlanAgents();
-    });
-
-    // Plan generation completed
-    addListener('plan:completed', (e) => {
-      const data = JSON.parse(e.data);
-      console.log('[Plan Completed]', data);
-      if (this.activePlanOrchestratorId === data.orchestratorId) {
-        this.activePlanOrchestratorId = null;
-      }
-      this.renderMonitorPlanAgents();
+    }
+  }
+
+  _onRespawnTimerCancelled(data) {
+    const { sessionId, timerName } = data;
+    if (this.respawnCountdownTimers[sessionId]) {
+      delete this.respawnCountdownTimers[sessionId][timerName];
+    }
+    if (sessionId === this.activeSessionId) {
+      this.updateCountdownTimerDisplay();
+    }
+  }
+
+  _onRespawnTimerCompleted(data) {
+    const { sessionId, timerName } = data;
+    if (this.respawnCountdownTimers[sessionId]) {
+      delete this.respawnCountdownTimers[sessionId][timerName];
+    }
+    if (sessionId === this.activeSessionId) {
+      this.updateCountdownTimerDisplay();
+    }
+  }
+
+  _onRespawnError(data) {
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'session-error',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Respawn Error',
+      message: data.error || data.message || 'Respawn encountered an error',
     });
   }
+
+  _onRespawnActionLog(data) {
+    const { sessionId, action } = data;
+    this.addActionLogEntry(sessionId, action);
+    if (sessionId === this.activeSessionId) {
+      this.updateCountdownTimerDisplay(); // Show row if hidden
+      this.updateActionLogDisplay();
+    }
+  }
+
+  // Tasks
+  _onTaskCreated(data) {
+    this.renderSessionTabs();
+    if (data.sessionId === this.activeSessionId) {
+      this.renderTaskPanel();
+    }
+  }
+
+  _onTaskCompleted(data) {
+    this.renderSessionTabs();
+    if (data.sessionId === this.activeSessionId) {
+      this.renderTaskPanel();
+    }
+  }
+
+  _onTaskFailed(data) {
+    this.renderSessionTabs();
+    if (data.sessionId === this.activeSessionId) {
+      this.renderTaskPanel();
+    }
+  }
+
+  _onTaskUpdated(data) {
+    if (data.sessionId === this.activeSessionId) {
+      this.renderTaskPanel();
+    }
+  }
+
+  // Mux (tmux)
+  _onMuxCreated(data) {
+    this.muxSessions.push(data);
+    this.renderMuxSessions();
+  }
+
+  _onMuxKilled(data) {
+    this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
+    this.renderMuxSessions();
+  }
+
+  _onMuxDied(data) {
+    this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
+    this.renderMuxSessions();
+    this.showToast('Mux session died: ' + data.sessionId.slice(0, 8), 'warning');
+  }
+
+  _onMuxStatsUpdated(data) {
+    this.muxSessions = data;
+    if (document.getElementById('monitorPanel').classList.contains('open')) {
+      this.renderMuxSessions();
+    }
+  }
+
+  // Ralph
+  _onRalphLoopUpdate(data) {
+    // Skip if user explicitly closed this session's Ralph panel
+    if (this.ralphClosedSessions.has(data.sessionId)) return;
+    this.updateRalphState(data.sessionId, { loop: data.state });
+  }
+
+  _onRalphTodoUpdate(data) {
+    // Skip if user explicitly closed this session's Ralph panel
+    if (this.ralphClosedSessions.has(data.sessionId)) return;
+    this.updateRalphState(data.sessionId, { todos: data.todos });
+  }
+
+  _onRalphCompletionDetected(data) {
+    // Skip if user explicitly closed this session's Ralph panel
+    if (this.ralphClosedSessions.has(data.sessionId)) return;
+    // Prevent duplicate notifications for the same completion
+    const completionKey = `${data.sessionId}:${data.phrase}`;
+    if (this._shownCompletions?.has(completionKey)) {
+      return;
+    }
+    if (!this._shownCompletions) {
+      this._shownCompletions = new Set();
+    }
+    this._shownCompletions.add(completionKey);
+    // Clear after 30 seconds to allow re-notification if loop restarts
+    setTimeout(() => this._shownCompletions?.delete(completionKey), 30000);
+
+    // Update ralph state to mark loop as inactive
+    const existing = this.ralphStates.get(data.sessionId) || {};
+    if (existing.loop) {
+      existing.loop.active = false;
+      this.updateRalphState(data.sessionId, existing);
+    }
+
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'warning',
+      category: 'ralph-complete',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      title: 'Loop Complete',
+      message: `Completion: ${data.phrase || 'unknown'}`,
+    });
+  }
+
+  _onRalphStatusUpdate(data) {
+    // Skip if user explicitly closed this session's Ralph panel
+    if (this.ralphClosedSessions.has(data.sessionId)) return;
+    this.updateRalphState(data.sessionId, { statusBlock: data.block });
+  }
+
+  _onCircuitBreakerUpdate(data) {
+    // Skip if user explicitly closed this session's Ralph panel
+    if (this.ralphClosedSessions.has(data.sessionId)) return;
+    this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
+    // Notify if circuit breaker opens
+    if (data.status.state === 'OPEN') {
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'circuit-breaker',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title: 'Circuit Breaker Open',
+        message: data.status.reason || 'Loop stuck - no progress detected',
+      });
+    }
+  }
+
+  _onExitGateMet(data) {
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'warning',
+      category: 'exit-gate',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId?.slice(0, 8),
+      title: 'Exit Gate Met',
+      message: `Loop ready to exit (indicators: ${data.completionIndicators})`,
+    });
+  }
+
+  // Bash tools
+  _onBashToolStart(data) {
+    this.handleBashToolStart(data.sessionId, data.tool);
+  }
+
+  _onBashToolEnd(data) {
+    this.handleBashToolEnd(data.sessionId, data.tool);
+  }
+
+  _onBashToolsUpdate(data) {
+    this.handleBashToolsUpdate(data.sessionId, data.tools);
+  }
+
+  // Hooks (Claude Code hook events)
+  _onHookIdlePrompt(data) {
+    const session = this.sessions.get(data.sessionId);
+    // Always track pending hook - alert will show when switching away from session
+    if (data.sessionId) {
+      this.setPendingHook(data.sessionId, 'idle_prompt');
+    }
+    this.notificationManager?.notify({
+      urgency: 'warning',
+      category: 'hook-idle',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Waiting for Input',
+      message: data.message || 'Claude is idle and waiting for a prompt',
+    });
+  }
+
+  _onHookPermissionPrompt(data) {
+    const session = this.sessions.get(data.sessionId);
+    // Always track pending hook - action alerts need user interaction to clear
+    if (data.sessionId) {
+      this.setPendingHook(data.sessionId, 'permission_prompt');
+    }
+    const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'hook-permission',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Permission Required',
+      message: toolInfo || 'Claude needs tool approval to continue',
+    });
+  }
+
+  _onHookElicitationDialog(data) {
+    const session = this.sessions.get(data.sessionId);
+    // Always track pending hook - action alerts need user interaction to clear
+    if (data.sessionId) {
+      this.setPendingHook(data.sessionId, 'elicitation_dialog');
+    }
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'hook-elicitation',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Question Asked',
+      message: data.question || 'Claude is asking a question and waiting for your answer',
+    });
+  }
+
+  _onHookStop(data) {
+    const session = this.sessions.get(data.sessionId);
+    // Clear all pending hooks when Claude finishes responding
+    if (data.sessionId) {
+      this.clearPendingHooks(data.sessionId);
+    }
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'hook-stop',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Response Complete',
+      message: data.reason || 'Claude has finished responding',
+    });
+  }
+
+  _onHookTeammateIdle(data) {
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'warning',
+      category: 'hook-teammate-idle',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Teammate Idle',
+      message: `A teammate is idle in ${session?.name || data.sessionId}`,
+    });
+  }
+
+  _onHookTaskCompleted(data) {
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'hook-task-completed',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: 'Task Completed',
+      message: `A team task completed in ${session?.name || data.sessionId}`,
+    });
+  }
+
+  // Subagents (Claude Code background agents)
+  _onSubagentDiscovered(data) {
+    // Clear all old data for this agentId (in case of ID reuse)
+    this.subagents.set(data.agentId, data);
+    this.subagentActivity.set(data.agentId, []);
+    this.subagentToolResults.delete(data.agentId);
+    // Close any existing window for this agentId (will be reopened fresh)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.forceCloseSubagentWindow(data.agentId);
+    }
+    this.renderSubagentPanel();
+
+    // Find which Codeman session owns this subagent (direct claudeSessionId match only)
+    this.findParentSessionForSubagent(data.agentId);
+
+    // Auto-open window for new active agents — but ONLY if they belong to a Codeman session tab.
+    // Agents from external Claude sessions (not managed by Codeman) should not pop up.
+    if (data.status === 'active') {
+      const agentForCheck = this.subagents.get(data.agentId);
+      const hasMatchingTab = agentForCheck?.sessionId &&
+        Array.from(this.sessions.values()).some(s => s.claudeSessionId === agentForCheck.sessionId);
+      if (hasMatchingTab) {
+        this.openSubagentWindow(data.agentId);
+      }
+    }
+
+    // Ensure connection lines are updated after window is created and DOM settles
+    requestAnimationFrame(() => {
+      this.updateConnectionLines();
+    });
+
+    // Notify about new subagent discovery
+    const parentId = this.subagentParentMap.get(data.agentId);
+    const parentSession = parentId ? this.sessions.get(parentId) : null;
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'subagent-spawn',
+      sessionId: parentId || data.sessionId,
+      sessionName: parentSession?.name || parentId || data.sessionId,
+      title: 'Subagent Spawned',
+      message: data.description || 'New background agent started',
+    });
+  }
+
+  _onSubagentUpdated(data) {
+    const existing = this.subagents.get(data.agentId);
+    if (existing) {
+      // Merge updated fields (especially description)
+      Object.assign(existing, data);
+      this.subagents.set(data.agentId, existing);
+    } else {
+      this.subagents.set(data.agentId, data);
+    }
+    this.renderSubagentPanel();
+    // Update floating window if open (content + header/title)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.renderSubagentWindowContent(data.agentId);
+      this.updateSubagentWindowHeader(data.agentId);
+    }
+  }
+
+  _onSubagentToolCall(data) {
+    const activity = this.subagentActivity.get(data.agentId) || [];
+    activity.push({ type: 'tool', ...data });
+    if (activity.length > 50) activity.shift(); // Keep last 50 entries
+    this.subagentActivity.set(data.agentId, activity);
+    if (this.activeSubagentId === data.agentId) {
+      this.renderSubagentDetail();
+    }
+    this.renderSubagentPanel();
+    // Update floating window (debounced — tool_call events fire rapidly)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.scheduleSubagentWindowRender(data.agentId);
+    }
+  }
+
+  _onSubagentProgress(data) {
+    const activity = this.subagentActivity.get(data.agentId) || [];
+    activity.push({ type: 'progress', ...data });
+    if (activity.length > 50) activity.shift();
+    this.subagentActivity.set(data.agentId, activity);
+    if (this.activeSubagentId === data.agentId) {
+      this.renderSubagentDetail();
+    }
+    // Update floating window (debounced)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.scheduleSubagentWindowRender(data.agentId);
+    }
+  }
+
+  _onSubagentMessage(data) {
+    const activity = this.subagentActivity.get(data.agentId) || [];
+    activity.push({ type: 'message', ...data });
+    if (activity.length > 50) activity.shift();
+    this.subagentActivity.set(data.agentId, activity);
+    if (this.activeSubagentId === data.agentId) {
+      this.renderSubagentDetail();
+    }
+    // Update floating window (debounced)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.scheduleSubagentWindowRender(data.agentId);
+    }
+  }
+
+  _onSubagentToolResult(data) {
+    // Store tool result by toolUseId for later lookup (cap at 50 per agent)
+    if (!this.subagentToolResults.has(data.agentId)) {
+      this.subagentToolResults.set(data.agentId, new Map());
+    }
+    const resultsMap = this.subagentToolResults.get(data.agentId);
+    resultsMap.set(data.toolUseId, data);
+    if (resultsMap.size > 50) {
+      const oldest = resultsMap.keys().next().value;
+      resultsMap.delete(oldest);
+    }
+
+    // Add to activity stream
+    const activity = this.subagentActivity.get(data.agentId) || [];
+    activity.push({ type: 'tool_result', ...data });
+    if (activity.length > 50) activity.shift();
+    this.subagentActivity.set(data.agentId, activity);
+
+    if (this.activeSubagentId === data.agentId) {
+      this.renderSubagentDetail();
+    }
+    // Update floating window (debounced)
+    if (this.subagentWindows.has(data.agentId)) {
+      this.scheduleSubagentWindowRender(data.agentId);
+    }
+  }
+
+  async _onSubagentCompleted(data) {
+    const existing = this.subagents.get(data.agentId);
+    if (existing) {
+      existing.status = 'completed';
+      this.subagents.set(data.agentId, existing);
+    }
+    this.renderSubagentPanel();
+    this.updateSubagentWindows();
+
+    // Auto-minimize completed subagent windows
+    if (this.subagentWindows.has(data.agentId)) {
+      const windowData = this.subagentWindows.get(data.agentId);
+      if (windowData && !windowData.minimized) {
+        await this.closeSubagentWindow(data.agentId); // This minimizes to tab
+        this.saveSubagentWindowStates(); // Persist the minimized state
+      }
+    }
+
+    // Notify about subagent completion
+    const parentId = this.subagentParentMap.get(data.agentId);
+    const parentSession = parentId ? this.sessions.get(parentId) : null;
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'subagent-complete',
+      sessionId: parentId || existing?.sessionId || data.sessionId,
+      sessionName: parentSession?.name || parentId || data.sessionId,
+      title: 'Subagent Completed',
+      message: existing?.description || data.description || 'Background agent finished',
+    });
+
+    // Clean up activity/tool data for completed agents after 5 minutes
+    // This prevents memory leaks from long-running sessions with many subagents
+    setTimeout(() => {
+      const agent = this.subagents.get(data.agentId);
+      // Only clean up if agent is still completed (not restarted)
+      if (agent?.status === 'completed') {
+        this.subagentActivity.delete(data.agentId);
+        this.subagentToolResults.delete(data.agentId);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+
+    // Prune stale completed agents from main maps after 30 minutes
+    // Keeps subagents/subagentParentMap from growing unbounded in 24h sessions
+    setTimeout(() => {
+      const agent = this.subagents.get(data.agentId);
+      if (agent?.status === 'completed' && !this.subagentWindows.has(data.agentId)) {
+        this.subagents.delete(data.agentId);
+        this.subagentParentMap.delete(data.agentId);
+      }
+    }, 30 * 60 * 1000); // 30 minutes
+  }
+
+  // Images
+  _onImageDetected(data) {
+    console.log('[Image Detected]', data);
+    this.openImagePopup(data);
+  }
+
+  // Tunnel
+  _onTunnelStarted(data) {
+    console.log('[Tunnel] Started:', data.url);
+    this._dismissTunnelConnecting();
+    this._updateTunnelUrlDisplay(data.url);
+    const welcomeVisible = document.getElementById('welcomeOverlay')?.classList.contains('visible');
+    if (welcomeVisible) {
+      // On welcome screen: QR appears inline, expanded first
+      this._updateWelcomeTunnelBtn(true, data.url, true);
+      this.showToast(`Tunnel active`, 'success');
+    } else {
+      // Not on welcome screen: popup QR overlay
+      this._updateWelcomeTunnelBtn(true, data.url);
+      this.showToast(`Tunnel active: ${data.url}`, 'success');
+      this.showTunnelQR();
+    }
+  }
+
+  _onTunnelStopped() {
+    console.log('[Tunnel] Stopped');
+    this._dismissTunnelConnecting();
+    this._updateTunnelUrlDisplay(null);
+    this._updateWelcomeTunnelBtn(false);
+    this.closeTunnelQR();
+  }
+
+  _onTunnelProgress(data) {
+    console.log('[Tunnel] Progress:', data.message);
+    const toast = document.getElementById('tunnelConnectingToast');
+    if (toast) {
+      toast.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
+    }
+    // Also update button text if on welcome screen
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (btn?.classList.contains('connecting')) {
+      btn.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
+    }
+  }
+
+  _onTunnelError(data) {
+    console.warn('[Tunnel] Error:', data.message);
+    this._dismissTunnelConnecting();
+    this.showToast(`Tunnel error: ${data.message}`, 'error');
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (btn) { btn.disabled = false; btn.classList.remove('connecting'); }
+  }
+
+  _onTunnelQrRotated(data) {
+    if (data.svg) {
+      const container = document.getElementById('tunnelQrContainer');
+      if (container) container.innerHTML = data.svg;
+      const welcomeInner = document.getElementById('welcomeQrInner');
+      if (welcomeInner) welcomeInner.innerHTML = data.svg;
+    } else {
+      this._refreshTunnelQrFromApi();
+    }
+    this._resetQrCountdown();
+  }
+
+  _onTunnelQrRegenerated(data) {
+    if (data.svg) {
+      const container = document.getElementById('tunnelQrContainer');
+      if (container) container.innerHTML = data.svg;
+      const welcomeInner = document.getElementById('welcomeQrInner');
+      if (welcomeInner) welcomeInner.innerHTML = data.svg;
+    } else {
+      this._refreshTunnelQrFromApi();
+    }
+    this._resetQrCountdown();
+  }
+
+  _onTunnelQrAuthUsed(data) {
+    const ua = data.ua || 'Unknown device';
+    const family = ua.match(/Chrome|Firefox|Safari|Edge|Mobile/)?.[0] || 'Browser';
+    this.showToast(`Device authenticated via QR (${family}, ${data.ip}). Not you?`, 'warning', {
+      duration: 10000,
+      action: { label: 'Revoke All', onClick: () => {
+        fetch('/api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          .then(() => this.showToast('All sessions revoked', 'success'))
+          .catch(() => this.showToast('Failed to revoke sessions', 'error'));
+      }},
+    });
+  }
+
+  // Plan orchestration
+  _onPlanSubagent(data) {
+    console.log('[Plan Subagent]', data);
+    this.handlePlanSubagentEvent(data);
+  }
+
+  _onPlanProgress(data) {
+    console.log('[Plan Progress]', data);
+
+    // Update UI if we have a progress handler registered
+    if (this._planProgressHandler) {
+      this._planProgressHandler({ type: 'plan:progress', data });
+    }
+
+    // Also update the loading display directly for better feedback
+    const titleEl = document.getElementById('planLoadingTitle');
+    const hintEl = document.getElementById('planLoadingHint');
+
+    if (titleEl && data.phase) {
+      const phaseLabels = {
+        'parallel-analysis': 'Running parallel analysis...',
+        'subagent': data.detail || 'Subagent working...',
+        'synthesis': 'Synthesizing results...',
+        'verification': 'Running verification...',
+      };
+      titleEl.textContent = phaseLabels[data.phase] || data.phase;
+    }
+    if (hintEl && data.detail) {
+      hintEl.textContent = data.detail;
+    }
+  }
+
+  _onPlanStarted(data) {
+    console.log('[Plan Started]', data);
+    this.activePlanOrchestratorId = data.orchestratorId;
+    this.planGenerationStopped = false; // Reset flag for new generation
+    this.renderMonitorPlanAgents();
+  }
+
+  _onPlanCancelled(data) {
+    console.log('[Plan Cancelled]', data);
+    if (this.activePlanOrchestratorId === data.orchestratorId) {
+      this.activePlanOrchestratorId = null;
+    }
+    this.renderMonitorPlanAgents();
+  }
+
+  _onPlanCompleted(data) {
+    console.log('[Plan Completed]', data);
+    if (this.activePlanOrchestratorId === data.orchestratorId) {
+      this.activePlanOrchestratorId = null;
+    }
+    this.renderMonitorPlanAgents();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Connection Status, Input Queuing & State Initialization
+  // ═══════════════════════════════════════════════════════════════
 
   setConnectionStatus(status) {
     this._connectionStatus = status;
@@ -2787,7 +2912,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Tabs ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Tabs
+  // ═══════════════════════════════════════════════════════════════
 
   renderSessionTabs() {
     // Debounce renders at 100ms to prevent excessive DOM updates
@@ -3017,7 +3144,9 @@ class CodemanApp {
   }
 
 
-  // ========== Tab Order and Drag-and-Drop ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Tab Order and Drag-and-Drop
+  // ═══════════════════════════════════════════════════════════════
 
   // Sync sessionOrder with current sessions (preserve order for existing, add new at end)
   syncSessionOrder() {
@@ -3140,6 +3269,9 @@ class CodemanApp {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Session Lifecycle — select, close, navigate
+  // ═══════════════════════════════════════════════════════════════
 
   getSessionName(session) {
     // Use custom name if set
@@ -3542,7 +3674,9 @@ class CodemanApp {
     this.selectSession(this.sessionOrder[prevIndex]);
   }
 
-  // ========== Navigation ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Navigation
+  // ═══════════════════════════════════════════════════════════════
 
   goHome() {
     // Deselect active session and show welcome screen
@@ -3554,7 +3688,9 @@ class CodemanApp {
     this.renderRalphStatePanel();
   }
 
-  // ========== Ralph Loop Wizard (methods in ralph-wizard.js) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Ralph Loop Wizard (methods in ralph-wizard.js)
+  // ═══════════════════════════════════════════════════════════════
 
   // Wizard state (initialized here, methods loaded from ralph-wizard.js)
   ralphWizardStep = 1;
@@ -3574,7 +3710,9 @@ class CodemanApp {
   planLoadingTimer = null;
   planLoadingStartTime = null;
 
-  // ========== Quick Start ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Quick Start
+  // ═══════════════════════════════════════════════════════════════
 
   async loadQuickStartCases(selectCaseName = null, settingsPromise = null) {
     try {
@@ -4040,7 +4178,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Directory Input ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Directory Input
+  // ═══════════════════════════════════════════════════════════════
 
   toggleDirInput() {
     const btn = document.querySelector('#dirDisplay').parentElement;
@@ -4066,7 +4206,9 @@ class CodemanApp {
     }, 100);
   }
 
-  // ========== Respawn Banner ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Banner
+  // ═══════════════════════════════════════════════════════════════
 
   showRespawnBanner() {
     this.$('respawnBanner').style.display = 'flex';
@@ -4339,7 +4481,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Countdown Timer Display Methods ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Countdown Timer Display Methods
+  // ═══════════════════════════════════════════════════════════════
 
   addActionLogEntry(sessionId, action) {
     // Only keep truly interesting events - no spam
@@ -4497,7 +4641,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Kill Sessions ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Kill Sessions
+  // ═══════════════════════════════════════════════════════════════
 
   async killActiveSession() {
     if (!this.activeSessionId) {
@@ -4533,7 +4679,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Terminal Controls ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Controls
+  // ═══════════════════════════════════════════════════════════════
 
   clearTerminal() {
     this.terminal.clear();
@@ -4686,7 +4834,9 @@ class CodemanApp {
     });
   }
 
-  // ========== Timer ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Timer
+  // ═══════════════════════════════════════════════════════════════
 
   showTimer() {
     document.getElementById('timerBanner').style.display = 'flex';
@@ -4734,7 +4884,9 @@ class CodemanApp {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   }
 
-  // ========== Tokens ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Tokens
+  // ═══════════════════════════════════════════════════════════════
 
   updateCost() {
     // Now updates tokens instead of cost
@@ -4788,7 +4940,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Options Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Options Modal
+  // ═══════════════════════════════════════════════════════════════
 
   openSessionOptions(sessionId) {
     const session = this.sessions.get(sessionId);
@@ -5035,7 +5189,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Respawn Presets ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Presets
+  // ═══════════════════════════════════════════════════════════════
 
   loadRespawnPresets() {
     const saved = localStorage.getItem('codeman-respawn-presets');
@@ -5351,7 +5507,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Run Summary Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Run Summary Modal
+  // ═══════════════════════════════════════════════════════════════
 
   async openRunSummary(sessionId) {
     // Open session options modal and switch to summary tab
@@ -5605,7 +5763,9 @@ class CodemanApp {
     this.closeSessionOptions();
   }
 
-  // ========== Session Options Modal Tabs ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Options Modal Tabs
+  // ═══════════════════════════════════════════════════════════════
 
   switchOptionsTab(tabName) {
     // Toggle active class on tab buttons
@@ -5723,7 +5883,9 @@ class CodemanApp {
     });
   }
 
-  // ========== Web Push ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Web Push
+  // ═══════════════════════════════════════════════════════════════
 
   registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
@@ -5863,7 +6025,9 @@ class CodemanApp {
     }
   }
 
-  // ========== App Settings Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // App Settings Modal
+  // ═══════════════════════════════════════════════════════════════
 
   openAppSettings() {
     // Load current settings
@@ -6373,7 +6537,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Lifecycle Log ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Lifecycle Log
+  // ═══════════════════════════════════════════════════════════════
 
   openLifecycleLog() {
     const win = document.getElementById('lifecycleWindow');
@@ -6693,6 +6859,10 @@ class CodemanApp {
       console.warn('Failed to save model config:', err);
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Visibility Settings & Device-Specific Defaults
+  // ═══════════════════════════════════════════════════════════════
 
   // Get the global Ralph tracker enabled setting
   isRalphTrackerEnabledByDefault() {
@@ -7049,7 +7219,9 @@ class CodemanApp {
   }
 
 
-  // ========== Persistent Parent Associations ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Persistent Parent Associations
+  // ═══════════════════════════════════════════════════════════════
   // This is the ROCK-SOLID system for tracking which tab an agent belongs to.
   // Once an agent's parent is discovered, it's saved here PERMANENTLY.
 
@@ -7155,7 +7327,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Help Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Help Modal
+  // ═══════════════════════════════════════════════════════════════
 
   showHelp() {
     const modal = document.getElementById('helpModal');
@@ -7190,7 +7364,9 @@ class CodemanApp {
     this.subagentPanelVisible = false;
   }
 
-  // ========== Token Statistics Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Token Statistics Modal
+  // ═══════════════════════════════════════════════════════════════
 
   async openTokenStats() {
     try {
@@ -7315,7 +7491,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Monitor Panel (combined Mux Sessions + Background Tasks) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Monitor Panel (combined Mux Sessions + Background Tasks)
+  // ═══════════════════════════════════════════════════════════════
 
   async toggleMonitorPanel() {
     const panel = document.getElementById('monitorPanel');
@@ -7340,7 +7518,9 @@ class CodemanApp {
     this.toggleMonitorPanel();
   }
 
-  // ========== Monitor Panel Detach & Drag ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Monitor Panel Detach & Drag
+  // ═══════════════════════════════════════════════════════════════
 
   toggleMonitorDetach() {
     const panel = document.getElementById('monitorPanel');
@@ -7435,7 +7615,9 @@ class CodemanApp {
     header.addEventListener('touchstart', onStart, { passive: false });
   }
 
-  // ========== Subagents Panel Detach & Drag ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagents Panel Detach & Drag
+  // ═══════════════════════════════════════════════════════════════
 
   toggleSubagentsDetach() {
     const panel = document.getElementById('subagentsPanel');
@@ -7618,7 +7800,9 @@ class CodemanApp {
     return result;
   }
 
-  // ========== Enhanced Ralph Wiggum Loop Panel ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Enhanced Ralph Wiggum Loop Panel
+  // ═══════════════════════════════════════════════════════════════
 
   updateRalphState(sessionId, updates) {
     const existing = this.ralphStates.get(sessionId) || { loop: null, todos: [] };
@@ -7666,7 +7850,9 @@ class CodemanApp {
     this.renderRalphStatePanel();
   }
 
-  // ========== @fix_plan.md Integration ==========
+  // ═══════════════════════════════════════════════════════════════
+  // @fix_plan.md Integration
+  // ═══════════════════════════════════════════════════════════════
 
   toggleRalphMenu() {
     const dropdown = document.getElementById('ralphDropdown');
@@ -8453,7 +8639,9 @@ class CodemanApp {
     return this.getRalphTaskIcon(status);
   }
 
-  // ========== Plan Versioning ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Versioning
+  // ═══════════════════════════════════════════════════════════════
 
   // Update the plan version display in the Ralph panel
   updatePlanVersionDisplay(version, historyLength) {
@@ -8593,7 +8781,9 @@ class CodemanApp {
     return `${days}d ago`;
   }
 
-  // ========== Subagent Panel (Claude Code Background Agents) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Panel (Claude Code Background Agents)
+  // ═══════════════════════════════════════════════════════════════
 
   // Legacy alias
   toggleSubagentPanel() {
@@ -8912,7 +9102,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Subagent Parent TAB Tracking ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Parent TAB Tracking
+  // ═══════════════════════════════════════════════════════════════
   //
   // CRITICAL: This system tracks which TAB an agent window connects to.
   // The association is stored in `subagentParentMap` (agentId -> sessionId).
@@ -9404,7 +9596,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Agent Teams ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Agent Teams
+  // ═══════════════════════════════════════════════════════════════
 
   /** Initialize an xterm.js terminal for a teammate's tmux pane */
   initTeammateTerminal(agentId, paneInfo, windowElement) {
@@ -9802,7 +9996,9 @@ class CodemanApp {
     return info?.color || 'blue';
   }
 
-  // ========== Project Insights Panel (Bash Tools with Clickable File Paths) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Project Insights Panel (Bash Tools with Clickable File Paths)
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Normalize a file path to its canonical form for comparison.
@@ -10115,7 +10311,9 @@ class CodemanApp {
     }
   }
 
-  // ========== File Browser Panel ==========
+  // ═══════════════════════════════════════════════════════════════
+  // File Browser Panel
+  // ═══════════════════════════════════════════════════════════════
 
   // File tree data and state
   fileBrowserData = null;
@@ -10422,7 +10620,9 @@ class CodemanApp {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
-  // ========== Log Viewer Windows (Floating File Streamers) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Log Viewer Windows (Floating File Streamers)
+  // ═══════════════════════════════════════════════════════════════
 
   openLogViewerWindow(filePath, sessionId) {
     sessionId = sessionId || this.activeSessionId;
@@ -10569,7 +10769,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Image Popup Windows (Auto-popup for Screenshots) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Image Popup Windows (Auto-popup for Screenshots)
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Open a popup window to display a detected image.
@@ -10708,7 +10910,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Mux Sessions (in Monitor Panel) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Mux Sessions (in Monitor Panel)
+  // ═══════════════════════════════════════════════════════════════
 
   async loadMuxSessions() {
     try {
@@ -10783,7 +10987,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Case Settings ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Case Settings
+  // ═══════════════════════════════════════════════════════════════
 
   toggleCaseSettings() {
     const popover = document.getElementById('caseSettingsPopover');
@@ -10860,7 +11066,9 @@ class CodemanApp {
     if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
   }
 
-  // ========== Create Case Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Create Case Modal
+  // ═══════════════════════════════════════════════════════════════
 
   showCreateCaseModal() {
     document.getElementById('newCaseName').value = '';
@@ -11014,9 +11222,9 @@ class CodemanApp {
     }
   }
 
-  // ============================================================================
+  // ═══════════════════════════════════════════════════════════════
   // Mobile Case Picker
-  // ============================================================================
+  // ═══════════════════════════════════════════════════════════════
 
   showMobileCasePicker() {
     const modal = document.getElementById('mobileCasePickerModal');
@@ -11273,7 +11481,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Plan Wizard Agents in Monitor ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Wizard Agents in Monitor
+  // ═══════════════════════════════════════════════════════════════
 
   renderMonitorPlanAgents() {
     const section = document.getElementById('monitorPlanAgentsSection');
@@ -11357,7 +11567,9 @@ class CodemanApp {
     this.showToast('Plan generation cancelled', 'success');
   }
 
-  // ========== Toast ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Toast
+  // ═══════════════════════════════════════════════════════════════
 
   // Cached toast container for performance
   _toastContainer = null;
@@ -11407,7 +11619,9 @@ class CodemanApp {
     }, duration);
   }
 
-  // ========== System Stats ==========
+  // ═══════════════════════════════════════════════════════════════
+  // System Stats
+  // ═══════════════════════════════════════════════════════════════
 
   startSystemStatsPolling() {
     // Clear any existing interval to prevent duplicates
@@ -11482,6 +11696,10 @@ class CodemanApp {
   }
 
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Module Init — localStorage migration and app start
+// ═══════════════════════════════════════════════════════════════
 
 // Migrate legacy localStorage keys (claudeman-* → codeman-*)
 try {

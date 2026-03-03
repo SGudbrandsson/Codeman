@@ -1,8 +1,29 @@
+/**
+ * @fileoverview Shared constants, utility functions, and SSE event type registry for all frontend modules.
+ *
+ * This is the first script loaded in index.html. Every other frontend module depends on the
+ * globals defined here: timing constants, Z-index layers, DEC 2026 sync markers, respawn
+ * preset definitions, the SSE_EVENTS registry, and shared utilities (escapeHtml, extractSyncSegments,
+ * getEventCoords, scheduleBackground, urlBase64ToUint8Array).
+ *
+ * @globals {function} urlBase64ToUint8Array - VAPID key conversion for Web Push
+ * @globals {function} scheduleBackground - scheduler.postTask wrapper (background priority)
+ * @globals {function} extractSyncSegments - DEC 2026 terminal sync marker parser
+ * @globals {function} getEventCoords - Unified mouse/touch coordinate extractor
+ * @globals {function} escapeHtml - XSS-safe HTML escaping
+ * @globals {object} SSE_EVENTS - Centralized SSE event type constants (~73 event types)
+ * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
+ *
+ * @dependency None (first in load order)
+ * @loadorder 1 of 9 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
+ *   → keyboard-accessory.js → app.js → ralph-wizard.js → api-client.js → subagent-windows.js
+ */
+
 // Codeman — Shared constants and utility functions for frontend modules
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Web Push Utilities
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /** Convert a base64-encoded VAPID key to Uint8Array for pushManager.subscribe() */
 function urlBase64ToUint8Array(base64String) {
@@ -16,9 +37,9 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Constants
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 // Default terminal scrollback (can be changed via settings)
 const DEFAULT_SCROLLBACK = 5000;
@@ -157,9 +178,115 @@ const BUILTIN_RESPAWN_PRESETS = [
   },
 ];
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
+// SSE Event Types
+// ═══════════════════════════════════════════════════════════════
+
+/** @type {Record<string, string>} Centralized SSE event type constants */
+const SSE_EVENTS = {
+  // Core
+  INIT: 'init',
+
+  // Session lifecycle
+  SESSION_CREATED: 'session:created',
+  SESSION_UPDATED: 'session:updated',
+  SESSION_DELETED: 'session:deleted',
+  SESSION_TERMINAL: 'session:terminal',
+  SESSION_NEEDS_REFRESH: 'session:needsRefresh',
+  SESSION_CLEAR_TERMINAL: 'session:clearTerminal',
+  SESSION_COMPLETION: 'session:completion',
+  SESSION_ERROR: 'session:error',
+  SESSION_EXIT: 'session:exit',
+  SESSION_IDLE: 'session:idle',
+  SESSION_WORKING: 'session:working',
+  SESSION_AUTO_CLEAR: 'session:autoClear',
+  SESSION_CLI_INFO: 'session:cliInfo',
+
+  // Scheduled runs
+  SCHEDULED_CREATED: 'scheduled:created',
+  SCHEDULED_UPDATED: 'scheduled:updated',
+  SCHEDULED_COMPLETED: 'scheduled:completed',
+  SCHEDULED_STOPPED: 'scheduled:stopped',
+
+  // Respawn
+  RESPAWN_STARTED: 'respawn:started',
+  RESPAWN_STOPPED: 'respawn:stopped',
+  RESPAWN_STATE_CHANGED: 'respawn:stateChanged',
+  RESPAWN_CYCLE_STARTED: 'respawn:cycleStarted',
+  RESPAWN_BLOCKED: 'respawn:blocked',
+  RESPAWN_AUTO_ACCEPT_SENT: 'respawn:autoAcceptSent',
+  RESPAWN_DETECTION_UPDATE: 'respawn:detectionUpdate',
+  RESPAWN_TIMER_STARTED: 'respawn:timerStarted',
+  RESPAWN_TIMER_CANCELLED: 'respawn:timerCancelled',
+  RESPAWN_TIMER_COMPLETED: 'respawn:timerCompleted',
+  RESPAWN_ERROR: 'respawn:error',
+  RESPAWN_ACTION_LOG: 'respawn:actionLog',
+
+  // Tasks
+  TASK_CREATED: 'task:created',
+  TASK_COMPLETED: 'task:completed',
+  TASK_FAILED: 'task:failed',
+  TASK_UPDATED: 'task:updated',
+
+  // Mux (tmux)
+  MUX_CREATED: 'mux:created',
+  MUX_KILLED: 'mux:killed',
+  MUX_DIED: 'mux:died',
+  MUX_STATS_UPDATED: 'mux:statsUpdated',
+
+  // Ralph
+  SESSION_RALPH_LOOP_UPDATE: 'session:ralphLoopUpdate',
+  SESSION_RALPH_TODO_UPDATE: 'session:ralphTodoUpdate',
+  SESSION_RALPH_COMPLETION_DETECTED: 'session:ralphCompletionDetected',
+  SESSION_RALPH_STATUS_UPDATE: 'session:ralphStatusUpdate',
+  SESSION_CIRCUIT_BREAKER_UPDATE: 'session:circuitBreakerUpdate',
+  SESSION_EXIT_GATE_MET: 'session:exitGateMet',
+
+  // Bash tools
+  SESSION_BASH_TOOL_START: 'session:bashToolStart',
+  SESSION_BASH_TOOL_END: 'session:bashToolEnd',
+  SESSION_BASH_TOOLS_UPDATE: 'session:bashToolsUpdate',
+
+  // Hooks (Claude Code hook events)
+  HOOK_IDLE_PROMPT: 'hook:idle_prompt',
+  HOOK_PERMISSION_PROMPT: 'hook:permission_prompt',
+  HOOK_ELICITATION_DIALOG: 'hook:elicitation_dialog',
+  HOOK_STOP: 'hook:stop',
+  HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
+  HOOK_TASK_COMPLETED: 'hook:task_completed',
+
+  // Subagents (Claude Code background agents)
+  SUBAGENT_DISCOVERED: 'subagent:discovered',
+  SUBAGENT_UPDATED: 'subagent:updated',
+  SUBAGENT_TOOL_CALL: 'subagent:tool_call',
+  SUBAGENT_PROGRESS: 'subagent:progress',
+  SUBAGENT_MESSAGE: 'subagent:message',
+  SUBAGENT_TOOL_RESULT: 'subagent:tool_result',
+  SUBAGENT_COMPLETED: 'subagent:completed',
+
+  // Images
+  IMAGE_DETECTED: 'image:detected',
+
+  // Tunnel
+  TUNNEL_STARTED: 'tunnel:started',
+  TUNNEL_STOPPED: 'tunnel:stopped',
+  TUNNEL_PROGRESS: 'tunnel:progress',
+  TUNNEL_ERROR: 'tunnel:error',
+  TUNNEL_QR_ROTATED: 'tunnel:qrRotated',
+  TUNNEL_QR_REGENERATED: 'tunnel:qrRegenerated',
+  TUNNEL_QR_AUTH_USED: 'tunnel:qrAuthUsed',
+
+  // Plan orchestration
+  PLAN_SUBAGENT: 'plan:subagent',
+  PLAN_PROGRESS: 'plan:progress',
+  PLAN_STARTED: 'plan:started',
+  PLAN_CANCELLED: 'plan:cancelled',
+  PLAN_COMPLETED: 'plan:completed',
+};
+
+// ═══════════════════════════════════════════════════════════════
 // Utility Functions
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * Get unified coordinates from mouse or touch event.
