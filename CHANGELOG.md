@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.4
+
+### Patch Changes
+
+- Fix Chrome tab freeze from flicker filter buffer accumulation during active sessions, and fix shell mode feedback delay by excluding shell sessions from cursor-up filter
+
 ## 0.3.3
 
 ### Patch Changes
