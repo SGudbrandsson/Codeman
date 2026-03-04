@@ -3560,6 +3560,24 @@ class CodemanApp {
           if (fileBrowserPanel) {
             fileBrowserPanel.classList.add('visible');
             this.loadFileBrowser(sessionId);
+            // Attach drag listeners if not already attached
+            if (!this.fileBrowserDragListeners) {
+              const header = fileBrowserPanel.querySelector('.file-browser-header');
+              if (header) {
+                const onFirstDrag = () => {
+                  if (!fileBrowserPanel.style.left) {
+                    const rect = fileBrowserPanel.getBoundingClientRect();
+                    fileBrowserPanel.style.left = `${rect.left}px`;
+                    fileBrowserPanel.style.top = `${rect.top}px`;
+                    fileBrowserPanel.style.right = 'auto';
+                  }
+                };
+                header.addEventListener('mousedown', onFirstDrag);
+                header.addEventListener('touchstart', onFirstDrag, { passive: true });
+                this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
+                this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
+              }
+            }
           }
         }
       });
@@ -7050,6 +7068,25 @@ class CodemanApp {
       if (showFileBrowser && this.activeSessionId) {
         fileBrowserPanel.classList.add('visible');
         this.loadFileBrowser(this.activeSessionId);
+        // Attach drag listeners if not already attached
+        if (!this.fileBrowserDragListeners) {
+          const header = fileBrowserPanel.querySelector('.file-browser-header');
+          if (header) {
+            // Convert right-positioned to left/top before drag so makeWindowDraggable works
+            const onFirstDrag = () => {
+              if (!fileBrowserPanel.style.left) {
+                const rect = fileBrowserPanel.getBoundingClientRect();
+                fileBrowserPanel.style.left = `${rect.left}px`;
+                fileBrowserPanel.style.top = `${rect.top}px`;
+                fileBrowserPanel.style.right = 'auto';
+              }
+            };
+            header.addEventListener('mousedown', onFirstDrag);
+            header.addEventListener('touchstart', onFirstDrag, { passive: true });
+            this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
+            this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
+          }
+        }
       } else {
         fileBrowserPanel.classList.remove('visible');
       }
@@ -10349,6 +10386,7 @@ class CodemanApp {
   fileBrowserExpandedDirs = new Set();
   fileBrowserFilter = '';
   fileBrowserAllExpanded = false;
+  fileBrowserDragListeners = null;
   filePreviewContent = '';
 
   async loadFileBrowser(sessionId) {
@@ -10532,6 +10570,29 @@ class CodemanApp {
     const panel = this.$('fileBrowserPanel');
     if (panel) {
       panel.classList.remove('visible');
+      // Reset position so it reopens at default location
+      panel.style.left = '';
+      panel.style.top = '';
+      panel.style.bottom = '';
+      panel.style.right = '';
+    }
+    // Clean up drag listeners
+    if (this.fileBrowserDragListeners) {
+      const dl = this.fileBrowserDragListeners;
+      document.removeEventListener('mousemove', dl.move);
+      document.removeEventListener('mouseup', dl.up);
+      document.removeEventListener('touchmove', dl.touchMove);
+      document.removeEventListener('touchend', dl.up);
+      document.removeEventListener('touchcancel', dl.up);
+      if (dl.handle) {
+        dl.handle.removeEventListener('mousedown', dl.handleMouseDown);
+        dl.handle.removeEventListener('touchstart', dl.handleTouchStart);
+        if (dl._onFirstDrag) {
+          dl.handle.removeEventListener('mousedown', dl._onFirstDrag);
+          dl.handle.removeEventListener('touchstart', dl._onFirstDrag);
+        }
+      }
+      this.fileBrowserDragListeners = null;
     }
     // Save setting
     const settings = this.loadAppSettingsFromStorage();
