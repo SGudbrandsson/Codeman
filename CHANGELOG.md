@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.2
+
+### Patch Changes
+
+- Make file browser panel draggable by its header
+
 ## 0.3.1
 
 ### Patch Changes
