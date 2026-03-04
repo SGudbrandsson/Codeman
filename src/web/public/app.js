@@ -1368,8 +1368,9 @@ class CodemanApp {
         this.terminal.write(chunk);
         offset += chunkSize;
 
-        // Schedule next chunk on next frame
-        requestAnimationFrame(writeChunk);
+        // Double-RAF: yields to both the browser's layout/paint AND the WebGL renderer's
+        // GPU flush. Single RAF can still block if ReadPixels is synchronous.
+        requestAnimationFrame(() => requestAnimationFrame(writeChunk));
       };
 
       // Start writing
@@ -3436,12 +3437,15 @@ class CodemanApp {
     // belt-and-suspenders guard for any edge cases.
     this._restoringFlushedState = true;
     try {
-      // Instant cache restore — show previous buffer immediately while network fetch runs
+      // Instant cache restore — show previous buffer via chunked write to avoid WebGL GPU stalls.
+      // Direct terminal.write() of large cached buffers (256KB+) can block the main thread
+      // for 5+ seconds while the WebGL renderer processes ReadPixels synchronously.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       if (cachedBuffer) {
         this.terminal.clear();
         this.terminal.reset();
-        this.terminal.write(cachedBuffer);
+        await this.chunkedTerminalWrite(cachedBuffer);
+        if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
       }
 
