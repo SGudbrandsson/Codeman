@@ -16,17 +16,17 @@ import { IOSKeyboard } from '../components/IOSKeyboard';
 // ─── Scene timing (frames @ 30fps) ───
 const TITLE_DUR = 60;
 const PHONES_DUR = 30;
-const TYPING_DUR = 420;
+const TYPING_DUR = 468;
 const HOLD_DUR = 60;
 const OUTRO_DUR = 45;
 
 const TITLE_START = 0;
 const PHONES_START = TITLE_DUR; // 60
 const TYPING_START = PHONES_START + PHONES_DUR; // 90
-const HOLD_START = TYPING_START + TYPING_DUR; // 510
-const OUTRO_START = HOLD_START + HOLD_DUR; // 570
+const HOLD_START = TYPING_START + TYPING_DUR; // 558
+const OUTRO_START = HOLD_START + HOLD_DUR; // 618
 
-export const ZEROLAG_TOTAL_FRAMES = OUTRO_START + OUTRO_DUR; // 615
+export const ZEROLAG_TOTAL_FRAMES = OUTRO_START + OUTRO_DUR; // 663
 
 // ─── iPhone 17 Pro safe area ───
 const SAFE_AREA_TOP = 59; // Below Dynamic Island
@@ -42,25 +42,61 @@ const TERMINAL_TOP = SAFE_AREA_TOP + 52;
 const TERMINAL_LEFT = 14;
 const TERMINAL_FONT = 22; // Large for video readability
 
-// ─── Typing schedule ───
-const TYPED_TEXT = 'fix the auth bug in the login flow';
+// ─── Typing schedule (with typo + backspace correction) ───
+const CORRECT_TEXT = 'fix the auth bug in the login flow';
 const FRAME_GAP = 12; // ~400ms between keystrokes
+const TYPO_INDEX = 28; // After "logi", type "m" instead of "n"
 
 // Remote connection lag: 600ms-1.2s+ per char (18-36+ frames)
 const LAGGY_DELAYS = [
   24, 30, 36, 32, 26, 22, 34, 28, 38, 20, 30, 24, 32, 26, 36, 22,
   30, 24, 32, 28, 34, 26, 30, 22, 28, 36, 24, 30, 32, 26, 34, 28, 24, 30,
+  26, 32, 28, 34,
 ];
 
-type KeyEvent = { frame: number; char: string; lagDelay: number };
+type KeyAction = { frame: number; action: 'type' | 'backspace'; char: string; lagDelay: number };
 
-const TYPING_SCHEDULE: KeyEvent[] = TYPED_TEXT.split('').map((char, i) => ({
-  frame: i * FRAME_GAP,
-  char,
-  lagDelay: LAGGY_DELAYS[i % LAGGY_DELAYS.length],
-}));
+const buildSchedule = (): KeyAction[] => {
+  const actions: KeyAction[] = [];
+  let idx = 0;
+  const lag = (i: number) => LAGGY_DELAYS[i % LAGGY_DELAYS.length];
 
-const CONFIRM_DELAY = 14;
+  // Type correctly up to typo point: "fix the auth bug in the logi"
+  for (let i = 0; i < TYPO_INDEX; i++) {
+    actions.push({ frame: idx * FRAME_GAP, action: 'type', char: CORRECT_TEXT[i], lagDelay: lag(idx) });
+    idx++;
+  }
+
+  // Typo: type "m" instead of "n"
+  actions.push({ frame: idx * FRAME_GAP, action: 'type', char: 'm', lagDelay: lag(idx) });
+  idx++;
+
+  // Backspace to fix it
+  actions.push({ frame: idx * FRAME_GAP, action: 'backspace', char: '⌫', lagDelay: lag(idx) });
+  idx++;
+
+  // Type correct remaining: "n flow"
+  for (let i = TYPO_INDEX; i < CORRECT_TEXT.length; i++) {
+    actions.push({ frame: idx * FRAME_GAP, action: 'type', char: CORRECT_TEXT[i], lagDelay: lag(idx) });
+    idx++;
+  }
+
+  return actions;
+};
+
+const TYPING_SCHEDULE = buildSchedule();
+
+/** Replay actions in order up to current frame, computing the visible text buffer */
+const computeVisibleText = (frame: number, withLag: boolean): string => {
+  let buffer = '';
+  for (const a of TYPING_SCHEDULE) {
+    const threshold = withLag ? a.frame + a.lagDelay : a.frame;
+    if (frame < threshold) break; // TCP-ordered: stop at first unresolved
+    if (a.action === 'backspace') buffer = buffer.slice(0, -1);
+    else buffer += a.char;
+  }
+  return buffer;
+};
 
 // ─── iOS Status Bar (sits in the safe area, flanking Dynamic Island) ───
 const IOSStatusBar: React.FC = () => (
@@ -295,13 +331,8 @@ const OutroScene: React.FC = () => {
 const TypingDemo: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const laggyChars = TYPING_SCHEDULE.filter((ev) => frame >= ev.frame + ev.lagDelay).map((ev) => ev.char);
-  const laggyTyped = laggyChars.join('');
-
-  const zerolagOverlay = TYPING_SCHEDULE.filter((ev) => frame >= ev.frame).map((ev) => ({
-    char: ev.char,
-    confirmed: frame >= ev.frame + CONFIRM_DELAY,
-  }));
+  const laggyTyped = computeVisibleText(frame, true);
+  const zerolagTyped = computeVisibleText(frame, false);
 
   let activeKey: string | undefined;
   let pressAge = 99;
@@ -326,12 +357,12 @@ const TypingDemo: React.FC = () => {
         }}
       >
         <div>
-          <MobileCodeman typed={laggyTyped} cursorVisible activeKey={activeKey} pressAge={pressAge} noAnimation />
-          <PhoneLabel title="Without Zerolag" detail="600ms–1.2s delay" dotColor={colors.accent.red} detailColor={colors.accent.red} />
+          <MobileCodeman typed={zerolagTyped} cursorVisible activeKey={activeKey} pressAge={pressAge} noAnimation />
+          <PhoneLabel title="With Zerolag" detail="0ms delay" dotColor={colors.accent.green} detailColor={colors.accent.green} />
         </div>
         <div>
-          <MobileCodeman typed="" overlayChars={zerolagOverlay} cursorVisible activeKey={activeKey} pressAge={pressAge} noAnimation />
-          <PhoneLabel title="With Zerolag" detail="0ms delay" dotColor={colors.accent.green} detailColor={colors.accent.green} />
+          <MobileCodeman typed={laggyTyped} cursorVisible activeKey={activeKey} pressAge={pressAge} noAnimation />
+          <PhoneLabel title="Without Zerolag" detail="600ms–1.2s delay" dotColor={colors.accent.red} detailColor={colors.accent.red} />
         </div>
       </div>
     </AbsoluteFill>
@@ -359,11 +390,11 @@ const PanelsEntrance: React.FC = () => {
       <div style={{ display: 'flex', gap: 50, alignItems: 'flex-start' }}>
         <div>
           <MobileCodeman typed="" cursorVisible noAnimation />
-          <PhoneLabel title="Without Zerolag" detail="600ms–1.2s delay" dotColor={colors.accent.red} detailColor={colors.accent.red} />
+          <PhoneLabel title="With Zerolag" detail="0ms delay" dotColor={colors.accent.green} detailColor={colors.accent.green} />
         </div>
         <div>
           <MobileCodeman typed="" cursorVisible noAnimation />
-          <PhoneLabel title="With Zerolag" detail="0ms delay" dotColor={colors.accent.green} detailColor={colors.accent.green} />
+          <PhoneLabel title="Without Zerolag" detail="600ms–1.2s delay" dotColor={colors.accent.red} detailColor={colors.accent.red} />
         </div>
       </div>
     </AbsoluteFill>

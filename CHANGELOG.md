@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.3
+
+### Patch Changes
+
+- fix: eliminate WebGL re-render flicker during tab switch by keeping renderer active instead of toggling it off/on around large buffer writes
+
 ## 0.3.2
 
 ### Patch Changes

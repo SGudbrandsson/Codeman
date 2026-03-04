@@ -71,6 +71,10 @@ export const IOSKeyboard: React.FC<IOSKeyboardProps> = ({ activeKey, pressAge = 
     activeKey !== undefined && key.toLowerCase() === activeKey.toLowerCase();
   const age = (key: string) => (isActive(key) ? pressAge : 99);
 
+  // Backspace/delete key highlight
+  const deleteHighlight = activeKey === '⌫' && pressAge < 4 ? 1 - pressAge / 4 : 0;
+  const deleteBg = deleteHighlight > 0 ? lerpColor(SPECIAL_BG, KEY_BG_ACTIVE, deleteHighlight) : SPECIAL_BG;
+
   // Key widths: 10 keys + 9 gaps in ~375px row → each key ~33px
   const letterKeyW = 33;
   // Row 2 has 9 keys → same key width but centered with side padding
@@ -126,7 +130,7 @@ export const IOSKeyboard: React.FC<IOSKeyboardProps> = ({ activeKey, pressAge = 
             width: 42,
             height: KEY_H,
             borderRadius: 5,
-            background: SPECIAL_BG,
+            background: deleteBg,
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',

@@ -1346,35 +1346,21 @@ class CodemanApp {
       // (from historical SSE data that was stored with markers)
       const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
-      // Disable WebGL during large buffer loads to prevent GPU stalls.
-      // The canvas renderer handles bulk writes without blocking the main thread.
-      // WebGL's synchronous ReadPixels calls cause "page unresponsive" on dense ANSI buffers.
-      const isLargeBuffer = cleanBuffer.length > chunkSize;
-      if (isLargeBuffer && this._webglAddon) {
-        try { this._webglAddon.dispose(); } catch (_e) { /* already disposed */ }
-        this._webglAddon = null;
-      }
-
       const finish = () => {
-        // Re-enable WebGL after buffer load completes
-        if (isLargeBuffer && !this._webglAddon && typeof WebglAddon !== 'undefined') {
-          try {
-            this._webglAddon = new WebglAddon.WebglAddon();
-            this._webglAddon.onContextLoss(() => { this._webglAddon.dispose(); this._webglAddon = null; });
-            this.terminal.loadAddon(this._webglAddon);
-          } catch (_e) { /* WebGL re-init failed — stay on canvas */ }
-        }
         this._finishBufferLoad();
         resolve();
       };
 
-      // For small buffers, write directly (WebGL stays active — small writes are fine)
-      if (!isLargeBuffer) {
+      // For small buffers, write directly — single-frame render is fast enough
+      if (cleanBuffer.length <= chunkSize) {
         this.terminal.write(cleanBuffer);
         finish();
         return;
       }
 
+      // Large buffers: write in chunks across animation frames.
+      // Each 32KB chunk keeps per-frame WebGL render work under ~5ms,
+      // avoiding GPU stalls without needing to toggle the renderer.
       let offset = 0;
       const writeChunk = () => {
         if (offset >= cleanBuffer.length) {
