@@ -542,12 +542,14 @@ class CodemanApp {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
 
-    // Activate WebGL renderer for up to 900% faster rendering (fallback to canvas on failure)
+    // Activate WebGL renderer for up to 900% faster rendering (fallback to canvas on failure).
+    // Store reference so we can disable during large buffer loads to prevent GPU stalls.
+    this._webglAddon = null;
     if (typeof WebglAddon !== 'undefined') {
       try {
-        const webglAddon = new WebglAddon.WebglAddon();
-        webglAddon.onContextLoss(() => { webglAddon.dispose(); });
-        this.terminal.loadAddon(webglAddon);
+        this._webglAddon = new WebglAddon.WebglAddon();
+        this._webglAddon.onContextLoss(() => { this._webglAddon.dispose(); this._webglAddon = null; });
+        this.terminal.loadAddon(this._webglAddon);
       } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
     }
 
@@ -1344,13 +1346,30 @@ class CodemanApp {
       // (from historical SSE data that was stored with markers)
       const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
+      // Disable WebGL during large buffer loads to prevent GPU stalls.
+      // The canvas renderer handles bulk writes without blocking the main thread.
+      // WebGL's synchronous ReadPixels calls cause "page unresponsive" on dense ANSI buffers.
+      const isLargeBuffer = cleanBuffer.length > chunkSize;
+      if (isLargeBuffer && this._webglAddon) {
+        try { this._webglAddon.dispose(); } catch (_e) { /* already disposed */ }
+        this._webglAddon = null;
+      }
+
       const finish = () => {
+        // Re-enable WebGL after buffer load completes
+        if (isLargeBuffer && !this._webglAddon && typeof WebglAddon !== 'undefined') {
+          try {
+            this._webglAddon = new WebglAddon.WebglAddon();
+            this._webglAddon.onContextLoss(() => { this._webglAddon.dispose(); this._webglAddon = null; });
+            this.terminal.loadAddon(this._webglAddon);
+          } catch (_e) { /* WebGL re-init failed — stay on canvas */ }
+        }
         this._finishBufferLoad();
         resolve();
       };
 
-      // For small buffers, write directly
-      if (cleanBuffer.length <= chunkSize) {
+      // For small buffers, write directly (WebGL stays active — small writes are fine)
+      if (!isLargeBuffer) {
         this.terminal.write(cleanBuffer);
         finish();
         return;
@@ -1368,9 +1387,8 @@ class CodemanApp {
         this.terminal.write(chunk);
         offset += chunkSize;
 
-        // Double-RAF: yields to both the browser's layout/paint AND the WebGL renderer's
-        // GPU flush. Single RAF can still block if ReadPixels is synchronous.
-        requestAnimationFrame(() => requestAnimationFrame(writeChunk));
+        // Schedule next chunk on next frame
+        requestAnimationFrame(writeChunk);
       };
 
       // Start writing
