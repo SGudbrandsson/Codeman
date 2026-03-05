@@ -630,6 +630,30 @@ export class WebServer extends EventEmitter {
       }
     });
 
+    // Crash diagnostics beacon — frontend POSTs breadcrumbs, GET to read them
+    let _crashBreadcrumbs = '';
+    this.app.addContentTypeParser('text/plain;charset=UTF-8', { parseAs: 'string' }, (_req, body, done) => {
+      try {
+        done(null, JSON.parse(body as string));
+      } catch {
+        done(null, { data: body });
+      }
+    });
+    this.app.addContentTypeParser('text/plain', { parseAs: 'string' }, (_req, body, done) => {
+      try {
+        done(null, JSON.parse(body as string));
+      } catch {
+        done(null, { data: body });
+      }
+    });
+    this.app.post('/api/crash-diag', (req, reply) => {
+      _crashBreadcrumbs = String((req.body as { data?: string })?.data || '');
+      reply.code(204).send();
+    });
+    this.app.get('/api/crash-diag', (_req, reply) => {
+      reply.code(200).send({ breadcrumbs: _crashBreadcrumbs, timestamp: Date.now() });
+    });
+
     // Register all route modules
     const ctx = this.createRouteContext();
     registerPushRoutes(this.app, ctx);

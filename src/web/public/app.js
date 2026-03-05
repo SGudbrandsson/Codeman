@@ -81,12 +81,44 @@
 // ═══════════════════════════════════════════════════════════════
 // Global Error & Performance Diagnostics
 // ═══════════════════════════════════════════════════════════════
+// Writes breadcrumbs to localStorage so they survive tab freezes.
+// After a crash, check: localStorage.getItem('codeman-crash-diag')
+
+const _crashDiag = {
+  _entries: [],
+  _maxEntries: 50,
+  log(msg) {
+    const entry = `${new Date().toISOString().slice(11,23)} ${msg}`;
+    this._entries.push(entry);
+    if (this._entries.length > this._maxEntries) this._entries.shift();
+    try { localStorage.setItem('codeman-crash-diag', this._entries.join('\n')); } catch {}
+  }
+};
+
+// Log previous crash breadcrumbs on startup
+try {
+  const prev = localStorage.getItem('codeman-crash-diag');
+  if (prev) console.log('[CRASH-DIAG] Previous session breadcrumbs:\n' + prev);
+} catch {}
+_crashDiag.log('PAGE LOAD');
+
+// Heartbeat: send breadcrumbs to server every 2s so they survive tab freezes.
+setInterval(() => {
+  try {
+    localStorage.setItem('codeman-crash-heartbeat', String(Date.now()));
+    if (_crashDiag._entries.length > 0) {
+      navigator.sendBeacon('/api/crash-diag', JSON.stringify({ data: _crashDiag._entries.join('\n') }));
+    }
+  } catch {}
+}, 2000);
 
 window.addEventListener('error', (e) => {
+  _crashDiag.log(`ERROR: ${e.message} at ${e.filename}:${e.lineno}`);
   console.error('[CRASH-DIAG] Uncaught error:', e.message, '\n  File:', e.filename, ':', e.lineno, ':', e.colno, '\n  Stack:', e.error?.stack);
 });
 
 window.addEventListener('unhandledrejection', (e) => {
+  _crashDiag.log(`UNHANDLED: ${e.reason?.message || e.reason}`);
   console.error('[CRASH-DIAG] Unhandled promise rejection:', e.reason?.message || e.reason, '\n  Stack:', e.reason?.stack);
 });
 
@@ -96,6 +128,7 @@ if (typeof PerformanceObserver !== 'undefined') {
     const longTaskObserver = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
         if (entry.duration > 200) {
+          _crashDiag.log(`LONG_TASK: ${entry.duration.toFixed(0)}ms`);
           console.warn(`[CRASH-DIAG] Long task: ${entry.duration.toFixed(0)}ms (type: ${entry.entryType}, name: ${entry.name})`);
         }
       }
@@ -110,9 +143,11 @@ HTMLCanvasElement.prototype.getContext = function(type, ...args) {
   const ctx = _origGetContext.call(this, type, ...args);
   if (type === 'webgl2' || type === 'webgl') {
     this.addEventListener('webglcontextlost', (e) => {
+      _crashDiag.log(`WEBGL_LOST: ${this.width}x${this.height}`);
       console.error('[CRASH-DIAG] WebGL context LOST on canvas', this.width, 'x', this.height, '— prevented:', e.defaultPrevented);
     });
     this.addEventListener('webglcontextrestored', () => {
+      _crashDiag.log('WEBGL_RESTORED');
       console.warn('[CRASH-DIAG] WebGL context restored');
     });
   }
@@ -1340,6 +1375,7 @@ class CodemanApp {
     // Extract segments, stripping DEC 2026 markers
     // This implements synchronized output for xterm.js which doesn't support DEC 2026 natively
     const _joinedLen = this.pendingWrites.reduce((s, w) => s + w.length, 0);
+    if (_joinedLen > 16384) _crashDiag.log(`FLUSH: ${(_joinedLen/1024).toFixed(0)}KB`);
     const segments = extractSyncSegments(this.pendingWrites.join(''));
     this.pendingWrites = [];
 
@@ -1689,6 +1725,7 @@ class CodemanApp {
   // Async handlers have their own internal try/catch for fetch errors.
 
   _onInit(data) {
+    _crashDiag.log(`INIT: ${data.sessions?.length || 0} sessions`);
     this.handleInit(data);
   }
 
@@ -1747,6 +1784,7 @@ class CodemanApp {
 
   _onSessionTerminal(data) {
     if (data.id === this.activeSessionId) {
+      if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
       this.batchTerminalWrite(data.data);
     }
   }
@@ -3409,6 +3447,8 @@ class CodemanApp {
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
     const _selStart = performance.now();
+    const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
+    _crashDiag.log(`SELECT: ${_selName}`);
     console.log(`[CRASH-DIAG] selectSession START: ${sessionId.slice(0,8)}`);
 
     const selectGen = ++this._selectGeneration;
@@ -3544,17 +3584,21 @@ class CodemanApp {
       // for 5+ seconds while the WebGL renderer processes ReadPixels synchronously.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       if (cachedBuffer) {
+        _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
         if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
+        _crashDiag.log('CACHE_DONE');
       }
 
+      _crashDiag.log('FETCH_START');
       const tailSize = 256 * 1024;
       const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
       if (selectGen !== this._selectGeneration) { this._restoringFlushedState = false; return; }
       const data = await res.json();
+      _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
       if (data.terminalBuffer) {
         // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
@@ -3562,6 +3606,7 @@ class CodemanApp {
         // very visible, causing the terminal to flash blank then repaint.
         const needsRewrite = data.terminalBuffer !== cachedBuffer;
         if (needsRewrite) {
+          _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
           this.terminal.clear();
           this.terminal.reset();
           // Show truncation indicator if buffer was cut
@@ -3688,8 +3733,10 @@ class CodemanApp {
         }
       });
 
+      _crashDiag.log('FOCUS');
       this.terminal.focus();
       this.terminal.scrollToBottom();
+      _crashDiag.log(`SELECT_DONE: ${(performance.now() - _selStart).toFixed(0)}ms`);
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
       this._restoringFlushedState = false;
