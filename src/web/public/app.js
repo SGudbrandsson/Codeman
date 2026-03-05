@@ -78,6 +78,47 @@
 // MobileDetection, KeyboardHandler, SwipeHandler are in mobile-handlers.js
 // DeepgramProvider, VoiceInput are in voice-input.js
 
+// ═══════════════════════════════════════════════════════════════
+// Global Error & Performance Diagnostics
+// ═══════════════════════════════════════════════════════════════
+
+window.addEventListener('error', (e) => {
+  console.error('[CRASH-DIAG] Uncaught error:', e.message, '\n  File:', e.filename, ':', e.lineno, ':', e.colno, '\n  Stack:', e.error?.stack);
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[CRASH-DIAG] Unhandled promise rejection:', e.reason?.message || e.reason, '\n  Stack:', e.reason?.stack);
+});
+
+// Detect long tasks (>50ms main thread blocks) — these cause "page unresponsive"
+if (typeof PerformanceObserver !== 'undefined') {
+  try {
+    const longTaskObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration > 200) {
+          console.warn(`[CRASH-DIAG] Long task: ${entry.duration.toFixed(0)}ms (type: ${entry.entryType}, name: ${entry.name})`);
+        }
+      }
+    });
+    longTaskObserver.observe({ type: 'longtask', buffered: true });
+  } catch { /* longtask not supported */ }
+}
+
+// Track WebGL context loss/restore events on all canvases
+const _origGetContext = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+  const ctx = _origGetContext.call(this, type, ...args);
+  if (type === 'webgl2' || type === 'webgl') {
+    this.addEventListener('webglcontextlost', (e) => {
+      console.error('[CRASH-DIAG] WebGL context LOST on canvas', this.width, 'x', this.height, '— prevented:', e.defaultPrevented);
+    });
+    this.addEventListener('webglcontextrestored', () => {
+      console.warn('[CRASH-DIAG] WebGL context restored');
+    });
+  }
+  return ctx;
+};
+
 
 
 
@@ -544,11 +585,20 @@ class CodemanApp {
 
     // Activate WebGL renderer for up to 900% faster rendering (fallback to canvas on failure).
     // Store reference so we can disable during large buffer loads to prevent GPU stalls.
+    // Disable with ?nowebgl=1 URL param for debugging GPU freeze issues.
     this._webglAddon = null;
-    if (typeof WebglAddon !== 'undefined') {
+    const _noWebGL = new URLSearchParams(location.search).has('nowebgl');
+    if (_noWebGL) {
+      console.warn('[CRASH-DIAG] WebGL renderer DISABLED via ?nowebgl param — using canvas renderer');
+    }
+    if (!_noWebGL && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
-        this._webglAddon.onContextLoss(() => { this._webglAddon.dispose(); this._webglAddon = null; });
+        this._webglAddon.onContextLoss(() => {
+          console.error('[CRASH-DIAG] WebGL context LOST — falling back to canvas renderer');
+          this._webglAddon.dispose();
+          this._webglAddon = null;
+        });
         this.terminal.loadAddon(this._webglAddon);
       } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
     }
@@ -1286,8 +1336,10 @@ class CodemanApp {
   flushPendingWrites() {
     if (this.pendingWrites.length === 0 || !this.terminal) return;
 
+    const _t0 = performance.now();
     // Extract segments, stripping DEC 2026 markers
     // This implements synchronized output for xterm.js which doesn't support DEC 2026 natively
+    const _joinedLen = this.pendingWrites.reduce((s, w) => s + w.length, 0);
     const segments = extractSyncSegments(this.pendingWrites.join(''));
     this.pendingWrites = [];
 
@@ -1304,6 +1356,8 @@ class CodemanApp {
         if (content) this.terminal.write(content);
       }
     }
+    const _dt = performance.now() - _t0;
+    if (_dt > 100) console.warn(`[CRASH-DIAG] flushPendingWrites took ${_dt.toFixed(0)}ms (${_joinedLen} bytes, ${segments.length} segments)`);
 
     // Sticky scroll: if user was at bottom, keep them there after new output
     if (this._wasAtBottomBeforeWrite) {
@@ -1396,15 +1450,23 @@ class CodemanApp {
       // Each 32KB chunk keeps per-frame WebGL render work under ~5ms,
       // avoiding GPU stalls without needing to toggle the renderer.
       let offset = 0;
+      const _chunkStart = performance.now();
+      let _chunkCount = 0;
       const writeChunk = () => {
         if (offset >= cleanBuffer.length) {
+          const _totalMs = performance.now() - _chunkStart;
+          console.log(`[CRASH-DIAG] chunkedTerminalWrite complete: ${cleanBuffer.length} bytes in ${_chunkCount} chunks, ${_totalMs.toFixed(0)}ms total`);
           // Wait one more frame for xterm to finish rendering before resolving
           requestAnimationFrame(finish);
           return;
         }
 
+        const _ct0 = performance.now();
         const chunk = cleanBuffer.slice(offset, offset + chunkSize);
         this.terminal.write(chunk);
+        const _cdt = performance.now() - _ct0;
+        _chunkCount++;
+        if (_cdt > 50) console.warn(`[CRASH-DIAG] chunk #${_chunkCount} write took ${_cdt.toFixed(0)}ms (${chunk.length} bytes at offset ${offset})`);
         offset += chunkSize;
 
         // Schedule next chunk on next frame
@@ -3346,6 +3408,8 @@ class CodemanApp {
 
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
+    const _selStart = performance.now();
+    console.log(`[CRASH-DIAG] selectSession START: ${sessionId.slice(0,8)}`);
 
     const selectGen = ++this._selectGeneration;
 
@@ -3626,6 +3690,7 @@ class CodemanApp {
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
+      console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
       this._restoringFlushedState = false;
       console.error('Failed to load session terminal:', err);
