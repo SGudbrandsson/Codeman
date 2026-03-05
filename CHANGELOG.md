@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.5
+
+### Patch Changes
+
+- Fix Chrome "page unresponsive" crashes caused by xterm.js WebGL renderer GPU stalls during heavy terminal output. Disable WebGL by default (canvas renderer used instead), gate SSE terminal writes during tab switches, and add crash diagnostics with server-side breadcrumb collection.
+
 ## 0.3.4
 
 ### Patch Changes
