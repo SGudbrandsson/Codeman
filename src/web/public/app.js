@@ -1381,21 +1381,50 @@ class CodemanApp {
 
     const segments = extractSyncSegments(joined);
 
-    // Write all segments in a single batch (atomic within this frame).
-    // xterm.js internally batches multiple write() calls within same frame.
-    // Never discard content from incomplete sync blocks — xterm.js doesn't support
-    // DEC 2026 natively anyway, so strip the marker and write content regardless.
-    // Discarding causes real data loss (including Ink's erase-line escapes).
-    for (const segment of segments) {
-      if (segment) {
-        const content = segment.startsWith(DEC_SYNC_START)
-          ? segment.slice(DEC_SYNC_START.length)
-          : segment;
-        if (content) this.terminal.write(content);
+    // Write segments respecting a per-frame byte budget.
+    // Each DEC 2026 sync segment is a complete Ink redraw — writing whole segments
+    // preserves atomicity (no flicker). But when total data exceeds 48KB, defer
+    // remaining segments to the next frame to prevent terminal.write() from blocking
+    // the main thread. 141KB single-frame writes have been observed to freeze Chrome
+    // for 2+ minutes even with the canvas renderer.
+    const MAX_FRAME_BYTES = 49152; // 48KB budget per frame
+    let bytesThisFrame = 0;
+    let deferred = false;
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      if (!segment) continue;
+      const content = segment.startsWith(DEC_SYNC_START)
+        ? segment.slice(DEC_SYNC_START.length)
+        : segment;
+      if (!content) continue;
+
+      // If we'd exceed the budget, defer this and all remaining segments
+      if (bytesThisFrame > 0 && bytesThisFrame + content.length > MAX_FRAME_BYTES) {
+        // Re-queue remaining segments as raw content for next flush
+        const remaining = segments.slice(i).map(s => {
+          if (!s) return '';
+          return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
+        }).filter(Boolean).join('');
+        if (remaining) {
+          this.pendingWrites.push(remaining);
+          if (!this.writeFrameScheduled) {
+            this.writeFrameScheduled = true;
+            requestAnimationFrame(() => {
+              this.flushPendingWrites();
+              this.writeFrameScheduled = false;
+            });
+          }
+        }
+        deferred = true;
+        break;
       }
+
+      this.terminal.write(content);
+      bytesThisFrame += content.length;
     }
     const _dt = performance.now() - _t0;
-    if (_dt > 100) console.warn(`[CRASH-DIAG] flushPendingWrites took ${_dt.toFixed(0)}ms (${_joinedLen} bytes)`);
+    if (_dt > 100 || deferred) console.warn(`[CRASH-DIAG] flushPendingWrites: ${_dt.toFixed(0)}ms, ${(bytesThisFrame/1024).toFixed(0)}KB written${deferred ? ', rest deferred' : ''} (total ${(_joinedLen/1024).toFixed(0)}KB)`);
 
     // Sticky scroll: if user was at bottom, keep them there after new output
     if (this._wasAtBottomBeforeWrite) {
