@@ -618,14 +618,13 @@ class CodemanApp {
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
 
-    // WebGL renderer disabled — canvas renderer used instead.
-    // xterm.js WebGL addon causes synchronous GPU ReadPixels calls during large
-    // terminal writes (buffer loads, heavy Ink output) that block Chrome's main
-    // thread for 10+ seconds, triggering "page unresponsive" crashes.
-    // Canvas renderer handles the same workloads without GPU stalls.
-    // Re-enable with ?webgl=1 URL param for testing.
+    // WebGL renderer for GPU-accelerated terminal rendering.
+    // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
+    // but the 48KB/frame flush cap in flushPendingWrites() now prevents
+    // oversized terminal.write() calls that triggered the stalls.
+    // Disable with ?nowebgl URL param if GPU issues return.
     this._webglAddon = null;
-    if (new URLSearchParams(location.search).has('webgl') && typeof WebglAddon !== 'undefined') {
+    if (!new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {

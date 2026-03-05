@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.6
+
+### Patch Changes
+
+- Re-enable WebGL renderer with 48KB/frame flush cap protection against GPU stalls
+
 ## 0.3.5
 
 ### Patch Changes
