@@ -1386,7 +1386,7 @@ class CodemanApp {
     // remaining segments to the next frame to prevent terminal.write() from blocking
     // the main thread. 141KB single-frame writes have been observed to freeze Chrome
     // for 2+ minutes even with the canvas renderer.
-    const MAX_FRAME_BYTES = 49152; // 48KB budget per frame
+    const MAX_FRAME_BYTES = 65536; // 64KB budget per frame
     let bytesThisFrame = 0;
     let deferred = false;
 
@@ -1815,6 +1815,16 @@ class CodemanApp {
   _onSessionTerminal(data) {
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
+
+      // Hard cap: track total bytes queued across ALL buffers (pendingWrites +
+      // flickerFilterBuffer + loadBufferQueue). When rAF is throttled (tab
+      // backgrounded, GPU busy), data accumulates with no flush, reaching
+      // 889KB+ and freezing Chrome for minutes. Drop data beyond 96KB —
+      // the server sends session:needsRefresh to recover.
+      const queued = (this.pendingWrites?.reduce((s, w) => s + w.length, 0) || 0)
+        + (this.flickerFilterBuffer?.length || 0);
+      if (queued > 131072) return; // 128KB — drop to prevent accumulation
+
       this.batchTerminalWrite(data.data);
     }
   }
