@@ -1624,10 +1624,47 @@ class CodemanApp {
         this.decreaseFontSize();
       }
 
-      // Ctrl/Cmd + Shift + V - toggle voice input
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'V') {
+      // Ctrl/Cmd + Shift + B - toggle voice input
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'B') {
         e.preventDefault();
         VoiceInput.toggle();
+      }
+
+      // Ctrl/Cmd + Shift + V - paste text from clipboard
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'V') {
+        e.preventDefault();
+        if (this.activeSessionId) {
+          navigator.clipboard.readText().then(text => {
+            if (!text) return;
+            if (this._localEchoEnabled && this._localEchoOverlay) {
+              this._localEchoOverlay.appendText(text);
+            } else {
+              this.sendInput(text).catch(() => {});
+            }
+          }).catch(() => {
+            this.showToast('Clipboard access denied', 'error');
+          });
+        }
+      }
+
+      // Ctrl/Cmd + X - copy selected terminal text
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'x') {
+        const selection = this.terminal?.getSelection?.();
+        if (selection) {
+          e.preventDefault();
+          navigator.clipboard.writeText(selection).then(() => {
+            this.showToast('Copied', 'success');
+          }).catch(() => {});
+        }
+        // No selection → let Ctrl+X pass through to PTY
+      }
+
+      // Shift+Enter - insert newline in local echo mode (without sending)
+      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        if (this._localEchoEnabled && this._localEchoOverlay && this.activeSessionId) {
+          e.preventDefault();
+          this._localEchoOverlay.appendText('\n');
+        }
       }
     }, true); // Use capture phase to handle before terminal
 
@@ -1902,6 +1939,16 @@ class CodemanApp {
       session.status = 'stopped';
       this.renderSessionTabs();
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
+    }
+    // Auto-close on clean exit (exit code 0) if setting enabled and respawn not running
+    if (data.code === 0) {
+      const settings = this.loadAppSettingsFromStorage();
+      const stopOnCleanExit = settings.stopOnCleanExit ?? true;
+      const respawnActive = this.respawnStatus[data.id]?.enabled;
+      if (stopOnCleanExit && !respawnActive) {
+        setTimeout(() => this.closeSession(data.id).catch(() => {}), 800);
+        return;
+      }
     }
     // Notify on unexpected exit (non-zero code)
     if (data.code && data.code !== 0) {
@@ -6288,7 +6335,13 @@ class CodemanApp {
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
+    document.getElementById('appSettingsStopOnCleanExit').checked = settings.stopOnCleanExit ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
+    // Mobile hotbar buttons
+    const hotbarButtons = settings.hotbarButtons || ['scroll-up', 'scroll-down', 'newline', 'init', 'clear', 'compact', 'paste', 'copy', 'dismiss'];
+    document.querySelectorAll('input[name="hotbarBtn"]').forEach(cb => {
+      cb.checked = hotbarButtons.includes(cb.value);
+    });
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -6891,6 +6944,8 @@ class CodemanApp {
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
+      stopOnCleanExit: document.getElementById('appSettingsStopOnCleanExit').checked,
+      hotbarButtons: [...document.querySelectorAll('input[name="hotbarBtn"]:checked')].map(cb => cb.value),
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,

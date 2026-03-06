@@ -20,7 +20,7 @@
   <script defer src="vendor/xterm-addon-fit.min.js"></script>
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
-  <script defer src="vendor/xterm-zerolag-input.js?v=0.3.2"></script>
+  <script defer src="vendor/xterm-zerolag-input.js?v=0.4.0"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
@@ -391,7 +391,7 @@
 
       <div class="toolbar-center">
         <button class="btn-toolbar btn-sm btn-voice" id="voiceInputBtn" onclick="VoiceInput.toggle()"
-                title="Voice input (Ctrl+Shift+V)" aria-label="Start voice input" aria-pressed="false">
+                title="Voice input (Ctrl+Shift+B)" aria-label="Start voice input" aria-pressed="false">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -423,8 +423,11 @@
             <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
             <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
             <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
+            <div><kbd>Ctrl</kbd>+<kbd>X</kbd></div><div>Copy Selected Text</div>
             <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
-            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Voice Input</div>
+            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div><div>Voice Input</div>
+            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Paste from Clipboard</div>
+            <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
             <div><kbd>Escape</kbd></div><div>Close Panels</div>
           </div>
         </div>
@@ -821,6 +824,7 @@
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
+          <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -835,6 +839,16 @@
                 </div>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsLocalEcho">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline" title="Automatically close the session tab when the shell or Claude exits cleanly (exit code 0). Disable to keep the tab open after typing 'exit'.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Close on Clean Exit</span>
+                  <span class="settings-item-desc">Remove session tab when process exits with code 0</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsStopOnCleanExit" checked>
                   <span class="slider"></span>
                 </label>
               </div>
@@ -964,6 +978,25 @@
               <div class="settings-item" id="tunnelUploadUrlRow" style="display:none">
                 <span class="settings-item-label">Upload URL</span>
                 <span id="tunnelUploadUrlDisplay" class="settings-item-value" style="cursor:pointer; text-decoration:underline; font-family:monospace; font-size:12px" title="Click to copy"></span>
+              </div>
+
+              <!-- Mobile Hotbar Section -->
+              <div class="settings-section-header">Mobile Hotbar</div>
+              <div class="settings-item settings-item-multiline" style="grid-column: 1 / -1;" title="Select which buttons appear in the keyboard accessory bar on mobile">
+                <div class="settings-item-text" style="width:100%">
+                  <span class="settings-item-label">Visible Buttons</span>
+                  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;">
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="scroll-up"> ↑ Up</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="scroll-down"> ↓ Down</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="newline"> ↵ Newline</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="init"> /init</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="clear"> /clear</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="compact"> /compact</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="paste"> Paste</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="copy"> Copy</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="dismiss"> Dismiss</label>
+                  </div>
+                </div>
               </div>
 
             </div>
@@ -1277,6 +1310,26 @@
                 <input type="text" id="voiceKeyterms" placeholder="codeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
                 <span class="form-hint">Comma-separated terms to boost recognition accuracy</span>
               </div>
+            </div>
+          </div>
+
+          <!-- Shortcuts Tab -->
+          <div class="modal-tab-content hidden" id="settings-shortcuts">
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
+              <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
+              <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions</div>
+              <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
+              <div><kbd>Ctrl</kbd>+<kbd>X</kbd></div><div>Copy Selected Text</div>
+              <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
+              <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div><div>Voice Input</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Paste from Clipboard</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></div><div>Restore Terminal Size</div>
+              <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline (Local Echo)</div>
+              <div><kbd>Escape</kbd></div><div>Close Panels</div>
             </div>
           </div>
         </div>
@@ -1674,14 +1727,14 @@
     <!-- Lines drawn dynamically -->
   </svg>
 
-  <script defer src="constants.js?v=0.3.2"></script>
-  <script defer src="mobile-handlers.js?v=0.3.2"></script>
-  <script defer src="voice-input.js?v=0.3.2"></script>
-  <script defer src="notification-manager.js?v=0.3.2"></script>
-  <script defer src="keyboard-accessory.js?v=0.3.2"></script>
-  <script defer src="app.js?v=0.3.2"></script>
-  <script defer src="ralph-wizard.js?v=0.3.2"></script>
-  <script defer src="api-client.js?v=0.3.2"></script>
-  <script defer src="subagent-windows.js?v=0.3.2"></script>
+  <script defer src="constants.js?v=0.4.0"></script>
+  <script defer src="mobile-handlers.js?v=0.4.0"></script>
+  <script defer src="voice-input.js?v=0.4.0"></script>
+  <script defer src="notification-manager.js?v=0.4.0"></script>
+  <script defer src="keyboard-accessory.js?v=0.4.0"></script>
+  <script defer src="app.js?v=0.4.0"></script>
+  <script defer src="ralph-wizard.js?v=0.4.0"></script>
+  <script defer src="api-client.js?v=0.4.0"></script>
+  <script defer src="subagent-windows.js?v=0.4.0"></script>
 </body>
 </html>
