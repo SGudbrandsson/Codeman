@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.4.0
+
+### Minor Changes
+
+- feat: 8 UX improvements — configurable mobile hotbar, newline insertion (Shift+Enter + hotbar ↵ button), Ctrl+Shift+B voice input, Ctrl+Shift+V clipboard paste, Ctrl+X copy selection, mobile Copy hotbar button, keyboard shortcuts tab in Settings, and Close-on-Clean-Exit toggle (auto-removes session tab when process exits with code 0)
+
 ## 0.3.6
 
 ### Patch Changes

@@ -835,7 +835,7 @@ const VoiceInput = {
       desktopBtn.classList.toggle('recording', isRecording);
       desktopBtn.setAttribute('aria-pressed', String(isRecording));
       desktopBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
-      desktopBtn.title = isRecording ? 'Stop voice input (Ctrl+Shift+V)' : 'Voice input (Ctrl+Shift+V)';
+      desktopBtn.title = isRecording ? 'Stop voice input (Ctrl+Shift+B)' : 'Voice input (Ctrl+Shift+B)';
     }
     // Mobile toolbar button (always visible on mobile)
     const mobileToolbarBtn = document.getElementById('voiceInputBtnMobile');

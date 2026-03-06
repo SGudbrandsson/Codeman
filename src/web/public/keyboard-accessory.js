@@ -34,12 +34,29 @@
 const KeyboardAccessoryBar = {
   element: null,
 
+  /** Default hotbar button set */
+  _defaultButtons: ['scroll-up', 'scroll-down', 'newline', 'init', 'clear', 'compact', 'paste', 'copy', 'dismiss'],
+
+  /** Return the configured button list from saved settings */
+  _getButtonConfig() {
+    try {
+      const isMobile = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'mobile';
+      const key = isMobile ? 'codeman-app-settings-mobile' : 'codeman-app-settings';
+      const saved = JSON.parse(localStorage.getItem(key) || '{}');
+      return Array.isArray(saved.hotbarButtons) && saved.hotbarButtons.length > 0
+        ? saved.hotbarButtons
+        : this._defaultButtons;
+    } catch (_e) {
+      return this._defaultButtons;
+    }
+  },
+
   /** Create and inject the accessory bar */
   init() {
     // Only on mobile
     if (!MobileDetection.isTouchDevice()) return;
 
-    // Create accessory bar element
+    // Create accessory bar element with all possible buttons (hidden by default, shown by config)
     this.element = document.createElement('div');
     this.element.className = 'keyboard-accessory-bar';
     this.element.innerHTML = `
@@ -53,6 +70,7 @@ const KeyboardAccessoryBar = {
           <path d="M19 9l-7 7-7-7"/>
         </svg>
       </button>
+      <button class="accessory-btn" data-action="newline" title="Insert newline">&#x21B5;</button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
@@ -62,12 +80,23 @@ const KeyboardAccessoryBar = {
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
         </svg>
       </button>
+      <button class="accessory-btn" data-action="copy" title="Copy selected text">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+      </button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
           <path d="M19 9l-7 7-7-7"/>
         </svg>
       </button>
     `;
+    // Show only configured buttons
+    const enabled = this._getButtonConfig();
+    this.element.querySelectorAll('.accessory-btn[data-action]').forEach(btn => {
+      btn.style.display = enabled.includes(btn.dataset.action) ? '' : 'none';
+    });
 
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
@@ -124,8 +153,17 @@ const KeyboardAccessoryBar = {
         }
         break;
       }
+      case 'newline':
+        // Insert a newline in local echo buffer (does not send)
+        if (typeof app !== 'undefined' && app._localEchoEnabled && app._localEchoOverlay) {
+          app._localEchoOverlay.appendText('\n');
+        }
+        break;
       case 'paste':
         this.pasteFromClipboard();
+        break;
+      case 'copy':
+        this.copySelection();
         break;
       case 'dismiss':
         // Blur active element to dismiss keyboard
@@ -215,6 +253,21 @@ const KeyboardAccessoryBar = {
 
     document.body.appendChild(overlay);
     textarea.focus();
+  },
+
+  /** Copy selected terminal text to clipboard */
+  copySelection() {
+    if (typeof app === 'undefined') return;
+    const selection = app.terminal?.getSelection?.();
+    if (selection) {
+      navigator.clipboard.writeText(selection).then(() => {
+        app.showToast('Copied', 'success');
+      }).catch(() => {
+        app.showToast('Copy failed', 'error');
+      });
+    } else {
+      app.showToast('No text selected', 'warning');
+    }
   },
 
   /** Show the accessory bar */
