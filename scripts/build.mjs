@@ -61,10 +61,11 @@ run('minify styles.css', 'npx esbuild dist/web/public/styles.css --minify --outf
 run('minify mobile.css', 'npx esbuild dist/web/public/mobile.css --minify --outfile=dist/web/public/mobile.css --allow-overwrite');
 
 // 5. Compress with gzip + brotli
+// If brotli is unavailable, remove any stale .br files so the server falls back to .gz
 run(
   'compress',
   `for f in dist/web/public/*.js dist/web/public/*.css dist/web/public/*.html dist/web/public/vendor/*.js dist/web/public/vendor/*.css; do` +
-    ` [ -f "$f" ] && gzip -9 -k -f "$f" && { brotli -9 -k -f "$f" 2>/dev/null || true; }; done`
+    ` [ -f "$f" ] && gzip -9 -k -f "$f" && { brotli -9 -k -f "$f" 2>/dev/null || rm -f "$f.br"; }; done`
 );
 
 console.log('\n✓ Build complete');
