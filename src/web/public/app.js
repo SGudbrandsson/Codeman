@@ -1642,7 +1642,12 @@ class CodemanApp {
               this.sendInput(text).catch(() => {});
             }
           }).catch(() => {
-            this.showToast('Clipboard access denied', 'error');
+            // Clipboard API denied (e.g. lost user activation after freeze) — fall back to dialog
+            if (typeof KeyboardAccessory !== 'undefined') {
+              KeyboardAccessory.pasteFromClipboard();
+            } else {
+              this.showToast('Clipboard access denied', 'error');
+            }
           });
         }
       }

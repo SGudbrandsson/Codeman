@@ -1,5 +1,16 @@
 # aicodeman
 
+## 0.4.1
+
+### Patch Changes
+
+- Fix stale brotli-compressed assets causing outdated UI over Tailscale/HTTPS
+  - Build script now removes stale `.br` files when brotli is unavailable, preventing
+    browsers that prefer brotli (Chrome) from receiving outdated compressed assets
+  - Ctrl+Shift+V paste now falls back to a dialog when clipboard API access is denied
+    (e.g. after a tab freeze/recovery) instead of showing an error toast
+  - Updated Cloudflare tunnel service to use correct `http://localhost:3001` URL
+
 ## 0.4.0
 
 ### Minor Changes
