@@ -320,13 +320,33 @@ const KeyboardHandler = {
   onKeyboardHide() {
     // Keep accessory bar visible — tapping any button on Android dismisses the
     // keyboard, so hiding the bar on keyboard-hide makes every button destroy itself.
+
+    // Capture scroll state BEFORE layout changes so we can restore it after fitAddon.fit()
+    const terminal = typeof app !== 'undefined' ? app.terminal : null;
+    const wasAtBottom = typeof app !== 'undefined' && typeof app.isTerminalAtBottom === 'function'
+      ? app.isTerminalAtBottom()
+      : true;
+    const preViewportY = terminal?.buffer?.active?.viewportY;
+    const preBaseY     = terminal?.buffer?.active?.baseY;
+
     this.resetLayout();
 
-    // Refit terminal, scroll to bottom, and send resize to restore original dimensions
+    // Refit terminal and restore scroll position, then send resize to restore original dimensions
     setTimeout(() => {
       if (typeof app !== 'undefined' && app.fitAddon) {
         try { app.fitAddon.fit(); } catch {}
-        if (app.terminal) app.terminal.scrollToBottom();
+
+        if (app.terminal) {
+          if (wasAtBottom) {
+            // Was at bottom — stay at bottom after resize
+            app.terminal.scrollToBottom();
+          } else if (preViewportY !== undefined && preBaseY !== undefined) {
+            // Was scrolled up — restore relative position from scrollback start
+            const offsetFromBase = preViewportY - preBaseY;
+            const newBase = app.terminal.buffer.active.baseY;
+            app.terminal.scrollToLine(newBase + Math.max(0, offsetFromBase));
+          }
+        }
         // Send resize to server to restore full terminal size
         this._sendTerminalResize();
       }
