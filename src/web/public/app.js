@@ -3683,7 +3683,7 @@ class CodemanApp {
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
-        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
         termContainer?.classList.remove('buffer-loading');
         _crashDiag.log('CACHE_DONE');
@@ -3713,7 +3713,7 @@ class CodemanApp {
           }
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
-          if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
           termContainer?.classList.remove('buffer-loading');
