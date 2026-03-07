@@ -279,6 +279,7 @@ const STATUS_LINE_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btok
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
+    this._sessionCommands = new Map(); // Map<sessionId, Array<{cmd:string, desc:string, source:string}>>
     this._shortIdCache = new Map(); // Cache session ID .slice(0, 8) results
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
     this.draggedTabId = null; // Currently dragged tab session ID
@@ -3889,6 +3890,19 @@ class CodemanApp {
       _crashDiag.log('FOCUS');
       this.terminal.focus();
       this.terminal.scrollToBottom();
+
+      // Fetch plugin/GSD commands for this session on connect (cached per session, refreshed on reconnect)
+      if (!this._sessionCommands.has(sessionId)) {
+        fetch(`/api/sessions/${sessionId}/commands`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (data?.commands?.length) {
+              this._sessionCommands.set(sessionId, data.commands);
+            }
+          })
+          .catch(() => {}); // non-fatal — drawer falls back to static list
+      }
+
       _crashDiag.log(`SELECT_DONE: ${(performance.now() - _selStart).toFixed(0)}ms`);
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
@@ -3909,6 +3923,7 @@ class CodemanApp {
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
+    this._sessionCommands?.delete(sessionId);
 
     this._flushedOffsets?.delete(sessionId);
     this._flushedTexts?.delete(sessionId);

@@ -859,9 +859,21 @@ html.mobile-init .file-browser-panel {
   .accessory-drawer-item.confirming .drawer-cmd-desc { color: #c8a030; }
 
   .accessory-drawer-sep {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     height: 1px;
     background: rgba(255, 255, 255, 0.15);
     margin: 4px 0;
+    padding: 4px 12px;
+  }
+
+  .accessory-drawer-sep-label {
+    font-size: 10px;
+    color: #4b5563;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
   }
 
   /* Commands button style */
