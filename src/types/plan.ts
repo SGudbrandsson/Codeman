@@ -6,7 +6,7 @@
  * Key exports:
  * - PlanItem — a single task with priority (P0/P1/P2), TDD phase, dependencies, verification criteria
  * - PlanTaskStatus — 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked'
- * - TddPhase / PlanPhase — 'setup' | 'test' | 'impl' | 'verify' | 'review'
+ * - TddPhase — 'setup' | 'test' | 'impl' | 'verify' | 'review'
  *
  * Used by PlanOrchestrator (`src/plan-orchestrator.ts`) and the plan API routes
  * (`src/web/routes/plan-routes.ts`). Served at `GET /api/sessions/:id/plan/tasks`.
@@ -20,9 +20,6 @@ export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' 
 
 /** TDD phase categories */
 export type TddPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
-
-/** Development phase in TDD cycle (alias for TddPhase) */
-export type PlanPhase = TddPhase;
 
 /**
  * A single plan item for plan orchestration.
@@ -42,7 +39,7 @@ export interface PlanItem {
   lastError?: string;
   completedAt?: number;
   complexity?: 'low' | 'medium' | 'high';
-  tddPhase?: PlanPhase;
+  tddPhase?: TddPhase;
   pairedWith?: string;
   reviewChecklist?: string[];
 }

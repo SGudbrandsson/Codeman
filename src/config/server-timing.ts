@@ -73,3 +73,16 @@ export const MAX_CONSECUTIVE_ERRORS = 5;
 
 /** Error counter reset interval — forgives errors after quiet period (ms) */
 export const ERROR_RESET_MS = 60_000;
+
+// ============================================================================
+// Common Cleanup Intervals
+// ============================================================================
+
+/** Standard 1-minute cleanup/check interval used by multiple subsystems (ms) */
+export const CLEANUP_CHECK_INTERVAL_MS = 60_000;
+
+/** Standard 1-hour max age for stale/completed data (ms) */
+export const STALE_DATA_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** Standard 5-minute inactivity timeout for streams and caches (ms) */
+export const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;

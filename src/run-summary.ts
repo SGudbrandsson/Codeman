@@ -22,6 +22,7 @@ import {
   RunSummaryStats,
   createInitialRunSummaryStats,
 } from './types.js';
+import { CLEANUP_CHECK_INTERVAL_MS } from './config/server-timing.js';
 
 /** Maximum events to keep per session (FIFO trimming) */
 const MAX_EVENTS = 1000;
@@ -36,7 +37,7 @@ const TOKEN_MILESTONE_INTERVAL = 50000;
 const STATE_STUCK_WARNING_MS = 10 * 60 * 1000; // 10 minutes
 
 /** State stuck check interval (ms) */
-const STATE_STUCK_CHECK_INTERVAL = 60 * 1000; // 1 minute
+const STATE_STUCK_CHECK_INTERVAL = CLEANUP_CHECK_INTERVAL_MS;
 
 /**
  * Tracks events and statistics for a session's run summary.
