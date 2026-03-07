@@ -4,8 +4,10 @@
  * Defines two exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: arrow up/down, /init, /clear, /compact, paste, and dismiss.
- *   Destructive actions (/clear, /compact) require double-tap confirmation (2s amber state).
+ *   keyboard on mobile: arrow up/down, Commands (drawer), paste, copy, and dismiss.
+ *   The Commands button opens an upward-sliding drawer containing /init, /clear, /compact,
+ *   and user-configured custom commands. Destructive actions (/clear, /compact) require
+ *   double-tap confirmation (2s amber state) inside the drawer.
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
  *
@@ -33,9 +35,10 @@
  */
 const KeyboardAccessoryBar = {
   element: null,
+  drawerElement: null,
 
   /** Default hotbar button set */
-  _defaultButtons: ['scroll-up', 'scroll-down', 'newline', 'init', 'clear', 'compact', 'paste', 'copy', 'dismiss'],
+  _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
@@ -48,6 +51,18 @@ const KeyboardAccessoryBar = {
         : this._defaultButtons;
     } catch (_e) {
       return this._defaultButtons;
+    }
+  },
+
+  /** Return custom command buttons from saved settings */
+  _getCustomCommands() {
+    try {
+      const isMobile = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'mobile';
+      const key = isMobile ? 'codeman-app-settings-mobile' : 'codeman-app-settings';
+      const saved = JSON.parse(localStorage.getItem(key) || '{}');
+      return Array.isArray(saved.hotbarCustomCommands) ? saved.hotbarCustomCommands : [];
+    } catch (_e) {
+      return [];
     }
   },
 
@@ -70,10 +85,7 @@ const KeyboardAccessoryBar = {
           <path d="M19 9l-7 7-7-7"/>
         </svg>
       </button>
-      <button class="accessory-btn" data-action="newline" title="Insert newline">&#x21B5;</button>
-      <button class="accessory-btn" data-action="init" title="/init">/init</button>
-      <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
-      <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
+      <button class="accessory-btn accessory-btn-commands" data-action="commands" title="Commands">/ ▲</button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -98,6 +110,9 @@ const KeyboardAccessoryBar = {
       btn.style.display = enabled.includes(btn.dataset.action) ? '' : 'none';
     });
 
+    // Build the commands drawer
+    this._buildDrawer();
+
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-btn');
@@ -109,8 +124,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if ((action === 'scroll-up' || action === 'scroll-down') ||
-          ((action === 'clear' || action === 'compact') && this._confirmAction)) {
+      if (action === 'scroll-up' || action === 'scroll-down') {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
         }
@@ -138,26 +152,8 @@ const KeyboardAccessoryBar = {
       case 'scroll-down':
         this.sendKey('\x1b[B');
         break;
-      case 'init':
-        this.sendCommand('/init');
-        break;
-      case 'clear':
-      case 'compact': {
-        // Require double-tap: first tap turns amber, second tap within 2s sends
-        const cmd = action === 'clear' ? '/clear' : '/compact';
-        if (this._confirmAction === action && this._confirmTimer) {
-          this.clearConfirm();
-          this.sendCommand(cmd);
-        } else {
-          this.setConfirm(action, btn);
-        }
-        break;
-      }
-      case 'newline':
-        // Insert a newline in local echo buffer (does not send)
-        if (typeof app !== 'undefined' && app._localEchoEnabled && app._localEchoOverlay) {
-          app._localEchoOverlay.appendText('\n');
-        }
+      case 'commands':
+        this.openDrawer();
         break;
       case 'paste':
         this.pasteFromClipboard();
@@ -169,6 +165,11 @@ const KeyboardAccessoryBar = {
         // Blur active element to dismiss keyboard
         document.activeElement?.blur();
         break;
+      default:
+        if (action.startsWith('custom-') && btn?.dataset.command) {
+          this.sendCommand(btn.dataset.command);
+        }
+        break;
     }
   },
 
@@ -178,7 +179,7 @@ const KeyboardAccessoryBar = {
     this._confirmAction = action;
     if (btn) {
       btn.classList.add('confirming');
-      btn.dataset.origHtml = btn.innerHTML;
+      btn.dataset.origText = btn.textContent;
       btn.textContent = 'Tap again';
     }
     this._confirmTimer = setTimeout(() => this.clearConfirm(), 2000);
@@ -190,15 +191,102 @@ const KeyboardAccessoryBar = {
       clearTimeout(this._confirmTimer);
       this._confirmTimer = null;
     }
-    if (this._confirmAction && this.element) {
-      const btn = this.element.querySelector(`[data-action="${this._confirmAction}"]`);
-      if (btn && btn.dataset.origHtml) {
-        btn.innerHTML = btn.dataset.origHtml;
-        delete btn.dataset.origHtml;
+    if (this._confirmAction) {
+      // Search both the bar and the drawer for the confirming button
+      const containers = [this.element, this.drawerElement].filter(Boolean);
+      for (const container of containers) {
+        const btn = container.querySelector(`[data-action="${this._confirmAction}"]`);
+        if (btn) {
+          if (btn.dataset.origText) {
+            btn.textContent = btn.dataset.origText;
+            delete btn.dataset.origText;
+          }
+          btn.classList.remove('confirming');
+        }
       }
-      if (btn) btn.classList.remove('confirming');
     }
     this._confirmAction = null;
+  },
+
+  /** Build the commands drawer and append to the accessory bar element */
+  _buildDrawer() {
+    const drawer = document.createElement('div');
+    drawer.className = 'accessory-cmd-drawer';
+    this.drawerElement = drawer;
+
+    // Fixed commands: /init, /clear, /compact
+    const fixed = [
+      { action: 'init', label: '/init' },
+      { action: 'clear', label: '/clear' },
+      { action: 'compact', label: '/compact' },
+    ];
+    for (const { action, label } of fixed) {
+      const btn = document.createElement('button');
+      btn.className = 'accessory-drawer-item';
+      btn.dataset.action = action;
+      btn.textContent = label;
+      drawer.appendChild(btn);
+    }
+
+    // Custom commands from settings
+    const customCmds = this._getCustomCommands();
+    customCmds.forEach((cmd, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'accessory-drawer-item';
+      btn.dataset.action = `custom-${i}`;
+      btn.dataset.command = cmd.command;
+      btn.textContent = cmd.label || cmd.command;
+      btn.title = cmd.command;
+      drawer.appendChild(btn);
+    });
+
+    // Drawer click handler
+    drawer.addEventListener('click', (e) => {
+      const btn = e.target.closest('.accessory-drawer-item');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const action = btn.dataset.action;
+      if (action === 'clear' || action === 'compact') {
+        const cmd = action === 'clear' ? '/clear' : '/compact';
+        if (this._confirmAction === action && this._confirmTimer) {
+          this.clearConfirm();
+          this.closeDrawer();
+          this.sendCommand(cmd);
+        } else {
+          this.setConfirm(action, btn);
+        }
+      } else if (action === 'init') {
+        this.closeDrawer();
+        this.sendCommand('/init');
+      } else if (action.startsWith('custom-') && btn.dataset.command) {
+        this.closeDrawer();
+        this.sendCommand(btn.dataset.command);
+      }
+    });
+
+    this.element.appendChild(drawer);
+  },
+
+  /** Open the commands drawer */
+  openDrawer() {
+    this.drawerElement?.classList.add('open');
+    // Close on next outside tap
+    const handler = (e) => {
+      if (!this.drawerElement?.contains(e.target) &&
+          !e.target.closest('[data-action="commands"]')) {
+        this.closeDrawer();
+      }
+    };
+    setTimeout(() => document.addEventListener('touchstart', handler, { once: true }), 50);
+    setTimeout(() => document.addEventListener('click', handler, { once: true }), 50);
+  },
+
+  /** Close the commands drawer and reset confirm state */
+  closeDrawer() {
+    this.drawerElement?.classList.remove('open');
+    this.clearConfirm();
   },
 
   /** Send a slash command to the active session.

@@ -6316,6 +6316,48 @@ class CodemanApp {
   // App Settings Modal
   // ═══════════════════════════════════════════════════════════════
 
+  _loadHotbarCustomCmds(cmds) {
+    const container = document.getElementById('hotbarCustomCmds');
+    if (!container) return;
+    container.textContent = '';
+    cmds.forEach(cmd => this._addHotbarCmdRow(cmd.label, cmd.command));
+  }
+
+  _addHotbarCmdRow(label = '', command = '') {
+    const container = document.getElementById('hotbarCustomCmds');
+    if (!container) return;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;';
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.placeholder = 'Label';
+    labelInput.value = label;
+    labelInput.className = 'hotbar-cmd-label';
+    labelInput.style.cssText = 'width:80px;font-size:0.8rem;padding:2px 4px;background:var(--input-bg,#222);color:var(--text);border:1px solid var(--border);border-radius:4px;';
+    const cmdInput = document.createElement('input');
+    cmdInput.type = 'text';
+    cmdInput.placeholder = '/command or text';
+    cmdInput.value = command;
+    cmdInput.className = 'hotbar-cmd-value';
+    cmdInput.style.cssText = 'flex:1;font-size:0.8rem;padding:2px 4px;background:var(--input-bg,#222);color:var(--text);border:1px solid var(--border);border-radius:4px;';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '\u2715';
+    removeBtn.style.cssText = 'font-size:0.8rem;padding:2px 6px;cursor:pointer;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);';
+    removeBtn.addEventListener('click', () => row.remove());
+    row.appendChild(labelInput);
+    row.appendChild(cmdInput);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  }
+
+  _collectHotbarCustomCmds() {
+    return [...document.querySelectorAll('#hotbarCustomCmds > div')].map(row => ({
+      label: row.querySelector('.hotbar-cmd-label').value.trim(),
+      command: row.querySelector('.hotbar-cmd-value').value.trim(),
+    })).filter(c => c.command);
+  }
+
   openAppSettings() {
     // Load current settings
     const settings = this.loadAppSettingsFromStorage();
@@ -6343,10 +6385,11 @@ class CodemanApp {
     document.getElementById('appSettingsStopOnCleanExit').checked = settings.stopOnCleanExit ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Mobile hotbar buttons
-    const hotbarButtons = settings.hotbarButtons || ['scroll-up', 'scroll-down', 'newline', 'init', 'clear', 'compact', 'paste', 'copy', 'dismiss'];
+    const hotbarButtons = settings.hotbarButtons || ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'];
     document.querySelectorAll('input[name="hotbarBtn"]').forEach(cb => {
       cb.checked = hotbarButtons.includes(cb.value);
     });
+    this._loadHotbarCustomCmds(settings.hotbarCustomCommands || []);
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -6951,6 +6994,7 @@ class CodemanApp {
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       stopOnCleanExit: document.getElementById('appSettingsStopOnCleanExit').checked,
       hotbarButtons: [...document.querySelectorAll('input[name="hotbarBtn"]:checked')].map(cb => cb.value),
+      hotbarCustomCommands: this._collectHotbarCustomCmds(),
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
