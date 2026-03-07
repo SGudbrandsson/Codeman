@@ -176,6 +176,9 @@ const KeyboardAccessoryBar = {
     if (toolbar && toolbar.parentNode) {
       toolbar.parentNode.insertBefore(this.element, toolbar);
     }
+
+    // Show immediately — bar is always visible on mobile, not keyboard-dependent
+    this.show();
   },
 
   _confirmTimer: null,
