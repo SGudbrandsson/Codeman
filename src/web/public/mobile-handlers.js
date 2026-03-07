@@ -155,6 +155,12 @@ const KeyboardHandler = {
     this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
     this.lastViewportHeight = this.initialViewportHeight;
 
+    // Cache safe-area-bottom once (env(safe-area-inset-bottom)) — varies per device.
+    // Used in all layout padding calculations to account for home indicator / gesture bar.
+    this.safeAreaBottom = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--safe-area-bottom')
+    ) || 0;
+
     // Simple focus handler - scroll input into view after keyboard appears
     this._focusinHandler = (e) => {
       const target = e.target;
@@ -256,9 +262,10 @@ const KeyboardHandler = {
           if (toolbar) toolbar.style.transform = '';
           if (accessoryBar) accessoryBar.style.transform = '';
           if (main) {
-            const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
-            const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : 0;
-            main.style.paddingBottom = blockedPx > 0 ? `${Math.ceil(blockedPx)}px` : '';
+            // With resizes-content, innerHeight is already the visible area.
+            // Just reserve space for the fixed bars + safe-area-bottom.
+            const barHeight = accessoryBar?.classList.contains('visible') ? 84 : 40;
+            main.style.paddingBottom = `${barHeight + this.safeAreaBottom}px`;
           }
           return;
         } else {
@@ -274,11 +281,10 @@ const KeyboardHandler = {
       if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
       if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
 
-      // Measure actual blocked area after transforms (getBoundingClientRect includes transform + safe-area).
+      // Reserve space for keyboard + translated bars + safe-area-bottom.
       if (main) {
-        const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
-        const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : keyboardOffset + 84;
-        main.style.paddingBottom = `${Math.ceil(blockedPx)}px`;
+        const barHeight = accessoryBar?.classList.contains('visible') ? 84 : 40;
+        main.style.paddingBottom = `${keyboardOffset + barHeight + this.safeAreaBottom}px`;
       }
     } else {
       this.resetLayout();
@@ -295,11 +301,8 @@ const KeyboardHandler = {
     if (accessoryBar) accessoryBar.style.transform = '';
 
     if (main) {
-      // Measure actual blocked bottom area (toolbar + accessory bar + safe-area-bottom).
-      // getBoundingClientRect() forces a layout flush and includes safe-area offset.
-      const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
-      const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : 0;
-      main.style.paddingBottom = blockedPx > 0 ? `${Math.ceil(blockedPx)}px` : '';
+      const barHeight = accessoryBar?.classList.contains('visible') ? 84 : 40;
+      main.style.paddingBottom = `${barHeight + this.safeAreaBottom}px`;
     }
   },
 
