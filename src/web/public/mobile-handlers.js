@@ -283,23 +283,19 @@ const KeyboardHandler = {
     const accessoryBar = document.querySelector('.keyboard-accessory-bar');
     const main = document.querySelector('.main');
 
-    if (toolbar) {
-      toolbar.style.transform = '';
-    }
-    if (accessoryBar) {
-      accessoryBar.style.transform = '';
-    }
+    if (toolbar) toolbar.style.transform = '';
+    if (accessoryBar) accessoryBar.style.transform = '';
+
     if (main) {
-      main.style.paddingBottom = '';
+      // If the accessory bar is visible (always-on), reserve space for its height
+      // so terminal content isn't hidden behind it.
+      main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '44px' : '';
     }
   },
 
   /** Called when keyboard appears */
   onKeyboardShow() {
-    // Show keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.show();
-    }
+    // Bar is already visible (always-on); nothing to show here.
 
     // Refit terminal locally AND send resize to server so Claude Code (Ink)
     // knows the actual terminal dimensions. Without this, Ink redraws at the
@@ -322,11 +318,8 @@ const KeyboardHandler = {
 
   /** Called when keyboard hides */
   onKeyboardHide() {
-    // Hide keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.hide();
-    }
-
+    // Keep accessory bar visible — tapping any button on Android dismisses the
+    // keyboard, so hiding the bar on keyboard-hide makes every button destroy itself.
     this.resetLayout();
 
     // Refit terminal, scroll to bottom, and send resize to restore original dimensions
