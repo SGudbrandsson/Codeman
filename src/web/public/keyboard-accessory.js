@@ -421,6 +421,41 @@ const KeyboardAccessoryBar = {
       btn.appendChild(descEl);
       this._itemsContainer.appendChild(btn);
     });
+
+    // Dynamic commands from plugins/GSD fetched on session connect
+    const dynamicCmds = (typeof app !== 'undefined' && app.activeSessionId)
+      ? (app._sessionCommands?.get(app.activeSessionId) ?? [])
+      : [];
+
+    if (dynamicCmds.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'accessory-drawer-sep';
+      const sepLabel = document.createElement('span');
+      sepLabel.className = 'accessory-drawer-sep-label';
+      sepLabel.textContent = 'Plugins & Skills';
+      sep.appendChild(sepLabel);
+      this._itemsContainer.appendChild(sep);
+
+      for (const { cmd, desc } of dynamicCmds) {
+        const btn = document.createElement('button');
+        btn.className = 'accessory-drawer-item';
+        btn.dataset.cmd = cmd;
+        btn.dataset.action = cmd;
+        btn.dataset.desc = desc;
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'drawer-cmd-name';
+        nameEl.textContent = cmd;
+
+        const descEl = document.createElement('span');
+        descEl.className = 'drawer-cmd-desc';
+        descEl.textContent = desc;
+
+        btn.appendChild(nameEl);
+        btn.appendChild(descEl);
+        this._itemsContainer.appendChild(btn);
+      }
+    }
   },
 
   /** Open the commands drawer, populating it for the current session */
