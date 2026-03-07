@@ -6144,6 +6144,10 @@ kbd {
   margin-left: 0.5rem;
 }
 
+.terminal-status-strip {
+  display: none;
+}
+
 .log-viewer-window-title .status.streaming {
   background: var(--success);
   color: white;

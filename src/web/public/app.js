@@ -1430,6 +1430,8 @@ class CodemanApp {
       this.terminal.scrollToBottom();
     }
 
+    this._updateStatusStrip();
+
     // Re-position local echo overlay after terminal writes — Ink redraws can
     // move the ❯ prompt to a different row, making the overlay invisible.
     if (this._localEchoOverlay?.hasPending) {
@@ -1475,6 +1477,42 @@ class CodemanApp {
         }
       });
     }
+  }
+
+  /**
+   * Scan the last lines of the xterm.js buffer for a GSD/plugin status line
+   * and mirror it into the persistent status strip element.
+   * Matches patterns like "Context: 47%" from the GSD context tracker.
+   */
+  _updateStatusStrip() {
+    if (!this.terminal) return;
+    const strip = document.getElementById('terminalStatusStrip');
+    if (!strip) return;
+
+    const buffer = this.terminal.buffer.active;
+    const totalLines = buffer.length;
+    // Scan last 8 lines — Ink status bar is always near the bottom
+    const scanFrom = Math.max(0, totalLines - 8);
+
+    // Matches GSD format like "◆ Context: 47% · 3 tools · idle"
+    const STATUS_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btokens?\b)/i;
+
+    let matched = '';
+    for (let i = totalLines - 1; i >= scanFrom; i--) {
+      const line = buffer.getLine(i);
+      if (!line) continue;
+      const text = line.translateToString(true).trim();
+      if (text && STATUS_RE.test(text)) {
+        matched = text;
+        break;
+      }
+    }
+
+    if (matched) {
+      strip.textContent = matched; // textContent is safe — no HTML interpretation
+      strip.style.display = '';
+    }
+    // Keep last known value visible if no match found this frame
   }
 
   /**

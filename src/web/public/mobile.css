@@ -2038,3 +2038,19 @@ html.mobile-init .file-browser-panel {
     display: block;
   }
 }
+
+@media (max-width: 768px) {
+  .terminal-status-strip {
+    font-family: var(--font-mono, 'Cascadia Code', monospace);
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    background: #0a0a0a;
+    padding: 2px 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    min-height: 18px;
+    flex-shrink: 0;
+  }
+}
