@@ -3720,40 +3720,37 @@ class CodemanApp {
     this._isLoadingBuffer = true;
     this._loadBufferQueue = [];
     try {
-      // Instant cache restore — show previous buffer via chunked write to avoid WebGL GPU stalls.
-      // Direct terminal.write() of large cached buffers (256KB+) can block the main thread
-      // for 5+ seconds while the WebGL renderer processes ReadPixels synchronously.
+      // Load terminal buffer for the new session. Hide the terminal container for the
+      // entire sequence (cache write + fetch + optional rewrite) so the user sees a
+      // single reveal rather than: cached-content → hidden → fresh-content (double flash).
+      // On localhost the fetch is < 5ms, so the hidden period is imperceptible.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       const termContainer = document.getElementById('terminalContainer');
+      termContainer?.classList.add('buffer-loading');
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
       if (cachedBuffer) {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
-        termContainer?.classList.add('buffer-loading');
-        await new Promise(resolve => requestAnimationFrame(resolve));
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
         if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
-        this.terminal.scrollToBottom();
-        termContainer?.classList.remove('buffer-loading');
         _crashDiag.log('CACHE_DONE');
+        // Stay hidden — fetch may have newer content; reveal once after final write
       }
 
       _crashDiag.log('FETCH_START');
       const tailSize = 256 * 1024;
       const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
-      if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+      if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
       const data = await res.json();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
       if (data.terminalBuffer) {
-        // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
-        // On slow connections (mobile 5G), the gap between clear() and chunkedWrite() is
-        // very visible, causing the terminal to flash blank then repaint.
+        // Skip rewrite if fresh buffer matches cache — avoids unnecessary clear+rewrite.
         const needsRewrite = data.terminalBuffer !== cachedBuffer;
         if (needsRewrite) {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
-          termContainer?.classList.add('buffer-loading');
-          await new Promise(resolve => requestAnimationFrame(resolve));
           this.terminal.clear();
           this.terminal.reset();
           // Show truncation indicator if buffer was cut
@@ -3763,9 +3760,6 @@ class CodemanApp {
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
           if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
-          // Ensure terminal is scrolled to bottom after buffer load
-          this.terminal.scrollToBottom();
-          termContainer?.classList.remove('buffer-loading');
         }
 
         // Update cache (cap at 20 entries)
@@ -3780,6 +3774,10 @@ class CodemanApp {
         this.terminal.clear();
         this.terminal.reset();
       }
+
+      // Scroll to bottom and reveal terminal once with final content
+      this.terminal.scrollToBottom();
+      termContainer?.classList.remove('buffer-loading');
 
       // Buffer load complete — unblock live SSE writes and flush any queued events.
       // chunkedTerminalWrite calls _finishBufferLoad internally, but if we skipped
