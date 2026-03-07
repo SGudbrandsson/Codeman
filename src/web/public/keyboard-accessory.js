@@ -201,6 +201,30 @@ const KeyboardAccessoryBar = {
         if (typeof InputPanel !== 'undefined') InputPanel.toggle();
       });
       this.element.appendChild(inputToggleBtn);
+
+      // Hamburger (session drawer) button — to the right of the lock icon
+      const hamburgerBtn = document.createElement('button');
+      hamburgerBtn.className = 'accessory-btn';
+      hamburgerBtn.title = 'Sessions';
+      hamburgerBtn.setAttribute('aria-label', 'Open session list');
+      hamburgerBtn.type = 'button';
+
+      const hSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      hSvg.setAttribute('width', '18'); hSvg.setAttribute('height', '18');
+      hSvg.setAttribute('viewBox', '0 0 24 24'); hSvg.setAttribute('fill', 'none');
+      hSvg.setAttribute('stroke', 'currentColor'); hSvg.setAttribute('stroke-width', '2');
+      hSvg.setAttribute('aria-hidden', 'true');
+      [6, 12, 18].forEach(y => {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '3'); line.setAttribute('y1', String(y));
+        line.setAttribute('x2', '21'); line.setAttribute('y2', String(y));
+        hSvg.appendChild(line);
+      });
+      hamburgerBtn.appendChild(hSvg);
+      hamburgerBtn.addEventListener('click', () => {
+        if (typeof SessionDrawer !== 'undefined') SessionDrawer.toggle();
+      });
+      this.element.appendChild(hamburgerBtn);
     }
 
     // Insert before toolbar

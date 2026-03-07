@@ -556,7 +556,7 @@ body {
   font-weight: 600;
 }
 
-.btn-hamburger { display: none; }
+.btn-hamburger { display: flex; }
 
 .btn-icon-header.btn-sm:hover {
   transform: none;

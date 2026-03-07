@@ -2065,7 +2065,7 @@ html.mobile-init .file-browser-panel {
   }
 }
 
-.touch-device .btn-hamburger { display: flex; }
+.touch-device .btn-hamburger { display: none; }
 
 .session-drawer-overlay {
   display: none;
