@@ -37,6 +37,45 @@ const KeyboardAccessoryBar = {
   element: null,
   drawerElement: null,
   _searchInput: null,
+  _itemsContainer: null,
+
+  /**
+   * Known slash commands per session mode.
+   * `confirm: true` = destructive, requires double-tap.
+   * `noSend: true` = opens a sub-UI in the CLI rather than running inline (show but don't auto-send).
+   */
+  _CLI_COMMANDS: {
+    claude: [
+      { cmd: '/clear',           desc: 'Clear conversation history',       confirm: true  },
+      { cmd: '/compact',         desc: 'Compact conversation (keep summary)', confirm: true },
+      { cmd: '/init',            desc: 'Initialize CLAUDE.md for project'                 },
+      { cmd: '/help',            desc: 'Show help'                                         },
+      { cmd: '/cost',            desc: 'Token usage & cost'                                },
+      { cmd: '/status',          desc: 'Account & API status'                              },
+      { cmd: '/model',           desc: 'Set or switch AI model'                            },
+      { cmd: '/memory',          desc: 'Edit CLAUDE.md memory files'                       },
+      { cmd: '/config',          desc: 'View/edit configuration'                           },
+      { cmd: '/permissions',     desc: 'View/update tool permissions'                      },
+      { cmd: '/mcp',             desc: 'Manage MCP server connections'                     },
+      { cmd: '/add-dir',         desc: 'Add an allowed working directory'                  },
+      { cmd: '/doctor',          desc: 'Check installation health'                         },
+      { cmd: '/review',          desc: 'Code review (optional PR URL)'                     },
+      { cmd: '/vim',             desc: 'Toggle vim key bindings'                           },
+      { cmd: '/bug',             desc: 'Report a bug to Anthropic'                         },
+      { cmd: '/login',           desc: 'Switch Anthropic accounts'                         },
+      { cmd: '/logout',          desc: 'Sign out from Anthropic'                           },
+      { cmd: '/terminal',        desc: 'Run a terminal command'                            },
+      { cmd: '/pr_comments',     desc: 'View PR comments'                                  },
+      { cmd: '/release-notes',   desc: 'View release notes'                                },
+    ],
+    opencode: [
+      { cmd: '/clear',    desc: 'Clear conversation',    confirm: true },
+      { cmd: '/compact',  desc: 'Compact conversation',  confirm: true },
+      { cmd: '/model',    desc: 'Set model'                            },
+      { cmd: '/sessions', desc: 'Browse sessions'                      },
+    ],
+    shell: [],
+  },
 
   /** Default hotbar button set */
   _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'],
@@ -180,8 +219,15 @@ const KeyboardAccessoryBar = {
     this._confirmAction = action;
     if (btn) {
       btn.classList.add('confirming');
-      btn.dataset.origText = btn.textContent;
-      btn.textContent = 'Tap again';
+      // Drawer items have a .drawer-cmd-name child; plain hotbar buttons use textContent directly
+      const nameEl = btn.querySelector('.drawer-cmd-name');
+      if (nameEl) {
+        btn.dataset.origText = nameEl.textContent;
+        nameEl.textContent = 'Tap again to confirm';
+      } else {
+        btn.dataset.origText = btn.textContent;
+        btn.textContent = 'Tap again';
+      }
     }
     this._confirmTimer = setTimeout(() => this.clearConfirm(), 2000);
   },
@@ -193,13 +239,18 @@ const KeyboardAccessoryBar = {
       this._confirmTimer = null;
     }
     if (this._confirmAction) {
-      // Search both the bar and the drawer for the confirming button
-      const containers = [this.element, this.drawerElement].filter(Boolean);
+      // Search bar, drawer, and items container for the confirming button
+      const containers = [this.element, this._itemsContainer, this.drawerElement].filter(Boolean);
       for (const container of containers) {
-        const btn = container.querySelector(`[data-action="${this._confirmAction}"]`);
+        const btn = container.querySelector(`[data-action="${CSS.escape(this._confirmAction)}"]`);
         if (btn) {
           if (btn.dataset.origText) {
-            btn.textContent = btn.dataset.origText;
+            const nameEl = btn.querySelector('.drawer-cmd-name');
+            if (nameEl) {
+              nameEl.textContent = btn.dataset.origText;
+            } else {
+              btn.textContent = btn.dataset.origText;
+            }
             delete btn.dataset.origText;
           }
           btn.classList.remove('confirming');
@@ -209,14 +260,14 @@ const KeyboardAccessoryBar = {
     this._confirmAction = null;
   },
 
-  /** Build the commands drawer and append to the accessory bar element */
+  /** Build the commands drawer shell (search input + items container + delegated click handler).
+   *  Items are populated dynamically per session on each open via _populateDrawer(). */
   _buildDrawer() {
     const drawer = document.createElement('div');
     drawer.className = 'accessory-cmd-drawer';
     this.drawerElement = drawer;
 
-    // Search input — focusing this re-opens the keyboard on Android when the
-    // drawer opens, and lets users filter commands by typing.
+    // Search input — focusing re-opens the keyboard on Android when the drawer opens.
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
     searchInput.className = 'accessory-cmd-search';
@@ -228,56 +279,39 @@ const KeyboardAccessoryBar = {
     drawer.appendChild(searchInput);
     this._searchInput = searchInput;
 
+    // Container for dynamically generated command items
+    const items = document.createElement('div');
+    items.className = 'accessory-cmd-items';
+    drawer.appendChild(items);
+    this._itemsContainer = items;
+
+    // Filter: search both command name and description (stored in data-desc)
     searchInput.addEventListener('input', () => {
       const q = searchInput.value.toLowerCase();
-      drawer.querySelectorAll('.accessory-drawer-item').forEach((btn) => {
-        btn.style.display = btn.textContent.toLowerCase().includes(q) ? '' : 'none';
+      items.querySelectorAll('.accessory-drawer-item').forEach((btn) => {
+        const match = btn.dataset.cmd.includes(q) || (btn.dataset.desc || '').toLowerCase().includes(q);
+        btn.style.display = match ? '' : 'none';
       });
     });
-    // Enter on search input sends the first visible command
+
+    // Enter sends the first visible command
     searchInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
-        const first = drawer.querySelector('.accessory-drawer-item:not([style*="none"])');
+        const first = items.querySelector('.accessory-drawer-item:not([style*="none"])');
         if (first) first.click();
       }
     });
 
-    // Fixed commands: /init, /clear, /compact
-    const fixed = [
-      { action: 'init', label: '/init' },
-      { action: 'clear', label: '/clear' },
-      { action: 'compact', label: '/compact' },
-    ];
-    for (const { action, label } of fixed) {
-      const btn = document.createElement('button');
-      btn.className = 'accessory-drawer-item';
-      btn.dataset.action = action;
-      btn.textContent = label;
-      drawer.appendChild(btn);
-    }
-
-    // Custom commands from settings
-    const customCmds = this._getCustomCommands();
-    customCmds.forEach((cmd, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'accessory-drawer-item';
-      btn.dataset.action = `custom-${i}`;
-      btn.dataset.command = cmd.command;
-      btn.textContent = cmd.label || cmd.command;
-      btn.title = cmd.command;
-      drawer.appendChild(btn);
-    });
-
-    // Drawer click handler
-    drawer.addEventListener('click', (e) => {
+    // Delegated click handler for all items (works for dynamically added items too)
+    items.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-drawer-item');
       if (!btn) return;
       e.preventDefault();
       e.stopPropagation();
 
-      const action = btn.dataset.action;
-      if (action === 'clear' || action === 'compact') {
-        const cmd = action === 'clear' ? '/clear' : '/compact';
+      const cmd = btn.dataset.cmd;
+      const action = btn.dataset.action; // stable key for confirm tracking
+      if (btn.dataset.confirm === 'true') {
         if (this._confirmAction === action && this._confirmTimer) {
           this.clearConfirm();
           this.closeDrawer();
@@ -285,37 +319,92 @@ const KeyboardAccessoryBar = {
         } else {
           this.setConfirm(action, btn);
         }
-      } else if (action === 'init') {
+      } else {
         this.closeDrawer();
-        this.sendCommand('/init');
-      } else if (action.startsWith('custom-') && btn.dataset.command) {
-        this.closeDrawer();
-        this.sendCommand(btn.dataset.command);
+        this.sendCommand(cmd);
       }
     });
 
     this.element.appendChild(drawer);
   },
 
-  /** Open the commands drawer */
+  /** Populate the items container based on the active session's CLI type.
+   *  Called each time the drawer opens so it always reflects the current pane. */
+  _populateDrawer() {
+    if (!this._itemsContainer) return;
+    this._itemsContainer.replaceChildren(); // clear previous items
+
+    const mode = (typeof app !== 'undefined' && app.activeSessionId)
+      ? (app.sessions?.get(app.activeSessionId)?.mode ?? 'claude')
+      : 'claude';
+
+    const cliCmds = this._CLI_COMMANDS[mode] ?? [];
+
+    // Add CLI commands
+    for (const { cmd, desc, confirm } of cliCmds) {
+      const btn = document.createElement('button');
+      btn.className = 'accessory-drawer-item';
+      btn.dataset.cmd = cmd;
+      btn.dataset.action = cmd; // stable key for confirm tracking
+      btn.dataset.desc = desc;
+      if (confirm) btn.dataset.confirm = 'true';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'drawer-cmd-name';
+      nameEl.textContent = cmd;
+      const descEl = document.createElement('span');
+      descEl.className = 'drawer-cmd-desc';
+      descEl.textContent = desc;
+      btn.appendChild(nameEl);
+      btn.appendChild(descEl);
+      this._itemsContainer.appendChild(btn);
+    }
+
+    // Separator before custom commands (only if both lists are non-empty)
+    const customCmds = this._getCustomCommands();
+    if (cliCmds.length > 0 && customCmds.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'accessory-drawer-sep';
+      this._itemsContainer.appendChild(sep);
+    }
+
+    // Add custom commands from settings
+    customCmds.forEach((custom) => {
+      const btn = document.createElement('button');
+      btn.className = 'accessory-drawer-item';
+      btn.dataset.cmd = custom.command;
+      btn.dataset.action = `custom:${custom.command}`;
+      btn.dataset.desc = custom.label || '';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'drawer-cmd-name';
+      nameEl.textContent = custom.label || custom.command;
+      const descEl = document.createElement('span');
+      descEl.className = 'drawer-cmd-desc';
+      descEl.textContent = custom.command;
+      btn.appendChild(nameEl);
+      btn.appendChild(descEl);
+      this._itemsContainer.appendChild(btn);
+    });
+  },
+
+  /** Open the commands drawer, populating it for the current session */
   openDrawer() {
     if (!this.drawerElement) return;
+
+    // Populate items for the active session's CLI type
+    this._populateDrawer();
+
     this.drawerElement.classList.add('open');
 
-    // Reset filter and show all items
+    // Reset search and focus input to re-open keyboard on Android
     if (this._searchInput) {
       this._searchInput.value = '';
-      this.drawerElement.querySelectorAll('.accessory-drawer-item').forEach((btn) => {
-        btn.style.display = '';
-      });
-      // Focus search input — re-opens the keyboard on Android so the drawer stays visible.
-      // Delay slightly to let the drawer's CSS transition start before focus triggers layout.
       setTimeout(() => this._searchInput?.focus(), 80);
     }
 
-    // Register outside-tap close with a long enough delay that the tap opening the
-    // drawer (and any associated touchstart/click) has fully completed first.
-    // Android needs more time than iOS here.
+    // Register outside-tap close. Use 200ms delay so the opening tap (and its
+    // associated touchstart/click propagation) finishes before we listen.
     const handler = (e) => {
       if (!this.drawerElement?.contains(e.target) &&
           !e.target.closest('[data-action="commands"]')) {
