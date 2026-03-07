@@ -261,6 +261,8 @@ const KeyboardHandler = {
           // Only reserve space for the fixed bars; do NOT add keyboard height again.
           if (toolbar) toolbar.style.transform = '';
           if (accessoryBar) accessoryBar.style.transform = '';
+          const inputPanel = document.getElementById('mobileInputPanel');
+          if (inputPanel) inputPanel.style.transform = '';
           if (main) {
             // With resizes-content, innerHeight is already the visible area.
             // Just reserve space for the fixed bars + safe-area-bottom.
@@ -280,6 +282,8 @@ const KeyboardHandler = {
       // iOS / Android pan mode: translate bars up above keyboard.
       if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
       if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
+      const inputPanel = document.getElementById('mobileInputPanel');
+      if (inputPanel) inputPanel.style.transform = `translateY(${-keyboardOffset}px)`;
 
       // Reserve space for keyboard + translated bars + safe-area-bottom.
       if (main) {
@@ -299,6 +303,8 @@ const KeyboardHandler = {
 
     if (toolbar) toolbar.style.transform = '';
     if (accessoryBar) accessoryBar.style.transform = '';
+    const inputPanel = document.getElementById('mobileInputPanel');
+    if (inputPanel) inputPanel.style.transform = '';
 
     if (main) {
       const barHeight = accessoryBar?.classList.contains('visible') ? 124 : 40;
@@ -372,6 +378,10 @@ const KeyboardHandler = {
   /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
   _sendTerminalResize() {
     if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
+    // Don't resize during tab switch buffer load — selectSession calls sendResize at the end,
+    // and an early resize causes Ink to redraw, queueing a full-screen repaint in
+    // _loadBufferQueue that flushes on top of the loaded buffer (looks like reload).
+    if (app._isLoadingBuffer) return;
     try {
       const dims = app.fitAddon.proposeDimensions();
       if (dims) {

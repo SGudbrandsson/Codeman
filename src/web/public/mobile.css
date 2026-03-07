@@ -2128,15 +2128,28 @@ html.mobile-init .file-browser-panel {
 .session-drawer-dot.ralph   { background: #f59e0b; }
 
 .mobile-input-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-area-bottom) + 84px); /* 40px toolbar + 44px accessory bar */
+  z-index: 52;
   background: #111;
   border-top: 1px solid #1a1a2e;
   padding: 8px;
-  flex-shrink: 0;
+  padding-left: calc(8px + var(--safe-area-left));
+  padding-right: calc(8px + var(--safe-area-right));
 }
 .mobile-input-row {
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+.mobile-input-left-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
 }
 .mobile-input-textarea {
   flex: 1;

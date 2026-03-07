@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.3
+
+### Patch Changes
+
+- Add Tab button and image picker to mobile UI; fix compose panel positioning and send behavior
+
 ## 0.5.2
 
 ### Patch Changes

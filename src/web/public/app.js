@@ -769,8 +769,11 @@ class CodemanApp {
           // Skip server resize while mobile keyboard is visible — sending SIGWINCH
           // causes Ink to re-render at the new row count, garbling terminal output.
           // Local fit() still runs so xterm knows the viewport size for scrolling.
+          // Also skip during buffer load (tab switch): selectSession calls sendResize at the
+          // end, and an early resize queues an Ink full-screen repaint in _loadBufferQueue
+          // that flushes on top of the loaded buffer, looking like a stream reload.
           const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
-          if (this.activeSessionId && !keyboardUp) {
+          if (this.activeSessionId && !keyboardUp && !this._isLoadingBuffer) {
             const dims = this.fitAddon.proposeDimensions();
             // Enforce minimum dimensions to prevent layout issues
             const cols = dims ? Math.max(dims.cols, MIN_COLS) : MIN_COLS;
@@ -2991,7 +2994,8 @@ class CodemanApp {
     this.sessions.clear();
     this.ralphStates.clear();
     this.terminalBuffers.clear();
-    this.terminalBufferCache.clear();
+    // Keep terminalBufferCache across SSE reconnects — selectSession uses it for soft reload
+    // (no hide/clear when same session reconnects with unchanged content).
     this.projectInsights.clear();
     this.teams.clear();
     this.teamTasks.clear();
@@ -3175,6 +3179,10 @@ class CodemanApp {
         try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
       if (restoreId && this.sessions.has(restoreId)) {
+        // Soft reconnect: if SSE dropped and same session is being restored with cached
+        // content, selectSession will skip the hide+clear+reload and just verify in background.
+        this._sseReconnectRestoreId = (previousActiveId === restoreId && this.terminalBufferCache.has(restoreId))
+          ? restoreId : null;
         this.selectSession(restoreId);
       } else {
         this.selectSession(this.sessionOrder[0]);
@@ -3726,58 +3734,99 @@ class CodemanApp {
       // On localhost the fetch is < 5ms, so the hidden period is imperceptible.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       const termContainer = document.getElementById('terminalContainer');
-      termContainer?.classList.add('buffer-loading');
-      await new Promise(resolve => requestAnimationFrame(resolve));
-
-      if (cachedBuffer) {
-        _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
-        this.terminal.clear();
-        this.terminal.reset();
-        await this.chunkedTerminalWrite(cachedBuffer);
-        if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
-        _crashDiag.log('CACHE_DONE');
-        // Stay hidden — fetch may have newer content; reveal once after final write
-      }
-
-      _crashDiag.log('FETCH_START');
       const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
-      if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
-      const data = await res.json();
-      _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
-      if (data.terminalBuffer) {
-        // Skip rewrite if fresh buffer matches cache — avoids unnecessary clear+rewrite.
-        const needsRewrite = data.terminalBuffer !== cachedBuffer;
-        if (needsRewrite) {
-          _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
+      // Soft reconnect: SSE dropped and reconnected to the same already-visible session.
+      // Skip hiding the terminal; verify the buffer in the background. Only do a full
+      // hide+clear+reload if content actually changed while SSE was down.
+      const isSoftReconnect = this._sseReconnectRestoreId === sessionId;
+      this._sseReconnectRestoreId = null;  // consume immediately
+      let terminalHidden = false;  // track whether buffer-loading was added
+
+      if (isSoftReconnect && cachedBuffer) {
+        _crashDiag.log('SOFT_RECONNECT: fetching to compare');
+        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        const data = await res.json();
+        _crashDiag.log(`SOFT_RECONNECT_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} changed=${data.terminalBuffer !== cachedBuffer}`);
+
+        if (data.terminalBuffer && data.terminalBuffer !== cachedBuffer) {
+          // Content changed while SSE was down — hide and reload cleanly
+          termContainer?.classList.add('buffer-loading');
+          terminalHidden = true;
+          await new Promise(resolve => requestAnimationFrame(resolve));
           this.terminal.clear();
           this.terminal.reset();
-          // Show truncation indicator if buffer was cut
           if (data.truncated) {
             this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
           }
-          // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
           if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          this.terminalBufferCache.set(sessionId, data.terminalBuffer);
+          if (this.terminalBufferCache.size > 20) {
+            const oldest = this.terminalBufferCache.keys().next().value;
+            this.terminalBufferCache.delete(oldest);
+          }
+        } else if (data.terminalBuffer) {
+          // Buffer unchanged — terminal already shows correct content; refresh cache entry
+          this.terminalBufferCache.set(sessionId, data.terminalBuffer);
+        }
+      } else {
+        // Normal tab switch: hide terminal for the entire load sequence so the user sees
+        // a single reveal rather than: cached-content → hidden → fresh-content (double flash).
+        termContainer?.classList.add('buffer-loading');
+        terminalHidden = true;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        if (cachedBuffer) {
+          _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
+          this.terminal.clear();
+          this.terminal.reset();
+          await this.chunkedTerminalWrite(cachedBuffer);
+          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          _crashDiag.log('CACHE_DONE');
+          // Stay hidden — fetch may have newer content; reveal once after final write
         }
 
-        // Update cache (cap at 20 entries)
-        this.terminalBufferCache.set(sessionId, data.terminalBuffer);
-        if (this.terminalBufferCache.size > 20) {
-          // Evict oldest entry (first key in Map iteration order)
-          const oldest = this.terminalBufferCache.keys().next().value;
-          this.terminalBufferCache.delete(oldest);
+        _crashDiag.log('FETCH_START');
+        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+        if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        const data = await res.json();
+        _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
+
+        if (data.terminalBuffer) {
+          // Skip rewrite if fresh buffer matches cache — avoids unnecessary clear+rewrite.
+          const needsRewrite = data.terminalBuffer !== cachedBuffer;
+          if (needsRewrite) {
+            _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
+            this.terminal.clear();
+            this.terminal.reset();
+            // Show truncation indicator if buffer was cut
+            if (data.truncated) {
+              this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
+            }
+            // Use chunked write for large buffers to avoid UI jank
+            await this.chunkedTerminalWrite(data.terminalBuffer);
+            if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          }
+
+          // Update cache (cap at 20 entries)
+          this.terminalBufferCache.set(sessionId, data.terminalBuffer);
+          if (this.terminalBufferCache.size > 20) {
+            // Evict oldest entry (first key in Map iteration order)
+            const oldest = this.terminalBufferCache.keys().next().value;
+            this.terminalBufferCache.delete(oldest);
+          }
+        } else if (!cachedBuffer) {
+          // No fresh buffer and no cache — clear any stale content
+          this.terminal.clear();
+          this.terminal.reset();
         }
-      } else if (!cachedBuffer) {
-        // No fresh buffer and no cache — clear any stale content
-        this.terminal.clear();
-        this.terminal.reset();
       }
 
-      // Scroll to bottom and reveal terminal once with final content
+      // Scroll to bottom and reveal terminal (only if it was hidden)
       this.terminal.scrollToBottom();
-      termContainer?.classList.remove('buffer-loading');
+      if (terminalHidden) termContainer?.classList.remove('buffer-loading');
 
       // Buffer load complete — unblock live SSE writes and flush any queued events.
       // chunkedTerminalWrite calls _finishBufferLoad internally, but if we skipped
@@ -12230,9 +12279,10 @@ const InputPanel = {
     if (!text) return;
     if (typeof app !== 'undefined' && app.sendInput) {
       app.sendInput(text);
+      setTimeout(() => app.sendInput('\r'), 80);
     }
-    // Intentionally do NOT clear — user can keep editing/appending
-    ta.focus();
+    ta.value = '';
+    this.close();
   },
 
   clear() {
@@ -12245,6 +12295,42 @@ const InputPanel = {
   toggleVoice() {
     if (typeof VoiceInput !== 'undefined' && VoiceInput.toggle) {
       VoiceInput.toggle();
+    }
+  },
+
+  pickImage() {
+    const fileInput = document.getElementById('mobileInputImageFile');
+    if (fileInput) fileInput.click();
+  },
+
+  async _onImageFileChosen(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    input.value = ''; // reset so same file can be picked again
+
+    const btn = document.getElementById('mobileInputImageBtn');
+    if (btn) btn.disabled = true;
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/api/screenshots', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (!data.success) throw new Error(data.error || 'Upload failed');
+
+      // Send the file path to Claude — Claude Code reads images from absolute paths
+      if (typeof app !== 'undefined' && app.sendInput && app.activeSessionId) {
+        app.sendInput(data.path);
+        setTimeout(() => app.sendInput('\r'), 80);
+      }
+      if (typeof app !== 'undefined') app.showToast('Image sent', 'success');
+    } catch (err) {
+      if (typeof app !== 'undefined') app.showToast('Image upload failed', 'error');
+      console.error('[InputPanel] image upload failed:', err);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 };

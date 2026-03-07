@@ -55,7 +55,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.5.2 (must match `package.json`)
+**Version**: 0.5.3 (must match `package.json`)
 
 ## Project Overview
 
@@ -148,11 +148,15 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. Load order: `constants.js`(1) → `mobile-handlers.js`(2) → `voice-input.js`(3) → `notification-manager.js`(4) → `keyboard-accessory.js`(5) → `app.js`(6) → `ralph-wizard.js`(7) → `api-client.js`(8) → `subagent-windows.js`(9).
 
-**Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7).
+**Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7), input panel (52).
 
 **Respawn presets**: `solo-work` (3s/60min), `subagent-workflow` (45s/240min), `team-lead` (90s/480min), `ralph-todo` (8s/480min), `overnight-autonomous` (10s/480min).
 
 **Keyboard shortcuts**: Escape (close), Ctrl+? (help), Ctrl+Enter (quick start), Ctrl+W (kill), Ctrl+Tab (next), Ctrl+K (kill all), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl/Cmd +/- (font).
+
+**Mobile accessory bar** default buttons: `tab`, `scroll-up`, `scroll-down`, `commands`, `paste`, `copy`. The `dismiss` button was removed. Configured via `hotbarButtons` in localStorage settings.
+
+**Mobile compose panel** (lock icon): native textarea overlay above the accessory bar (`z-index: 52`, `position: fixed`). Send clears textarea, closes panel, and sends a trailing `\r`. Image button uploads to `POST /api/screenshots` and sends the saved file path to the session. Panel transforms with the accessory bar when keyboard opens — updated in all three layout paths in `mobile-handlers.js` (`updateLayout`, `resetLayout`).
 
 ### Security
 

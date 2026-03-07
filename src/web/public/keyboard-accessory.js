@@ -78,7 +78,7 @@ const KeyboardAccessoryBar = {
   },
 
   /** Default hotbar button set */
-  _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'],
+  _defaultButtons: ['tab', 'scroll-up', 'scroll-down', 'commands', 'paste', 'copy'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
@@ -115,6 +115,11 @@ const KeyboardAccessoryBar = {
     this.element = document.createElement('div');
     this.element.className = 'keyboard-accessory-bar';
     this.element.innerHTML = `
+      <button class="accessory-btn" data-action="tab" title="Tab">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12h14M12 5l7 7-7 7"/><line x1="21" y1="5" x2="21" y2="19" stroke-width="2.5"/>
+        </svg>
+      </button>
       <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M5 15l7-7 7 7"/>
@@ -138,11 +143,6 @@ const KeyboardAccessoryBar = {
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
         </svg>
       </button>
-      <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-          <path d="M19 9l-7 7-7-7"/>
-        </svg>
-      </button>
     `;
     // Show only configured buttons
     const enabled = this._getButtonConfig();
@@ -164,7 +164,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if (action === 'scroll-up' || action === 'scroll-down') {
+      if (action === 'tab' || action === 'scroll-up' || action === 'scroll-down') {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
         }
@@ -245,6 +245,9 @@ const KeyboardAccessoryBar = {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
     switch (action) {
+      case 'tab':
+        this.sendKey('\t');
+        break;
       case 'scroll-up':
         this.sendKey('\x1b[A');
         break;
