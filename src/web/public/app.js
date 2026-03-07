@@ -7773,6 +7773,7 @@ class CodemanApp {
     this.cancelCloseSession();
     this.closeTokenStats();
     if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    if (typeof InputPanel !== 'undefined') InputPanel.close();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');
