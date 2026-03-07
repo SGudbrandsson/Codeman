@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.0
+
+### Minor Changes
+
+- Mobile UX overhaul: fix terminal scroll animation on session switch, add persistent GSD status line strip, add session navigation hamburger drawer, fix Android keyboard layout jump, add persistent input panel toggle, and add dynamic plugin/GSD command discovery in the Commands drawer
+
 ## 0.4.1
 
 ### Patch Changes
