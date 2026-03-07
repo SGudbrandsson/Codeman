@@ -1751,6 +1751,43 @@
     <div class="session-drawer-list" id="sessionDrawerList"></div>
   </div>
 
+  <!-- Mobile persistent input panel — toggled by InputPanel.toggle() -->
+  <div class="mobile-input-panel" id="mobileInputPanel" style="display:none;"
+       aria-label="Compose input" role="region">
+    <div class="mobile-input-row">
+      <button class="mobile-input-btn mobile-input-mic" id="mobileInputMic"
+              onclick="InputPanel.toggleVoice()" title="Voice input"
+              aria-label="Toggle voice input" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <textarea class="mobile-input-textarea" id="mobileInputTextarea"
+                rows="3"
+                placeholder="Type or paste… Send keeps text. Clear to reset."
+                autocomplete="off" autocorrect="on"
+                autocapitalize="sentences" spellcheck="true"></textarea>
+      <div class="mobile-input-actions">
+        <button class="mobile-input-btn mobile-input-clear"
+                onclick="InputPanel.clear()" title="Clear" type="button"
+                aria-label="Clear input">&#x2715;</button>
+        <button class="mobile-input-btn mobile-input-send"
+                onclick="InputPanel.send()" title="Send"
+                type="button" aria-label="Send input">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script defer src="constants.js?v=0.4.0"></script>
   <script defer src="mobile-handlers.js?v=0.4.2"></script>
   <script defer src="voice-input.js?v=0.4.0"></script>

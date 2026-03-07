@@ -12174,6 +12174,62 @@ try {
 } catch {}
 
 /**
+ * InputPanel — Persistent native textarea above the keyboard accessory bar.
+ * Mobile only. Toggle open/closed. Send does not clear — user keeps editing.
+ */
+const InputPanel = {
+  _open: false,
+  _panelEl: null,
+  _textareaEl: null,
+  _getPanel() { return this._panelEl || (this._panelEl = document.getElementById('mobileInputPanel')); },
+  _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('mobileInputTextarea')); },
+
+  toggle() {
+    if (this._open) this.close(); else this.open();
+  },
+
+  open() {
+    const panel = this._getPanel();
+    if (!panel) return;
+    panel.style.display = '';
+    this._open = true;
+    requestAnimationFrame(() => { this._getTextarea()?.focus(); });
+  },
+
+  close() {
+    const panel = this._getPanel();
+    if (!panel) return;
+    panel.style.display = 'none';
+    this._open = false;
+  },
+
+  send() {
+    const ta = this._getTextarea();
+    if (!ta) return;
+    const text = ta.value;
+    if (!text) return;
+    if (typeof app !== 'undefined' && app.sendInput) {
+      app.sendInput(text);
+    }
+    // Intentionally do NOT clear — user can keep editing/appending
+    ta.focus();
+  },
+
+  clear() {
+    const ta = this._getTextarea();
+    if (!ta) return;
+    ta.value = '';
+    ta.focus();
+  },
+
+  toggleVoice() {
+    if (typeof VoiceInput !== 'undefined' && VoiceInput.toggle) {
+      VoiceInput.toggle();
+    }
+  }
+};
+
+/**
  * SessionDrawer — bottom-sheet session picker for mobile.
  * All DOM text uses textContent (no innerHTML with session data).
  */
