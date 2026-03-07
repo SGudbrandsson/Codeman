@@ -266,6 +266,13 @@ const _SSE_HANDLER_MAP = [
 ];
 
 // ═══════════════════════════════════════════════════════════════
+// Module-level regex patterns
+// ═══════════════════════════════════════════════════════════════
+
+/** Matches GSD context lines like "◆ Context: 47% · 3 tools · idle" */
+const STATUS_LINE_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btokens?\b)/i;
+
+// ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
 
@@ -404,6 +411,7 @@ class CodemanApp {
     this._localEchoOverlay = null;  // created after terminal.open()
     this._localEchoEnabled = false; // true when setting on + session active
     this._restoringFlushedState = false; // true during selectSession buffer load — protects flushed Maps
+    this._statusStripEl = null; // lazy-cached in _updateStatusStrip
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -1486,7 +1494,8 @@ class CodemanApp {
    */
   _updateStatusStrip() {
     if (!this.terminal) return;
-    const strip = document.getElementById('terminalStatusStrip');
+    if (!this._statusStripEl) this._statusStripEl = document.getElementById('terminalStatusStrip');
+    const strip = this._statusStripEl;
     if (!strip) return;
 
     const buffer = this.terminal.buffer.active;
@@ -1494,15 +1503,12 @@ class CodemanApp {
     // Scan last 8 lines — Ink status bar is always near the bottom
     const scanFrom = Math.max(0, totalLines - 8);
 
-    // Matches GSD format like "◆ Context: 47% · 3 tools · idle"
-    const STATUS_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btokens?\b)/i;
-
     let matched = '';
     for (let i = totalLines - 1; i >= scanFrom; i--) {
       const line = buffer.getLine(i);
       if (!line) continue;
       const text = line.translateToString(true).trim();
-      if (text && STATUS_RE.test(text)) {
+      if (text && STATUS_LINE_RE.test(text)) {
         matched = text;
         break;
       }
@@ -3592,6 +3598,10 @@ class CodemanApp {
     this._tabCompletionRetries = 0;
     this._tabCompletionBaseText = null;
     if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
+
+    // Clear status strip — new session may not have GSD output
+    const statusStrip = this._statusStripEl ?? document.getElementById('terminalStatusStrip');
+    if (statusStrip) statusStrip.style.display = 'none';
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
     if (this.syncWaitTimeout) {
