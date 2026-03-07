@@ -1629,10 +1629,8 @@ html.mobile-init .file-browser-panel {
   }
 
   /* When keyboard is visible, adjust content to account for moved toolbar */
-  .keyboard-visible .terminal-container {
-    /* Reduce terminal height when keyboard is up so it doesn't overlap toolbar */
-    padding-bottom: 50px;
-  }
+  /* Note: padding-bottom removed — updateLayoutForKeyboard() in JS already sizes
+     .main correctly; extra padding caused xterm to render hidden lines below the fold */
 
   /* Ensure modals scroll properly when keyboard is visible */
   .keyboard-visible .modal-body {
