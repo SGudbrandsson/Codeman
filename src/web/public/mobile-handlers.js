@@ -250,11 +250,15 @@ const KeyboardHandler = {
       if (keyboardOffset <= 0) {
         const viewportShrinkage = this.initialViewportHeight - window.innerHeight;
         if (viewportShrinkage > 100) {
-          // Android resize mode: browser already shrank innerHeight for keyboard.
-          // Use shrinkage as keyboard height; fixed elements auto-position, no transforms needed.
-          keyboardOffset = viewportShrinkage;
+          // Android resize mode: browser already shrank innerHeight to exclude keyboard.
+          // Fixed elements auto-position at bottom of visible area — no transforms needed.
+          // Only reserve space for the fixed bars; do NOT add keyboard height again.
           if (toolbar) toolbar.style.transform = '';
           if (accessoryBar) accessoryBar.style.transform = '';
+          if (main) {
+            main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '84px' : '';
+          }
+          return;
         } else {
           // iOS: keyboard-visible flag is stale, keyboard is actually gone.
           this.keyboardVisible = false;
@@ -262,11 +266,11 @@ const KeyboardHandler = {
           this.onKeyboardHide();
           return;
         }
-      } else {
-        // iOS / Android pan mode: translate bars up above keyboard.
-        if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
-        if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
       }
+
+      // iOS / Android pan mode: translate bars up above keyboard.
+      if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
+      if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
 
       // Shrink main content area so terminal doesn't extend behind keyboard
       // Account for keyboard height + toolbar height (40px) + accessory bar (44px)
