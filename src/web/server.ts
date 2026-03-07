@@ -572,6 +572,21 @@ export class WebServer extends EventEmitter {
         .sendFile('sw.js', join(__dirname, 'public'));
     });
 
+    // index.html must not be cached — it contains versioned asset references (?v=X).
+    // If the browser caches index.html for 1y, version bumps in assets are never seen.
+    // Assets (JS/CSS) keep 1-year immutable cache; only the HTML shell needs to be fresh.
+    // NOTE: reply.sendFile() always applies the plugin's maxAge, so we read the file
+    // directly and use reply.send() — @fastify/compress still handles gzip/br compression.
+    const indexHtml = readFileSync(join(__dirname, 'public', 'index.html'));
+    const serveIndex = async (_req: unknown, reply: FastifyReply) => {
+      return reply
+        .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        .type('text/html; charset=utf-8')
+        .send(indexHtml);
+    };
+    this.app.get('/', serveIndex);
+    this.app.get('/index.html', serveIndex);
+
     // Serve static files — versioned assets (?v=X) are immutable, cache aggressively
     // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
