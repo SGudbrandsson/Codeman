@@ -988,13 +988,15 @@
                   <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;">
                     <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="scroll-up"> ↑ Up</label>
                     <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="scroll-down"> ↓ Down</label>
-                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="newline"> ↵ Newline</label>
-                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="init"> /init</label>
-                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="clear"> /clear</label>
-                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="compact"> /compact</label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="commands"> Commands</label>
                     <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="paste"> Paste</label>
                     <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="copy"> Copy</label>
                     <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer"><input type="checkbox" name="hotbarBtn" value="dismiss"> Dismiss</label>
+                  </div>
+                  <div style="margin-top:12px;">
+                    <span class="settings-item-label">Custom Commands</span>
+                    <div id="hotbarCustomCmds" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>
+                    <button type="button" onclick="app._addHotbarCmdRow()" style="margin-top:6px;font-size:0.8rem;padding:2px 8px;cursor:pointer;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);">+ Add Command</button>
                   </div>
                 </div>
               </div>
