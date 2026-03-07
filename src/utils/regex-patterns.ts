@@ -79,3 +79,15 @@ export function stripAnsi(text: string): string {
 export const SPINNER_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧]/;
 
 export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_/\-. ~]+$/;
+
+/**
+ * Execute a global regex pattern against data, calling the callback for each match.
+ * Automatically resets lastIndex before execution.
+ */
+export function execPattern(pattern: RegExp, data: string, callback: (match: RegExpExecArray) => void): void {
+  pattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(data)) !== null) {
+    callback(match);
+  }
+}

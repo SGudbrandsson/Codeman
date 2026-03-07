@@ -49,7 +49,13 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
-import { ANSI_ESCAPE_PATTERN_FULL, TOKEN_PATTERN, SPINNER_PATTERN, MAX_SESSION_TOKENS } from './utils/index.js';
+import {
+  ANSI_ESCAPE_PATTERN_FULL,
+  TOKEN_PATTERN,
+  SPINNER_PATTERN,
+  MAX_SESSION_TOKENS,
+  execPattern,
+} from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
   TRIM_TERMINAL_TO as TERMINAL_BUFFER_TRIM_SIZE,
@@ -1692,16 +1698,12 @@ export class Session extends EventEmitter {
     // Quick pre-check: skip expensive regex if no common tool patterns present
     if (!cleanLine.includes('(') || !cleanLine.includes(')')) return;
 
-    // Reset regex lastIndex for global pattern
-    TASK_TOOL_PATTERN.lastIndex = 0;
-
-    let match;
-    while ((match = TASK_TOOL_PATTERN.exec(cleanLine)) !== null) {
+    execPattern(TASK_TOOL_PATTERN, cleanLine, (match) => {
       const description = match[2].trim();
       if (description && description.length > 0) {
         this._taskCache.add(Date.now(), description);
       }
-    }
+    });
   }
 
   /**

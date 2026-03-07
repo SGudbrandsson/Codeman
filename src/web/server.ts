@@ -120,6 +120,7 @@ import {
   ITERATION_PAUSE_MS,
   BATCH_FLUSH_THRESHOLD,
   STATS_COLLECTION_INTERVAL_MS,
+  INACTIVITY_TIMEOUT_MS,
 } from '../config/server-timing.js';
 
 // DEC mode 2026 - Synchronized Output
@@ -230,7 +231,7 @@ export class WebServer extends EventEmitter {
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
   private lastTerminalEventTime: StaleExpirationMap<string, number> = new StaleExpirationMap({
-    ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
+    ttlMs: INACTIVITY_TIMEOUT_MS, // 5 minutes - auto-expire stale session timing data
     refreshOnGet: false, // Don't refresh on reads, only on explicit sets
   });
   // Centralized cleanup for standalone timers (intervals + resettable timeouts)
@@ -2397,7 +2398,7 @@ export class WebServer extends EventEmitter {
       () => {
         this.recordPeriodicTokenUsage();
       },
-      5 * 60 * 1000,
+      INACTIVITY_TIMEOUT_MS,
       { description: 'periodic token recording' }
     );
 

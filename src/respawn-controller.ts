@@ -62,7 +62,15 @@ import {
 import { RespawnAdaptiveTiming } from './respawn-adaptive-timing.js';
 import { RespawnCycleMetricsTracker } from './respawn-metrics.js';
 import { calculateHealthScore, shouldSkipClear, type HealthInputs } from './respawn-health.js';
-import { AI_CHECK_MODEL, AI_IDLE_CHECK_MAX_CONTEXT, AI_PLAN_CHECK_MAX_CONTEXT } from './config/ai-defaults.js';
+import {
+  AI_CHECK_MODEL,
+  AI_IDLE_CHECK_MAX_CONTEXT,
+  AI_PLAN_CHECK_MAX_CONTEXT,
+  AI_IDLE_CHECK_TIMEOUT_MS,
+  AI_IDLE_CHECK_COOLDOWN_MS,
+  AI_PLAN_CHECK_TIMEOUT_MS,
+  AI_PLAN_CHECK_COOLDOWN_MS,
+} from './config/ai-defaults.js';
 import type {
   RespawnCycleMetrics,
   RespawnAggregateMetrics,
@@ -559,13 +567,13 @@ const DEFAULT_CONFIG: RespawnConfig = {
   aiIdleCheckEnabled: true, // use AI to confirm idle state
   aiIdleCheckModel: AI_CHECK_MODEL,
   aiIdleCheckMaxContext: AI_IDLE_CHECK_MAX_CONTEXT,
-  aiIdleCheckTimeoutMs: 90000, // 90 seconds (thinking can be slow)
-  aiIdleCheckCooldownMs: 180000, // 3 minutes after WORKING verdict
+  aiIdleCheckTimeoutMs: AI_IDLE_CHECK_TIMEOUT_MS,
+  aiIdleCheckCooldownMs: AI_IDLE_CHECK_COOLDOWN_MS,
   aiPlanCheckEnabled: true, // use AI to confirm plan mode before auto-accept
   aiPlanCheckModel: AI_CHECK_MODEL,
   aiPlanCheckMaxContext: AI_PLAN_CHECK_MAX_CONTEXT,
-  aiPlanCheckTimeoutMs: 60000, // 60 seconds (thinking can be slow)
-  aiPlanCheckCooldownMs: 30000, // 30 seconds after NOT_PLAN_MODE
+  aiPlanCheckTimeoutMs: AI_PLAN_CHECK_TIMEOUT_MS,
+  aiPlanCheckCooldownMs: AI_PLAN_CHECK_COOLDOWN_MS,
   stuckStateDetectionEnabled: true, // detect stuck states
   stuckStateWarningMs: 300000, // 5 minutes warning threshold
   stuckStateRecoveryMs: 600000, // 10 minutes recovery threshold

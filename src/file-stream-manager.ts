@@ -16,6 +16,7 @@ import { existsSync, statSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
+import { CLEANUP_CHECK_INTERVAL_MS, INACTIVITY_TIMEOUT_MS } from './config/server-timing.js';
 
 // ========== Configuration Constants ==========
 
@@ -39,7 +40,7 @@ const MAX_STREAMS_PER_SESSION = 5;
  * Inactivity timeout for streams (5 minutes).
  * Streams with no data for this long will be auto-closed.
  */
-const STREAM_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+const STREAM_INACTIVITY_TIMEOUT_MS = INACTIVITY_TIMEOUT_MS;
 
 // ========== Types ==========
 
@@ -129,7 +130,7 @@ export class FileStreamManager extends EventEmitter {
   constructor() {
     super();
     // Start cleanup timer for inactive streams
-    this.cleanupTimer = setInterval(() => this.cleanupInactiveStreams(), 60 * 1000);
+    this.cleanupTimer = setInterval(() => this.cleanupInactiveStreams(), CLEANUP_CHECK_INTERVAL_MS);
   }
 
   // ========== Public Methods ==========

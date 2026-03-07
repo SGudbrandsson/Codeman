@@ -34,6 +34,7 @@ import { join, basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
 import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS, MAX_TRACKED_AGENTS } from './config/map-limits.js';
+import { STALE_DATA_MAX_AGE_MS } from './config/server-timing.js';
 import { CleanupManager, KeyedDebouncer } from './utils/index.js';
 
 // ========== Types ==========
@@ -151,7 +152,7 @@ const POLL_INTERVAL_MS = 1000; // Base poll interval (lightweight checks)
 const FULL_SCAN_EVERY_N_POLLS = 5; // Full directory traversal every 5th poll (5s)
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
 const FILE_ALIVE_THRESHOLD_MS = 30000; // File mtime within 30s = agent alive (primary check)
-const STALE_COMPLETED_MAX_AGE_MS = 60 * 60 * 1000; // Remove completed agents older than 1 hour
+const STALE_COMPLETED_MAX_AGE_MS = STALE_DATA_MAX_AGE_MS; // Remove completed agents older than 1 hour
 const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older than 4 hours
 const STARTUP_MAX_FILE_AGE_MS = 4 * 60 * 60 * 1000; // Only load files modified in last 4 hours on startup
 

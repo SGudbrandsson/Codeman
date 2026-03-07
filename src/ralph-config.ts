@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { execPattern } from './utils/index.js';
 
 // Pattern to extract completion phrase from CLAUDE.md
 // Matches <promise>PHRASE</promise> with optional whitespace
@@ -83,9 +84,7 @@ export function parseRalphLoopConfigFromContent(content: string): RalphLoopConfi
   };
 
   // Parse each YAML line
-  let match;
-  YAML_LINE_PATTERN.lastIndex = 0;
-  while ((match = YAML_LINE_PATTERN.exec(yaml)) !== null) {
+  execPattern(YAML_LINE_PATTERN, yaml, (match) => {
     const key = match[1].toLowerCase();
     const value = match[2].trim();
 
@@ -103,7 +102,7 @@ export function parseRalphLoopConfigFromContent(content: string): RalphLoopConfi
         config.completionPromise = value.toUpperCase();
         break;
     }
-  }
+  });
 
   return config;
 }

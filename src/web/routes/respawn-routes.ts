@@ -11,7 +11,15 @@ import { SseEvent } from '../sse-events.js';
 import { findSessionOrFail, autoConfigureRalph } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import { AI_CHECK_MODEL, AI_IDLE_CHECK_MAX_CONTEXT, AI_PLAN_CHECK_MAX_CONTEXT } from '../../config/ai-defaults.js';
+import {
+  AI_CHECK_MODEL,
+  AI_IDLE_CHECK_MAX_CONTEXT,
+  AI_PLAN_CHECK_MAX_CONTEXT,
+  AI_IDLE_CHECK_TIMEOUT_MS,
+  AI_IDLE_CHECK_COOLDOWN_MS,
+  AI_PLAN_CHECK_TIMEOUT_MS,
+  AI_PLAN_CHECK_COOLDOWN_MS,
+} from '../../config/ai-defaults.js';
 
 /** No-op EventPort used to suppress broadcasts during pre-start ralph configuration. */
 const noopEventPort: EventPort = {
@@ -188,14 +196,18 @@ export function registerRespawnRoutes(
       aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? AI_CHECK_MODEL,
       aiIdleCheckMaxContext:
         config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? AI_IDLE_CHECK_MAX_CONTEXT,
-      aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? 90000,
-      aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? 180000,
+      aiIdleCheckTimeoutMs:
+        config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs ?? AI_IDLE_CHECK_TIMEOUT_MS,
+      aiIdleCheckCooldownMs:
+        config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? AI_IDLE_CHECK_COOLDOWN_MS,
       aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
       aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? AI_CHECK_MODEL,
       aiPlanCheckMaxContext:
         config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? AI_PLAN_CHECK_MAX_CONTEXT,
-      aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? 60000,
-      aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
+      aiPlanCheckTimeoutMs:
+        config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs ?? AI_PLAN_CHECK_TIMEOUT_MS,
+      aiPlanCheckCooldownMs:
+        config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? AI_PLAN_CHECK_COOLDOWN_MS,
       durationMinutes: currentConfig?.durationMinutes,
     };
     ctx.mux.updateRespawnConfig(id, merged);
