@@ -36,6 +36,7 @@
 const KeyboardAccessoryBar = {
   element: null,
   drawerElement: null,
+  _searchInput: null,
 
   /** Default hotbar button set */
   _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'],
@@ -214,6 +215,33 @@ const KeyboardAccessoryBar = {
     drawer.className = 'accessory-cmd-drawer';
     this.drawerElement = drawer;
 
+    // Search input — focusing this re-opens the keyboard on Android when the
+    // drawer opens, and lets users filter commands by typing.
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'accessory-cmd-search';
+    searchInput.placeholder = 'Search commands…';
+    searchInput.setAttribute('autocomplete', 'off');
+    searchInput.setAttribute('autocorrect', 'off');
+    searchInput.setAttribute('autocapitalize', 'none');
+    searchInput.setAttribute('spellcheck', 'false');
+    drawer.appendChild(searchInput);
+    this._searchInput = searchInput;
+
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.toLowerCase();
+      drawer.querySelectorAll('.accessory-drawer-item').forEach((btn) => {
+        btn.style.display = btn.textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+    // Enter on search input sends the first visible command
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const first = drawer.querySelector('.accessory-drawer-item:not([style*="none"])');
+        if (first) first.click();
+      }
+    });
+
     // Fixed commands: /init, /clear, /compact
     const fixed = [
       { action: 'init', label: '/init' },
@@ -271,21 +299,37 @@ const KeyboardAccessoryBar = {
 
   /** Open the commands drawer */
   openDrawer() {
-    this.drawerElement?.classList.add('open');
-    // Close on next outside tap
+    if (!this.drawerElement) return;
+    this.drawerElement.classList.add('open');
+
+    // Reset filter and show all items
+    if (this._searchInput) {
+      this._searchInput.value = '';
+      this.drawerElement.querySelectorAll('.accessory-drawer-item').forEach((btn) => {
+        btn.style.display = '';
+      });
+      // Focus search input — re-opens the keyboard on Android so the drawer stays visible.
+      // Delay slightly to let the drawer's CSS transition start before focus triggers layout.
+      setTimeout(() => this._searchInput?.focus(), 80);
+    }
+
+    // Register outside-tap close with a long enough delay that the tap opening the
+    // drawer (and any associated touchstart/click) has fully completed first.
+    // Android needs more time than iOS here.
     const handler = (e) => {
       if (!this.drawerElement?.contains(e.target) &&
           !e.target.closest('[data-action="commands"]')) {
         this.closeDrawer();
       }
     };
-    setTimeout(() => document.addEventListener('touchstart', handler, { once: true }), 50);
-    setTimeout(() => document.addEventListener('click', handler, { once: true }), 50);
+    setTimeout(() => document.addEventListener('touchstart', handler, { once: true }), 200);
+    setTimeout(() => document.addEventListener('click', handler, { once: true }), 200);
   },
 
   /** Close the commands drawer and reset confirm state */
   closeDrawer() {
     this.drawerElement?.classList.remove('open');
+    if (this._searchInput) this._searchInput.value = '';
     this.clearConfirm();
   },
 

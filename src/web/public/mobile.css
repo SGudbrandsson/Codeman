@@ -802,6 +802,22 @@ html.mobile-init .file-browser-panel {
     transform: translateY(0);
   }
 
+  /* Search input at top of commands drawer */
+  .accessory-cmd-search {
+    display: block;
+    width: 100%;
+    padding: 11px 16px;
+    background: #111;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e5e5e5;
+    font-size: 16px; /* 16px prevents iOS auto-zoom */
+    outline: none;
+    box-sizing: border-box;
+  }
+  .accessory-cmd-search::placeholder { color: #555; }
+  .accessory-cmd-search:focus { background: #181818; }
+
   .accessory-drawer-item {
     display: block;
     width: 100%;
