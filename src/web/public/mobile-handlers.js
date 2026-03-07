@@ -256,7 +256,9 @@ const KeyboardHandler = {
           if (toolbar) toolbar.style.transform = '';
           if (accessoryBar) accessoryBar.style.transform = '';
           if (main) {
-            main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '84px' : '';
+            const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
+            const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : 0;
+            main.style.paddingBottom = blockedPx > 0 ? `${Math.ceil(blockedPx)}px` : '';
           }
           return;
         } else {
@@ -272,10 +274,11 @@ const KeyboardHandler = {
       if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
       if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
 
-      // Shrink main content area so terminal doesn't extend behind keyboard
-      // Account for keyboard height + toolbar height (40px) + accessory bar (44px)
+      // Measure actual blocked area after transforms (getBoundingClientRect includes transform + safe-area).
       if (main) {
-        main.style.paddingBottom = `${keyboardOffset + 94}px`;
+        const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
+        const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : keyboardOffset + 84;
+        main.style.paddingBottom = `${Math.ceil(blockedPx)}px`;
       }
     } else {
       this.resetLayout();
@@ -292,9 +295,11 @@ const KeyboardHandler = {
     if (accessoryBar) accessoryBar.style.transform = '';
 
     if (main) {
-      // If the accessory bar is visible (always-on), reserve space for its height
-      // so terminal content isn't hidden behind it.
-      main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '84px' : '';
+      // Measure actual blocked bottom area (toolbar + accessory bar + safe-area-bottom).
+      // getBoundingClientRect() forces a layout flush and includes safe-area offset.
+      const el = accessoryBar?.classList.contains('visible') ? accessoryBar : toolbar;
+      const blockedPx = el ? window.innerHeight - el.getBoundingClientRect().top : 0;
+      main.style.paddingBottom = blockedPx > 0 ? `${Math.ceil(blockedPx)}px` : '';
     }
   },
 
