@@ -42,7 +42,7 @@ function urlBase64ToUint8Array(base64String) {
 // ═══════════════════════════════════════════════════════════════
 
 // Default terminal scrollback (can be changed via settings)
-const DEFAULT_SCROLLBACK = 5000;
+const DEFAULT_SCROLLBACK = 500;
 
 // Timing constants
 const STUCK_THRESHOLD_DEFAULT_MS = 600000;  // 10 minutes - default for stuck detection

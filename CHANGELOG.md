@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.1
+
+### Patch Changes
+
+- Reduce terminal scrollback from 5000 to 500 lines; remove redundant keyboard-visible padding that caused last lines to be hidden off-screen
+
 ## 0.5.0
 
 ### Minor Changes
