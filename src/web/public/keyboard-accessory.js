@@ -171,6 +171,38 @@ const KeyboardAccessoryBar = {
       }
     });
 
+    // Input panel toggle button
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
+      const inputToggleBtn = document.createElement('button');
+      inputToggleBtn.className = 'accessory-btn';
+      inputToggleBtn.title = 'Toggle input panel';
+      inputToggleBtn.setAttribute('aria-label', 'Toggle input panel');
+      inputToggleBtn.type = 'button';
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
+      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('aria-hidden', 'true');
+
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', '3'); rect.setAttribute('y', '11');
+      rect.setAttribute('width', '18'); rect.setAttribute('height', '11');
+      rect.setAttribute('rx', '2');
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M7 11V7a5 5 0 0 1 10 0v4');
+
+      svg.appendChild(rect);
+      svg.appendChild(path);
+      inputToggleBtn.appendChild(svg);
+
+      inputToggleBtn.addEventListener('click', () => {
+        if (typeof InputPanel !== 'undefined') InputPanel.toggle();
+      });
+      this.element.appendChild(inputToggleBtn);
+    }
+
     // Insert before toolbar
     const toolbar = document.querySelector('.toolbar');
     if (toolbar && toolbar.parentNode) {
