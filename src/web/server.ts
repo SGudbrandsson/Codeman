@@ -601,7 +601,10 @@ export class WebServer extends EventEmitter {
       const query = req.query as { sessions?: string };
       let sessionFilter: Set<string> | null = null;
       if (query.sessions) {
-        const ids = query.sessions.split(',').filter(Boolean);
+        const ids = query.sessions
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
         if (ids.length > 0) {
           sessionFilter = new Set(ids);
         }
@@ -1963,7 +1966,8 @@ export class WebServer extends EventEmitter {
           // Client may have missed terminal data during backpressure.
           // Tell it to reload the active session's buffer to recover.
           try {
-            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n`);
+            const drainPadding = this._isTunnelActive ? SSE_PADDING : '';
+            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n${drainPadding}`);
           } catch {
             /* client gone */
           }
@@ -1990,13 +1994,10 @@ export class WebServer extends EventEmitter {
     }
     // Performance optimization: serialize JSON once for all clients.
     // Only append Cloudflare tunnel padding for latency-sensitive events —
-    // high-frequency terminal data and recovery events need immediate proxy flush,
-    // but low-frequency metadata events (session:created, ralph:*, respawn:*, etc.)
-    // are small and infrequent enough that proxy buffering doesn't matter.
-    // Note: session:terminal bypasses broadcast() via flushSessionTerminalBatch(),
-    // but is included here for completeness in case the path changes.
-    const needsPadding =
-      this._isTunnelActive && (event === SseEvent.SessionTerminal || event === SseEvent.SessionNeedsRefresh);
+    // Recovery events need immediate proxy flush; low-frequency metadata events
+    // (session:created, ralph:*, respawn:*, etc.) don't need padding.
+    // Note: session:terminal has its own padding in flushSessionTerminalBatch().
+    const needsPadding = this._isTunnelActive && event === SseEvent.SessionNeedsRefresh;
     const padding = needsPadding ? SSE_PADDING : '';
     let message: string;
     try {

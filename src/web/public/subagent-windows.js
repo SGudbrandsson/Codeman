@@ -471,13 +471,9 @@ Object.assign(CodemanApp.prototype, {
   //   restore  → _restoreTeammateTerminalFromLazy()   → re-creates Terminal
   //   create (hidden/minimized) → skip initTeammateTerminal, set _lazyTerminal
   //
-  // The pane buffer is always re-fetched from the API on restore, so no
-  // client-side buffer accumulation is needed (the tmux pane is the source
-  // of truth). Regular (non-teammate) subagent windows use activity HTML
-  // and are unaffected by this optimization.
-
-  /** Max bytes to buffer for a minimized teammate terminal (256KB). */
-  _LAZY_TERMINAL_BUFFER_CAP: 256 * 1024,
+  // The tmux pane buffer is re-fetched from the API on restore. Regular
+  // (non-teammate) subagent windows use activity HTML and are unaffected
+  // by this optimization.
 
   /**
    * Dispose a teammate terminal when its window is minimized.
@@ -495,8 +491,6 @@ Object.assign(CodemanApp.prototype, {
       windowData._lazyTerminal = true;
       windowData._lazyPaneTarget = termData.paneTarget;
       windowData._lazySessionId = termData.sessionId;
-      // Buffer for any data that arrives while minimized (from pendingData or future writes)
-      windowData._lazyBuffer = '';
     }
 
     // Dispose the resize observer
@@ -532,36 +526,12 @@ Object.assign(CodemanApp.prototype, {
     windowData._lazyTerminal = false;
     windowData._lazyPaneTarget = null;
     windowData._lazySessionId = null;
-    windowData._lazyBuffer = null;
 
     if (!paneTarget || !sessionId) return;
 
     // Re-create the terminal using the same initTeammateTerminal flow
     const paneInfo = { paneTarget, sessionId };
     this.initTeammateTerminal(agentId, paneInfo, windowData.element);
-  },
-
-  /**
-   * Append terminal data to a minimized teammate terminal's lazy buffer.
-   * Called when SSE data arrives for a minimized window. Caps at _LAZY_TERMINAL_BUFFER_CAP.
-   * Returns true if the data was buffered, false if the window is not in lazy mode.
-   */
-  _bufferLazyTerminalData(agentId, data) {
-    const windowData = this.subagentWindows.get(agentId);
-    if (!windowData || !windowData._lazyTerminal) return false;
-
-    if (windowData._lazyBuffer === null || windowData._lazyBuffer === undefined) {
-      windowData._lazyBuffer = '';
-    }
-
-    // Append data, capping total size
-    windowData._lazyBuffer += data;
-    if (windowData._lazyBuffer.length > this._LAZY_TERMINAL_BUFFER_CAP) {
-      // Keep only the tail to stay under cap
-      windowData._lazyBuffer = windowData._lazyBuffer.slice(-this._LAZY_TERMINAL_BUFFER_CAP);
-    }
-
-    return true;
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -809,7 +779,6 @@ Object.assign(CodemanApp.prototype, {
           windowEntry._lazyTerminal = true;
           windowEntry._lazyPaneTarget = paneInfo.paneTarget;
           windowEntry._lazySessionId = paneInfo.sessionId;
-          windowEntry._lazyBuffer = '';
         }
       } else {
         this.initTeammateTerminal(agentId, paneInfo, win);

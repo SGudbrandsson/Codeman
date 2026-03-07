@@ -624,8 +624,8 @@ class CodemanApp {
     // oversized terminal.write() calls that triggered the stalls.
     // Disable with ?nowebgl URL param if GPU issues return.
     this._webglAddon = null;
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    if (!isMobile && !new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
+    const skipWebGL = MobileDetection.getDeviceType() !== 'desktop';
+    if (!skipWebGL && !new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {
@@ -10157,7 +10157,6 @@ class CodemanApp {
         windowEntry._lazyTerminal = true;
         windowEntry._lazyPaneTarget = paneData.paneTarget;
         windowEntry._lazySessionId = paneData.sessionId;
-        windowEntry._lazyBuffer = '';
       }
     } else {
       this.initTeammateTerminal(windowId, paneData, win);
