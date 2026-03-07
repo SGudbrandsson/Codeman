@@ -59,6 +59,16 @@
       </div>
 
       <div class="header-right">
+        <button class="btn-icon-header btn-hamburger" id="sessionDrawerToggle"
+                onclick="SessionDrawer.toggle()"
+                title="Sessions" aria-label="Open session list">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
         <div class="connection-indicator" id="connectionIndicator" style="display: none;">
           <span class="connection-dot" id="connectionDot"></span>
           <span class="connection-text" id="connectionText"></span>
@@ -1730,6 +1740,16 @@
   <svg id="connectionLines" class="connection-lines-svg">
     <!-- Lines drawn dynamically -->
   </svg>
+
+  <!-- Mobile session drawer — bottom sheet listing all sessions -->
+  <div class="session-drawer-overlay" id="sessionDrawerOverlay"
+       onclick="SessionDrawer.close()" aria-hidden="true"></div>
+  <div class="session-drawer" id="sessionDrawer" role="dialog"
+       aria-label="Session list" aria-modal="true">
+    <div class="session-drawer-handle" aria-hidden="true"></div>
+    <div class="session-drawer-title">Sessions</div>
+    <div class="session-drawer-list" id="sessionDrawerList"></div>
+  </div>
 
   <script defer src="constants.js?v=0.4.0"></script>
   <script defer src="mobile-handlers.js?v=0.4.2"></script>

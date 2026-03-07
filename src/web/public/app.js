@@ -12172,6 +12172,69 @@ try {
   }
 } catch {}
 
+/**
+ * SessionDrawer — bottom-sheet session picker for mobile.
+ * All DOM text uses textContent (no innerHTML with session data).
+ */
+const SessionDrawer = {
+  open() {
+    document.getElementById('sessionDrawerOverlay')?.classList.add('open');
+    const drawer = document.getElementById('sessionDrawer');
+    if (drawer) { drawer.classList.add('open'); this._render(); }
+  },
+  close() {
+    document.getElementById('sessionDrawerOverlay')?.classList.remove('open');
+    document.getElementById('sessionDrawer')?.classList.remove('open');
+  },
+  toggle() {
+    const drawer = document.getElementById('sessionDrawer');
+    if (drawer?.classList.contains('open')) this.close(); else this.open();
+  },
+  _render() {
+    const list = document.getElementById('sessionDrawerList');
+    if (!list || typeof app === 'undefined') return;
+    list.replaceChildren();
+
+    for (const id of app.sessionOrder) {
+      const session = app.sessions.get(id);
+      if (!session) continue;
+      const isActive  = id === app.activeSessionId;
+      const isRunning = session.status === 'running' || session.status === 'active';
+      const hasRalph  = app.ralphStates?.get(id)?.enabled;
+
+      const item = document.createElement('div');
+      item.className = 'session-drawer-item' + (isActive ? ' active' : '');
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'session-drawer-item-name';
+      nameSpan.textContent = session.name || id.slice(0, 8); // textContent — safe
+
+      const meta = document.createElement('span');
+      meta.className = 'session-drawer-item-meta';
+
+      const badge = document.createElement('span');
+      badge.className = 'session-drawer-badge';
+      badge.textContent = session.mode || 'claude'; // textContent — safe
+
+      const dot = document.createElement('span');
+      dot.className = 'session-drawer-dot'
+        + (isRunning ? ' running' : '')
+        + (hasRalph  ? ' ralph'   : '');
+
+      meta.appendChild(badge);
+      meta.appendChild(dot);
+      item.appendChild(nameSpan);
+      item.appendChild(meta);
+
+      item.addEventListener('click', () => {
+        app.selectSession(id);
+        this.close();
+      });
+      list.appendChild(item);
+    }
+  }
+};
+
 // Initialize
 const app = new CodemanApp();
 
