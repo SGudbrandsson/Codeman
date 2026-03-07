@@ -3888,7 +3888,13 @@ class CodemanApp {
       });
 
       _crashDiag.log('FOCUS');
-      this.terminal.focus();
+      // On touch devices, skip auto-focus on tab switch — focusing the xterm textarea
+      // unconditionally opens the virtual keyboard, causing it to pop up when switching
+      // tabs even if it was closed, or to flicker (close + reopen) if it was open.
+      // On mobile the user taps the terminal or input bar to bring the keyboard up.
+      if (!MobileDetection.isTouchDevice()) {
+        this.terminal.focus();
+      }
       this.terminal.scrollToBottom();
 
       // Fetch plugin/GSD commands for this session on connect (cached per session, refreshed on reconnect)
