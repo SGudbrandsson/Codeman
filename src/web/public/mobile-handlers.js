@@ -245,26 +245,27 @@ const KeyboardHandler = {
       // Calculate keyboard offset
       const layoutHeight = window.innerHeight;
       const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-      const keyboardOffset = layoutHeight - visualBottom;
+      let keyboardOffset = layoutHeight - visualBottom;
 
-      // Safety: if keyboard is supposedly visible but offset is 0 or negative,
-      // the keyboard is actually gone — force dismiss. This catches cases where
-      // visualViewport.resize fires late or with intermediate values on iOS.
       if (keyboardOffset <= 0) {
-        this.keyboardVisible = false;
-        document.body.classList.remove('keyboard-visible');
-        this.onKeyboardHide();
-        return;
-      }
-
-      // Move toolbar up above keyboard
-      if (toolbar) {
-        toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
-      }
-
-      // Move accessory bar up (it sits above toolbar)
-      if (accessoryBar) {
-        accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
+        const viewportShrinkage = this.initialViewportHeight - window.innerHeight;
+        if (viewportShrinkage > 100) {
+          // Android resize mode: browser already shrank innerHeight for keyboard.
+          // Use shrinkage as keyboard height; fixed elements auto-position, no transforms needed.
+          keyboardOffset = viewportShrinkage;
+          if (toolbar) toolbar.style.transform = '';
+          if (accessoryBar) accessoryBar.style.transform = '';
+        } else {
+          // iOS: keyboard-visible flag is stale, keyboard is actually gone.
+          this.keyboardVisible = false;
+          document.body.classList.remove('keyboard-visible');
+          this.onKeyboardHide();
+          return;
+        }
+      } else {
+        // iOS / Android pan mode: translate bars up above keyboard.
+        if (toolbar) toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
+        if (accessoryBar) accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
       }
 
       // Shrink main content area so terminal doesn't extend behind keyboard
@@ -289,7 +290,7 @@ const KeyboardHandler = {
     if (main) {
       // If the accessory bar is visible (always-on), reserve space for its height
       // so terminal content isn't hidden behind it.
-      main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '44px' : '';
+      main.style.paddingBottom = accessoryBar?.classList.contains('visible') ? '84px' : '';
     }
   },
 
