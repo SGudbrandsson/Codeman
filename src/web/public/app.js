@@ -7772,6 +7772,7 @@ class CodemanApp {
     this.closeAppSettings();
     this.cancelCloseSession();
     this.closeTokenStats();
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');
@@ -12177,21 +12178,26 @@ try {
  * All DOM text uses textContent (no innerHTML with session data).
  */
 const SessionDrawer = {
+  _el: null,
+  _overlay: null,
+  _list: null,
+  _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
+  _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
+  _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
   open() {
-    document.getElementById('sessionDrawerOverlay')?.classList.add('open');
-    const drawer = document.getElementById('sessionDrawer');
+    this._getOverlay()?.classList.add('open');
+    const drawer = this._getEl();
     if (drawer) { drawer.classList.add('open'); this._render(); }
   },
   close() {
-    document.getElementById('sessionDrawerOverlay')?.classList.remove('open');
-    document.getElementById('sessionDrawer')?.classList.remove('open');
+    this._getOverlay()?.classList.remove('open');
+    this._getEl()?.classList.remove('open');
   },
   toggle() {
-    const drawer = document.getElementById('sessionDrawer');
-    if (drawer?.classList.contains('open')) this.close(); else this.open();
+    if (this._getEl()?.classList.contains('open')) this.close(); else this.open();
   },
   _render() {
-    const list = document.getElementById('sessionDrawerList');
+    const list = this._getList();
     if (!list || typeof app === 'undefined') return;
     list.replaceChildren();
 
