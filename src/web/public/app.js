@@ -624,7 +624,8 @@ class CodemanApp {
     // oversized terminal.write() calls that triggered the stalls.
     // Disable with ?nowebgl URL param if GPU issues return.
     this._webglAddon = null;
-    if (!new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
+    const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    if (!isMobile && !new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {
@@ -3198,15 +3199,38 @@ class CodemanApp {
           return;
         }
 
-        // Update subagent badge - check if count changed
+        // Update subagent badge - targeted update without full rebuild
         const subagentBadgeEl = tab.querySelector('.tab-subagent-badge');
         const minimizedAgents = this.minimizedSubagents.get(id);
         const minimizedCount = minimizedAgents?.size || 0;
-        const currentCount = subagentBadgeEl ? parseInt(subagentBadgeEl.querySelector('.subagent-count')?.textContent || '0') : 0;
-        if (minimizedCount !== currentCount) {
-          // Count changed - need full rebuild for dropdown update
-          this._fullRenderSessionTabs();
-          return;
+        if (minimizedCount > 0 && subagentBadgeEl) {
+          // Badge exists and still has agents - update label and dropdown in-place
+          const labelEl = subagentBadgeEl.querySelector('.subagent-label');
+          const newLabel = minimizedCount === 1 ? 'AGENT' : `AGENTS (${minimizedCount})`;
+          if (labelEl && labelEl.textContent !== newLabel) {
+            labelEl.textContent = newLabel;
+          }
+          // Rebuild dropdown items (agent list may have changed)
+          const dropdownEl = subagentBadgeEl.querySelector('.subagent-dropdown');
+          if (dropdownEl) {
+            const newBadgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
+            const temp = document.createElement('div');
+            temp.innerHTML = newBadgeHtml;
+            const newDropdown = temp.querySelector('.subagent-dropdown');
+            if (newDropdown) {
+              dropdownEl.innerHTML = newDropdown.innerHTML;
+            }
+          }
+        } else if (minimizedCount > 0 && !subagentBadgeEl) {
+          // Need to add badge - insert before gear icon
+          const badgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
+          const gearEl = tab.querySelector('.tab-gear');
+          if (gearEl) {
+            gearEl.insertAdjacentHTML('beforebegin', badgeHtml);
+          }
+        } else if (minimizedCount === 0 && subagentBadgeEl) {
+          // Count went to 0 - remove badge
+          subagentBadgeEl.remove();
         }
       }
     } else {
@@ -9599,10 +9623,16 @@ class CodemanApp {
         // Show window (unless it was minimized by user)
         if (!windowInfo.minimized) {
           windowInfo.element.style.display = 'flex';
+          // Lazily re-create teammate terminal if it was disposed when hidden
+          if (windowInfo._lazyTerminal) {
+            this._restoreTeammateTerminalFromLazy(agentId);
+          }
         }
         windowInfo.hidden = false;
       } else {
         // Hide window (but don't close it)
+        // Dispose teammate terminal to free memory while hidden on inactive tab
+        this._disposeTeammateTerminalForMinimize(agentId);
         windowInfo.element.style.display = 'none';
         windowInfo.hidden = true;
       }
@@ -9685,6 +9715,8 @@ class CodemanApp {
   minimizeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (windowData) {
+      // Dispose teammate terminal on minimize to free DOM/memory (lazy re-creation on restore)
+      this._disposeTeammateTerminalForMinimize(agentId);
       windowData.element.style.display = 'none';
       windowData.minimized = true;
       this.updateConnectionLines();
@@ -9695,6 +9727,10 @@ class CodemanApp {
   // Debounced wrapper — coalesces rapid subagent events (tool_call, progress,
   // message) into a single DOM update per 100ms per agent window.
   scheduleSubagentWindowRender(agentId) {
+    // Skip DOM updates for windows with lazy (disposed) terminals — they're minimized
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData?.minimized) return;
+
     if (!this._subagentWindowRenderTimeouts) this._subagentWindowRenderTimeouts = new Map();
     if (this._subagentWindowRenderTimeouts.has(agentId)) {
       clearTimeout(this._subagentWindowRenderTimeouts.get(agentId));
@@ -9708,6 +9744,9 @@ class CodemanApp {
   renderSubagentWindowContent(agentId) {
     // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
     if (this.teammateTerminals.has(agentId)) return;
+    // Skip if this window has a lazy (disposed) terminal — it will be re-created on restore
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData?._lazyTerminal) return;
 
     const body = document.getElementById(`subagent-window-body-${agentId}`);
     if (!body) return;
@@ -10110,8 +10149,19 @@ class CodemanApp {
     resizeObserver.observe(win);
     this.subagentWindows.get(windowId).resizeObserver = resizeObserver;
 
-    // Init the xterm.js terminal
-    this.initTeammateTerminal(windowId, paneData, win);
+    // Init the xterm.js terminal (lazy if hidden)
+    if (shouldHide) {
+      // Window starts hidden — defer terminal creation until visible (lazy init)
+      const windowEntry = this.subagentWindows.get(windowId);
+      if (windowEntry) {
+        windowEntry._lazyTerminal = true;
+        windowEntry._lazyPaneTarget = paneData.paneTarget;
+        windowEntry._lazySessionId = paneData.sessionId;
+        windowEntry._lazyBuffer = '';
+      }
+    } else {
+      this.initTeammateTerminal(windowId, paneData, win);
+    }
 
     // Animate in
     requestAnimationFrame(() => {

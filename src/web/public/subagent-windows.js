@@ -121,7 +121,7 @@ Object.assign(CodemanApp.prototype, {
       if (!windowData.minimized) {
         openWindows.push({
           agentId,
-          position: windowData.position || null
+          position: windowData.position || null,
         });
       }
     }
@@ -163,8 +163,7 @@ Object.assign(CodemanApp.prototype, {
           // Use the PERSISTENT parent map (THE source of truth)
           // Fall back to saved sessionId only if it exists in current sessions
           const parentFromMap = this.subagentParentMap.get(agentId);
-          const correctSessionId = parentFromMap ||
-            (this.sessions.has(savedSessionId) ? savedSessionId : null);
+          const correctSessionId = parentFromMap || (this.sessions.has(savedSessionId) ? savedSessionId : null);
 
           if (correctSessionId) {
             // Ensure the parent map has this association
@@ -184,7 +183,7 @@ Object.assign(CodemanApp.prototype, {
     // Restore open windows (for recent, non-completed agents only)
     const now = Date.now();
     const maxAgeMs = 10 * 60 * 1000; // 10 minutes - don't restore windows for old agents
-    for (const { agentId, position } of (states.open || [])) {
+    for (const { agentId, position } of states.open || []) {
       const agent = this.subagents.get(agentId);
       // Only restore window if agent exists, is recent, and is still active/idle
       const agentAge = agent?.startedAt ? now - agent.startedAt : Infinity;
@@ -459,6 +458,113 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
+  // Lazy Terminal Lifecycle
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Teammate terminal windows use xterm.js Terminal instances that consume
+  // ~75KB of DOM memory each. With 50 agents minimized, that's ~3.75MB of
+  // invisible terminals. To avoid this, we dispose the Terminal when a
+  // window is minimized and lazily re-create it when restored.
+  //
+  // Flow:
+  //   minimize → _disposeTeammateTerminalForMinimize() → sets _lazyTerminal flag
+  //   restore  → _restoreTeammateTerminalFromLazy()   → re-creates Terminal
+  //   create (hidden/minimized) → skip initTeammateTerminal, set _lazyTerminal
+  //
+  // The pane buffer is always re-fetched from the API on restore, so no
+  // client-side buffer accumulation is needed (the tmux pane is the source
+  // of truth). Regular (non-teammate) subagent windows use activity HTML
+  // and are unaffected by this optimization.
+
+  /** Max bytes to buffer for a minimized teammate terminal (256KB). */
+  _LAZY_TERMINAL_BUFFER_CAP: 256 * 1024,
+
+  /**
+   * Dispose a teammate terminal when its window is minimized.
+   * Saves pane metadata so the terminal can be re-created on restore.
+   * No-op if the window has no teammate terminal.
+   */
+  _disposeTeammateTerminalForMinimize(agentId) {
+    const termData = this.teammateTerminals.get(agentId);
+    if (!termData) return; // Not a teammate terminal window
+
+    const windowData = this.subagentWindows.get(agentId);
+
+    // Save pane metadata needed to re-create the terminal on restore
+    if (windowData) {
+      windowData._lazyTerminal = true;
+      windowData._lazyPaneTarget = termData.paneTarget;
+      windowData._lazySessionId = termData.sessionId;
+      // Buffer for any data that arrives while minimized (from pendingData or future writes)
+      windowData._lazyBuffer = '';
+    }
+
+    // Dispose the resize observer
+    if (termData.resizeObserver) {
+      termData.resizeObserver.disconnect();
+    }
+
+    // Dispose the xterm.js Terminal instance (frees DOM nodes and internal buffers)
+    if (termData.terminal) {
+      try {
+        termData.terminal.dispose();
+      } catch {}
+    }
+
+    // Remove from teammateTerminals map so renderSubagentWindowContent won't skip this window
+    // (the activity HTML can serve as a lightweight placeholder while minimized)
+    this.teammateTerminals.delete(agentId);
+  },
+
+  /**
+   * Re-create a teammate terminal when its window is restored from minimized state.
+   * Fetches the current pane buffer from the API (tmux is the source of truth).
+   * No-op if the window doesn't have the _lazyTerminal flag.
+   */
+  _restoreTeammateTerminalFromLazy(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (!windowData || !windowData._lazyTerminal) return;
+
+    const paneTarget = windowData._lazyPaneTarget;
+    const sessionId = windowData._lazySessionId;
+
+    // Clear lazy state
+    windowData._lazyTerminal = false;
+    windowData._lazyPaneTarget = null;
+    windowData._lazySessionId = null;
+    windowData._lazyBuffer = null;
+
+    if (!paneTarget || !sessionId) return;
+
+    // Re-create the terminal using the same initTeammateTerminal flow
+    const paneInfo = { paneTarget, sessionId };
+    this.initTeammateTerminal(agentId, paneInfo, windowData.element);
+  },
+
+  /**
+   * Append terminal data to a minimized teammate terminal's lazy buffer.
+   * Called when SSE data arrives for a minimized window. Caps at _LAZY_TERMINAL_BUFFER_CAP.
+   * Returns true if the data was buffered, false if the window is not in lazy mode.
+   */
+  _bufferLazyTerminalData(agentId, data) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (!windowData || !windowData._lazyTerminal) return false;
+
+    if (windowData._lazyBuffer === null || windowData._lazyBuffer === undefined) {
+      windowData._lazyBuffer = '';
+    }
+
+    // Append data, capping total size
+    windowData._lazyBuffer += data;
+    if (windowData._lazyBuffer.length > this._LAZY_TERMINAL_BUFFER_CAP) {
+      // Keep only the tail to stay under cap
+      windowData._lazyBuffer = windowData._lazyBuffer.slice(-this._LAZY_TERMINAL_BUFFER_CAP);
+    }
+
+    return true;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
   // Subagent Floating Windows
   // ═══════════════════════════════════════════════════════════════
 
@@ -495,7 +601,7 @@ Object.assign(CodemanApp.prototype, {
     // Only open windows for agents that belong to a Codeman-managed session tab.
     // Agents from external Claude sessions (not tracked by Codeman) should not pop up.
     if (agent.sessionId) {
-      const hasMatchingTab = Array.from(this.sessions.values()).some(s => s.claudeSessionId === agent.sessionId);
+      const hasMatchingTab = Array.from(this.sessions.values()).some((s) => s.claudeSessionId === agent.sessionId);
       if (!hasMatchingTab) return;
     }
 
@@ -600,9 +706,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Get parent TAB element for spawn animation
-    const parentTab = parentSessionId
-      ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`)
-      : null;
+    const parentTab = parentSessionId ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`) : null;
 
     // Create window element
     const win = document.createElement('div');
@@ -611,17 +715,19 @@ Object.assign(CodemanApp.prototype, {
     win.style.zIndex = ++this.subagentWindowZIndex;
 
     // Build parent header if we have parent info
-    const parentHeader = parentSessionId && parentSessionName
-      ? `<div class="subagent-window-parent" data-parent-session="${parentSessionId}">
+    const parentHeader =
+      parentSessionId && parentSessionName
+        ? `<div class="subagent-window-parent" data-parent-session="${parentSessionId}">
           <span class="parent-label">from</span>
           <span class="parent-name" onclick="app.selectSession('${escapeHtml(parentSessionId)}')">${escapeHtml(parentSessionName)}</span>
         </div>`
-      : '';
+        : '';
 
     const teammateInfo = this.getTeammateInfo(agent);
-    const windowTitle = teammateInfo ? teammateInfo.name : (agent.description || agentId.substring(0, 7));
+    const windowTitle = teammateInfo ? teammateInfo.name : agent.description || agentId.substring(0, 7);
     const maxTitleLen = isMobile ? 30 : 50;
-    const truncatedTitle = windowTitle.length > maxTitleLen ? windowTitle.substring(0, maxTitleLen) + '...' : windowTitle;
+    const truncatedTitle =
+      windowTitle.length > maxTitleLen ? windowTitle.substring(0, maxTitleLen) + '...' : windowTitle;
     const modelBadge = agent.modelShort
       ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
       : '';
@@ -695,7 +801,19 @@ Object.assign(CodemanApp.prototype, {
     // Render content — check if this teammate has a tmux pane
     const paneInfo = teammateInfo ? this.teammatePanesByName.get(teammateInfo.name) : null;
     if (paneInfo) {
-      this.initTeammateTerminal(agentId, paneInfo, win);
+      if (shouldHide) {
+        // Window starts hidden — defer terminal creation until visible (lazy init).
+        // Saves ~75KB of DOM memory per hidden teammate terminal window.
+        const windowEntry = this.subagentWindows.get(agentId);
+        if (windowEntry) {
+          windowEntry._lazyTerminal = true;
+          windowEntry._lazyPaneTarget = paneInfo.paneTarget;
+          windowEntry._lazySessionId = paneInfo.sessionId;
+          windowEntry._lazyBuffer = '';
+        }
+      } else {
+        this.initTeammateTerminal(agentId, paneInfo, win);
+      }
     } else {
       this.renderSubagentWindowContent(agentId);
     }
@@ -754,6 +872,10 @@ Object.assign(CodemanApp.prototype, {
     if (!storedParent && parentSessionId && this.sessions.has(parentSessionId)) {
       this.setAgentParentSessionId(agentId, parentSessionId);
     }
+
+    // Dispose teammate terminal on minimize to free DOM/memory (~75KB per instance).
+    // The terminal will be lazily re-created on restore via initTeammateTerminal().
+    this._disposeTeammateTerminalForMinimize(agentId);
 
     // Always minimize to tab
     windowData.element.style.display = 'none';
@@ -829,7 +951,9 @@ Object.assign(CodemanApp.prototype, {
     for (const [, termData] of this.teammateTerminals) {
       if (termData.resizeObserver) termData.resizeObserver.disconnect();
       if (termData.terminal) {
-        try { termData.terminal.dispose(); } catch {}
+        try {
+          termData.terminal.dispose();
+        } catch {}
       }
     }
     this.teammateTerminals.clear();
@@ -959,6 +1083,13 @@ Object.assign(CodemanApp.prototype, {
         windowData.hidden = false;
       }
       windowData.minimized = false;
+
+      // Lazily re-create teammate terminal if it was disposed on minimize.
+      // Only re-create when the window is actually becoming visible.
+      if (shouldShow && windowData._lazyTerminal) {
+        this._restoreTeammateTerminalFromLazy(agentId);
+      }
+
       this.updateConnectionLines();
       // Restack all visible mobile windows so restored ones don't overlap
       this.relayoutMobileSubagentWindows();
@@ -1067,7 +1198,7 @@ Object.assign(CodemanApp.prototype, {
     if (!dropdown || dropdown.classList.contains('open')) return;
 
     // Close other dropdowns first
-    document.querySelectorAll('.subagent-dropdown.open').forEach(d => {
+    document.querySelectorAll('.subagent-dropdown.open').forEach((d) => {
       d.classList.remove('open', 'pinned');
       if (d.parentElement === document.body && d._originalParent) {
         d._originalParent.appendChild(d);
@@ -1089,8 +1220,8 @@ Object.assign(CodemanApp.prototype, {
   // Schedule hide after delay (allows moving mouse to dropdown)
   scheduleHideSubagentDropdown(badgeEl) {
     this._subagentHideTimeout = setTimeout(() => {
-      const dropdown = badgeEl?.querySelector?.('.subagent-dropdown') ||
-                       document.querySelector('.subagent-dropdown.open');
+      const dropdown =
+        badgeEl?.querySelector?.('.subagent-dropdown') || document.querySelector('.subagent-dropdown.open');
       if (dropdown && !dropdown.classList.contains('pinned')) {
         dropdown.classList.remove('open');
         if (dropdown._originalParent) {
