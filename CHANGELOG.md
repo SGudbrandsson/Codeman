@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.2
+
+### Patch Changes
+
+- Mobile layout fixes: Android keyboard resize detection, correct bottom padding (124px + safeAreaBottom), hamburger moved to desktop header and mobile accessory bar, tab-switch keyboard preservation, terminal flash fix on tab switch
+
 ## 0.5.1
 
 ### Patch Changes
