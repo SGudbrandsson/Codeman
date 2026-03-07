@@ -29,7 +29,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **Frontend changes**: Use Playwright to load the page and assert the UI renders correctly. Use `waitUntil: 'domcontentloaded'` (not `networkidle` — SSE keeps the connection open). Wait 3-4s for polling/async data to populate, then check element visibility, text content, and CSS values
 3. **Only after verification passes**, proceed with COM
 
-The production server caches static files for 1 year (`maxAge: '1y'` in `server.ts`). After deploying frontend changes, users may need a hard refresh (Ctrl+Shift+R) to see updates.
+The production server caches static files for 1 year (`maxAge: '1y'` in `server.ts`). **When modifying any frontend file, bump its `?v=` query string in `src/web/public/index.html`** so browsers fetch the new version without a hard refresh.
+
+- **CSS files** (`styles.css`, `mobile.css`): increment the trailing number by 1 (e.g. `v=0.1634` → `v=0.1635`)
+- **JS modules** (`constants.js`, `app.js`, etc.): increment the patch digit (e.g. `v=0.4.0` → `v=0.4.1`)
 
 ## COM Shorthand (Deployment)
 
