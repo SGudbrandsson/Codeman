@@ -103,6 +103,7 @@ import {
   registerRespawnRoutes,
   registerRalphRoutes,
   registerPlanRoutes,
+  registerCommandsRoutes,
 } from './routes/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -683,6 +684,7 @@ export class WebServer extends EventEmitter {
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
     registerPlanRoutes(this.app, ctx);
+    registerCommandsRoutes(this.app, ctx);
   }
 
   /**
