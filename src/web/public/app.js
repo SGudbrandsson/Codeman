@@ -1870,10 +1870,14 @@ class CodemanApp {
       const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
       const data = await res.json();
       if (data.terminalBuffer) {
+        const termContainer = document.getElementById('terminalContainer');
+        termContainer?.classList.add('buffer-loading');
+        await new Promise(resolve => requestAnimationFrame(resolve));
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(data.terminalBuffer);
         this.terminal.scrollToBottom();
+        termContainer?.classList.remove('buffer-loading');
         // Re-position local echo overlay at new prompt location
         this._localEchoOverlay?.rerender();
         // Resize PTY to match actual browser dimensions (critical for OpenCode
@@ -3671,13 +3675,17 @@ class CodemanApp {
       // Direct terminal.write() of large cached buffers (256KB+) can block the main thread
       // for 5+ seconds while the WebGL renderer processes ReadPixels synchronously.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
+      const termContainer = document.getElementById('terminalContainer');
       if (cachedBuffer) {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
+        termContainer?.classList.add('buffer-loading');
+        await new Promise(resolve => requestAnimationFrame(resolve));
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
         if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
+        termContainer?.classList.remove('buffer-loading');
         _crashDiag.log('CACHE_DONE');
       }
 
@@ -3695,6 +3703,8 @@ class CodemanApp {
         const needsRewrite = data.terminalBuffer !== cachedBuffer;
         if (needsRewrite) {
           _crashDiag.log(`REWRITE: ${(data.terminalBuffer.length/1024).toFixed(0)}KB`);
+          termContainer?.classList.add('buffer-loading');
+          await new Promise(resolve => requestAnimationFrame(resolve));
           this.terminal.clear();
           this.terminal.reset();
           // Show truncation indicator if buffer was cut
@@ -3706,6 +3716,7 @@ class CodemanApp {
           if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
+          termContainer?.classList.remove('buffer-loading');
         }
 
         // Update cache (cap at 20 entries)

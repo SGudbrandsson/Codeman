@@ -1656,6 +1656,10 @@ body {
   background: transparent !important;
 }
 
+.terminal-container.buffer-loading {
+  visibility: hidden;
+}
+
 /* Welcome Overlay */
 .welcome-overlay {
   position: absolute;
