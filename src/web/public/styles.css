@@ -639,6 +639,25 @@ body {
 
 .btn-hamburger { display: flex; }
 
+/* Mobile context-window usage pill — shown next to hamburger on small screens */
+.mobile-ctx-pill {
+  --ctx-color: #22c55e;
+  display: none; /* shown only on mobile via media query */
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ctx-color);
+  background: color-mix(in srgb, var(--ctx-color) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ctx-color) 40%, transparent);
+  border-radius: 10px;
+  padding: 2px 7px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: default;
+  transition: color 0.4s, background 0.4s, border-color 0.4s;
+}
+
 .btn-icon-header.btn-sm:hover {
   transform: none;
 }
