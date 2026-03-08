@@ -2172,11 +2172,9 @@ html.mobile-init .file-browser-panel {
   transition: transform 0.25s ease;
   border-radius: 0 0 0 8px;
   z-index: 1500;
+  display: block; /* reset desktop display: flex */
 }
 .session-drawer.open { transform: translateX(0); }
-
-.touch-device .session-drawer-overlay { z-index: 1499; }
-.touch-device .session-drawer { z-index: 1500; }
 
 .session-drawer-handle {
   display: none;
