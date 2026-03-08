@@ -72,6 +72,7 @@ import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
+import { UpdateChecker } from '../update-checker.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -104,6 +105,7 @@ import {
   registerRalphRoutes,
   registerPlanRoutes,
   registerCommandsRoutes,
+  registerUpdateRoutes,
 } from './routes/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -706,6 +708,10 @@ export class WebServer extends EventEmitter {
     registerRalphRoutes(this.app, ctx);
     registerPlanRoutes(this.app, ctx);
     registerCommandsRoutes(this.app, ctx);
+    const updateChecker = new UpdateChecker(APP_VERSION);
+    // Background check at startup — non-blocking
+    updateChecker.check().catch(() => {});
+    registerUpdateRoutes(this.app, ctx, updateChecker);
   }
 
   /**
