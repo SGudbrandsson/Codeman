@@ -1552,6 +1552,15 @@ class CodemanApp {
     if (matched) {
       strip.textContent = matched; // textContent is safe — no HTML interpretation
       strip.style.display = '';
+
+      // Sync the context pill to the % reported in the status line so both
+      // displays agree. Back-calculate tokens: updateContextPill uses
+      // pct = round((tokens / 200000) * 100), so tokens = pct * 2000.
+      const pctMatch = matched.match(/(\d+)%/);
+      if (pctMatch) {
+        const pct = parseInt(pctMatch[1], 10);
+        this.updateContextPill(pct * 2000);
+      }
     }
     // Keep last known value visible if no match found this frame
   }
