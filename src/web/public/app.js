@@ -12246,6 +12246,30 @@ try {
 } catch {}
 
 /**
+ * Built-in Claude Code slash commands — always available in the compose panel,
+ * regardless of which session is active or which plugins are installed.
+ */
+const BUILTIN_CLAUDE_COMMANDS = [
+  { cmd: '/compact',        desc: 'Compact conversation history',          source: 'builtin' },
+  { cmd: '/clear',          desc: 'Clear conversation history',            source: 'builtin' },
+  { cmd: '/help',           desc: 'Show available commands and help',      source: 'builtin' },
+  { cmd: '/bug',            desc: 'Report a bug to Anthropic',             source: 'builtin' },
+  { cmd: '/cost',           desc: 'View token usage and cost',             source: 'builtin' },
+  { cmd: '/doctor',         desc: 'Check Claude Code installation health', source: 'builtin' },
+  { cmd: '/init',           desc: 'Initialize CLAUDE.md in current project', source: 'builtin' },
+  { cmd: '/login',          desc: 'Sign in with Anthropic credentials',    source: 'builtin' },
+  { cmd: '/logout',         desc: 'Sign out from Anthropic',               source: 'builtin' },
+  { cmd: '/memory',         desc: 'Edit CLAUDE.md memory files',           source: 'builtin' },
+  { cmd: '/model',          desc: 'Set the AI model',                      source: 'builtin' },
+  { cmd: '/pr_comments',    desc: 'View PR comments',                      source: 'builtin' },
+  { cmd: '/release-notes',  desc: 'See what\'s new in Claude Code',        source: 'builtin' },
+  { cmd: '/review',         desc: 'Review a pull request',                 source: 'builtin' },
+  { cmd: '/status',         desc: 'Show account and system status',        source: 'builtin' },
+  { cmd: '/terminal-setup', desc: 'Configure terminal key bindings',       source: 'builtin' },
+  { cmd: '/vim',            desc: 'Toggle Vim mode',                       source: 'builtin' },
+];
+
+/**
  * InputPanel — Persistent native textarea above the keyboard accessory bar.
  * Mobile only. Toggle open/closed.
  *
@@ -12484,11 +12508,14 @@ const InputPanel = {
     if (!value.startsWith('/')) { this._closeSlashPopup(); return; }
     const query = value.slice(1).toLowerCase();
     const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
-    const commands = (sessionId && app._sessionCommands?.get(sessionId)) || [];
+    const sessionCommands = (sessionId && app._sessionCommands?.get(sessionId)) || [];
+    // Merge session-specific commands (first) with built-ins, deduplicating by cmd name
+    const sessionCmdSet = new Set(sessionCommands.map(c => c.cmd));
+    const allCommands = [...sessionCommands, ...BUILTIN_CLAUDE_COMMANDS.filter(c => !sessionCmdSet.has(c.cmd))];
     const matches = query
-      ? commands.filter(c => {
+      ? allCommands.filter(c => {
           const cmd = c.cmd.toLowerCase();
-          const desc = c.desc.toLowerCase();
+          const desc = (c.desc || '').toLowerCase();
           if (cmd.includes(query) || desc.includes(query)) return true;
           // Subsequence match: gsdmile matches gsd:new-milestone
           let qi = 0;
@@ -12497,7 +12524,7 @@ const InputPanel = {
           }
           return qi === query.length;
         })
-      : commands;
+      : allCommands;
     if (!matches.length) { this._closeSlashPopup(); return; }
     this._showSlashPopup(matches);
   },
