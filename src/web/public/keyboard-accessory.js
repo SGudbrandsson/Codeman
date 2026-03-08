@@ -78,7 +78,7 @@ const KeyboardAccessoryBar = {
   },
 
   /** Default hotbar button set */
-  _defaultButtons: ['tab', 'scroll-up', 'scroll-down', 'commands', 'paste', 'copy'],
+  _defaultButtons: ['tab', 'scroll-up', 'scroll-down', 'commands', 'copy'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
@@ -153,30 +153,29 @@ const KeyboardAccessoryBar = {
     // Build the commands drawer
     this._buildDrawer();
 
-    // Add click handlers — preventDefault stops event from reaching terminal
+    // Prevent any button in the bar from stealing focus — this is the key to keeping
+    // the keyboard open when tapping accessory buttons on mobile.
+    this.element.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) e.preventDefault();
+    });
+    this.element.addEventListener('touchstart', (e) => {
+      if (e.target.closest('button')) e.preventDefault();
+    }, { passive: false });
+
+    // Click handler for data-action buttons
     this.element.addEventListener('click', (e) => {
-      const btn = e.target.closest('.accessory-btn');
+      const btn = e.target.closest('.accessory-btn[data-action]');
       if (!btn) return;
-      e.preventDefault();
       e.stopPropagation();
-
-      const action = btn.dataset.action;
-      this.handleAction(action, btn);
-
-      // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if (action === 'tab' || action === 'scroll-up' || action === 'scroll-down') {
-        if (typeof app !== 'undefined' && app.terminal) {
-          app.terminal.focus();
-        }
-      }
+      this.handleAction(btn.dataset.action, btn);
     });
 
-    // Input panel toggle button
+    // Input panel toggle button (pencil icon)
     if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
       const inputToggleBtn = document.createElement('button');
       inputToggleBtn.className = 'accessory-btn';
-      inputToggleBtn.title = 'Toggle input panel';
-      inputToggleBtn.setAttribute('aria-label', 'Toggle input panel');
+      inputToggleBtn.title = 'Compose';
+      inputToggleBtn.setAttribute('aria-label', 'Compose');
       inputToggleBtn.type = 'button';
 
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -184,31 +183,28 @@ const KeyboardAccessoryBar = {
       svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
       svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
       svg.setAttribute('aria-hidden', 'true');
-
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', '3'); rect.setAttribute('y', '11');
-      rect.setAttribute('width', '18'); rect.setAttribute('height', '11');
-      rect.setAttribute('rx', '2');
-
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M7 11V7a5 5 0 0 1 10 0v4');
-
-      svg.appendChild(rect);
-      svg.appendChild(path);
+      const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path1.setAttribute('d', 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7');
+      const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path2.setAttribute('d', 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z');
+      svg.appendChild(path1);
+      svg.appendChild(path2);
       inputToggleBtn.appendChild(svg);
-
       inputToggleBtn.addEventListener('click', () => {
-        if (typeof InputPanel !== 'undefined') InputPanel.toggle();
+        if (typeof InputPanel !== 'undefined') {
+          InputPanel.toggle();
+          inputToggleBtn.classList.toggle('active', InputPanel._open);
+        }
       });
       this.element.appendChild(inputToggleBtn);
+      this._inputToggleBtn = inputToggleBtn;
 
-      // Hamburger (session drawer) button — to the right of the lock icon
+      // Hamburger (session drawer) button
       const hamburgerBtn = document.createElement('button');
       hamburgerBtn.className = 'accessory-btn';
       hamburgerBtn.title = 'Sessions';
       hamburgerBtn.setAttribute('aria-label', 'Open session list');
       hamburgerBtn.type = 'button';
-
       const hSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       hSvg.setAttribute('width', '18'); hSvg.setAttribute('height', '18');
       hSvg.setAttribute('viewBox', '0 0 24 24'); hSvg.setAttribute('fill', 'none');
@@ -600,6 +596,11 @@ const KeyboardAccessoryBar = {
     if (this.element) {
       this.element.classList.remove('visible');
     }
+  },
+
+  /** Sync the compose button active state */
+  setComposeActive(active) {
+    if (this._inputToggleBtn) this._inputToggleBtn.classList.toggle('active', active);
   }
 };
 
