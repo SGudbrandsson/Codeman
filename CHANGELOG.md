@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.6.0
+
+### Minor Changes
+
+- Add git worktree support: spawn isolated Claude sessions on parallel branches from the + button, with branch badge, dormant worktree persistence, and cleanup modal (remove/keep/merge).
+
 ## 0.5.4
 
 ### Patch Changes
