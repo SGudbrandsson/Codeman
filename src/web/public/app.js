@@ -507,6 +507,9 @@ class CodemanApp {
     SwipeHandler.init();
     VoiceInput.init();
     KeyboardAccessoryBar.init();
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
+      InputPanel.init();
+    }
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
@@ -12244,25 +12247,63 @@ try {
 
 /**
  * InputPanel — Persistent native textarea above the keyboard accessory bar.
- * Mobile only. Toggle open/closed. Send does not clear — user keeps editing.
+ * Mobile only. Toggle open/closed.
+ *
+ * Features: auto-growing textarea, inset + and send buttons, multi-image thumbnails,
+ * slash command popup, plus action sheet (camera / gallery / file).
  */
 const InputPanel = {
   _open: false,
   _panelEl: null,
   _textareaEl: null,
-  _getPanel() { return this._panelEl || (this._panelEl = document.getElementById('mobileInputPanel')); },
-  _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('mobileInputTextarea')); },
+  _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
+  _slashVisible: false,
+  _replaceIdx: -1,
 
-  toggle() {
-    if (this._open) this.close(); else this.open();
+  _getPanel()    { return this._panelEl    || (this._panelEl    = document.getElementById('mobileInputPanel')); },
+  _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('composeTextarea')); },
+
+  /** Init — wire events once after DOM is ready */
+  init() {
+    const ta = this._getTextarea();
+    if (!ta) return;
+
+    // Auto-grow on input
+    ta.addEventListener('input', () => {
+      this._autoGrow(ta);
+      this._handleSlashInput(ta.value);
+    });
+
+    // Plus button
+    const plusBtn = document.getElementById('composePlusBtn');
+    if (plusBtn) plusBtn.addEventListener('click', () => this._openActionSheet());
+
+    // Send button
+    const sendBtn = document.getElementById('composeSendBtn');
+    if (sendBtn) sendBtn.addEventListener('click', () => this.send());
   },
+
+  /** Auto-grow the textarea up to the available viewport height */
+  _autoGrow(ta) {
+    ta.style.height = 'auto';
+    const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const maxH = Math.max(80, vvh - 200);
+    ta.style.maxHeight = maxH + 'px';
+    ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
+  },
+
+  toggle() { if (this._open) this.close(); else this.open(); },
 
   open() {
     const panel = this._getPanel();
     if (!panel) return;
     panel.style.display = '';
     this._open = true;
-    requestAnimationFrame(() => { this._getTextarea()?.focus(); });
+    if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.instance) {
+      KeyboardAccessoryBar.instance.setComposeActive(true);
+    }
+    const ta = this._getTextarea();
+    if (ta) { this._autoGrow(ta); ta.focus(); }
   },
 
   close() {
@@ -12270,18 +12311,39 @@ const InputPanel = {
     if (!panel) return;
     panel.style.display = 'none';
     this._open = false;
+    this._closeSlashPopup();
+    if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.instance) {
+      KeyboardAccessoryBar.instance.setComposeActive(false);
+    }
   },
 
+  /** Send all queued images then the typed text */
   send() {
     const ta = this._getTextarea();
     if (!ta) return;
-    const text = ta.value;
-    if (!text) return;
-    if (typeof app !== 'undefined' && app.sendInput) {
-      app.sendInput(text);
-      setTimeout(() => app.sendInput('\r'), 80);
+    const text = ta.value.trim();
+    const images = this._images.filter(img => img.path);
+    if (!text && !images.length) return;
+    if (typeof app === 'undefined' || !app.sendInput) return;
+
+    let delay = 0;
+    for (const img of images) {
+      const path = img.path;
+      setTimeout(() => app.sendInput(path), delay);
+      delay += 80;
+      setTimeout(() => app.sendInput('\r'), delay);
+      delay += 80;
     }
+    if (text) {
+      setTimeout(() => app.sendInput(text), delay);
+      delay += 80;
+      setTimeout(() => app.sendInput('\r'), delay);
+    }
+
     ta.value = '';
+    this._autoGrow(ta);
+    this._images = [];
+    this._renderThumbnails();
     this.close();
   },
 
@@ -12289,50 +12351,186 @@ const InputPanel = {
     const ta = this._getTextarea();
     if (!ta) return;
     ta.value = '';
+    this._autoGrow(ta);
     ta.focus();
   },
 
-  toggleVoice() {
-    if (typeof VoiceInput !== 'undefined' && VoiceInput.toggle) {
-      VoiceInput.toggle();
-    }
+  // ── Image handling ──────────────────────────────────────────────────────────
+
+  _openActionSheet() {
+    const sheet = document.getElementById('composeActionSheet');
+    const backdrop = document.getElementById('composeActionBackdrop');
+    if (sheet) sheet.style.display = '';
+    if (backdrop) backdrop.style.display = '';
   },
 
-  pickImage() {
-    const fileInput = document.getElementById('mobileInputImageFile');
-    if (fileInput) fileInput.click();
+  _closeActionSheet() {
+    const sheet = document.getElementById('composeActionSheet');
+    const backdrop = document.getElementById('composeActionBackdrop');
+    if (sheet) sheet.style.display = 'none';
+    if (backdrop) backdrop.style.display = 'none';
   },
 
-  async _onImageFileChosen(input) {
-    const file = input.files?.[0];
-    if (!file) return;
-    input.value = ''; // reset so same file can be picked again
+  _actionSheetPick(type) {
+    this._closeActionSheet();
+    const id = type === 'camera' ? 'composeFileCamera'
+             : type === 'gallery' ? 'composeFileGallery'
+             : 'composeFileAny';
+    document.getElementById(id)?.click();
+  },
 
-    const btn = document.getElementById('mobileInputImageBtn');
-    if (btn) btn.disabled = true;
+  async _onFilesChosen(input, _type) {
+    const files = Array.from(input.files || []);
+    input.value = '';
+    if (!files.length) return;
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+    // If replacing an existing image
+    const replacing = this._replaceIdx >= 0 && this._replaceIdx < this._images.length;
+    const replaceIdx = this._replaceIdx;
+    this._replaceIdx = -1;
 
-      const res = await fetch('/api/screenshots', { method: 'POST', body: formData });
-      const data = await res.json();
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const objectUrl = URL.createObjectURL(file);
+      const entry = { objectUrl, file, path: null };
 
-      if (!data.success) throw new Error(data.error || 'Upload failed');
-
-      // Send the file path to Claude — Claude Code reads images from absolute paths
-      if (typeof app !== 'undefined' && app.sendInput && app.activeSessionId) {
-        app.sendInput(data.path);
-        setTimeout(() => app.sendInput('\r'), 80);
+      if (replacing && i === 0) {
+        // Revoke old object URL and replace entry
+        URL.revokeObjectURL(this._images[replaceIdx].objectUrl);
+        this._images[replaceIdx] = entry;
+      } else {
+        this._images.push(entry);
       }
-      if (typeof app !== 'undefined') app.showToast('Image sent', 'success');
-    } catch (err) {
-      if (typeof app !== 'undefined') app.showToast('Image upload failed', 'error');
-      console.error('[InputPanel] image upload failed:', err);
-    } finally {
-      if (btn) btn.disabled = false;
+      this._renderThumbnails();
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/screenshots', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Upload failed');
+        entry.path = data.path;
+        this._renderThumbnails();
+      } catch (err) {
+        if (typeof app !== 'undefined') app.showToast('Image upload failed', 'error');
+        console.error('[InputPanel] image upload failed:', err);
+        const idx = this._images.indexOf(entry);
+        if (idx !== -1) this._images.splice(idx, 1);
+        URL.revokeObjectURL(objectUrl);
+        this._renderThumbnails();
+      }
     }
-  }
+  },
+
+  _renderThumbnails() {
+    const strip = document.getElementById('composeThumbStrip');
+    if (!strip) return;
+    strip.replaceChildren();
+    if (!this._images.length) { strip.style.display = 'none'; return; }
+    strip.style.display = '';
+
+    this._images.forEach((img, idx) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'compose-thumb';
+      wrap.title = img.path ? 'Tap to preview / long-press to replace' : 'Uploading\u2026';
+
+      const imgEl = document.createElement('img');
+      imgEl.src = img.objectUrl;
+      imgEl.alt = 'Attachment ' + (idx + 1);
+      imgEl.addEventListener('click', () => this._previewImage(img));
+      let pressTimer;
+      imgEl.addEventListener('touchstart', () => {
+        pressTimer = setTimeout(() => this._replaceImage(idx), 500);
+      }, { passive: true });
+      imgEl.addEventListener('touchend', () => clearTimeout(pressTimer), { passive: true });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'compose-thumb-remove';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('aria-label', 'Remove image');
+      removeBtn.textContent = '\xd7';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        URL.revokeObjectURL(img.objectUrl);
+        this._images.splice(idx, 1);
+        this._renderThumbnails();
+      });
+
+      wrap.appendChild(imgEl);
+      wrap.appendChild(removeBtn);
+      strip.appendChild(wrap);
+    });
+  },
+
+  _previewImage(img) {
+    if (typeof app !== 'undefined' && app.showImagePopup) {
+      app.showImagePopup(img.objectUrl);
+    } else {
+      window.open(img.objectUrl, '_blank');
+    }
+  },
+
+  _replaceImage(idx) {
+    this._replaceIdx = idx;
+    const input = document.getElementById('composeFileGallery');
+    if (input) input.click();
+  },
+
+  // ── Slash commands ──────────────────────────────────────────────────────────
+
+  _handleSlashInput(value) {
+    if (!value.startsWith('/')) { this._closeSlashPopup(); return; }
+    const query = value.slice(1).toLowerCase();
+    const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
+    const commands = (sessionId && app._sessionCommands?.get(sessionId)) || [];
+    const matches = query
+      ? commands.filter(c => c.cmd.toLowerCase().includes(query) || c.desc.toLowerCase().includes(query))
+      : commands;
+    if (!matches.length) { this._closeSlashPopup(); return; }
+    this._showSlashPopup(matches);
+  },
+
+  _showSlashPopup(commands) {
+    const popup = document.getElementById('composeSlashPopup');
+    if (!popup) return;
+    popup.replaceChildren();
+    commands.slice(0, 10).forEach(cmd => {
+      const item = document.createElement('div');
+      item.className = 'compose-slash-item';
+      item.setAttribute('role', 'option');
+
+      const cmdSpan = document.createElement('span');
+      cmdSpan.className = 'compose-slash-cmd';
+      cmdSpan.textContent = cmd.cmd;
+
+      const descSpan = document.createElement('span');
+      descSpan.className = 'compose-slash-desc';
+      descSpan.textContent = cmd.desc;
+
+      item.appendChild(cmdSpan);
+      if (cmd.desc) item.appendChild(descSpan);
+      item.addEventListener('click', () => this._insertSlashCommand(cmd.cmd));
+      popup.appendChild(item);
+    });
+    popup.style.display = '';
+    this._slashVisible = true;
+  },
+
+  _insertSlashCommand(cmd) {
+    const ta = this._getTextarea();
+    if (ta) {
+      ta.value = cmd + ' ';
+      this._autoGrow(ta);
+      ta.focus();
+    }
+    this._closeSlashPopup();
+  },
+
+  _closeSlashPopup() {
+    const popup = document.getElementById('composeSlashPopup');
+    if (popup) popup.style.display = 'none';
+    this._slashVisible = false;
+  },
 };
 
 /**
