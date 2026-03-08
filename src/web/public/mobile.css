@@ -95,6 +95,11 @@ html.mobile-init .file-browser-panel {
     gap: 0.35rem;
   }
 
+  /* Show context pill on mobile */
+  .mobile-ctx-pill {
+    display: inline-flex;
+  }
+
   /* Compact session tabs — .tabs-two-rows override needed to match
      specificity of .session-tabs.tabs-two-rows in styles.css (0,2,0) */
   .session-tabs,

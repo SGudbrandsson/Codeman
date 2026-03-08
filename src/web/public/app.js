@@ -3985,6 +3985,11 @@ class CodemanApp {
     this.renderElicitationPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
+    // Update context pill for newly active session
+    const _activeSess = this.sessions.get(sessionId);
+    const _activeTokens = _activeSess?.tokens;
+    const _activeTokTotal = _activeTokens && typeof _activeTokens === 'object' ? _activeTokens.total : _activeTokens;
+    this.updateMobileContextPill(_activeTokTotal || 0);
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
@@ -5158,6 +5163,32 @@ class CodemanApp {
 
     // Also update mobile CLI info bar (shows tokens on mobile)
     this.updateCliInfoDisplay();
+    this.updateMobileContextPill(total);
+  }
+
+  /**
+   * Updates the mobile context-window pill next to the hamburger menu.
+   * Color transitions green → yellow → orange → red as context fills up.
+   */
+  updateMobileContextPill(totalTokens) {
+    const pill = document.getElementById('mobileContextPill');
+    if (!pill) return;
+    if (!totalTokens || totalTokens <= 0) {
+      pill.style.display = 'none';
+      return;
+    }
+    const MAX_CONTEXT = 200000;
+    const pct = Math.min(100, Math.round((totalTokens / MAX_CONTEXT) * 100));
+    // Color gradient: green(0%) → yellow(50%) → orange(75%) → red(90%+)
+    let color;
+    if (pct < 50)       color = '#22c55e';  // green
+    else if (pct < 75)  color = '#eab308';  // yellow
+    else if (pct < 90)  color = '#f97316';  // orange
+    else                color = '#ef4444';  // red
+    pill.style.display = '';
+    pill.style.setProperty('--ctx-color', color);
+    pill.textContent = `${pct}%`;
+    pill.title = `Context: ${pct}% full (${(totalTokens / 1000).toFixed(1)}k / 200k tokens)`;
   }
 
   // Update CLI info display (tokens, version, model - shown on mobile)
@@ -12693,19 +12724,12 @@ const InputPanel = {
     if (!text && !images.length) return;
     if (typeof app === 'undefined' || !app.sendInput) return;
 
-    let delay = 0;
-    for (const img of images) {
-      const path = img.path;
-      setTimeout(() => app.sendInput(path), delay);
-      delay += 80;
-      setTimeout(() => app.sendInput('\r'), delay);
-      delay += 80;
-    }
-    if (text) {
-      setTimeout(() => app.sendInput(text), delay);
-      delay += 80;
-      setTimeout(() => app.sendInput('\r'), delay);
-    }
+    // Combine image paths and text into one message joined by \n (Ctrl+J line breaks).
+    // This sends everything as a single Claude prompt so the Enter at the end submits
+    // it all together — avoids the race where text+Enter arrive while Claude is still
+    // processing the image path submission from a prior Enter.
+    const parts = [...images.map(img => img.path), ...(text ? [text] : [])];
+    app.sendInput(parts.join('\n') + '\r');
 
     ta.value = '';
     this._autoGrow(ta);

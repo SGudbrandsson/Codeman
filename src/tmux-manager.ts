@@ -1235,27 +1235,33 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       const hasCarriageReturn = input.includes('\r');
-      const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
+      // Split on \n to handle multi-line text. Each \n becomes a C-j (Ctrl+J) in
+      // Claude's input buffer, which inserts a line break without submitting the prompt.
+      // Ink (Claude CLI's terminal framework) interprets C-j as newline-in-input.
+      const lines = input.replace(/\r/g, '').split('\n');
 
-      if (textPart && hasCarriageReturn) {
-        // Send text first, then Enter as a SEPARATE tmux command after a short delay.
-        // Ink (Claude CLI's terminal framework) needs them split — sending both in a
-        // single tmux invocation (via \;) causes Ink to interpret Enter as a newline
-        // character in the input buffer rather than as form submission.
-        await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
-      } else if (textPart) {
-        // Text only, no Enter
-        await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
-      } else if (hasCarriageReturn) {
-        // Enter only
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trimEnd();
+        const isLastLine = i === lines.length - 1;
+
+        if (line) {
+          // Send text first, then a short delay so Ink can process it before Enter/C-j.
+          await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(line)}`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        if (!isLastLine) {
+          // Line break — send C-j (Ctrl+J = LF) to insert newline in Claude's input buffer
+          await execAsync(`tmux send-keys -t "${session.muxName}" C-j`, {
+            timeout: EXEC_TIMEOUT_MS,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+
+      if (hasCarriageReturn) {
         await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
           timeout: EXEC_TIMEOUT_MS,
         });
