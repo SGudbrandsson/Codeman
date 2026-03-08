@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.6.1
+
+### Patch Changes
+
+- Fix desktop hamburger menu, mobile drawer popup, run-mode dropdown z-index, context pill on desktop, and scope slash commands to session working directory
+
 ## 0.6.0
 
 ### Minor Changes
