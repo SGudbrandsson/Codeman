@@ -669,7 +669,7 @@ body {
   display: block;
 }
 
-/* Mobile context-window usage pill — shown next to hamburger on small screens */
+/* context pill — shown in header on all screen sizes when context data is available */
 .mobile-ctx-pill {
   --ctx-color: #22c55e;
   display: none; /* shown only on mobile via media query */

@@ -4278,7 +4278,7 @@ class CodemanApp {
       }
       this.terminal.scrollToBottom();
 
-      // Fetch plugin/GSD commands for this session on connect (cached per session, refreshed on reconnect)
+      // Fetch session-scoped slash commands (project + user level)
       if (!this._sessionCommands.has(sessionId)) {
         fetch(`/api/sessions/${sessionId}/commands`)
           .then(r => r.ok ? r.json() : null)
@@ -13179,7 +13179,7 @@ const InputPanel = {
 };
 
 /**
- * SessionDrawer — bottom-sheet session picker for mobile.
+ * SessionDrawer — session drawer — right-anchored popup (desktop and mobile).
  * All DOM text uses textContent (no innerHTML with session data).
  */
 const SessionDrawer = {
