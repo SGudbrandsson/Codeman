@@ -5,7 +5,7 @@
 <h2 align="center">The missing control plane for AI coding agents</h2>
 
 <p align="center">
-  <em>Agent Visualization &bull; Zero-Lag Input Overlay &bull; Mobile-First UI &bull; Respawn Controller &bull; Multi-Session Dashboard </em>
+  <em>Agent Visualization &bull; Zero-Lag Input Overlay &bull; Mobile-First UI &bull; Respawn Controller &bull; Multi-Session Dashboard &bull; Git Worktree Support</em>
 </p>
 
 <p align="center">
@@ -216,6 +216,10 @@ Terminal-based AI agents (Claude Code's Ink, OpenCode's Bubble Tea) redraw the s
 ```
 PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xterm.js (60fps)
 ```
+
+## Git Worktree Support
+
+Run parallel Claude sessions on isolated branches without conflicts. Hit **+** in the session tab bar to branch from any existing session — create a new branch or check out an existing one. Each worktree opens as a normal session with a 🌿 branch badge. When the session ends, choose to **Remove**, **Keep** (resume later via the + picker), or **Merge** back into the origin session.
 
 ---
 
