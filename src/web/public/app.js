@@ -12486,7 +12486,17 @@ const InputPanel = {
     const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
     const commands = (sessionId && app._sessionCommands?.get(sessionId)) || [];
     const matches = query
-      ? commands.filter(c => c.cmd.toLowerCase().includes(query) || c.desc.toLowerCase().includes(query))
+      ? commands.filter(c => {
+          const cmd = c.cmd.toLowerCase();
+          const desc = c.desc.toLowerCase();
+          if (cmd.includes(query) || desc.includes(query)) return true;
+          // Subsequence match: gsdmile matches gsd:new-milestone
+          let qi = 0;
+          for (let i = 0; i < cmd.length && qi < query.length; i++) {
+            if (cmd[i] === query[qi]) qi++;
+          }
+          return qi === query.length;
+        })
       : commands;
     if (!matches.length) { this._closeSlashPopup(); return; }
     this._showSlashPopup(matches);
@@ -12496,7 +12506,7 @@ const InputPanel = {
     const popup = document.getElementById('composeSlashPopup');
     if (!popup) return;
     popup.replaceChildren();
-    commands.slice(0, 10).forEach(cmd => {
+    commands.forEach(cmd => {
       const item = document.createElement('div');
       item.className = 'compose-slash-item';
       item.setAttribute('role', 'option');
