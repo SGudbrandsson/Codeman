@@ -1747,7 +1747,7 @@ body {
   /* Performance: promote to own compositor layer for isolation from
      header/toolbar/panel repaints. Eliminates compositing stalls
      when surrounding UI elements update during typing. */
-  will-change: contents;
+  will-change: transform;
 }
 .terminal-container .xterm {
   height: 100%;
@@ -4475,6 +4475,22 @@ kbd {
 .session-tab .tab-badge.completed {
   background: var(--green);
   animation: none;
+}
+
+.tab-worktree-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  background: var(--color-success, #22c55e);
+  color: #fff;
+  border-radius: 3px;
+  padding: 1px 4px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Subagent Badge on Tabs - Compact hover-triggered */
@@ -7265,3 +7281,86 @@ kbd {
 .advanced-options-content {
   padding-left: 0.5rem;
 }
+
+/* + New Session/Worktree button in tab bar */
+.tab-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: center;
+  line-height: 1;
+}
+.tab-add-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* New Picker / Worktree Creator / Worktree Cleanup modals */
+.modal-content-sm { max-width: 320px; }
+
+.new-picker-body {
+  display: flex;
+  gap: 16px;
+  padding: 24px;
+  justify-content: center;
+}
+.new-picker-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.new-picker-tile:hover { background: var(--color-hover); }
+.new-picker-icon { font-size: 28px; }
+.new-picker-label { font-weight: 500; font-size: 14px; }
+
+.worktree-cleanup-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.worktree-cleanup-output {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--color-code-bg, #1e1e1e);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.worktree-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 6px; }
+.worktree-resume-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 4px;
+}
+.worktree-resume-btn:hover { background: var(--color-hover); }
+.worktree-resume-project { color: var(--color-text-muted); font-size: 12px; }
+.worktree-divider { margin: 12px 0; border: none; border-top: 1px solid var(--color-border); }
+.worktree-session-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.worktree-session-radio { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.worktree-branch-type { display: flex; gap: 16px; margin-bottom: 8px; }
+.worktree-branch-type label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.worktree-path-preview { font-size: 12px; color: var(--color-text-muted); margin: 6px 0 12px; font-family: monospace; }
+.worktree-creator-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

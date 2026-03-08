@@ -595,8 +595,15 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   initTerminal() {
-    // Load scrollback setting from localStorage (default 5000)
+    // Load scrollback setting from localStorage (default 500)
     const scrollback = parseInt(localStorage.getItem('codeman-scrollback')) || DEFAULT_SCROLLBACK;
+
+    // Cap scrollback on mobile: each line adds to xterm-viewport scroll height.
+    // 500 lines × 10px font = 5000px tall scroll layer on a 900px screen.
+    // Cap at 200 lines to keep the native scroll layer manageable.
+    const isMobile = MobileDetection.getDeviceType() !== 'desktop';
+    const MOBILE_SCROLLBACK_CAP = 200;
+    const effectiveScrollback = isMobile ? Math.min(scrollback, MOBILE_SCROLLBACK_CAP) : scrollback;
 
     this.terminal = new Terminal({
       theme: {
@@ -628,7 +635,7 @@ class CodemanApp {
       lineHeight: 1.2,
       cursorBlink: false,
       cursorStyle: 'block',
-      scrollback: scrollback,
+      scrollback: effectiveScrollback,
       allowTransparency: true,
       allowProposedApi: true,
     });
@@ -3663,6 +3670,9 @@ class CodemanApp {
       const minimizedAgents = this.minimizedSubagents.get(id);
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
+      const worktreeBadge = session.worktreeBranch
+        ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">🌿 ${escapeHtml(session.worktreeBranch)}</span>`
+        : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
       const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
@@ -3680,6 +3690,7 @@ class CodemanApp {
           </span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
+          ${worktreeBadge}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
         </div>`);
@@ -12651,6 +12662,7 @@ const InputPanel = {
   _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
   _slashVisible: false,
   _replaceIdx: -1,
+  _autoGrowPending: false,
 
   _getPanel()    { return this._panelEl    || (this._panelEl    = document.getElementById('mobileInputPanel')); },
   _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('composeTextarea')); },
@@ -12660,10 +12672,16 @@ const InputPanel = {
     const ta = this._getTextarea();
     if (!ta) return;
 
-    // Auto-grow on input
+    // Auto-grow on input (RAF-debounced to avoid forced sync layout per keystroke)
     ta.addEventListener('input', () => {
-      this._autoGrow(ta);
-      this._handleSlashInput(ta.value);
+      this._handleSlashInput(ta.value); // stays synchronous (drives popup visibility)
+      if (!this._autoGrowPending) {
+        this._autoGrowPending = true;
+        requestAnimationFrame(() => {
+          this._autoGrowPending = false;
+          this._autoGrow(ta);
+        });
+      }
     });
 
     // Plus button
