@@ -550,3 +550,27 @@ export type RespawnEnableInput = z.infer<typeof RespawnEnableSchema>;
 export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
 export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
 export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
+
+export const CreateWorktreeSchema = z.object({
+  branch: z.string().min(1).max(200),
+  isNew: z.boolean(),
+});
+
+export const RemoveWorktreeSchema = z.object({
+  force: z.boolean().optional(),
+});
+
+export const DeleteDormantWorktreeSchema = z.object({
+  removeDisk: z.boolean().optional(),
+});
+
+export const MergeWorktreeSchema = z.object({
+  branch: z.string().min(1).max(200),
+});
+
+export const SaveDormantWorktreeSchema = z.object({
+  path: z.string().min(1),
+  branch: z.string().min(1),
+  originSessionId: z.string(),
+  projectName: z.string(),
+});
