@@ -55,6 +55,7 @@ import {
   stringSimilarity,
   Debouncer,
   CleanupManager,
+  execPattern,
 } from './utils/index.js';
 import { MAX_LINE_BUFFER_SIZE } from './config/buffer-limits.js';
 import { MAX_TODOS_PER_SESSION } from './config/map-limits.js';
@@ -63,6 +64,7 @@ import type { EnhancedPlanTask, CheckpointReview } from './ralph-plan-tracker.js
 import { RalphFixPlanWatcher, generateFixPlanMarkdown, importFixPlanMarkdown } from './ralph-fix-plan-watcher.js';
 import { RalphStallDetector } from './ralph-stall-detector.js';
 import { RalphStatusParser } from './ralph-status-parser.js';
+import { STALE_DATA_MAX_AGE_MS, INACTIVITY_TIMEOUT_MS } from './config/server-timing.js';
 
 // Re-export sub-module types for backward compatibility
 export type { EnhancedPlanTask, CheckpointReview } from './ralph-plan-tracker.js';
@@ -72,9 +74,9 @@ export type { EnhancedPlanTask, CheckpointReview } from './ralph-plan-tracker.js
 
 /**
  * Todo items older than this duration (in milliseconds) will be auto-expired.
- * Default: 1 hour (60 * 60 * 1000)
+ * Default: 1 hour
  */
-const TODO_EXPIRY_MS = 60 * 60 * 1000;
+const TODO_EXPIRY_MS = STALE_DATA_MAX_AGE_MS;
 
 /**
  * Minimum interval between on-demand cleanup checks (in milliseconds).
@@ -88,7 +90,7 @@ const CLEANUP_THROTTLE_MS = 30 * 1000;
  * Actively purges expired todos even when no terminal data is flowing.
  * Default: 5 minutes
  */
-const TODO_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const TODO_CLEANUP_INTERVAL_MS = INACTIVITY_TIMEOUT_MS;
 
 /**
  * Similarity threshold for todo deduplication.
@@ -1666,35 +1668,32 @@ export class RalphTracker extends EventEmitter {
     let match: RegExpExecArray | null;
 
     if (hasCheckbox) {
-      TODO_CHECKBOX_PATTERN.lastIndex = 0;
-      while ((match = TODO_CHECKBOX_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_CHECKBOX_PATTERN, line, (match) => {
         const checked = match[1].toLowerCase() === 'x';
         const content = match[2].trim();
         const status: RalphTodoStatus = checked ? 'completed' : 'pending';
         this.upsertTodo(content, status);
         updated = true;
-      }
+      });
     }
 
     if (hasTodoIndicator) {
-      TODO_INDICATOR_PATTERN.lastIndex = 0;
-      while ((match = TODO_INDICATOR_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_INDICATOR_PATTERN, line, (match) => {
         const icon = match[1];
         const content = match[2].trim();
         const status = this.iconToStatus(icon);
         this.upsertTodo(content, status);
         updated = true;
-      }
+      });
     }
 
     if (hasStatus) {
-      TODO_STATUS_PATTERN.lastIndex = 0;
-      while ((match = TODO_STATUS_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_STATUS_PATTERN, line, (match) => {
         const content = match[1].trim();
         const status = match[2] as RalphTodoStatus;
         this.upsertTodo(content, status);
         updated = true;
-      }
+      });
     }
 
     if (hasNativeCheckbox) {
@@ -1715,8 +1714,7 @@ export class RalphTracker extends EventEmitter {
     }
 
     if (hasCheckmark) {
-      TODO_TASK_CREATED_PATTERN.lastIndex = 0;
-      while ((match = TODO_TASK_CREATED_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_TASK_CREATED_PATTERN, line, (match) => {
         const taskNum = parseInt(match[1], 10);
         const content = match[2].trim();
         if (content.length >= 5) {
@@ -1725,10 +1723,9 @@ export class RalphTracker extends EventEmitter {
           this.upsertTodo(content, 'pending');
           updated = true;
         }
-      }
+      });
 
-      TODO_TASK_SUMMARY_PATTERN.lastIndex = 0;
-      while ((match = TODO_TASK_SUMMARY_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_TASK_SUMMARY_PATTERN, line, (match) => {
         const taskNum = parseInt(match[1], 10);
         const content = match[2].trim();
         if (content.length >= 5) {
@@ -1739,10 +1736,9 @@ export class RalphTracker extends EventEmitter {
           this.upsertTodo(this._taskNumberToContent.get(taskNum) || content, 'pending');
           updated = true;
         }
-      }
+      });
 
-      TODO_TASK_STATUS_PATTERN.lastIndex = 0;
-      while ((match = TODO_TASK_STATUS_PATTERN.exec(line)) !== null) {
+      execPattern(TODO_TASK_STATUS_PATTERN, line, (match) => {
         const taskNum = parseInt(match[1], 10);
         const statusStr = match[2].trim();
         const status: RalphTodoStatus =
@@ -1752,7 +1748,7 @@ export class RalphTracker extends EventEmitter {
           this.upsertTodo(content, status);
           updated = true;
         }
-      }
+      });
 
       if (!updated) {
         TODO_PLAIN_CHECKMARK_PATTERN.lastIndex = 0;

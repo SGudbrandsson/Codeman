@@ -20,8 +20,9 @@ export {
   createAnsiPatternSimple,
   stripAnsi,
   SAFE_PATH_PATTERN,
+  execPattern,
 } from './regex-patterns.js';
-export { MAX_SESSION_TOKENS, validateTokenCounts, validateTokensAndCost } from './token-validation.js';
+export { MAX_SESSION_TOKENS } from './token-validation.js';
 export { stringSimilarity, fuzzyPhraseMatch, todoContentHash } from './string-similarity.js';
 export { assertNever } from './type-safety.js';
 export { wrapWithNice } from './nice-wrapper.js';

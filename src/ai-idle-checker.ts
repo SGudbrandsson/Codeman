@@ -30,7 +30,14 @@ import {
   type AiCheckerResultBase,
   type AiCheckerStateBase,
 } from './ai-checker-base.js';
-import { AI_CHECK_MODEL, AI_IDLE_CHECK_MAX_CONTEXT } from './config/ai-defaults.js';
+import {
+  AI_CHECK_MODEL,
+  AI_IDLE_CHECK_MAX_CONTEXT,
+  AI_IDLE_CHECK_TIMEOUT_MS,
+  AI_IDLE_CHECK_COOLDOWN_MS,
+  AI_IDLE_CHECK_ERROR_COOLDOWN_MS,
+  AI_CHECK_MAX_CONSECUTIVE_ERRORS,
+} from './config/ai-defaults.js';
 
 // ========== Types ==========
 
@@ -48,10 +55,10 @@ const DEFAULT_AI_CHECK_CONFIG: AiIdleCheckConfig = {
   enabled: true,
   model: AI_CHECK_MODEL,
   maxContextChars: AI_IDLE_CHECK_MAX_CONTEXT,
-  checkTimeoutMs: 90000,
-  cooldownMs: 180000,
-  errorCooldownMs: 60000,
-  maxConsecutiveErrors: 3,
+  checkTimeoutMs: AI_IDLE_CHECK_TIMEOUT_MS,
+  cooldownMs: AI_IDLE_CHECK_COOLDOWN_MS,
+  errorCooldownMs: AI_IDLE_CHECK_ERROR_COOLDOWN_MS,
+  maxConsecutiveErrors: AI_CHECK_MAX_CONSECUTIVE_ERRORS,
 };
 
 /** Pattern to match IDLE or WORKING as the first word of output */

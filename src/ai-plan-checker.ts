@@ -29,7 +29,14 @@ import {
   type AiCheckerResultBase,
   type AiCheckerStateBase,
 } from './ai-checker-base.js';
-import { AI_CHECK_MODEL, AI_PLAN_CHECK_MAX_CONTEXT } from './config/ai-defaults.js';
+import {
+  AI_CHECK_MODEL,
+  AI_PLAN_CHECK_MAX_CONTEXT,
+  AI_PLAN_CHECK_TIMEOUT_MS,
+  AI_PLAN_CHECK_COOLDOWN_MS,
+  AI_PLAN_CHECK_ERROR_COOLDOWN_MS,
+  AI_CHECK_MAX_CONSECUTIVE_ERRORS,
+} from './config/ai-defaults.js';
 
 // ========== Types ==========
 
@@ -47,10 +54,10 @@ const DEFAULT_PLAN_CHECK_CONFIG: AiPlanCheckConfig = {
   enabled: true,
   model: AI_CHECK_MODEL,
   maxContextChars: AI_PLAN_CHECK_MAX_CONTEXT,
-  checkTimeoutMs: 60000,
-  cooldownMs: 30000,
-  errorCooldownMs: 30000,
-  maxConsecutiveErrors: 3,
+  checkTimeoutMs: AI_PLAN_CHECK_TIMEOUT_MS,
+  cooldownMs: AI_PLAN_CHECK_COOLDOWN_MS,
+  errorCooldownMs: AI_PLAN_CHECK_ERROR_COOLDOWN_MS,
+  maxConsecutiveErrors: AI_CHECK_MAX_CONSECUTIVE_ERRORS,
 };
 
 /** Pattern to match PLAN_MODE or NOT_PLAN_MODE as the first word(s) of output */
