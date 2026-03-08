@@ -99,7 +99,7 @@
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
         <button class="btn-icon-header btn-lifecycle-log" onclick="app.openLifecycleLog()" title="Session Lifecycle Log" aria-label="Open session lifecycle log"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></button>
-        <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="update-badge" id="updateBadge" style="display:none;" aria-label="Update available"></span></button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
     </header>
@@ -379,7 +379,7 @@
               <line x1="8" y1="23" x2="16" y2="23"/>
             </svg>
           </button>
-          <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;</button>
+          <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;<span class="update-badge update-badge-mobile" id="updateBadgeMobile" style="display:none;" aria-label="Update available"></span></button>
           <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span id="mobileCaseName">Case</span>
@@ -839,6 +839,7 @@
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
           <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
+          <button class="modal-tab-btn" id="settingsUpdatesTabBtn" data-tab="settings-updates">Updates</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1346,6 +1347,29 @@
               <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></div><div>Restore Terminal Size</div>
               <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline (Local Echo)</div>
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
+            </div>
+          </div>
+          <div class="modal-tab-content hidden" id="settings-updates">
+            <div class="settings-grid">
+              <div class="settings-section-header">Software Updates</div>
+              <div class="update-version-row">
+                <span>Installed: <strong id="updateCurrentVersion">—</strong></span>
+                <span id="updateLatestRow" style="display:none;">Latest: <strong id="updateLatestVersion">—</strong></span>
+              </div>
+              <div id="updateStatusMsg" class="update-status-msg"></div>
+              <div id="updateReleaseNotes" class="update-release-notes" style="display:none;"></div>
+              <div class="update-actions">
+                <button class="btn-secondary" onclick="app.checkForUpdates(true)">Check for updates</button>
+                <button class="btn-primary" id="updateNowBtn" style="display:none;" onclick="app.applyUpdate()">Update Now</button>
+              </div>
+              <div class="update-progress-log" id="updateProgressLog" style="display:none;"></div>
+              <div class="settings-section-header" style="margin-top:16px;">Configuration</div>
+              <label class="settings-label">Git repository path
+                <small>Local path to Codeman source repo (e.g. /home/user/sources/Codeman). Required for auto-update.</small>
+                <input type="text" id="updateRepoPathInput" class="settings-input"
+                  placeholder="/home/user/sources/Codeman"
+                  onchange="app.saveUpdateRepoPath(this.value)">
+              </label>
             </div>
           </div>
         </div>

@@ -263,6 +263,11 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.PLAN_STARTED, '_onPlanStarted'],
   [SSE_EVENTS.PLAN_CANCELLED, '_onPlanCancelled'],
   [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
+
+  // Update notifications
+  [SSE_EVENTS.UPDATE_PROGRESS, '_onUpdateProgress'],
+  [SSE_EVENTS.UPDATE_COMPLETE, '_onUpdateComplete'],
+  [SSE_EVENTS.UPDATE_FAILED, '_onUpdateFailed'],
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -574,6 +579,7 @@ class CodemanApp {
     // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection
     this.setupOnlineDetection();
+    this._initUpdateChecker();
     // Load server-stored settings (async, re-applies visibility after load)
     this.loadAppSettingsFromServer(settingsPromise).then(() => {
       this.applyHeaderVisibilitySettings();
@@ -2572,6 +2578,137 @@ class CodemanApp {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
     }).catch(() => {});
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Update Checker
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Called on page load and every 24h. Silently checks for updates. */
+  async _initUpdateChecker() {
+    try {
+      const data = await fetch('/api/update/check').then(r => r.json());
+      this._applyUpdateInfo(data);
+    } catch { /* offline — ignore */ }
+    setInterval(async () => {
+      try {
+        const data = await fetch('/api/update/check').then(r => r.json());
+        this._applyUpdateInfo(data);
+      } catch { /* ignore */ }
+    }, 24 * 60 * 60 * 1000);
+  }
+
+  /** Apply update info to badge and settings panel. */
+  _applyUpdateInfo(data) {
+    const badge = document.getElementById('updateBadge');
+    const badgeMobile = document.getElementById('updateBadgeMobile');
+    const tabBtn = document.getElementById('settingsUpdatesTabBtn');
+    const hasUpdate = data.updateAvailable && !data.stale;
+
+    if (badge) badge.style.display = hasUpdate ? '' : 'none';
+    if (badgeMobile) badgeMobile.style.display = hasUpdate ? '' : 'none';
+    if (tabBtn) tabBtn.classList.toggle('has-update', hasUpdate);
+
+    // Populate settings panel fields
+    const cur = document.getElementById('updateCurrentVersion');
+    const latestRow = document.getElementById('updateLatestRow');
+    const latestEl = document.getElementById('updateLatestVersion');
+    const statusMsg = document.getElementById('updateStatusMsg');
+    const releaseNotes = document.getElementById('updateReleaseNotes');
+    const updateBtn = document.getElementById('updateNowBtn');
+    const repoInput = document.getElementById('updateRepoPathInput');
+
+    if (cur) cur.textContent = data.currentVersion || '—';
+    if (repoInput && data.repoPath && !repoInput.value) repoInput.value = data.repoPath;
+
+    if (hasUpdate) {
+      if (latestRow) latestRow.style.display = '';
+      if (latestEl) latestEl.textContent = data.latestVersion;
+      if (statusMsg) statusMsg.textContent = `Version ${data.latestVersion} is available.`;
+      if (releaseNotes && data.releaseNotes) {
+        releaseNotes.style.display = '';
+        releaseNotes.textContent = data.releaseNotes.slice(0, 2000);
+      }
+      if (updateBtn) updateBtn.style.display = '';
+    } else {
+      if (latestRow) latestRow.style.display = 'none';
+      if (updateBtn) updateBtn.style.display = 'none';
+      if (releaseNotes) releaseNotes.style.display = 'none';
+      if (statusMsg) {
+        statusMsg.textContent = data.stale
+          ? 'Could not check for updates (GitHub unreachable).'
+          : 'You are running the latest version.';
+      }
+    }
+  }
+
+  /** Called by "Check for updates" button. */
+  async checkForUpdates(force = false) {
+    const statusMsg = document.getElementById('updateStatusMsg');
+    if (statusMsg) statusMsg.textContent = 'Checking…';
+    try {
+      const data = await fetch(`/api/update/check${force ? '?force=1' : ''}`).then(r => r.json());
+      this._applyUpdateInfo(data);
+    } catch {
+      if (statusMsg) statusMsg.textContent = 'Failed to check — check your connection.';
+    }
+  }
+
+  /** Called by "Update Now" button. */
+  async applyUpdate() {
+    const updateBtn = document.getElementById('updateNowBtn');
+    const log = document.getElementById('updateProgressLog');
+    if (updateBtn) updateBtn.disabled = true;
+    if (log) { log.style.display = ''; log.textContent = ''; }
+
+    try {
+      const res = await fetch('/api/update/apply', { method: 'POST' });
+      if (res.status === 400 || res.status === 409) {
+        const body = await res.json();
+        if (log) log.textContent = body.message || 'Update failed.';
+        if (updateBtn) updateBtn.disabled = false;
+        return;
+      }
+      if (log) log.textContent += 'Update started…\n';
+    } catch {
+      if (log) log.textContent = 'Failed to start update — check your connection.';
+      if (updateBtn) updateBtn.disabled = false;
+    }
+  }
+
+  /** Save repo path to server settings. */
+  saveUpdateRepoPath(path) {
+    fetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updateRepoPath: path }),
+    }).catch(() => {});
+  }
+
+  _onUpdateProgress(data) {
+    const log = document.getElementById('updateProgressLog');
+    if (log) {
+      log.style.display = '';
+      log.textContent += (data.message || '') + '\n';
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  _onUpdateComplete(data) {
+    const log = document.getElementById('updateProgressLog');
+    if (log) log.textContent += (data.message || 'Update complete') + '\nReloading in 5 seconds…\n';
+    const badge = document.getElementById('updateBadge');
+    const badgeMobile = document.getElementById('updateBadgeMobile');
+    if (badge) badge.style.display = 'none';
+    if (badgeMobile) badgeMobile.style.display = 'none';
+    setTimeout(() => window.location.reload(), 5000);
+  }
+
+  _onUpdateFailed(data) {
+    const log = document.getElementById('updateProgressLog');
+    const updateBtn = document.getElementById('updateNowBtn');
+    if (log) log.textContent += (data.message || 'Update failed') + '\n';
+    if (updateBtn) updateBtn.disabled = false;
   }
 
   _onHookElicitationDialog(data) {
