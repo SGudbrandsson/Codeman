@@ -394,6 +394,9 @@ class CodemanApp {
     // SSE reconnect timeout (to prevent orphaned timeouts)
     this.sseReconnectTimeout = null;
 
+    // Tracks last SSE event timestamp — used to detect stale connections on tab-focus
+    this._lastSseEventTime = Date.now();
+
     // SSE event listener cleanup function (to prevent listener accumulation on reconnect)
     this._sseListenerCleanup = null;
 
@@ -1800,9 +1803,15 @@ class CodemanApp {
       listeners.length = 0;
     };
 
+    // Track last event time to detect stale connections after tab restore
+    this.eventSource.addEventListener('message', () => {
+      this._lastSseEventTime = Date.now();
+    });
+
     this.eventSource.onopen = () => {
       this.reconnectAttempts = 0;
       this.setConnectionStatus('connected');
+      this._lastSseEventTime = Date.now();
     };
     this.eventSource.onerror = () => {
       this.reconnectAttempts++;
@@ -3082,6 +3091,33 @@ class CodemanApp {
       this.isOnline = false;
       this.setConnectionStatus('offline');
     });
+
+    // Reconnect SSE when tab becomes visible (fixes frozen-tab bug)
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this._onTabVisible();
+    });
+  }
+
+  /**
+   * Called when the browser tab becomes visible again after being hidden.
+   * Reconnects the SSE stream if it dropped while the tab was backgrounded.
+   * Fixes the "frozen tab" bug where terminal stops updating after switching away.
+   */
+  _onTabVisible() {
+    if (!this.isOnline) return;
+    const es = this.eventSource;
+    if (!es || es.readyState === EventSource.CLOSED) {
+      // Stream dropped — reconnect (triggers INIT event which re-syncs all state)
+      this.reconnectAttempts = 0;
+      this.connectSSE();
+      return;
+    }
+    // Stream appears open but may be stale (browser throttled it without error)
+    const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+    if (Date.now() - this._lastSseEventTime > STALE_THRESHOLD_MS) {
+      this.reconnectAttempts = 0;
+      this.connectSSE();
+    }
   }
 
   handleInit(data) {
