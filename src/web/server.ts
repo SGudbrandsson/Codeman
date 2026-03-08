@@ -1116,6 +1116,14 @@ export class WebServer extends EventEmitter {
         // Wrap in try/catch to ensure cleanup always happens
         try {
           this.broadcast(SseEvent.SessionExit, { id: session.id, code });
+          if (session.worktreeBranch) {
+            this.broadcast(SseEvent.WorktreeSessionEnded, {
+              id: session.id,
+              worktreePath: session.worktreePath,
+              worktreeBranch: session.worktreeBranch,
+              worktreeOriginId: session.worktreeOriginId,
+            });
+          }
           this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
           this.persistSessionState(session);
         } catch (err) {

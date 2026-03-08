@@ -283,6 +283,9 @@ const SSE_EVENTS = {
   PLAN_CANCELLED: 'plan:cancelled',
   PLAN_COMPLETED: 'plan:completed',
 
+  // Worktree
+  WORKTREE_SESSION_ENDED: 'worktree:sessionEnded',
+
   // Update notifications
   UPDATE_AVAILABLE: 'update:available',
   UPDATE_PROGRESS: 'update:progress',
