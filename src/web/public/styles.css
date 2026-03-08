@@ -549,6 +549,87 @@ body {
   margin-left: 0;
 }
 
+/* Update available badge — red dot on settings gear */
+.btn-settings,
+.btn-settings-mobile {
+  position: relative;
+}
+
+.update-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-primary, #111);
+  pointer-events: none;
+}
+
+/* Red dot on "Updates" tab in settings modal */
+.modal-tab-btn.has-update::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #ef4444;
+  border-radius: 50%;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* Update settings panel */
+.update-version-row {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.update-status-msg {
+  font-size: 13px;
+  color: rgba(255,255,255,0.65);
+  margin-bottom: 8px;
+  min-height: 18px;
+}
+
+.update-release-notes {
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.75);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  font-family: inherit;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.update-progress-log {
+  background: #0a0a0a;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: monospace;
+  color: rgba(255,255,255,0.8);
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
 .btn-icon-header.btn-sm {
   width: 20px;
   height: 20px;
