@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.8
+
+### Patch Changes
+
+- Add tunnel status indicator with control panel — green pulsing dot in header when Cloudflare tunnel is active, dropdown with URL, remote clients, auth sessions, and start/stop/QR/revoke controls
+
 ## 0.3.7
 
 ### Patch Changes
