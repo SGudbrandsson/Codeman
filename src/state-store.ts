@@ -552,14 +552,26 @@ export class StateStore {
     return this.state.config;
   }
 
-  /** Returns user settings from ~/.codeman/settings.json, or {} if not found. */
+  /** In-memory cache for settings.json — loaded lazily, avoids repeated disk reads. */
+  private _settingsCache: Record<string, unknown> | null = null;
+
+  /** Returns user settings from ~/.codeman/settings.json, or {} if not found. Uses in-memory cache after first load. */
   getSettings(): Record<string, unknown> {
+    if (this._settingsCache !== null) {
+      return this._settingsCache;
+    }
     const settingsPath = join(homedir(), '.codeman', 'settings.json');
     try {
-      return JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+      this._settingsCache = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
     } catch {
-      return {};
+      this._settingsCache = {};
     }
+    return this._settingsCache;
+  }
+
+  /** Invalidates the in-memory settings cache so the next getSettings() re-reads from disk. */
+  invalidateSettingsCache(): void {
+    this._settingsCache = null;
   }
 
   /** Updates configuration (partial merge) and triggers a debounced save. */

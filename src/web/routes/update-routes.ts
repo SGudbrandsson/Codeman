@@ -48,12 +48,14 @@ async function healthCheck(port: number, timeoutMs = 15_000): Promise<boolean> {
 
 async function rollback(repoPath: string, port: number): Promise<void> {
   try {
+    // Only rollback if backup exists — otherwise we'd leave the service with no dist/
+    await access(DIST_BACKUP);
     await rm(DIST_LIVE, { recursive: true, force: true });
     await cp(DIST_BACKUP, DIST_LIVE, { recursive: true });
     await run('systemctl', ['--user', 'restart', 'codeman-web'], repoPath);
     await healthCheck(port, 10_000);
   } catch {
-    /* best-effort */
+    /* best-effort — if no backup, at least don't make things worse */
   }
 }
 
