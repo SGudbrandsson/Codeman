@@ -15,7 +15,7 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --header-height: 36px;
+  --header-height: 48px;
   --toolbar-height: 40px;
 
   /* Session color palette */
@@ -642,10 +642,10 @@ body {
 /* Session drawer — desktop (non-touch) */
 .session-drawer {
   position: fixed;
-  top: 48px;
+  top: var(--header-height);
   right: 0;
   width: 280px;
-  height: calc(100vh - 48px);
+  height: calc(100vh - var(--header-height));
   background: var(--bg-secondary, #1e1e2e);
   border-left: 1px solid var(--border-color, rgba(255,255,255,0.1));
   transform: translateX(100%);
