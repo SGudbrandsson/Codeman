@@ -62,7 +62,8 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
         continue;
       }
       const { name, description } = parseFrontmatter(content);
-      const cmd = name ?? entry.name.replace(/\.md$/, '');
+      const rawCmd = name ?? entry.name.replace(/\.md$/, '');
+      const cmd = rawCmd.startsWith('/') ? rawCmd : `/${rawCmd}`;
       commands.push({ cmd, desc: description ?? '', source: 'project' });
     }
   } catch {
@@ -83,7 +84,8 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
         continue;
       }
       const { name, description } = parseFrontmatter(content);
-      const cmd = name ?? entry.name.replace(/\.md$/, '');
+      const rawCmd = name ?? entry.name.replace(/\.md$/, '');
+      const cmd = rawCmd.startsWith('/') ? rawCmd : `/${rawCmd}`;
       commands.push({ cmd, desc: description ?? '', source: 'user' });
     }
   } catch {

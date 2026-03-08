@@ -22,7 +22,7 @@ describe('discoverCommands', () => {
     fs.writeFileSync(path.join(cmdDir, 'deploy.md'), '---\nname: deploy\ndescription: Deploy app\n---\n');
 
     const commands = discoverCommands(tmpDir, tmpDir);
-    expect(commands.some((c) => c.cmd === 'deploy' && c.source === 'project')).toBe(true);
+    expect(commands.some((c) => c.cmd === '/deploy' && c.source === 'project')).toBe(true);
   });
 
   it('excludes gsd/ subdirectory from user-level scan', () => {
@@ -43,7 +43,7 @@ describe('discoverCommands', () => {
     );
 
     const commands = discoverCommands('/nonexistent-project', tmpDir);
-    expect(commands.some((c) => c.cmd === 'mycommand' && c.source === 'user')).toBe(true);
+    expect(commands.some((c) => c.cmd === '/mycommand' && c.source === 'user')).toBe(true);
   });
 
   it('returns empty array when no commands found', () => {
