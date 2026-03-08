@@ -4003,7 +4003,7 @@ class CodemanApp {
     const _activeSess = this.sessions.get(sessionId);
     const _activeTokens = _activeSess?.tokens;
     const _activeTokTotal = _activeTokens && typeof _activeTokens === 'object' ? _activeTokens.total : _activeTokens;
-    this.updateMobileContextPill(_activeTokTotal || 0);
+    this.updateContextPill(_activeTokTotal || 0);
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
@@ -5177,14 +5177,15 @@ class CodemanApp {
 
     // Also update mobile CLI info bar (shows tokens on mobile)
     this.updateCliInfoDisplay();
-    this.updateMobileContextPill(total);
+    this.updateContextPill(total);
   }
 
   /**
-   * Updates the mobile context-window pill next to the hamburger menu.
+   * Updates the context-window pill next to the hamburger menu.
    * Color transitions green → yellow → orange → red as context fills up.
+   * Uses explicit inline-flex to override the CSS display:none on desktop.
    */
-  updateMobileContextPill(totalTokens) {
+  updateContextPill(totalTokens) {
     const pill = document.getElementById('mobileContextPill');
     if (!pill) return;
     if (!totalTokens || totalTokens <= 0) {
@@ -5199,7 +5200,7 @@ class CodemanApp {
     else if (pct < 75)  color = '#eab308';  // yellow
     else if (pct < 90)  color = '#f97316';  // orange
     else                color = '#ef4444';  // red
-    pill.style.display = '';
+    pill.style.display = 'inline-flex';
     pill.style.setProperty('--ctx-color', color);
     pill.textContent = `${pct}%`;
     pill.title = `Context: ${pct}% full (${(totalTokens / 1000).toFixed(1)}k / 200k tokens)`;
