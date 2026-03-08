@@ -292,6 +292,11 @@ export const HookTeammateIdle = 'hook:teammate_idle' as const;
 /** Claude Code hook: teammate task completed. */
 export const HookTaskCompleted = 'hook:task_completed' as const;
 
+// ─── Worktree ─────────────────────────────────────────────────────────────────
+
+/** Emitted when a worktree session exits — triggers cleanup modal on frontend */
+export const WorktreeSessionEnded = 'worktree:sessionEnded' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -451,6 +456,9 @@ export const SseEvent = {
   HookStop,
   HookTeammateIdle,
   HookTaskCompleted,
+
+  // Worktree
+  WorktreeSessionEnded,
 
   // Cases
   CaseCreated,
