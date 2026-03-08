@@ -366,6 +366,9 @@ class CodemanApp {
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
     this.pendingHooks = new Map();
 
+    // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
+    this.pendingElicitation = null;
+
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
@@ -481,6 +484,11 @@ class CodemanApp {
       this.pendingHooks.delete(sessionId);
     }
     this.updateTabAlertFromHooks(sessionId);
+    if (this.pendingElicitation?.sessionId === sessionId &&
+        (!hookType || hookType === 'elicitation_dialog')) {
+      this.pendingElicitation = null;
+      this.renderElicitationPanel();
+    }
   }
 
   updateTabAlertFromHooks(sessionId) {
@@ -2476,9 +2484,89 @@ class CodemanApp {
     });
   }
 
+  /**
+   * Reads the last 20 lines of the given session's xterm buffer and extracts
+   * numbered options of the form "N: Label" plus the question text above them.
+   * Returns { question, options: [{val, label}] } or null if nothing found.
+   */
+  _parseElicitationOptions(sessionId) {
+    const terminal = this.terminals?.get(sessionId) ?? this.terminal;
+    if (!terminal) return null;
+    const buf = terminal.buffer.active;
+    const lineCount = buf.length;
+    const start = Math.max(0, lineCount - 20);
+    const lines = [];
+    for (let i = start; i < lineCount; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true).trimEnd());
+    }
+    const text = lines.join('\n');
+
+    const optionRe = /\b(\d):\s*([A-Za-z][A-Za-z /\-]{0,18}?)(?=\s{2,}|\s*\d:|$|\n)/g;
+    const options = [];
+    let m;
+    while ((m = optionRe.exec(text)) !== null) {
+      options.push({ val: m[1], label: m[2].trim() });
+    }
+    if (options.length === 0) return null;
+
+    const firstOptionIdx = text.indexOf(options[0].val + ':');
+    const beforeOptions = text.slice(0, firstOptionIdx);
+    const questionLines = beforeOptions.split('\n')
+      .map(l => l.replace(/^[\u2022\s]+/, '').trim())
+      .filter(Boolean);
+    const question = questionLines[questionLines.length - 1] || '';
+
+    return { question, options };
+  }
+
+  /** Renders or hides the elicitation quick-reply panel based on this.pendingElicitation. */
+  renderElicitationPanel() {
+    const panel = document.getElementById('elicitationPanel');
+    if (!panel) return;
+    const pe = this.pendingElicitation;
+    if (!pe || pe.sessionId !== this.activeSessionId) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+    if (pe.options && pe.options.length > 0) {
+      const btns = pe.options.map(o =>
+        `<button class="elicitation-btn" ` +
+        `onclick="app.sendElicitationResponse('${pe.sessionId}','${o.val}')" ` +
+        `ontouchend="event.preventDefault();app.sendElicitationResponse('${pe.sessionId}','${o.val}')"` +
+        `>${o.val}: ${o.label}</button>`
+      ).join('');
+      panel.innerHTML =
+        (pe.question ? `<div class="elicitation-question">${pe.question}</div>` : '') +
+        `<div class="elicitation-options">${btns}</div>`;
+    } else {
+      panel.innerHTML =
+        (pe.question ? `<div class="elicitation-question">${pe.question}</div>` : '') +
+        `<div class="elicitation-free-row">` +
+        `<input class="elicitation-free-input" id="elicitationInput" type="text" ` +
+        `placeholder="Type your answer\u2026" autocomplete="off">` +
+        `<button class="elicitation-send-btn" ` +
+        `onclick="app.sendElicitationResponse('${pe.sessionId}',document.getElementById('elicitationInput').value)">Send</button>` +
+        `</div>`;
+    }
+  }
+
+  /** Sends a response to the active elicitation dialog and clears the panel. */
+  sendElicitationResponse(sessionId, value) {
+    if (value === null || value === undefined || value === '') return;
+    this.clearPendingHooks(sessionId, 'elicitation_dialog');
+    this.pendingElicitation = null;
+    this.renderElicitationPanel();
+    fetch(`/api/sessions/${sessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
+    }).catch(() => {});
+  }
+
   _onHookElicitationDialog(data) {
     const session = this.sessions.get(data.sessionId);
-    // Always track pending hook - action alerts need user interaction to clear
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'elicitation_dialog');
     }
@@ -2490,6 +2578,13 @@ class CodemanApp {
       title: 'Question Asked',
       message: data.question || 'Claude is asking a question and waiting for your answer',
     });
+    const parsed = this._parseElicitationOptions(data.sessionId);
+    this.pendingElicitation = {
+      sessionId: data.sessionId,
+      question: parsed?.question || '',
+      options: parsed?.options || [],
+    };
+    this.renderElicitationPanel();
   }
 
   _onHookStop(data) {
@@ -3714,6 +3809,7 @@ class CodemanApp {
       this._localEchoOverlay.suppressBufferDetection();
     }
     this.activeSessionId = sessionId;
+    this.renderElicitationPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
