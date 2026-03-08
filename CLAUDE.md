@@ -55,7 +55,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.6.2 (must match `package.json`)
+**Version**: 0.6.3 (must match `package.json`)
 
 ## Project Overview
 
