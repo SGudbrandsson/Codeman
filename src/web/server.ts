@@ -106,6 +106,8 @@ import {
   registerPlanRoutes,
   registerCommandsRoutes,
   registerUpdateRoutes,
+  registerWorktreeSessionRoutes,
+  registerWorktreeRoutes,
 } from './routes/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -712,6 +714,8 @@ export class WebServer extends EventEmitter {
     // Background check at startup — non-blocking
     updateChecker.check().catch(() => {});
     registerUpdateRoutes(this.app, ctx, updateChecker);
+    registerWorktreeSessionRoutes(this.app, ctx);
+    registerWorktreeRoutes(this.app, ctx);
   }
 
   /**
