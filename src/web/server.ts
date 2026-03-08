@@ -121,6 +121,7 @@ import {
   ITERATION_PAUSE_MS,
   BATCH_FLUSH_THRESHOLD,
   STATS_COLLECTION_INTERVAL_MS,
+  INACTIVITY_TIMEOUT_MS,
 } from '../config/server-timing.js';
 
 // DEC mode 2026 - Synchronized Output
@@ -211,7 +212,12 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
-  private sseClients: Set<FastifyReply> = new Set();
+  /**
+   * SSE clients mapped to their session subscription filter.
+   * Value is a Set of session IDs the client wants events for,
+   * or `null` meaning "receive all events" (backwards-compatible default).
+   */
+  private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
   /** Clients with backpressure — skip writes until 'drain' fires */
   private backpressuredClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -226,7 +232,7 @@ export class WebServer extends EventEmitter {
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
   private lastTerminalEventTime: StaleExpirationMap<string, number> = new StaleExpirationMap({
-    ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
+    ttlMs: INACTIVITY_TIMEOUT_MS, // 5 minutes - auto-expire stale session timing data
     refreshOnGet: false, // Don't refresh on reads, only on explicit sets
   });
   // Centralized cleanup for standalone timers (intervals + resettable timeouts)
@@ -606,6 +612,21 @@ export class WebServer extends EventEmitter {
         return;
       }
 
+      // Parse optional session subscription filter from query parameter.
+      // /api/events?sessions=id1,id2 — client only receives events for those sessions.
+      // /api/events (no param) — client receives all events (backwards-compatible).
+      const query = req.query as { sessions?: string };
+      let sessionFilter: Set<string> | null = null;
+      if (query.sessions) {
+        const ids = query.sessions
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (ids.length > 0) {
+          sessionFilter = new Set(ids);
+        }
+      }
+
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -613,7 +634,7 @@ export class WebServer extends EventEmitter {
         'X-Accel-Buffering': 'no', // Disable nginx buffering
       });
 
-      this.sseClients.add(reply);
+      this.sseClients.set(reply, sessionFilter);
 
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
@@ -1963,7 +1984,8 @@ export class WebServer extends EventEmitter {
           // Client may have missed terminal data during backpressure.
           // Tell it to reload the active session's buffer to recover.
           try {
-            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n`);
+            const drainPadding = this._isTunnelActive ? SSE_PADDING : '';
+            reply.raw.write(`event: ${SseEvent.SessionNeedsRefresh}\ndata: {}\n\n${drainPadding}`);
           } catch {
             /* client gone */
           }
@@ -1989,9 +2011,12 @@ export class WebServer extends EventEmitter {
       this.cachedSessionsList = null;
     }
     // Performance optimization: serialize JSON once for all clients.
-    // Only append Cloudflare tunnel padding when tunnel is actually active —
-    // direct/Tailscale clients don't need 8KB padding on every event.
-    const padding = this._isTunnelActive ? SSE_PADDING : '';
+    // Only append Cloudflare tunnel padding for latency-sensitive events —
+    // Recovery events need immediate proxy flush; low-frequency metadata events
+    // (session:created, ralph:*, respawn:*, etc.) don't need padding.
+    // Note: session:terminal has its own padding in flushSessionTerminalBatch().
+    const needsPadding = this._isTunnelActive && event === SseEvent.SessionNeedsRefresh;
+    const padding = needsPadding ? SSE_PADDING : '';
     let message: string;
     try {
       message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` + padding;
@@ -2000,9 +2025,33 @@ export class WebServer extends EventEmitter {
       console.error(`[Server] Failed to serialize SSE event "${event}":`, err);
       return;
     }
-    for (const client of this.sseClients) {
+    // Extract sessionId from event data for subscription filtering.
+    const eventSessionId = this.extractSessionId(event, data);
+
+    for (const [client, filter] of this.sseClients) {
+      // No filter (null) = receive everything. Otherwise, skip if event is
+      // session-scoped and the session isn't in the client's subscription set.
+      if (filter && eventSessionId && !filter.has(eventSessionId)) continue;
       this.sendSSEPreformatted(client, message);
     }
+  }
+
+  /**
+   * Extract the session ID from an event's data payload for subscription filtering.
+   * Returns the sessionId string if the event is session-scoped, or null for global events.
+   */
+  private extractSessionId(event: string, data: unknown): string | null {
+    if (data == null || typeof data !== 'object') return null;
+    const record = data as Record<string, unknown>;
+
+    // Most session-scoped events use `sessionId`
+    if (typeof record.sessionId === 'string') return record.sessionId;
+
+    // Session lifecycle events (session:*) use `id` from the session state object
+    if (typeof record.id === 'string' && event.startsWith('session:')) return record.id;
+
+    // No session ID found — treat as global event (sent to all clients)
+    return null;
   }
 
   // Batch terminal data for better performance (60fps)
@@ -2083,8 +2132,13 @@ export class WebServer extends EventEmitter {
       // Fast path: build SSE message directly without JSON.stringify on wrapper object.
       // Only the terminal data string needs escaping; sessionId is a UUID (safe to template).
       const escapedData = JSON.stringify(syncData);
-      const message = `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}}\n\n`;
-      for (const client of this.sseClients) {
+      // Append tunnel padding for immediate Cloudflare proxy flush —
+      // terminal data is high-frequency and latency-sensitive.
+      const padding = this._isTunnelActive ? SSE_PADDING : '';
+      const message = `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}}\n\n` + padding;
+      for (const [client, filter] of this.sseClients) {
+        // Skip clients that have a session filter and aren't subscribed to this session
+        if (filter && !filter.has(sessionId)) continue;
         this.sendSSEPreformatted(client, message);
       }
     }
@@ -2257,7 +2311,7 @@ export class WebServer extends EventEmitter {
   private cleanupDeadSSEClients(): void {
     const deadClients: FastifyReply[] = [];
 
-    for (const client of this.sseClients) {
+    for (const [client] of this.sseClients) {
       try {
         // Check if the underlying socket is still writable
         const socket = client.raw.socket;
@@ -2361,7 +2415,7 @@ export class WebServer extends EventEmitter {
       () => {
         this.recordPeriodicTokenUsage();
       },
-      5 * 60 * 1000,
+      INACTIVITY_TIMEOUT_MS,
       { description: 'periodic token recording' }
     );
 
@@ -2657,7 +2711,7 @@ export class WebServer extends EventEmitter {
     this.cleanup.dispose();
 
     // Gracefully close all SSE connections before clearing
-    for (const client of this.sseClients) {
+    for (const [client] of this.sseClients) {
       try {
         // Send a final event to notify clients of shutdown
         this.sendSSE(client, 'server:shutdown', { reason: 'Server stopping' });

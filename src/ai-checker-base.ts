@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { getAugmentedPath } from './utils/claude-cli-resolver.js';
 import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
+import { AI_CHECK_MAX_BACKOFF_MS } from './config/ai-defaults.js';
 
 // ========== Security Validation ==========
 
@@ -534,10 +535,7 @@ export abstract class AiCheckerBase<
       // P1-005: Exponential backoff for errors
       // Base cooldown * 2^(consecutiveErrors-1), capped at 5 minutes
       const backoffMultiplier = Math.pow(2, this.consecutiveErrors - 1);
-      const backoffCooldownMs = Math.min(
-        this.config.errorCooldownMs * backoffMultiplier,
-        5 * 60 * 1000 // Max 5 minutes
-      );
+      const backoffCooldownMs = Math.min(this.config.errorCooldownMs * backoffMultiplier, AI_CHECK_MAX_BACKOFF_MS);
       this.log(`Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`);
       this.startCooldown(backoffCooldownMs);
     }

@@ -10,6 +10,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { CLEANUP_CHECK_INTERVAL_MS } from './config/server-timing.js';
 
 /**
  * RalphStallDetector - Detects iteration stalls in the Ralph loop.
@@ -57,7 +58,7 @@ export class RalphStallDetector extends EventEmitter {
     // Check every minute
     this._iterationStallTimer = setInterval(() => {
       this.checkIterationStall();
-    }, 60 * 1000);
+    }, CLEANUP_CHECK_INTERVAL_MS);
   }
 
   /**

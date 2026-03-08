@@ -636,7 +636,8 @@ class CodemanApp {
     // oversized terminal.write() calls that triggered the stalls.
     // Disable with ?nowebgl URL param if GPU issues return.
     this._webglAddon = null;
-    if (!new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
+    const skipWebGL = MobileDetection.getDeviceType() !== 'desktop';
+    if (!skipWebGL && !new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {
@@ -1401,7 +1402,7 @@ class CodemanApp {
     // remaining segments to the next frame to prevent terminal.write() from blocking
     // the main thread. 141KB single-frame writes have been observed to freeze Chrome
     // for 2+ minutes even with the canvas renderer.
-    const MAX_FRAME_BYTES = 49152; // 48KB budget per frame
+    const MAX_FRAME_BYTES = 65536; // 64KB budget per frame
     let bytesThisFrame = 0;
     let deferred = false;
 
@@ -1908,6 +1909,26 @@ class CodemanApp {
   _onSessionTerminal(data) {
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
+
+      // Hard cap: track total bytes queued in render buffers (pendingWrites +
+      // flickerFilterBuffer). When rAF is throttled (tab
+      // backgrounded, GPU busy), data accumulates with no flush, reaching
+      // 889KB+ and freezing Chrome for minutes. Drop data beyond 128KB and
+      // schedule a buffer reload to recover the display once the burst subsides.
+      const queued = (this.pendingWrites?.reduce((s, w) => s + w.length, 0) || 0)
+        + (this.flickerFilterBuffer?.length || 0);
+      if (queued > 131072) { // 128KB — drop to prevent accumulation
+        // Schedule a self-recovery: reload the full terminal buffer once the
+        // queue drains (debounced to avoid hammering the API during sustained bursts).
+        if (!this._clientDropRecoveryTimer) {
+          this._clientDropRecoveryTimer = setTimeout(() => {
+            this._clientDropRecoveryTimer = null;
+            this._onSessionNeedsRefresh();
+          }, 2000);
+        }
+        return;
+      }
+
       this.batchTerminalWrite(data.data);
     }
   }
@@ -1917,8 +1938,7 @@ class CodemanApp {
     // so reload the buffer to recover from any display corruption.
     if (!this.activeSessionId || !this.terminal) return;
     try {
-      const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
       const data = await res.json();
       if (data.terminalBuffer) {
         const termContainer = document.getElementById('terminalContainer');
@@ -3300,15 +3320,38 @@ class CodemanApp {
           return;
         }
 
-        // Update subagent badge - check if count changed
+        // Update subagent badge - targeted update without full rebuild
         const subagentBadgeEl = tab.querySelector('.tab-subagent-badge');
         const minimizedAgents = this.minimizedSubagents.get(id);
         const minimizedCount = minimizedAgents?.size || 0;
-        const currentCount = subagentBadgeEl ? parseInt(subagentBadgeEl.querySelector('.subagent-count')?.textContent || '0') : 0;
-        if (minimizedCount !== currentCount) {
-          // Count changed - need full rebuild for dropdown update
-          this._fullRenderSessionTabs();
-          return;
+        if (minimizedCount > 0 && subagentBadgeEl) {
+          // Badge exists and still has agents - update label and dropdown in-place
+          const labelEl = subagentBadgeEl.querySelector('.subagent-label');
+          const newLabel = minimizedCount === 1 ? 'AGENT' : `AGENTS (${minimizedCount})`;
+          if (labelEl && labelEl.textContent !== newLabel) {
+            labelEl.textContent = newLabel;
+          }
+          // Rebuild dropdown items (agent list may have changed)
+          const dropdownEl = subagentBadgeEl.querySelector('.subagent-dropdown');
+          if (dropdownEl) {
+            const newBadgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
+            const temp = document.createElement('div');
+            temp.innerHTML = newBadgeHtml;
+            const newDropdown = temp.querySelector('.subagent-dropdown');
+            if (newDropdown) {
+              dropdownEl.innerHTML = newDropdown.innerHTML;
+            }
+          }
+        } else if (minimizedCount > 0 && !subagentBadgeEl) {
+          // Need to add badge - insert before gear icon
+          const badgeHtml = this.renderSubagentTabBadge(id, minimizedAgents);
+          const gearEl = tab.querySelector('.tab-gear');
+          if (gearEl) {
+            gearEl.insertAdjacentHTML('beforebegin', badgeHtml);
+          }
+        } else if (minimizedCount === 0 && subagentBadgeEl) {
+          // Count went to 0 - remove badge
+          subagentBadgeEl.remove();
         }
       }
     } else {
@@ -3610,6 +3653,7 @@ class CodemanApp {
     this._tabCompletionRetries = 0;
     this._tabCompletionBaseText = null;
     if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
+    if (this._clientDropRecoveryTimer) { clearTimeout(this._clientDropRecoveryTimer); this._clientDropRecoveryTimer = null; }
 
     // Clear status strip — new session may not have GSD output
     const statusStrip = this._statusStripEl ?? document.getElementById('terminalStatusStrip');
@@ -3716,7 +3760,7 @@ class CodemanApp {
 
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
-    // Use tail mode for faster initial load (256KB is enough for recent visible content).
+    // Use tail mode for faster initial load (128KB is enough for recent visible content).
     //
     // Protect flushed state during buffer load: terminal.write() can trigger
     // xterm.js onData responses (DA, OSC, etc.) that would otherwise clear
@@ -3737,7 +3781,6 @@ class CodemanApp {
       // On localhost the fetch is < 5ms, so the hidden period is imperceptible.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
       const termContainer = document.getElementById('terminalContainer');
-      const tailSize = 256 * 1024;
 
       // Soft reconnect: SSE dropped and reconnected to the same already-visible session.
       // Skip hiding the terminal; verify the buffer in the background. Only do a full
@@ -3748,7 +3791,7 @@ class CodemanApp {
 
       if (isSoftReconnect && cachedBuffer) {
         _crashDiag.log('SOFT_RECONNECT: fetching to compare');
-        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         const data = await res.json();
         _crashDiag.log(`SOFT_RECONNECT_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} changed=${data.terminalBuffer !== cachedBuffer}`);
@@ -3792,7 +3835,7 @@ class CodemanApp {
         }
 
         _crashDiag.log('FETCH_START');
-        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         const data = await res.json();
         _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
@@ -9825,10 +9868,16 @@ class CodemanApp {
         // Show window (unless it was minimized by user)
         if (!windowInfo.minimized) {
           windowInfo.element.style.display = 'flex';
+          // Lazily re-create teammate terminal if it was disposed when hidden
+          if (windowInfo._lazyTerminal) {
+            this._restoreTeammateTerminalFromLazy(agentId);
+          }
         }
         windowInfo.hidden = false;
       } else {
         // Hide window (but don't close it)
+        // Dispose teammate terminal to free memory while hidden on inactive tab
+        this._disposeTeammateTerminalForMinimize(agentId);
         windowInfo.element.style.display = 'none';
         windowInfo.hidden = true;
       }
@@ -9911,6 +9960,8 @@ class CodemanApp {
   minimizeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (windowData) {
+      // Dispose teammate terminal on minimize to free DOM/memory (lazy re-creation on restore)
+      this._disposeTeammateTerminalForMinimize(agentId);
       windowData.element.style.display = 'none';
       windowData.minimized = true;
       this.updateConnectionLines();
@@ -9921,6 +9972,10 @@ class CodemanApp {
   // Debounced wrapper — coalesces rapid subagent events (tool_call, progress,
   // message) into a single DOM update per 100ms per agent window.
   scheduleSubagentWindowRender(agentId) {
+    // Skip DOM updates for windows with lazy (disposed) terminals — they're minimized
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData?.minimized) return;
+
     if (!this._subagentWindowRenderTimeouts) this._subagentWindowRenderTimeouts = new Map();
     if (this._subagentWindowRenderTimeouts.has(agentId)) {
       clearTimeout(this._subagentWindowRenderTimeouts.get(agentId));
@@ -9934,6 +9989,9 @@ class CodemanApp {
   renderSubagentWindowContent(agentId) {
     // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
     if (this.teammateTerminals.has(agentId)) return;
+    // Skip if this window has a lazy (disposed) terminal — it will be re-created on restore
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData?._lazyTerminal) return;
 
     const body = document.getElementById(`subagent-window-body-${agentId}`);
     if (!body) return;
@@ -10336,8 +10394,18 @@ class CodemanApp {
     resizeObserver.observe(win);
     this.subagentWindows.get(windowId).resizeObserver = resizeObserver;
 
-    // Init the xterm.js terminal
-    this.initTeammateTerminal(windowId, paneData, win);
+    // Init the xterm.js terminal (lazy if hidden)
+    if (shouldHide) {
+      // Window starts hidden — defer terminal creation until visible (lazy init)
+      const windowEntry = this.subagentWindows.get(windowId);
+      if (windowEntry) {
+        windowEntry._lazyTerminal = true;
+        windowEntry._lazyPaneTarget = paneData.paneTarget;
+        windowEntry._lazySessionId = paneData.sessionId;
+      }
+    } else {
+      this.initTeammateTerminal(windowId, paneData, win);
+    }
 
     // Animate in
     requestAnimationFrame(() => {

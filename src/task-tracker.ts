@@ -22,6 +22,7 @@
 
 import { EventEmitter } from 'node:events';
 import { assertNever } from './utils/index.js';
+import { STALE_DATA_MAX_AGE_MS } from './config/server-timing.js';
 
 // ========== Configuration Constants ==========
 
@@ -36,7 +37,7 @@ const MAX_COMPLETED_TASKS = 100;
  * Entries older than this are cleaned up to prevent unbounded growth.
  * Default: 1 hour
  */
-const PENDING_TOOL_USE_MAX_AGE_MS = 60 * 60 * 1000;
+const PENDING_TOOL_USE_MAX_AGE_MS = STALE_DATA_MAX_AGE_MS;
 
 /**
  * Maximum number of pending tool uses to allow.
