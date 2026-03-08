@@ -2018,6 +2018,8 @@ body {
   /* contain: style only — layout/paint containment clips the case-settings popover
      that extends above the toolbar (popover uses position:absolute + bottom:100%) */
   contain: style;
+  /* z-index ensures dropdowns (run-mode-menu, etc.) appear above main content */
+  z-index: 10;
 }
 
 .toolbar-left,
@@ -2152,7 +2154,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
-  z-index: 1000;
+  z-index: 1100;
   min-width: 150px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
