@@ -12312,6 +12312,12 @@ const InputPanel = {
     panel.style.display = 'none';
     this._open = false;
     this._closeSlashPopup();
+    // Revoke object URLs to prevent memory leaks
+    for (const img of this._images) {
+      URL.revokeObjectURL(img.objectUrl);
+    }
+    this._images = [];
+    this._renderThumbnails();
     if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.instance) {
       KeyboardAccessoryBar.instance.setComposeActive(false);
     }
@@ -12463,11 +12469,7 @@ const InputPanel = {
   },
 
   _previewImage(img) {
-    if (typeof app !== 'undefined' && app.showImagePopup) {
-      app.showImagePopup(img.objectUrl);
-    } else {
-      window.open(img.objectUrl, '_blank');
-    }
+    window.open(img.objectUrl, '_blank');
   },
 
   _replaceImage(idx) {
