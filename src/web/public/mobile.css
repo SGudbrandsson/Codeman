@@ -2127,73 +2127,207 @@ html.mobile-init .file-browser-panel {
 .session-drawer-dot.running { background: #22c55e; }
 .session-drawer-dot.ralph   { background: #f59e0b; }
 
+/* ── Compose Panel ────────────────────────────────────────── */
 .mobile-input-panel {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--safe-area-bottom) + 84px); /* 40px toolbar + 44px accessory bar */
+  bottom: calc(var(--safe-area-bottom) + 84px); /* above accessory bar */
   z-index: 52;
   background: #111;
   border-top: 1px solid #1a1a2e;
   padding: 8px;
   padding-left: calc(8px + var(--safe-area-left));
   padding-right: calc(8px + var(--safe-area-right));
-}
-.mobile-input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-}
-.mobile-input-left-btns {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  align-items: center;
-  flex-shrink: 0;
+  gap: 6px;
 }
-.mobile-input-textarea {
-  flex: 1;
-  background: #0d0d0d;
-  color: #e2e8f0;
-  border: 1px solid #1a1a2e;
+
+/* Thumbnail strip */
+.compose-thumb-strip {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+.compose-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 60px;
+  height: 60px;
   border-radius: 8px;
-  padding: 8px 10px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 15px;
-  line-height: 1.4;
-  resize: none;
-  min-height: 44px;
-  max-height: 120px;
-  overflow-y: auto;
-}
-.mobile-input-textarea:focus {
-  outline: none;
-  border-color: #3b82f6;
-}
-.mobile-input-btn {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  padding: 8px;
+  overflow: hidden;
+  border: 1px solid #1a1a2e;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  flex-shrink: 0;
+}
+.compose-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.compose-thumb-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  border: none;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
 }
-.mobile-input-actions {
+
+/* Textarea wrapper — relative so inset buttons are absolute */
+.compose-textarea-wrap {
+  position: relative;
+}
+.compose-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #0d0d0d;
+  color: #e2e8f0;
+  border: 1px solid #1a1a2e;
+  border-radius: 12px;
+  /* left padding leaves room for + btn; right padding leaves room for send btn */
+  padding: 10px 52px 10px 44px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  resize: none;
+  min-height: 44px;
+  /* max-height set dynamically by JS */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.compose-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+/* Inset buttons inside textarea */
+.compose-inset-btn {
+  position: absolute;
+  bottom: 7px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.compose-plus-btn {
+  left: 4px;
+  color: #94a3b8;
+}
+.compose-plus-btn:active { color: #e2e8f0; }
+.compose-send-btn {
+  right: 4px;
+  width: 34px;
+  height: 34px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 50%;
+  padding: 0;
+}
+.compose-send-btn:active { background: #2563eb; }
+
+/* Slash command popup */
+.compose-slash-popup {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 4px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a4e;
+  border-radius: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 53;
+  -webkit-overflow-scrolling: touch;
+}
+.compose-slash-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a2a4e;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.compose-slash-item:last-child { border-bottom: none; }
+.compose-slash-item:active { background: #2a2a4e; }
+.compose-slash-cmd {
+  font-size: 14px;
+  font-weight: 600;
+  color: #93c5fd;
+  font-family: monospace;
+}
+.compose-slash-desc {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Plus action sheet */
+.compose-action-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 54;
+  background: rgba(0,0,0,0.5);
+}
+.compose-action-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  background: #1a1a2e;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  padding: 8px 16px calc(16px + var(--safe-area-bottom));
   display: flex;
   flex-direction: column;
   gap: 4px;
-  align-items: center;
 }
-.mobile-input-send {
-  background: #3b82f6;
-  color: #fff;
-  border-radius: 8px;
-  width: 36px;
-  height: 36px;
+.compose-action-item {
+  background: #252540;
+  color: #e2e8f0;
+  border: none;
+  border-radius: 10px;
+  padding: 16px;
+  font-size: 16px;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.mobile-input-send:active { background: #2563eb; }
-.mobile-input-clear { font-size: 14px; }
+.compose-action-item:active { background: #2a2a4e; }
+.compose-action-cancel {
+  background: none;
+  color: #94a3b8;
+  border: none;
+  border-radius: 10px;
+  padding: 14px;
+  font-size: 16px;
+  text-align: center;
+  cursor: pointer;
+  margin-top: 4px;
+}
