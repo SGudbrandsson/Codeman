@@ -15,3 +15,4 @@ export { registerRespawnRoutes } from './respawn-routes.js';
 export { registerRalphRoutes } from './ralph-routes.js';
 export { registerPlanRoutes } from './plan-routes.js';
 export { registerCommandsRoutes } from './commands-routes.js';
+export { registerUpdateRoutes } from './update-routes.js';
