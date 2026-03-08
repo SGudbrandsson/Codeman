@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.6.3
+
+### Patch Changes
+
+- Fix context pill to use Claude's reported status line percentage instead of accumulated token math
+
 ## 0.6.2
 
 ### Patch Changes
