@@ -243,6 +243,9 @@ export type { SessionMode } from './types.js';
 export class Session extends EventEmitter {
   readonly id: string;
   readonly workingDir: string;
+  readonly worktreePath?: string;
+  readonly worktreeBranch?: string;
+  readonly worktreeOriginId?: string;
   readonly createdAt: number;
   readonly mode: SessionMode;
 
@@ -395,6 +398,9 @@ export class Session extends EventEmitter {
 
     this.id = config.id || uuidv4();
     this.workingDir = config.workingDir;
+    this.worktreePath = config.worktreePath;
+    this.worktreeBranch = config.worktreeBranch;
+    this.worktreeOriginId = config.worktreeOriginId;
     this.createdAt = config.createdAt || Date.now();
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
@@ -764,6 +770,9 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      worktreePath: this.worktreePath,
+      worktreeBranch: this.worktreeBranch,
+      worktreeOriginId: this.worktreeOriginId,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,
