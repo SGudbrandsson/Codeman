@@ -268,6 +268,9 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.UPDATE_PROGRESS, '_onUpdateProgress'],
   [SSE_EVENTS.UPDATE_COMPLETE, '_onUpdateComplete'],
   [SSE_EVENTS.UPDATE_FAILED, '_onUpdateFailed'],
+
+  // Worktrees
+  [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -5814,6 +5817,229 @@ class CodemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+  }
+
+  openNewPicker() {
+    document.getElementById('newPickerModal').classList.add('active');
+  }
+
+  closeNewPicker() {
+    document.getElementById('newPickerModal').classList.remove('active');
+  }
+
+  async openWorktreeCreator() {
+    this.closeNewPicker();
+    const gitSessions = [...this.sessions.values()].filter(s => !s.worktreeBranch);
+    this._worktreeCreatorSessions = gitSessions;
+    this._worktreeCreatorSourceId = gitSessions.length === 1 ? gitSessions[0].id : null;
+    let dormant = [];
+    try {
+      const res = await fetch('/api/worktrees');
+      const data = await res.json();
+      if (data.success) dormant = data.worktrees;
+    } catch {}
+    this._dormantWorktrees = dormant;
+    this._renderWorktreeCreator();
+    document.getElementById('worktreeCreatorModal').classList.add('active');
+  }
+
+  closeWorktreeCreator() {
+    document.getElementById('worktreeCreatorModal').classList.remove('active');
+  }
+
+  _renderWorktreeCreator() {
+    const body = document.getElementById('worktreeCreatorBody');
+    const dormant = this._dormantWorktrees || [];
+    const sessions = this._worktreeCreatorSessions || [];
+    const sourceId = this._worktreeCreatorSourceId;
+    let html = '';
+
+    if (dormant.length > 0) {
+      html += `<div class="worktree-section-label">Resume</div>`;
+      dormant.forEach(w => {
+        html += `<button class="worktree-resume-btn" onclick="app._resumeWorktree('${escapeHtml(w.id)}')">🌿 ${escapeHtml(w.branch)} <span class="worktree-resume-project">${escapeHtml(w.projectName)}</span></button>`;
+      });
+      html += `<hr class="worktree-divider">`;
+    }
+
+    if (!sourceId && sessions.length > 1) {
+      html += `<div class="worktree-section-label">Branch from</div><div class="worktree-session-list">`;
+      sessions.forEach(s => {
+        html += `<label class="worktree-session-radio"><input type="radio" name="worktreeSource" value="${escapeHtml(s.id)}" onchange="app._worktreeCreatorSourceId=this.value; app._loadWorktreeBranches(this.value);"> ${escapeHtml(this.getSessionName(s))}</label>`;
+      });
+      html += `</div>`;
+    } else if (sourceId) {
+      this._loadWorktreeBranches(sourceId);
+    }
+
+    html += `<div id="worktreeBranchPicker" style="display:${sourceId ? 'block' : 'none'}">
+      <div class="worktree-section-label">Branch</div>
+      <div class="worktree-branch-type">
+        <label><input type="radio" name="worktreeBranchType" value="new" checked onchange="app._onWorktreeBranchTypeChange(this.value)"> New branch</label>
+        <label><input type="radio" name="worktreeBranchType" value="existing" onchange="app._onWorktreeBranchTypeChange(this.value)"> Existing</label>
+      </div>
+      <input type="text" id="worktreeNewBranchInput" class="form-input" placeholder="feature/my-thing" oninput="app._updateWorktreePathPreview()">
+      <select id="worktreeExistingBranchSelect" class="form-select" style="display:none" onchange="app._updateWorktreePathPreview()"><option value="">Loading...</option></select>
+      <div class="worktree-path-preview" id="worktreePathPreview"></div>
+      <div class="worktree-creator-actions">
+        <button class="btn btn-secondary" onclick="app.closeWorktreeCreator()">Cancel</button>
+        <button class="btn btn-primary" onclick="app._submitCreateWorktree()">Create</button>
+      </div>
+    </div>`;
+
+    body.innerHTML = html;
+  }
+
+  async _loadWorktreeBranches(sessionId) {
+    const picker = document.getElementById('worktreeBranchPicker');
+    if (picker) picker.style.display = 'block';
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/worktree/branches`);
+      const data = await res.json();
+      if (!data.success) return;
+      const sel = document.getElementById('worktreeExistingBranchSelect');
+      if (sel) sel.innerHTML = data.branches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('');
+    } catch {}
+  }
+
+  _onWorktreeBranchTypeChange(type) {
+    const newInput = document.getElementById('worktreeNewBranchInput');
+    const existSel = document.getElementById('worktreeExistingBranchSelect');
+    if (newInput) newInput.style.display = type === 'new' ? '' : 'none';
+    if (existSel) existSel.style.display = type === 'existing' ? '' : 'none';
+    this._updateWorktreePathPreview();
+  }
+
+  _updateWorktreePathPreview() {
+    const type = document.querySelector('input[name="worktreeBranchType"]:checked')?.value ?? 'new';
+    const branch = type === 'new'
+      ? (document.getElementById('worktreeNewBranchInput')?.value ?? '')
+      : (document.getElementById('worktreeExistingBranchSelect')?.value ?? '');
+    const preview = document.getElementById('worktreePathPreview');
+    if (preview) preview.textContent = branch ? `Path: ../project-${branch.replace(/\//g, '-')}` : '';
+  }
+
+  async _resumeWorktree(id) {
+    this.closeWorktreeCreator();
+    try {
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) this.selectSession(data.session.id);
+      else alert('Failed to resume worktree: ' + (data.error || 'Unknown error'));
+    } catch (err) { alert('Failed to resume worktree: ' + err.message); }
+  }
+
+  async _submitCreateWorktree() {
+    const sourceId = this._worktreeCreatorSourceId;
+    if (!sourceId) { alert('Please select a source session'); return; }
+    const type = document.querySelector('input[name="worktreeBranchType"]:checked')?.value ?? 'new';
+    const isNew = type === 'new';
+    const branch = (isNew
+      ? document.getElementById('worktreeNewBranchInput')?.value
+      : document.getElementById('worktreeExistingBranchSelect')?.value
+    )?.trim() ?? '';
+    if (!branch) { alert('Please enter a branch name'); return; }
+    const btn = document.querySelector('#worktreeCreatorBody .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sourceId)}/worktree`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch, isNew }),
+      });
+      const data = await res.json();
+      if (data.success) { this.closeWorktreeCreator(); this.selectSession(data.session.id); }
+      else {
+        alert('Failed to create worktree: ' + (data.error || 'Unknown error'));
+        if (btn) { btn.disabled = false; btn.textContent = 'Create'; }
+      }
+    } catch (err) {
+      alert('Failed to create worktree: ' + err.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Create'; }
+    }
+  }
+
+  _onWorktreeSessionEnded(data) {
+    this._pendingWorktreeCleanup = data;
+    document.getElementById('worktreeCleanupBranch').textContent = data.worktreeBranch;
+    const originSession = data.worktreeOriginId ? this.sessions.get(data.worktreeOriginId) : null;
+    document.getElementById('worktreeCleanupMergeTarget').textContent =
+      originSession ? this.getSessionName(originSession) : 'origin';
+    const out = document.getElementById('worktreeCleanupOutput');
+    out.style.display = 'none';
+    out.textContent = '';
+    document.getElementById('worktreeCleanupModal').classList.add('active');
+  }
+
+  _closeWorktreeCleanupModal() {
+    document.getElementById('worktreeCleanupModal').classList.remove('active');
+    this._pendingWorktreeCleanup = null;
+  }
+
+  async worktreeCleanupRemove() {
+    const data = this._pendingWorktreeCleanup;
+    if (!data) return;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(data.id)}/worktree`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: false }),
+      });
+      const result = await res.json();
+      if (result.dirty) {
+        if (!confirm('The worktree has uncommitted changes. Remove anyway?')) return;
+        await fetch(`/api/sessions/${encodeURIComponent(data.id)}/worktree`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: true }),
+        });
+      }
+      this._closeWorktreeCleanupModal();
+    } catch (err) { alert('Failed to remove worktree: ' + err.message); }
+  }
+
+  async worktreeCleanupKeep() {
+    const data = this._pendingWorktreeCleanup;
+    if (!data) return;
+    const originSession = data.worktreeOriginId ? this.sessions.get(data.worktreeOriginId) : null;
+    const projectName = originSession?.workingDir?.split('/').pop() ?? 'project';
+    try {
+      await fetch('/api/worktrees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: data.worktreePath,
+          branch: data.worktreeBranch,
+          originSessionId: data.worktreeOriginId ?? '',
+          projectName,
+        }),
+      });
+    } catch {}
+    this._closeWorktreeCleanupModal();
+  }
+
+  async worktreeCleanupMerge() {
+    const data = this._pendingWorktreeCleanup;
+    if (!data) return;
+    const originSession = data.worktreeOriginId ? this.sessions.get(data.worktreeOriginId) : null;
+    if (!originSession) { alert('Origin session not found. Cannot merge.'); return; }
+    const out = document.getElementById('worktreeCleanupOutput');
+    out.style.display = 'block';
+    out.textContent = 'Merging...';
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(originSession.id)}/worktree/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch: data.worktreeBranch }),
+      });
+      const result = await res.json();
+      out.textContent = result.success
+        ? (result.output || 'Merge successful.')
+        : ('Merge failed: ' + (result.error || 'Unknown error') + '\n\nWorktree kept on disk.');
+      if (result.success) setTimeout(() => this._closeWorktreeCleanupModal(), 2000);
+    } catch (err) {
+      out.textContent = 'Merge error: ' + err.message + '\n\nWorktree kept on disk.';
+    }
   }
 
   async saveSessionName() {
