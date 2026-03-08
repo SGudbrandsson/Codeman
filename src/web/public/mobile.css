@@ -2192,14 +2192,21 @@ html.mobile-init .file-browser-panel {
 /* Textarea wrapper — relative so inset buttons are absolute */
 .compose-textarea-wrap {
   position: relative;
+  border: 1px solid #1a1a2e;
+  border-radius: 12px;
+  background: #0d0d0d;
+  transition: border-color 0.15s;
+}
+.compose-textarea-wrap:focus-within {
+  border-color: #3b82f6;
 }
 .compose-textarea {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  background: #0d0d0d;
+  background: transparent;
   color: #e2e8f0;
-  border: 1px solid #1a1a2e;
+  border: none;
   border-radius: 12px;
   /* left padding leaves room for + btn; right padding leaves room for send btn */
   padding: 10px 52px 10px 44px;
@@ -2214,7 +2221,6 @@ html.mobile-init .file-browser-panel {
 }
 .compose-textarea:focus {
   outline: none;
-  border-color: #3b82f6;
 }
 
 /* Inset buttons inside textarea */
