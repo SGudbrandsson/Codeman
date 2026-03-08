@@ -513,6 +513,12 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
+## Full Feature Reference
+
+For exhaustive feature documentation, configuration details, and differences from the upstream fork, see **[FEATURES.md](./FEATURES.md)**.
+
+---
+
 <p align="center">
   <strong>Track sessions. Visualize agents. Control respawn. Let it run while you sleep.</strong>
 </p>
