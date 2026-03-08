@@ -62,6 +62,12 @@ export interface SessionConfig {
   id: string;
   /** Working directory for the session */
   workingDir: string;
+  /** Path to git worktree directory if this is a worktree session */
+  worktreePath?: string;
+  /** Git branch checked out in this worktree */
+  worktreeBranch?: string;
+  /** Session ID that spawned this worktree session */
+  worktreeOriginId?: string;
   /** Timestamp when session was created */
   createdAt: number;
 }
@@ -83,6 +89,12 @@ export interface SessionState {
   status: SessionStatus;
   /** Working directory path */
   workingDir: string;
+  /** Path to git worktree directory if this is a worktree session */
+  worktreePath?: string;
+  /** Git branch checked out in this worktree */
+  worktreeBranch?: string;
+  /** Session ID that spawned this worktree session */
+  worktreeOriginId?: string;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */
