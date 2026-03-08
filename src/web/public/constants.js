@@ -282,6 +282,12 @@ const SSE_EVENTS = {
   PLAN_STARTED: 'plan:started',
   PLAN_CANCELLED: 'plan:cancelled',
   PLAN_COMPLETED: 'plan:completed',
+
+  // Update notifications
+  UPDATE_AVAILABLE: 'update:available',
+  UPDATE_PROGRESS: 'update:progress',
+  UPDATE_COMPLETE: 'update:complete',
+  UPDATE_FAILED: 'update:failed',
 };
 
 // ═══════════════════════════════════════════════════════════════
