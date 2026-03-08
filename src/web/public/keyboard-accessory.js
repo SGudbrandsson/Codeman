@@ -604,6 +604,10 @@ const KeyboardAccessoryBar = {
   }
 };
 
+// Expose a static-style instance reference so InputPanel can call
+// KeyboardAccessoryBar.instance.setComposeActive() without needing a separate variable.
+KeyboardAccessoryBar.instance = KeyboardAccessoryBar;
+
 // ═══════════════════════════════════════════════════════════════
 // Accessibility: Focus Trap for Modals
 // ═══════════════════════════════════════════════════════════════
