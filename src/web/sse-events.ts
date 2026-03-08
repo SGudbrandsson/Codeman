@@ -299,6 +299,17 @@ export const CaseCreated = 'case:created' as const;
 /** Existing directory linked as a case. */
 export const CaseLinked = 'case:linked' as const;
 
+// ─── Update notifications ─────────────────────────────────────────────────────
+
+/** A new version of Codeman is available. */
+export const UpdateAvailable = 'update:available' as const;
+/** Update download/install progress. */
+export const UpdateProgress = 'update:progress' as const;
+/** Update completed successfully. */
+export const UpdateComplete = 'update:complete' as const;
+/** Update failed. */
+export const UpdateFailed = 'update:failed' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -444,4 +455,10 @@ export const SseEvent = {
   // Cases
   CaseCreated,
   CaseLinked,
+
+  // Update notifications
+  UpdateAvailable,
+  UpdateProgress,
+  UpdateComplete,
+  UpdateFailed,
 } as const;
