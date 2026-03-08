@@ -135,6 +135,8 @@ export interface ClaudeMessage {
     usage?: {
       input_tokens: number;
       output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
     };
   };
   /** Final result text (on result messages) */
@@ -279,6 +281,8 @@ export class Session extends EventEmitter {
   // Token tracking for auto-clear
   private _totalInputTokens: number = 0;
   private _totalOutputTokens: number = 0;
+  private _totalCacheReadTokens: number = 0;
+  private _totalCacheCreationTokens: number = 0;
 
   // Auto-compact/auto-clear automation (extracted to SessionAutoOps)
   private _autoOps!: SessionAutoOps;
@@ -843,7 +847,13 @@ export class Session extends EventEmitter {
       tokens: {
         input: this._totalInputTokens,
         output: this._totalOutputTokens,
-        total: this._totalInputTokens + this._totalOutputTokens,
+        cacheRead: this._totalCacheReadTokens,
+        cacheCreation: this._totalCacheCreationTokens,
+        total:
+          this._totalInputTokens +
+          this._totalOutputTokens +
+          this._totalCacheReadTokens +
+          this._totalCacheCreationTokens,
       },
       autoClear: {
         enabled: this._autoOps.autoClearEnabled,
@@ -1652,6 +1662,14 @@ export class Session extends EventEmitter {
               }
               if (outputDelta > 0 && outputDelta <= MAX_TOKENS_PER_MESSAGE) {
                 this._totalOutputTokens += outputDelta;
+              }
+              const cacheReadDelta = msg.message.usage.cache_read_input_tokens || 0;
+              const cacheCreationDelta = msg.message.usage.cache_creation_input_tokens || 0;
+              if (cacheReadDelta > 0 && cacheReadDelta <= MAX_TOKENS_PER_MESSAGE) {
+                this._totalCacheReadTokens += cacheReadDelta;
+              }
+              if (cacheCreationDelta > 0 && cacheCreationDelta <= MAX_TOKENS_PER_MESSAGE) {
+                this._totalCacheCreationTokens += cacheCreationDelta;
               }
 
               // Check if we should auto-compact or auto-clear
