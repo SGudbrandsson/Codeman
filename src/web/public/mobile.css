@@ -1170,6 +1170,7 @@ html.mobile-init .file-browser-panel {
     position: relative;
     overflow: visible; /* Must not be hidden — blocks touch scroll on viewport */
     touch-action: pan-y;
+    will-change: auto; /* No compositor isolation needed on mobile — saves GPU memory */
   }
 
   .terminal-container .xterm {
