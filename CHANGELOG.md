@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.4
+
+### Patch Changes
+
+- Redesign mobile compose panel with auto-growing textarea, inset + and send buttons, multi-image thumbnail support, slash command popup, and pencil icon replacing lock
+
 ## 0.5.3
 
 ### Patch Changes

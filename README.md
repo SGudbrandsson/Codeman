@@ -109,7 +109,7 @@ The security design addresses all 6 critical QR auth flaws identified in ["Demys
 ### Touch-Optimized Interface
 
 - **Keyboard accessory bar** — Tab, arrow up/down, `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
-- **Compose panel** — tap the lock icon to open a native textarea above the keyboard for drafting longer messages. Tap the blue send button to dispatch the text and return to the terminal. Includes an **image picker** button — select any photo from your gallery, it uploads to the server and sends the file path to Claude so it can read the image directly
+- **Compose panel** — tap the pencil icon to open a full-width auto-growing textarea above the keyboard. The `+` button (inset bottom-left) opens an action sheet to **Take Photo**, **Photo Library**, or **Attach File** — multiple images attach as thumbnails with tap-to-preview, long-press-to-replace, and `×` to remove. The send button (↑ circle, bottom-right) dispatches all queued images then the text. Type `/` to get an inline slash command popup filtered to commands available in the current session
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
