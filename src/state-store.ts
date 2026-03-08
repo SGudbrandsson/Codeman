@@ -552,6 +552,16 @@ export class StateStore {
     return this.state.config;
   }
 
+  /** Returns user settings from ~/.codeman/settings.json, or {} if not found. */
+  getSettings(): Record<string, unknown> {
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
+    try {
+      return JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+
   /** Updates configuration (partial merge) and triggers a debounced save. */
   setConfig(config: Partial<AppState['config']>) {
     this.state.config = { ...this.state.config, ...config };
