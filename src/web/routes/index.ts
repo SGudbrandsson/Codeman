@@ -16,3 +16,5 @@ export { registerRalphRoutes } from './ralph-routes.js';
 export { registerPlanRoutes } from './plan-routes.js';
 export { registerCommandsRoutes } from './commands-routes.js';
 export { registerUpdateRoutes } from './update-routes.js';
+export { registerWorktreeSessionRoutes } from './worktree-session-routes.js';
+export { registerWorktreeRoutes } from './worktree-routes.js';
