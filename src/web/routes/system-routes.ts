@@ -104,6 +104,23 @@ export function registerSystemRoutes(
 
   app.get('/api/tunnel/status', async () => ctx.tunnelManager.getStatus());
 
+  app.get('/api/tunnel/info', async () => {
+    const status = ctx.tunnelManager.getStatus();
+    const sseClients = ctx.getSseClientCount();
+    const sessions: Array<{ ip: string; ua: string; createdAt: number; method: string }> = [];
+    if (ctx.authSessions) {
+      for (const [, record] of ctx.authSessions) {
+        sessions.push({ ip: record.ip, ua: record.ua, createdAt: record.createdAt, method: record.method });
+      }
+    }
+    return {
+      ...status,
+      sseClients,
+      authEnabled: !!process.env.CODEMAN_PASSWORD,
+      authSessions: sessions,
+    };
+  });
+
   app.get('/api/tunnel/qr', async (_req, reply) => {
     const url = ctx.tunnelManager.getUrl();
     if (!url) {

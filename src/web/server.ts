@@ -217,6 +217,8 @@ export class WebServer extends EventEmitter {
    * or `null` meaning "receive all events" (backwards-compatible default).
    */
   private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
+  /** SSE clients connecting from non-localhost (i.e. through tunnel) */
+  private remoteSseClients: Set<FastifyReply> = new Set();
   /** Clients with backpressure — skip writes until 'drain' fires */
   private backpressuredClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -505,6 +507,7 @@ export class WebServer extends EventEmitter {
       batchTerminalData: this.batchTerminalData.bind(this),
       broadcastSessionStateDebounced: this.broadcastSessionStateDebounced.bind(this),
       batchTaskUpdate: this.batchTaskUpdate.bind(this),
+      getSseClientCount: () => this.remoteSseClients.size,
       // RespawnPort
       respawnControllers: this.respawnControllers,
       respawnTimers: this.respawnTimers,
@@ -620,6 +623,12 @@ export class WebServer extends EventEmitter {
 
       this.sseClients.set(reply, sessionFilter);
 
+      // Track tunnel clients — cloudflared proxies locally so req.ip is always
+      // 127.0.0.1; detect tunnel traffic via Cf-Connecting-Ip header instead.
+      if (req.headers['cf-connecting-ip']) {
+        this.remoteSseClients.add(reply);
+      }
+
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
@@ -636,6 +645,7 @@ export class WebServer extends EventEmitter {
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
+        this.remoteSseClients.delete(reply);
         this.backpressuredClients.delete(reply);
       });
     });
@@ -1947,6 +1957,7 @@ export class WebServer extends EventEmitter {
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     } catch {
       this.sseClients.delete(reply);
+      this.remoteSseClients.delete(reply);
     }
   }
 
@@ -1976,6 +1987,7 @@ export class WebServer extends EventEmitter {
       }
     } catch {
       this.sseClients.delete(reply);
+      this.remoteSseClients.delete(reply);
       this.backpressuredClients.delete(reply);
     }
   }
@@ -2316,6 +2328,7 @@ export class WebServer extends EventEmitter {
     // Remove dead clients
     for (const client of deadClients) {
       this.sseClients.delete(client);
+      this.remoteSseClients.delete(client);
       this.backpressuredClients.delete(client);
     }
 
@@ -2704,6 +2717,7 @@ export class WebServer extends EventEmitter {
       }
     }
     this.sseClients.clear();
+    this.remoteSseClients.clear();
     this.backpressuredClients.clear();
 
     // Clear per-session batch timers

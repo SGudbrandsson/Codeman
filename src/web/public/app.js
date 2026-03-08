@@ -351,6 +351,9 @@ class CodemanApp {
     this.imagePopups = new Map(); // Map<imageId, { element, sessionId, filePath }>
     this.imagePopupZIndex = ZINDEX_IMAGE_POPUP_BASE;
 
+    // Tunnel indicator state
+    this._tunnelUrl = null;
+
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
@@ -519,6 +522,8 @@ class CodemanApp {
     });
     // Register service worker for push notifications
     this.registerServiceWorker();
+    // Fetch tunnel status for header indicator (desktop only)
+    this.loadTunnelStatus();
     // Share a single settings fetch between both consumers
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
@@ -2617,8 +2622,10 @@ class CodemanApp {
   // Tunnel
   _onTunnelStarted(data) {
     console.log('[Tunnel] Started:', data.url);
+    this._tunnelUrl = data.url;
     this._dismissTunnelConnecting();
     this._updateTunnelUrlDisplay(data.url);
+    this._updateTunnelIndicator(true);
     const welcomeVisible = document.getElementById('welcomeOverlay')?.classList.contains('visible');
     if (welcomeVisible) {
       // On welcome screen: QR appears inline, expanded first
@@ -2634,9 +2641,12 @@ class CodemanApp {
 
   _onTunnelStopped() {
     console.log('[Tunnel] Stopped');
+    this._tunnelUrl = null;
     this._dismissTunnelConnecting();
     this._updateTunnelUrlDisplay(null);
     this._updateWelcomeTunnelBtn(false);
+    this._updateTunnelIndicator(false);
+    this.closeTunnelPanel();
     this.closeTunnelQR();
   }
 
@@ -6471,11 +6481,15 @@ class CodemanApp {
       const res = await fetch('/api/tunnel/status');
       const status = await res.json();
       const active = status.running && status.url;
-      this._updateTunnelUrlDisplay(active ? status.url : null);
-      this._updateWelcomeTunnelBtn(!!active, active ? status.url : null);
+      this._tunnelUrl = active ? status.url : null;
+      this._updateTunnelUrlDisplay(this._tunnelUrl);
+      this._updateWelcomeTunnelBtn(!!active, this._tunnelUrl);
+      this._updateTunnelIndicator(!!active);
     } catch {
+      this._tunnelUrl = null;
       this._updateTunnelUrlDisplay(null);
       this._updateWelcomeTunnelBtn(false);
+      this._updateTunnelIndicator(false);
     }
   }
 
@@ -6800,6 +6814,214 @@ class CodemanApp {
     if (qrWrap) {
       clearTimeout(this._welcomeQrShrinkTimer);
       qrWrap.classList.toggle('expanded');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Tunnel Header Indicator & Panel (desktop only)
+  // ═══════════════════════════════════════════════════════════════
+
+  _updateTunnelIndicator(active) {
+    if (MobileDetection.getDeviceType() === 'mobile') return;
+    const indicator = document.getElementById('tunnelIndicator');
+    if (!indicator) return;
+    indicator.style.display = active ? 'flex' : 'none';
+    indicator.classList.remove('connecting');
+  }
+
+  toggleTunnelPanel() {
+    const existing = document.getElementById('tunnelPanel');
+    if (existing) {
+      this.closeTunnelPanel();
+      return;
+    }
+    this._openTunnelPanel();
+  }
+
+  async _openTunnelPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'tunnel-panel';
+    panel.id = 'tunnelPanel';
+    panel.innerHTML = `
+      <div class="tunnel-panel-header">
+        <h3>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          Cloudflare Tunnel
+          <span class="tunnel-panel-status" id="tunnelPanelStatus">Loading...</span>
+        </h3>
+      </div>
+      <div class="tunnel-panel-body" id="tunnelPanelBody">
+        <div style="font-size:12px;color:var(--text-muted);padding:8px 0">Loading...</div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    // Close on outside click
+    this._tunnelPanelClickHandler = (e) => {
+      if (!panel.contains(e.target) && e.target.id !== 'tunnelIndicator' && !e.target.closest('.tunnel-indicator')) {
+        this.closeTunnelPanel();
+      }
+    };
+    setTimeout(() => document.addEventListener('click', this._tunnelPanelClickHandler), 0);
+
+    // Close on Escape
+    this._tunnelPanelEscHandler = (e) => { if (e.key === 'Escape') this.closeTunnelPanel(); };
+    document.addEventListener('keydown', this._tunnelPanelEscHandler);
+
+    // Fetch tunnel info
+    try {
+      const res = await fetch('/api/tunnel/info');
+      const info = await res.json();
+      this._renderTunnelPanel(info);
+    } catch {
+      const body = document.getElementById('tunnelPanelBody');
+      if (body) body.innerHTML = '<div style="font-size:12px;color:var(--red);padding:8px 0">Failed to load tunnel info</div>';
+    }
+  }
+
+  _renderTunnelPanel(info) {
+    const statusEl = document.getElementById('tunnelPanelStatus');
+    const body = document.getElementById('tunnelPanelBody');
+    if (!statusEl || !body) return;
+
+    statusEl.textContent = info.running ? 'Connected' : 'Offline';
+    statusEl.className = 'tunnel-panel-status' + (info.running ? '' : ' offline');
+
+    let html = '';
+
+    // URL section
+    if (info.url) {
+      html += `
+        <div class="tunnel-panel-section">
+          <div class="tunnel-panel-label">URL</div>
+          <div class="tunnel-panel-url" id="tunnelPanelUrl" title="Click to copy">${escapeHtml(info.url)}</div>
+        </div>`;
+    }
+
+    // Clients section
+    html += `
+      <div class="tunnel-panel-section">
+        <div class="tunnel-panel-label">Connections</div>
+        <div class="tunnel-panel-stat">
+          <span>Remote Clients</span>
+          <span class="tunnel-panel-stat-value">${info.sseClients}</span>
+        </div>`;
+
+    if (info.authEnabled) {
+      html += `
+        <div class="tunnel-panel-stat">
+          <span>Auth Sessions</span>
+          <span class="tunnel-panel-stat-value">${info.authSessions.length}</span>
+        </div>`;
+    }
+    html += '</div>';
+
+    // Auth sessions detail
+    if (info.authEnabled && info.authSessions.length > 0) {
+      html += '<div class="tunnel-panel-section"><div class="tunnel-panel-label">Authenticated Devices</div>';
+      for (const s of info.authSessions) {
+        const ua = s.ua || 'Unknown';
+        const browser = ua.match(/Chrome|Firefox|Safari|Edge|Mobile/)?.[0] || 'Browser';
+        const ago = this._formatTimeAgo(s.createdAt);
+        html += `
+          <div class="tunnel-panel-session">
+            <span class="tunnel-panel-session-dot"></span>
+            <span class="tunnel-panel-session-info" title="${escapeHtml(ua)}">${escapeHtml(browser)} &middot; ${escapeHtml(s.ip)} &middot; ${ago}</span>
+            <span class="tunnel-panel-session-method">${s.method}</span>
+          </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Actions
+    html += '<div class="tunnel-panel-actions">';
+    if (info.running) {
+      html += `
+        <button class="tunnel-panel-btn btn-qr" onclick="app.showTunnelQR();app.closeTunnelPanel()">QR Code</button>
+        <button class="tunnel-panel-btn btn-stop" onclick="app._tunnelPanelToggle(false)">Stop Tunnel</button>`;
+    } else {
+      html += `<button class="tunnel-panel-btn btn-start" onclick="app._tunnelPanelToggle(true)">Start Tunnel</button>`;
+    }
+    html += '</div>';
+
+    // Revoke all sessions button
+    if (info.authEnabled && info.authSessions.length > 0) {
+      html += `
+        <div style="padding-top:8px">
+          <button class="tunnel-panel-btn btn-revoke" style="width:100%" onclick="app._tunnelPanelRevokeAll()">Revoke All Sessions</button>
+        </div>`;
+    }
+
+    body.innerHTML = html;
+
+    // Bind URL copy handler
+    const urlEl = document.getElementById('tunnelPanelUrl');
+    if (urlEl) {
+      urlEl.onclick = () => {
+        navigator.clipboard.writeText(info.url).then(() => this.showToast('Tunnel URL copied', 'success'));
+      };
+    }
+  }
+
+  _formatTimeAgo(timestamp) {
+    const diff = Date.now() - timestamp;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  async _tunnelPanelToggle(enable) {
+    try {
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tunnelEnabled: enable }),
+      });
+      if (enable) {
+        this._updateTunnelIndicator(false);
+        const indicator = document.getElementById('tunnelIndicator');
+        if (indicator) {
+          indicator.style.display = 'flex';
+          indicator.classList.add('connecting');
+        }
+        this.showToast('Tunnel starting...', 'info');
+        this._showTunnelConnecting();
+        this._pollTunnelStatus();
+      } else {
+        this.showToast('Tunnel stopped', 'info');
+      }
+      this.closeTunnelPanel();
+    } catch {
+      this.showToast('Failed to toggle tunnel', 'error');
+    }
+  }
+
+  async _tunnelPanelRevokeAll() {
+    try {
+      await fetch('/api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      this.showToast('All sessions revoked', 'success');
+      // Refresh panel
+      const res = await fetch('/api/tunnel/info');
+      const info = await res.json();
+      this._renderTunnelPanel(info);
+    } catch {
+      this.showToast('Failed to revoke sessions', 'error');
+    }
+  }
+
+  closeTunnelPanel() {
+    const panel = document.getElementById('tunnelPanel');
+    if (panel) panel.remove();
+    if (this._tunnelPanelClickHandler) {
+      document.removeEventListener('click', this._tunnelPanelClickHandler);
+      this._tunnelPanelClickHandler = null;
+    }
+    if (this._tunnelPanelEscHandler) {
+      document.removeEventListener('keydown', this._tunnelPanelEscHandler);
+      this._tunnelPanelEscHandler = null;
     }
   }
 
