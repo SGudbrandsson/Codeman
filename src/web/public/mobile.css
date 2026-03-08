@@ -2420,3 +2420,16 @@ html.mobile-init .file-browser-panel {
   cursor: pointer;
   margin-top: 4px;
 }
+
+@media (max-width: 768px) {
+  .update-badge-mobile {
+    top: 0;
+    right: 0;
+    width: 10px;
+    height: 10px;
+  }
+
+  .update-actions {
+    flex-direction: column;
+  }
+}
