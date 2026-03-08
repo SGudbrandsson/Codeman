@@ -2218,9 +2218,13 @@ html.mobile-init .file-browser-panel {
   /* max-height set dynamically by JS */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
 }
 .compose-textarea:focus {
   outline: none;
+}
+.compose-textarea::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/iOS */
 }
 
 /* Inset buttons inside textarea */
