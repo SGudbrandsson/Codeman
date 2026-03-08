@@ -639,6 +639,36 @@ body {
 
 .btn-hamburger { display: flex; }
 
+/* Session drawer — desktop (non-touch) */
+.session-drawer {
+  position: fixed;
+  top: 48px;
+  right: 0;
+  width: 280px;
+  height: calc(100vh - 48px);
+  background: var(--bg-secondary, #1e1e2e);
+  border-left: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  z-index: 1200;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.session-drawer.open {
+  transform: translateX(0);
+}
+.session-drawer-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1199;
+}
+.session-drawer-overlay.open {
+  display: block;
+}
+
 /* Mobile context-window usage pill — shown next to hamburger on small screens */
 .mobile-ctx-pill {
   --ctx-color: #22c55e;
