@@ -156,7 +156,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 **Mobile accessory bar** default buttons: `tab`, `scroll-up`, `scroll-down`, `commands`, `paste`, `copy`. The `dismiss` button was removed. Configured via `hotbarButtons` in localStorage settings.
 
-**Mobile compose panel** (lock icon): native textarea overlay above the accessory bar (`z-index: 52`, `position: fixed`). Send clears textarea, closes panel, and sends a trailing `\r`. Image button uploads to `POST /api/screenshots` and sends the saved file path to the session. Panel transforms with the accessory bar when keyboard opens — updated in all three layout paths in `mobile-handlers.js` (`updateLayout`, `resetLayout`).
+**Mobile compose panel** (pencil icon): native textarea overlay above the accessory bar (`z-index: 52`, `position: fixed`). Send clears textarea, closes panel, and sends a trailing `\r`. Image button uploads to `POST /api/screenshots` and sends the saved file path to the session. Panel transforms with the accessory bar when keyboard opens — updated in all three layout paths in `mobile-handlers.js` (`updateLayout`, `resetLayout`). Slash command popup merges `BUILTIN_CLAUDE_COMMANDS` (17 built-ins defined in `app.js` before `InputPanel`) with session-specific plugin commands from `app._sessionCommands`; session commands take priority and are deduplicated by cmd name. Supports substring and subsequence matching.
 
 ### Security
 
