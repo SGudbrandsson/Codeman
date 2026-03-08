@@ -2157,31 +2157,29 @@ html.mobile-init .file-browser-panel {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  z-index: 1500;
+  z-index: 1499;
 }
 .session-drawer-overlay.open { display: block; }
 
 .session-drawer {
   position: fixed;
-  bottom: 0;
-  left: 0;
+  top: var(--header-height, 48px);
   right: 0;
-  background: #111;
-  border-radius: 12px 12px 0 0;
-  border-top: 1px solid #1a1a2e;
-  z-index: 1501;
-  transform: translateY(100%);
-  transition: transform 0.25s ease;
-  max-height: 70vh;
+  width: 260px;
+  max-height: 60vh;
   overflow-y: auto;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  border-radius: 0 0 0 8px;
+  z-index: 1500;
 }
-.session-drawer.open { transform: translateY(0); }
+.session-drawer.open { transform: translateX(0); }
+
+.touch-device .session-drawer-overlay { z-index: 1499; }
+.touch-device .session-drawer { z-index: 1500; }
 
 .session-drawer-handle {
-  width: 36px; height: 4px;
-  background: #333; border-radius: 2px;
-  margin: 10px auto 0;
+  display: none;
 }
 .session-drawer-title {
   font-size: 12px; font-weight: 600; color: #666;
