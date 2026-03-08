@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.6.2
+
+### Patch Changes
+
+- Fix context pill percentage to include cache tokens in context window usage total
+
 ## 0.6.1
 
 ### Patch Changes
