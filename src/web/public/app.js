@@ -14114,7 +14114,10 @@ const SessionDrawer = {
         mergeBtn.textContent = 'merge';
         mergeBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (wtSessions[0]) app.openWorktreeCleanupForSession(wtSessions[0].id);
+          if (wtSessions[0]) {
+            SessionDrawer.close();
+            app.openWorktreeCleanupForSession(wtSessions[0].id);
+          }
         });
 
         const wtAddBtn = document.createElement('button');
@@ -14243,7 +14246,6 @@ const SessionDrawer = {
 
     const popover = document.createElement('div');
     popover.className = 'drawer-quick-add';
-    drawer.style.position = 'relative';
 
     // Title
     const title = document.createElement('div');
@@ -14292,14 +14294,20 @@ const SessionDrawer = {
     }
     popover.appendChild(row);
 
-    // Position: below the anchor, right-aligned to drawer
+    // Position: use fixed positioning relative to viewport so drawer overflow-y doesn't clip it
     const anchorRect = anchorEl.getBoundingClientRect();
-    const drawerRect = drawer.getBoundingClientRect();
-    popover.style.position = 'absolute';
-    popover.style.top = (anchorRect.bottom - drawerRect.top + 4) + 'px';
-    popover.style.right = '8px';
+    popover.style.position = 'fixed';
+    // Place below the anchor; if it would go off the bottom, flip above
+    const popoverHeight = 100; // estimated before insertion
+    const spaceBelow = window.innerHeight - anchorRect.bottom;
+    if (spaceBelow >= popoverHeight) {
+      popover.style.top = (anchorRect.bottom + 4) + 'px';
+    } else {
+      popover.style.bottom = (window.innerHeight - anchorRect.top + 4) + 'px';
+    }
+    popover.style.right = (window.innerWidth - anchorRect.right) + 'px';
 
-    drawer.appendChild(popover);
+    document.body.appendChild(popover);
 
     // Dismiss on outside click
     const dismiss = e => {
