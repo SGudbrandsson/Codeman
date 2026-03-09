@@ -361,17 +361,17 @@
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
           <div class="case-select-group">
-            <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <select id="quickStartCase" class="toolbar-select" title="Select project">
               <option value="testcase">testcase</option>
             </select>
-            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
-            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Case settings">&#x2699;</button>
+            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new project">+</button>
+            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Project settings">&#x2699;</button>
             <div class="case-settings-popover hidden" id="caseSettingsPopover">
               <label class="checkbox-inline">
                 <input type="checkbox" id="caseAgentTeams" onchange="app.onCaseSettingChanged()">
                 <span>Agent Teams</span>
               </label>
-              <span class="form-hint">Enable experimental Agent Teams for new sessions in this case</span>
+              <span class="form-hint">Enable experimental Agent Teams for new sessions in this project</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
@@ -385,11 +385,11 @@
             </svg>
           </button>
           <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;<span class="update-badge update-badge-mobile" id="updateBadgeMobile" style="display:none;" aria-label="Update available"></span></button>
-          <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
+          <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select project">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span id="mobileCaseName">Case</span>
+            <span id="mobileCaseName">Project</span>
           </button>
-          <button class="btn-case-settings-mobile" id="btnCaseSettingsMobile" onclick="app.toggleCaseSettingsMobile()" title="Case settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <button class="btn-case-settings-mobile" id="btnCaseSettingsMobile" onclick="app.toggleCaseSettingsMobile()" title="Project settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <div class="case-settings-popover-mobile hidden" id="caseSettingsPopoverMobile">
             <label class="checkbox-inline">
               <input type="checkbox" id="caseAgentTeamsMobile" onchange="app.onCaseSettingChangedMobile()">
@@ -1148,7 +1148,7 @@
             <div class="form-row">
               <label>Default CLAUDE.md Template</label>
               <input type="text" id="appSettingsClaudeMdPath" placeholder="/path/to/CLAUDE.md template">
-              <span class="form-hint">Used when creating new cases. Leave empty for built-in template.</span>
+              <span class="form-hint">Used when creating new projects. Leave empty for built-in template.</span>
             </div>
             <div class="form-row">
               <label>Default Working Directory</label>
@@ -1397,8 +1397,8 @@
       <div class="modal-backdrop" onclick="app.closeCreateCaseModal()"></div>
       <div class="modal-content modal-lg">
         <div class="modal-header">
-          <h3>Add Case</h3>
-          <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create case">&times;</button>
+          <h3>Add Project</h3>
+          <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create project">&times;</button>
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
@@ -1408,7 +1408,7 @@
           <!-- Create New Tab -->
           <div class="modal-tab-content" id="case-create">
             <div class="form-row">
-              <label>Case Name</label>
+              <label>Project Name</label>
               <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
             </div>
@@ -1420,9 +1420,9 @@
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">
             <div class="form-row">
-              <label>Case Name</label>
+              <label>Project Name</label>
               <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Name to identify this case in Codeman</span>
+              <span class="form-hint">Name to identify this project in Codeman</span>
             </div>
             <div class="form-row">
               <label>Folder Path</label>
@@ -1443,8 +1443,8 @@
       <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>
       <div class="mobile-case-picker-sheet">
         <div class="mobile-case-picker-header">
-          <h3>Select Case</h3>
-          <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close case picker">&times;</button>
+          <h3>Select Project</h3>
+          <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close project picker">&times;</button>
         </div>
         <div class="mobile-case-picker-body">
           <div class="mobile-case-list" id="mobileCaseList">
@@ -1454,7 +1454,7 @@
         <div class="mobile-case-picker-footer">
           <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Create New Case
+            Create New Project
           </button>
         </div>
       </div>
@@ -1604,7 +1604,7 @@
                 <span id="summaryIterations">10</span>
               </div>
               <div class="config-summary-row">
-                <span class="config-label">Case:</span>
+                <span class="config-label">Project:</span>
                 <span id="summaryCase">testcase</span>
               </div>
               <div class="config-summary-row" style="display: none;">
