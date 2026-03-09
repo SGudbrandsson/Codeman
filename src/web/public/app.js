@@ -736,6 +736,10 @@ const _SSE_HANDLER_MAP = [
 
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
+
+  // Transcript streaming
+  [SSE_EVENTS.TRANSCRIPT_BLOCK, '_onTranscriptBlock'],
+  [SSE_EVENTS.TRANSCRIPT_CLEAR, '_onTranscriptClear'],
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -6739,6 +6743,27 @@ class CodemanApp {
     const descEl = document.getElementById('worktreeCleanupDesc');
     if (descEl) descEl.textContent = desc ?? 'Session ended — what should happen to this worktree?';
     document.getElementById('worktreeCleanupModal').classList.add('active');
+  }
+
+  _onTranscriptBlock(data) {
+    const { sessionId, block } = data;
+    if (TranscriptView._sessionId === sessionId &&
+        document.getElementById('transcriptView')?.style.display !== 'none') {
+      TranscriptView.append(block);
+    }
+    if (app._transcriptState?.[sessionId]) {
+      app._transcriptState[sessionId].blocks.push(block);
+    }
+  }
+
+  _onTranscriptClear(data) {
+    const { sessionId } = data;
+    if (app._transcriptState?.[sessionId]) {
+      app._transcriptState[sessionId].blocks = [];
+    }
+    if (TranscriptView._sessionId === sessionId) {
+      TranscriptView.clear();
+    }
   }
 
   _closeWorktreeCleanupModal() {
