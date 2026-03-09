@@ -8697,7 +8697,7 @@ kbd {
   /* Main content area: reserve space at bottom for the two fixed bars.
      CSS var --desktop-compose-height is updated by JS on textarea resize. */
   .main {
-    padding-bottom: calc(var(--desktop-compose-height, 52px) + 40px);
+    padding-bottom: calc(var(--desktop-compose-height, 60px) + 40px);
   }
 
   /* ── Accessory bar ─────────────────────────────────────────── */
@@ -8765,7 +8765,7 @@ kbd {
     font-size: 0.875rem;
     line-height: 1.45;
     resize: none;
-    min-height: 80px; /* ~3 lines at 14px/1.45 line-height + 20px padding */
+    min-height: 44px; /* single line at 14px/1.45 + 20px padding */
     max-height: 200px;
     overflow-y: auto;
     scrollbar-width: none;
