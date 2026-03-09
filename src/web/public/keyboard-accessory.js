@@ -78,7 +78,7 @@ const KeyboardAccessoryBar = {
   },
 
   /** Default hotbar button set */
-  _defaultButtons: ['scroll-up', 'scroll-down', 'commands'],
+  _defaultButtons: ['commands'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
