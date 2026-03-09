@@ -11572,6 +11572,21 @@ class CodemanApp {
     }
   }
 
+  /** Clean up wizard drag document-level listeners (called on SSE reconnect cleanup) */
+  cleanupWizardDragging() {
+    if (this.wizardDragListeners) {
+      document.removeEventListener('mousemove', this.wizardDragListeners.move);
+      document.removeEventListener('mouseup', this.wizardDragListeners.up);
+      if (this.wizardDragListeners.touchMove) {
+        document.removeEventListener('touchmove', this.wizardDragListeners.touchMove);
+        document.removeEventListener('touchend', this.wizardDragListeners.up);
+        document.removeEventListener('touchcancel', this.wizardDragListeners.up);
+      }
+      this.wizardDragListeners = null;
+    }
+    this.wizardDragState = null;
+  }
+
   /** Get teammate color by name */
   getTeammateColor(name) {
     const info = this.teammateMap.get(name);
