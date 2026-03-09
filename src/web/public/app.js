@@ -4577,6 +4577,8 @@ class CodemanApp {
       const res = await fetch('/api/cases');
       const cases = await res.json();
       this.cases = cases;
+      // Re-render drawer if open so project groups appear even if drawer was opened before cases loaded
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
       console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name), 'lastUsedCase:', lastUsedCase);
 
       const select = document.getElementById('quickStartCase');
