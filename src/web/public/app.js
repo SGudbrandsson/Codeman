@@ -429,7 +429,8 @@ const TranscriptView = {
     if (!this._container) return;
     const state = this._sessionId ? this._getState(this._sessionId) : null;
     if (!force && state?.scrolledUp) return;
-    this._container.scrollTop = this._container.scrollHeight;
+    // Use 'instant' to bypass CSS scroll-behavior: smooth so programmatic scroll is immediate
+    this._container.scrollTo({ top: this._container.scrollHeight, behavior: 'instant' });
   },
 
   _appendBlock(block, scroll) {
@@ -461,6 +462,15 @@ const TranscriptView = {
   },
 
   _renderTextBlock(block) {
+    // Skip Claude Code internal command messages (e.g. /compact, /clear) that only contain XML-like tags
+    if (block.role === 'user' && /^<command-message>[^<]*<\/command-message>(\n<command-name>[^<]*<\/command-name>)?\s*$/.test(block.text)) {
+      const nameMatch = block.text.match(/<command-name>([^<]*)<\/command-name>/);
+      const cmdName = nameMatch ? nameMatch[1].trim() : 'command';
+      const pill = document.createElement('div');
+      pill.className = 'tv-command-pill';
+      pill.textContent = '/' + cmdName;
+      return pill;
+    }
     const div = document.createElement('div');
     div.className = 'tv-block tv-block--' + (block.role === 'user' ? 'user' : 'assistant');
     const label = document.createElement('div');
@@ -2584,7 +2594,10 @@ class CodemanApp {
       session.status = 'idle';
       this.renderSessionTabs();
       this.sendPendingCtrlL(data.id);
-      if (data.id === this.activeSessionId) this._updateLocalEchoState();
+      if (data.id === this.activeSessionId) {
+        this._updateLocalEchoState();
+        this._updateSendBtn(false);
+      }
     }
     // Start stuck detection timer (only if no respawn running)
     if (!this.respawnStatus[data.id]?.enabled) {
@@ -2615,7 +2628,10 @@ class CodemanApp {
       }
       this.renderSessionTabs();
       this.sendPendingCtrlL(data.id);
-      if (data.id === this.activeSessionId) this._updateLocalEchoState();
+      if (data.id === this.activeSessionId) {
+        this._updateLocalEchoState();
+        this._updateSendBtn(true);
+      }
     }
     // Clear stuck detection timer
     const timer = this.idleTimers.get(data.id);
@@ -2623,6 +2639,14 @@ class CodemanApp {
       clearTimeout(timer);
       this.idleTimers.delete(data.id);
     }
+  }
+
+  /** Toggle the send button between send (idle) and stop/ESC (working) states */
+  _updateSendBtn(isWorking) {
+    const btn = document.getElementById('composeSendBtn');
+    if (!btn) return;
+    btn.classList.toggle('is-working', isWorking);
+    btn.setAttribute('aria-label', isWorking ? 'Stop (ESC)' : 'Send');
   }
 
   _onSessionAutoClear(data) {
@@ -4529,6 +4553,8 @@ class CodemanApp {
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
     this._updateLocalEchoState();
+    const _switchedSession = this.sessions.get(sessionId);
+    this._updateSendBtn(_switchedSession?.status === 'busy');
 
     // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the
@@ -14157,6 +14183,14 @@ const InputPanel = {
 
   /** Send all queued images then the typed text */
   send() {
+    // If the active session is working, act as a stop button (send ESC to interrupt)
+    if (typeof app !== 'undefined' && app.activeSessionId) {
+      const activeSession = app.sessions?.get(app.activeSessionId);
+      if (activeSession && activeSession.status === 'busy') {
+        app.sendInput('\x1b').catch(() => {});
+        return;
+      }
+    }
     const ta = this._getTextarea();
     if (!ta) return;
     const text = ta.value.trim();
