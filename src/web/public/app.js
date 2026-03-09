@@ -13420,9 +13420,24 @@ const InputPanel = {
       }
     });
 
-    // Plus button
+    // Keyboard: Shift+Enter sends on desktop; plain Enter creates newline
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        this.send();
+      }
+    });
+
+    // Plus button — on desktop skip the mobile action sheet, open file picker directly
     const plusBtn = document.getElementById('composePlusBtn');
-    if (plusBtn) plusBtn.addEventListener('click', () => this._openActionSheet());
+    if (plusBtn) plusBtn.addEventListener('click', () => {
+      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
+      if (isDesktop) {
+        document.getElementById('composeFileAny')?.click();
+      } else {
+        this._openActionSheet();
+      }
+    });
 
     // Send button
     const sendBtn = document.getElementById('composeSendBtn');
@@ -13517,11 +13532,11 @@ const InputPanel = {
     app.sendInput(parts.join('\n') + '\r');
 
     ta.value = '';
-    this._autoGrow(ta);
     this._images = [];
-    this._renderThumbnails();
+    this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
+    this._autoGrow(ta);
     // Desktop: keep panel open (always-visible); mobile: close after send
-    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
+    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
     if (!isDesktop) this.close();
   },
 
