@@ -232,6 +232,9 @@
     <!-- Main Terminal Area -->
     <main class="main">
       <div class="terminal-container" id="terminalContainer"></div>
+      <!-- Transcript web view — shown instead of xterm for Claude Code sessions in web mode -->
+      <div id="transcriptView" class="transcript-view" style="display:none;"
+           role="log" aria-live="polite" aria-label="Claude Code session history"></div>
       <!-- GSD/plugin status line mirror — updated by app.js after each terminal write -->
       <div class="terminal-status-strip" id="terminalStatusStrip" style="display:none;"></div>
       <!-- Elicitation quick-reply panel — shown when Claude asks a numbered question -->
