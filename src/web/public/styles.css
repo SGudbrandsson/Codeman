@@ -15,7 +15,7 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --header-height: 48px;
+  --header-height: 34px;
   --toolbar-height: 40px;
 
   /* Session color palette */
@@ -131,7 +131,7 @@ body {
   display: flex;
   align-items: flex-start;
   min-height: var(--header-height);
-  padding: 0.35rem 0.75rem;
+  padding: 0 0.75rem;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -208,8 +208,8 @@ body {
 .session-tab {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.5rem;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -882,17 +882,30 @@ body {
 
 .btn-hamburger { display: flex; }
 
-/* Session drawer — desktop (non-touch) */
+/* ══════════════════════════════════════════════════════════════
+   Session Drawer
+   ══════════════════════════════════════════════════════════════ */
+
+/* Running dot pulse animation */
+@keyframes dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.5); }
+  60%       { box-shadow: 0 0 0 5px rgba(74, 222, 128, 0); }
+}
+@keyframes dot-pulse-ralph {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
+  60%       { box-shadow: 0 0 0 5px rgba(251, 191, 36, 0); }
+}
+
 .session-drawer {
   position: fixed;
   top: var(--header-height);
   right: 0;
-  width: 280px;
+  width: 300px;
   height: calc(100vh - var(--header-height));
-  background: var(--bg-secondary, #1e1e2e);
-  border-left: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  background: #0d1117;
+  border-left: 1px solid rgba(255,255,255,0.07);
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 1200;
   overflow-y: auto;
   display: flex;
@@ -905,11 +918,522 @@ body {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
   z-index: 1199;
 }
 .session-drawer-overlay.open {
   display: block;
+}
+
+/* ── Drawer title bar ─────────────────────────────────────── */
+.session-drawer-title {
+  display: flex;
+  align-items: center;
+  padding: 14px 14px 12px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #475569;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
+  gap: 8px;
+  user-select: none;
+}
+.session-drawer-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  background: linear-gradient(to bottom, #3b82f6, #1d4ed8);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── List area ────────────────────────────────────────────── */
+.session-drawer-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px 0 4px;
+}
+.session-drawer-list::-webkit-scrollbar { width: 3px; }
+.session-drawer-list::-webkit-scrollbar-track { background: transparent; }
+.session-drawer-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+/* ── Footer — "New Session or Worktree" ───────────────────── */
+.session-drawer-footer {
+  padding: 10px 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
+}
+.session-drawer-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 14px;
+  background: rgba(59,130,246,0.08);
+  border: 1px solid rgba(59,130,246,0.2);
+  border-radius: 8px;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  letter-spacing: 0.01em;
+}
+.session-drawer-new-btn:hover {
+  background: rgba(59,130,246,0.14);
+  border-color: rgba(59,130,246,0.38);
+  color: #93c5fd;
+}
+.session-drawer-new-btn svg { opacity: 0.8; flex-shrink: 0; }
+
+/* ── Grouped drawer: project groups ───────────────────────── */
+.drawer-project-group {
+  margin-bottom: 2px;
+}
+.drawer-project-group + .drawer-project-group {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  padding-top: 4px;
+}
+.drawer-project-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 4px 12px;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: #475569;
+  text-transform: uppercase;
+  user-select: none;
+  cursor: default;
+}
+.drawer-project-header:hover .drawer-add-btn { opacity: 1; }
+.drawer-project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-project-branch {
+  font-size: 0.6rem;
+  font-weight: 500;
+  font-family: monospace;
+  color: #334155;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.drawer-add-btn {
+  opacity: 0.4;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.drawer-add-btn:hover {
+  opacity: 1;
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.3);
+  color: #60a5fa;
+}
+
+/* ── Worktree sub-group ───────────────────────────────────── */
+.drawer-worktree-group {
+  margin: 2px 8px 4px 10px;
+  border-left: 2px solid rgba(6, 182, 212, 0.3);
+  background: rgba(6, 182, 212, 0.025);
+  border-radius: 0 6px 6px 0;
+}
+.drawer-worktree-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px 4px;
+  font-size: 0.68rem;
+  color: #0891b2;
+}
+.drawer-worktree-icon { opacity: 0.7; flex-shrink: 0; }
+.drawer-worktree-branch {
+  flex: 1;
+  font-family: monospace;
+  font-weight: 600;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #22d3ee;
+}
+.drawer-merge-btn {
+  background: none;
+  border: 1px solid rgba(6, 182, 212, 0.25);
+  color: #0891b2;
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.drawer-merge-btn:hover {
+  background: rgba(6, 182, 212, 0.1);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
+/* ── Session rows ─────────────────────────────────────────── */
+.drawer-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 6px;
+  border-left: 2px solid transparent;
+  transition: background 0.13s, border-color 0.13s;
+  position: relative;
+}
+.drawer-session-row:hover {
+  background: rgba(255,255,255,0.05);
+  border-left-color: rgba(255,255,255,0.1);
+}
+.drawer-session-row.active {
+  background: rgba(59,130,246,0.1);
+  border-left-color: #3b82f6;
+}
+.drawer-session-row:hover .drawer-session-close {
+  opacity: 1;
+}
+
+/* Status dot */
+.drawer-session-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #4ade80;
+  transition: background 0.2s;
+}
+.drawer-session-dot.idle { background: #334155; }
+.drawer-session-dot.running {
+  background: #4ade80;
+  animation: dot-pulse 2.2s ease-in-out infinite;
+}
+.drawer-session-dot.ralph {
+  background: #fbbf24;
+  animation: dot-pulse-ralph 2.2s ease-in-out infinite;
+}
+
+/* Session name */
+.drawer-session-name {
+  flex: 1;
+  font-size: 0.815rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.13s;
+}
+.drawer-session-row.active .drawer-session-name { color: #cbd5e1; }
+.drawer-session-row:hover .drawer-session-name { color: #b8c5d6; }
+.drawer-worktree-group .drawer-session-name { font-size: 0.78rem; }
+
+/* ── Mode badges ──────────────────────────────────────────── */
+.session-mode-badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  text-transform: lowercase;
+}
+.session-mode-badge[data-mode="claude"] {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.09);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+}
+.session-mode-badge[data-mode="shell"] {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.07);
+  border: 1px solid rgba(74, 222, 128, 0.2);
+}
+.session-mode-badge[data-mode="opencode"] {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.2);
+}
+
+/* ── Close button ─────────────────────────────────────────── */
+.drawer-session-close {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.drawer-session-close:hover {
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+  opacity: 1;
+}
+
+/* ── JS-rendered footer (New Project / Clone from Git) ────── */
+.drawer-footer {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  gap: 6px;
+}
+.drawer-footer-btn {
+  flex: 1;
+  padding: 7px 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 7px;
+  color: #64748b;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.drawer-footer-btn:hover {
+  background: rgba(255,255,255,0.07);
+  color: #94a3b8;
+  border-color: rgba(255,255,255,0.12);
+}
+
+/* ── Quick-add popover ────────────────────────────────────── */
+.drawer-quick-add {
+  position: fixed;
+  background: #141c2b;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3);
+  z-index: 1300;
+  min-width: 210px;
+}
+.drawer-quick-add-title {
+  font-size: 0.7rem;
+  color: #475569;
+  padding: 0 2px 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.drawer-quick-add-row { display: flex; gap: 6px; }
+.drawer-mode-btn {
+  flex: 1;
+  padding: 10px 4px 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.drawer-mode-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: #cbd5e1;
+  border-color: rgba(255,255,255,0.15);
+}
+.drawer-mode-btn.selected {
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.35);
+  color: #93c5fd;
+}
+.drawer-mode-btn-icon { font-size: 1.1rem; }
+
+/* ── Worktree creation form ───────────────────────────────── */
+.drawer-worktree-form {
+  padding: 8px 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.drawer-form-back {
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+.drawer-form-back:hover { color: #64748b; }
+.drawer-form-label {
+  font-size: 0.68rem;
+  color: #475569;
+  margin-bottom: 3px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.drawer-form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-family: monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.drawer-form-input:focus { border-color: rgba(59,130,246,0.4); }
+.drawer-from-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.drawer-from-chip {
+  padding: 3px 9px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 20px;
+  color: #64748b;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.drawer-from-chip.selected {
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.35);
+  color: #93c5fd;
+}
+.drawer-create-btn {
+  padding: 9px;
+  background: #2563eb;
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.drawer-create-btn:hover { background: #1d4ed8; }
+
+/* ── Close confirmation sheet ─────────────────────────────── */
+.drawer-close-sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #111827;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px 12px 0 0;
+  padding: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.drawer-close-sheet-title {
+  font-size: 0.78rem;
+  color: #64748b;
+  padding: 0 2px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.close-sheet-option {
+  padding: 11px 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255,255,255,0.02);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.close-sheet-option:hover { background: rgba(255,255,255,0.06); }
+.close-sheet-option.danger { border-color: rgba(239,68,68,0.25); }
+.close-sheet-option.danger:hover { background: rgba(239,68,68,0.07); }
+.close-sheet-option-title { font-size: 0.875rem; font-weight: 600; color: #e2e8f0; }
+.close-sheet-option.danger .close-sheet-option-title { color: #f87171; }
+.close-sheet-option-desc { font-size: 0.7rem; color: #475569; }
+.close-sheet-cancel {
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 8px;
+  text-align: center;
+  width: 100%;
+  font-family: inherit;
+}
+.close-sheet-cancel:hover { color: #64748b; }
+
+/* ── Desktop pinned sidebar ───────────────────────────────── */
+@media (min-width: 1024px) {
+  body.sidebar-pinned .session-drawer { transform: translateX(0) !important; }
+  body.sidebar-pinned .session-drawer-overlay { display: none; }
+  body.sidebar-pinned .main-content { margin-right: 300px; }
+  .drawer-pin-btn {
+    background: none;
+    border: none;
+    color: #334155;
+    cursor: pointer;
+    font-size: 1rem;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    margin-left: auto;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .drawer-pin-btn:hover {
+    color: #94a3b8;
+    background: rgba(255,255,255,0.06);
+  }
 }
 
 /* context pill — shown in header on all screen sizes when context data is available */
@@ -995,6 +1519,8 @@ body {
   background: rgba(16, 185, 129, 0.2);
   color: #10b981;
 }
+
+/* (session-mode-badge styles live in the drawer section above) */
 
 /* Timer Banner - Compact */
 .timer-banner {
@@ -3479,6 +4005,14 @@ body {
   backdrop-filter: blur(2px);
 }
 
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(2px);
+  cursor: default;
+}
+
 .modal-content {
   position: relative;
   background: var(--bg-card);
@@ -3644,6 +4178,109 @@ body {
 .btn-case-create-mobile:active {
   background: var(--bg-hover);
 }
+
+/* ── Case Picker Tabs ────────────────────────────────────────── */
+.case-picker-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+.case-picker-tab {
+  flex: 1;
+  padding: 10px 4px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #5a6478;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+.case-picker-tab:hover { color: #94a3b8; }
+.case-picker-tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
+
+/* ── Case Picker Form (New / Clone tabs) ─────────────────────── */
+.case-picker-form {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.case-picker-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.case-picker-form-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.case-picker-input {
+  width: 100%;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.case-picker-input:focus { border-color: #3b82f6; }
+.case-picker-input::placeholder { color: #2d3748; }
+.case-picker-submit {
+  width: 100%;
+  padding: 11px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+  margin-top: 4px;
+}
+.case-picker-submit:hover { background: #2563eb; }
+.case-picker-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Session Drawer Footer ───────────────────────────────────── */
+.drawer-footer {
+  display: flex;
+  gap: 7px;
+  padding: 10px 14px;
+  border-top: 1px solid #1a1a2e;
+  flex-shrink: 0;
+}
+.drawer-footer-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 8px;
+  background: #0d1117;
+  border: 1px solid #1a2333;
+  border-radius: 8px;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.13s;
+  white-space: nowrap;
+}
+.drawer-footer-btn:hover { background: #111827; border-color: #1e293b; color: #64748b; }
+.drawer-footer-btn:active { background: #0f172a; }
 
 .btn-case-create-mobile svg {
   width: 16px;
@@ -4313,6 +4950,103 @@ body {
   color: var(--text);
 }
 
+/* Worktree cleanup modal — action card layout */
+.modal.modal-sm .modal-content {
+  max-width: 340px;
+  padding: 1rem;
+}
+
+.modal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-branch-name {
+  font-family: monospace;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+
+.modal-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
+.modal-subtitle {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+
+.modal-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.modal-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+  width: 100%;
+}
+
+.modal-action-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.modal-action-card.modal-action-danger {
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.modal-action-card.modal-action-danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.action-card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.action-card-desc {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.modal-output {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
 .modal-body {
   padding: 1rem;
 }
@@ -4781,8 +5515,9 @@ kbd {
   align-items: center;
   gap: 2px;
   font-size: 10px;
-  background: var(--color-success, #22c55e);
-  color: #fff;
+  background: rgba(6, 182, 212, 0.08);
+  color: #22d3ee;
+  border: 1px solid rgba(6, 182, 212, 0.35);
   border-radius: 3px;
   padding: 1px 4px;
   max-width: 80px;
@@ -7931,4 +8666,543 @@ kbd {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Desktop Sessions button in toolbar-right */
+.btn-sessions-desktop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 4px 10px;
+  background: rgba(100,116,139,0.12);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-sessions-desktop:hover { background: rgba(100,116,139,0.22); color: var(--text-primary); }
+
+/* ================================================================
+   Desktop Bottom Bar (>=1024px)
+   compose-bar + accessory-bar replace the old .toolbar footer.
+   mobile.css is NOT loaded on desktop — all desktop styles live here.
+   ================================================================ */
+@media (min-width: 1024px) {
+  /* Hide old toolbar footer */
+  footer.toolbar { display: none !important; }
+
+  /* Main content area: reserve space at bottom for the two fixed bars.
+     CSS var --desktop-compose-height is updated by JS on textarea resize. */
+  .main {
+    padding-bottom: calc(var(--desktop-compose-height, 52px) + 40px);
+  }
+
+  /* ── Accessory bar ─────────────────────────────────────────── */
+  .keyboard-accessory-bar {
+    display: flex !important;   /* Always visible on desktop */
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    background: #1a1a1a;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 6px 8px;
+    gap: 8px;
+    align-items: center;
+    z-index: 51;
+    overflow: visible;
+  }
+
+  /* ── Compose bar ───────────────────────────────────────────── */
+  .mobile-input-panel {
+    position: fixed !important;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    background: #111;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 12px;
+    z-index: 52;
+    display: block !important;  /* Override inline style="display:none" */
+  }
+
+  /* Centered 720px textarea wrapper; .expanded overrides to near-full-width */
+  .compose-textarea-wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    position: relative;
+    overflow: hidden; /* clip thumbnail strip to rounded corners */
+    /* Base styles from mobile.css don't load on desktop — replicate here */
+    border: 1px solid #1a1a2e;
+    border-radius: 12px;
+    background: #0d0d0d;
+    transition: border-color 0.15s;
+  }
+  .compose-textarea-wrap:focus-within {
+    border-color: #3b82f6;
+  }
+
+  .compose-textarea-wrap.expanded {
+    max-width: calc(100% - 24px);
+  }
+
+  /* Full textarea base — mobile.css sets these but doesn't load on desktop */
+  .compose-textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    color: #e2e8f0;
+    border: none;
+    border-radius: 12px;
+    /* left: + btn; right: expand + send */
+    padding: 10px 76px 10px 44px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.45;
+    resize: none;
+    min-height: 80px; /* ~3 lines at 14px/1.45 line-height + 20px padding */
+    max-height: 200px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .compose-textarea:focus { outline: none; }
+  .compose-textarea::-webkit-scrollbar { display: none; }
+
+  /* Inset buttons base — not styled by mobile.css on desktop */
+  .compose-inset-btn {
+    position: absolute;
+    bottom: 5px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: #94a3b8;
+  }
+  .compose-plus-btn { left: 4px; }
+  .compose-send-btn {
+    right: 4px;
+    width: 32px;
+    height: 32px;
+    background: #3b82f6;
+    color: #fff;
+    border-radius: 50%;
+    padding: 0;
+  }
+  .compose-send-btn:hover { background: #2563eb; }
+
+  /* Expand button: show on desktop (inline style="display:none" is overridden) */
+  .compose-expand-btn {
+    position: absolute;
+    display: inline-flex !important;
+    right: 44px;   /* Left of send button */
+    bottom: 7px;
+    color: #94a3b8;
+  }
+
+  /* Swap expand/collapse icons based on wrapper state */
+  .compose-expand-icon { display: block; }
+  .compose-collapse-icon { display: none; }
+  .compose-textarea-wrap.expanded .compose-expand-icon { display: none; }
+  .compose-textarea-wrap.expanded .compose-collapse-icon { display: block; }
+
+  /* Commands drawer: slides up from accessory bar */
+  .accessory-cmd-drawer {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: #1e1e1e;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    flex-direction: column;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: transform 0.18s ease-out, opacity 0.15s ease-out;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .accessory-cmd-drawer.open {
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Accessory button base ─────────────────────────────────── */
+  .accessory-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-size: 0.65rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .accessory-btn:hover { background: #3a3a3a; }
+  .accessory-btn:active { background: #3a3a3a; }
+
+  .accessory-btn-arrow {
+    padding: 6px 10px;
+    background: #1e3a5f;
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+  }
+  .accessory-btn-arrow:hover { background: #2563eb; }
+
+  .accessory-btn-commands {
+    background: #1e2a3a;
+    border-color: rgba(100, 160, 255, 0.3);
+    color: #93c5fd;
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+  }
+  .accessory-btn-commands:hover { background: #2a3a5a; }
+
+  /* Context pill */
+  .accessory-ctx-pill {
+    display: none;   /* Hidden by default; JS shows it when context data is available */
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: #1e2e1e;
+    border: 1px solid rgba(74, 222, 128, 0.25);
+    border-radius: 6px;
+    color: #4ade80;
+    font-size: 0.65rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  /* Project button — inherits .accessory-btn base styles; override specifics here */
+  .accessory-btn-project {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    height: 28px;
+    max-width: 180px;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: #1e2a3a;
+    border: 1px solid rgba(100, 160, 255, 0.25);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .accessory-btn-project:hover { background: #2a3a5a; }
+  .accessory-project-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .accessory-project-name {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #93c5fd;
+  }
+  .accessory-project-caret {
+    font-size: 10px;
+    color: #64748b;
+    flex-shrink: 0;
+  }
+
+  /* Flex spacer between commands and project */
+  .accessory-btn-spacer { flex: 1; }
+
+  /* Thumbnail strip — small on desktop (mobile.css not loaded here) */
+  .compose-thumb-strip {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 8px 44px 6px 44px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    scrollbar-width: thin;
+  }
+  .compose-thumb {
+    position: relative;
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.15);
+    cursor: pointer;
+  }
+  .compose-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .compose-thumb-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  /* Commands search input */
+  .accessory-cmd-search {
+    display: block;
+    width: 100%;
+    padding: 10px 16px;
+    background: #111;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e5e5e5;
+    font-size: 14px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .accessory-cmd-search::placeholder { color: #555; }
+
+  .accessory-cmd-items {
+    overflow-y: auto;
+    max-height: calc(40vh - 44px);
+  }
+
+  .accessory-drawer-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .accessory-drawer-item:hover { background: #2a2a2a; }
+
+  .drawer-cmd-name { color: #e5e5e5; font-size: 0.9rem; font-family: monospace; }
+  .drawer-cmd-desc { color: #6b7280; font-size: 0.75rem; margin-top: 1px; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Desktop Project Picker — centered dialog, fixed dimensions.
+   Overrides the mobile bottom-sheet layout for screens ≥ 1024px.
+   ════════════════════════════════════════════════════════════════ */
+@media (min-width: 1024px) {
+  /* Backdrop: full-screen dim */
+  .mobile-case-picker .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
+
+  /* Sheet: centered dialog, FIXED dimensions so no jumping between tabs */
+  .mobile-case-picker-sheet {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    bottom: auto;
+    width: 500px;
+    height: 500px;
+    max-height: none;
+    border-radius: 12px;
+    background: #0f1318;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 32px 80px rgba(0, 0, 0, 0.75),
+                0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header: compact label style */
+  .mobile-case-picker-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+  }
+  .mobile-case-picker-header h3 {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #4b5563;
+  }
+  .mobile-case-picker-header .modal-close {
+    color: #374151;
+    font-size: 1.3rem;
+    transition: color 0.15s;
+  }
+  .mobile-case-picker-header .modal-close:hover {
+    color: #9ca3af;
+  }
+
+  /* Tab bar: compact segment-style pills, NOT full-width stretching */
+  .case-picker-tabs {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: #0f1318;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .case-picker-tab {
+    flex: none;
+    padding: 6px 14px;
+    font-size: 0.77rem;
+    font-weight: 600;
+    border-radius: 6px;
+    color: #4b5563;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, background 0.15s;
+    margin-bottom: 0;
+  }
+  .case-picker-tab:hover {
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .case-picker-tab.active {
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.08);
+    border-bottom-color: transparent;
+  }
+
+  /* Body: fills remaining fixed height — NO overflow at container level */
+  .mobile-case-picker-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  /* Each tab content: fills 100% of body, flex column */
+  .case-picker-tab-content {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Projects tab: scrollable list inside fixed area */
+  #casePickerTab-projects {
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+  #casePickerTab-projects::-webkit-scrollbar { width: 4px; }
+  #casePickerTab-projects::-webkit-scrollbar-track { background: transparent; }
+  #casePickerTab-projects::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+
+  /* Project list items: tighter, monospace names, teal selected state */
+  .mobile-case-item {
+    padding: 9px 20px;
+    font-size: 0.875rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    letter-spacing: -0.02em;
+    gap: 10px;
+    border-left: 2px solid transparent;
+  }
+  .mobile-case-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .mobile-case-item.selected {
+    background: rgba(34, 211, 238, 0.07);
+    color: #22d3ee;
+    border-left-color: #22d3ee;
+  }
+  .mobile-case-item.selected .mobile-case-item-icon {
+    color: #22d3ee;
+  }
+  .mobile-case-item-icon { color: #374151; }
+  .mobile-case-item-check { color: #22d3ee; }
+
+  /* Form tabs (New / Clone): vertically centered form content */
+  .case-picker-form {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 32px 44px 36px;
+    gap: 18px;
+  }
+  .case-picker-form-group {
+    gap: 8px;
+  }
+  .case-picker-form-label {
+    font-size: 0.68rem;
+    color: #374151;
+    letter-spacing: 0.11em;
+  }
+  .case-picker-input {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 7px;
+    padding: 12px 14px;
+    font-size: 0.9rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    color: #e2e8f0;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .case-picker-input:focus {
+    border-color: rgba(34, 211, 238, 0.4);
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.07);
+    outline: none;
+  }
+  .case-picker-input::placeholder {
+    color: #1f2937;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  }
+  /* Submit button: right-aligned, teal accent */
+  .case-picker-submit {
+    width: auto;
+    align-self: flex-end;
+    padding: 10px 28px;
+    border-radius: 7px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: #0e7490;
+    color: #fff;
+    margin-top: 4px;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  .case-picker-submit:hover {
+    background: #0891b2;
+    box-shadow: 0 4px 16px rgba(8, 145, 178, 0.3);
+  }
+  .case-picker-submit:disabled {
+    background: #0e7490;
+    opacity: 0.4;
+    box-shadow: none;
+  }
 }

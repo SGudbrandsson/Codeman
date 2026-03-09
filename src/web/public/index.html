@@ -9,8 +9,8 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1650">
-  <link rel="stylesheet" href="mobile.css?v=0.1654" media="(max-width: 1023px)">
+  <link rel="stylesheet" href="styles.css?v=0.1662">
+  <link rel="stylesheet" href="mobile.css?v=0.1657" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="vendor/xterm.css"></noscript>
@@ -57,19 +57,7 @@
       <!-- Session Tabs -->
       <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
       </div>
-      <button class="tab-add-btn" onclick="app.openNewPicker()" title="New session or worktree" aria-label="New session or worktree">+</button>
-
       <div class="header-right">
-        <button class="btn-icon-header btn-hamburger" id="sessionDrawerToggle"
-                onclick="SessionDrawer.toggle()"
-                title="Sessions" aria-label="Open session list">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <line x1="3" y1="6" x2="21" y2="6"/>
-            <line x1="3" y1="12" x2="21" y2="12"/>
-            <line x1="3" y1="18" x2="21" y2="18"/>
-          </svg>
-        </button>
         <button class="tunnel-indicator" id="tunnelIndicator" style="display: none;" onclick="app.toggleTunnelPanel()" title="Cloudflare Tunnel" aria-label="Tunnel status">
           <span class="tunnel-dot"></span>
         </button>
@@ -322,7 +310,7 @@
       </div>
     </div>
 
-    <!-- Bottom Toolbar -->
+    <!-- Bottom Toolbar (hidden on desktop, kept for mobile legacy + JS targets) -->
     <footer class="toolbar">
       <div class="toolbar-left">
         <!-- Run AI -->
@@ -361,17 +349,17 @@
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
           <div class="case-select-group">
-            <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <select id="quickStartCase" class="toolbar-select" title="Select project">
               <option value="testcase">testcase</option>
             </select>
-            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
-            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Case settings">&#x2699;</button>
+            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new project">+</button>
+            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Project settings">&#x2699;</button>
             <div class="case-settings-popover hidden" id="caseSettingsPopover">
               <label class="checkbox-inline">
                 <input type="checkbox" id="caseAgentTeams" onchange="app.onCaseSettingChanged()">
                 <span>Agent Teams</span>
               </label>
-              <span class="form-hint">Enable experimental Agent Teams for new sessions in this case</span>
+              <span class="form-hint">Enable experimental Agent Teams for new sessions in this project</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
@@ -385,11 +373,11 @@
             </svg>
           </button>
           <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;<span class="update-badge update-badge-mobile" id="updateBadgeMobile" style="display:none;" aria-label="Update available"></span></button>
-          <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select case">
+          <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select project">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span id="mobileCaseName">Case</span>
+            <span id="mobileCaseName">Project</span>
           </button>
-          <button class="btn-case-settings-mobile" id="btnCaseSettingsMobile" onclick="app.toggleCaseSettingsMobile()" title="Case settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <button class="btn-case-settings-mobile" id="btnCaseSettingsMobile" onclick="app.toggleCaseSettingsMobile()" title="Project settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <div class="case-settings-popover-mobile hidden" id="caseSettingsPopoverMobile">
             <label class="checkbox-inline">
               <input type="checkbox" id="caseAgentTeamsMobile" onchange="app.onCaseSettingChangedMobile()">
@@ -1148,7 +1136,7 @@
             <div class="form-row">
               <label>Default CLAUDE.md Template</label>
               <input type="text" id="appSettingsClaudeMdPath" placeholder="/path/to/CLAUDE.md template">
-              <span class="form-hint">Used when creating new cases. Leave empty for built-in template.</span>
+              <span class="form-hint">Used when creating new projects. Leave empty for built-in template.</span>
             </div>
             <div class="form-row">
               <label>Default Working Directory</label>
@@ -1397,8 +1385,8 @@
       <div class="modal-backdrop" onclick="app.closeCreateCaseModal()"></div>
       <div class="modal-content modal-lg">
         <div class="modal-header">
-          <h3>Add Case</h3>
-          <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create case">&times;</button>
+          <h3>Add Project</h3>
+          <button class="modal-close" onclick="app.closeCreateCaseModal()" aria-label="Close create project">&times;</button>
         </div>
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
@@ -1408,7 +1396,7 @@
           <!-- Create New Tab -->
           <div class="modal-tab-content" id="case-create">
             <div class="form-row">
-              <label>Case Name</label>
+              <label>Project Name</label>
               <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
             </div>
@@ -1420,9 +1408,9 @@
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">
             <div class="form-row">
-              <label>Case Name</label>
+              <label>Project Name</label>
               <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Name to identify this case in Codeman</span>
+              <span class="form-hint">Name to identify this project in Codeman</span>
             </div>
             <div class="form-row">
               <label>Folder Path</label>
@@ -1443,19 +1431,45 @@
       <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>
       <div class="mobile-case-picker-sheet">
         <div class="mobile-case-picker-header">
-          <h3>Select Case</h3>
-          <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close case picker">&times;</button>
+          <h3>Projects</h3>
+          <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close project picker">&times;</button>
+        </div>
+        <!-- Tab bar -->
+        <div class="case-picker-tabs">
+          <button class="case-picker-tab active" data-tab="projects" onclick="app.switchCasePickerTab('projects')">My Projects</button>
+          <button class="case-picker-tab" data-tab="new" onclick="app.switchCasePickerTab('new')">New</button>
+          <button class="case-picker-tab" data-tab="clone" onclick="app.switchCasePickerTab('clone')">Clone from Git</button>
         </div>
         <div class="mobile-case-picker-body">
-          <div class="mobile-case-list" id="mobileCaseList">
-            <!-- Cases populated by JS -->
+          <!-- My Projects tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-projects">
+            <div class="mobile-case-list" id="mobileCaseList">
+              <!-- Cases populated by JS -->
+            </div>
           </div>
-        </div>
-        <div class="mobile-case-picker-footer">
-          <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Create New Case
-          </button>
+          <!-- New Project tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-new" style="display:none">
+            <div class="case-picker-form">
+              <div class="case-picker-form-group">
+                <label class="case-picker-form-label">Project name</label>
+                <input class="case-picker-input" type="text" id="pickerNewCaseName" placeholder="my-project"
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <button class="case-picker-submit" onclick="app.createCaseFromPicker()">Create Project</button>
+            </div>
+          </div>
+          <!-- Clone from Git tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-clone" style="display:none">
+            <div class="case-picker-form">
+              <div class="case-picker-form-group">
+                <label class="case-picker-form-label">Repository URL</label>
+                <input class="case-picker-input" type="text" id="pickerCloneUrl"
+                       placeholder="https://github.com/user/repo.git"
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <button class="case-picker-submit" onclick="app.cloneRepoFromPicker()">Clone &amp; Open</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1604,7 +1618,7 @@
                 <span id="summaryIterations">10</span>
               </div>
               <div class="config-summary-row">
-                <span class="config-label">Case:</span>
+                <span class="config-label">Project:</span>
                 <span id="summaryCase">testcase</span>
               </div>
               <div class="config-summary-row" style="display: none;">
@@ -1799,15 +1813,16 @@
   <div class="mobile-input-panel" id="mobileInputPanel" style="display:none;"
        aria-label="Compose input" role="region">
 
-    <!-- Thumbnail strip — hidden until images are attached -->
-    <div class="compose-thumb-strip" id="composeThumbStrip" style="display:none;"></div>
-
     <!-- Slash command popup — shown when user types / -->
     <div class="compose-slash-popup" id="composeSlashPopup" style="display:none;"
          role="listbox" aria-label="Slash commands"></div>
 
     <!-- Textarea wrapper — + and send buttons are absolutely positioned inside -->
     <div class="compose-textarea-wrap">
+
+      <!-- Thumbnail strip — inside the compose box, hidden until images are attached -->
+      <div class="compose-thumb-strip" id="composeThumbStrip" style="display:none;"></div>
+
       <textarea class="compose-textarea" id="composeTextarea"
                 rows="1"
                 placeholder="Type a message…"
@@ -1823,6 +1838,30 @@
              stroke="currentColor" stroke-width="2.5" aria-hidden="true">
           <line x1="12" y1="5" x2="12" y2="19"/>
           <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+
+      <!-- Expand/collapse button — desktop only (hidden via style, shown via desktop CSS) -->
+      <button class="compose-inset-btn compose-expand-btn" id="composeExpandBtn"
+              type="button" aria-label="Expand compose area"
+              onmousedown="event.preventDefault()"
+              ontouchstart="event.preventDefault()"
+              style="display:none;">
+        <!-- Expand icon (default): shown when textarea is narrow -->
+        <svg class="compose-expand-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <polyline points="15 3 21 3 21 9"/>
+          <polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/>
+          <line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+        <!-- Collapse icon: shown when textarea is full-width -->
+        <svg class="compose-collapse-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <polyline points="4 14 10 14 10 20"/>
+          <polyline points="20 10 14 10 14 4"/>
+          <line x1="10" y1="14" x2="3" y2="21"/>
+          <line x1="21" y1="3" x2="14" y2="10"/>
         </svg>
       </button>
 
@@ -1925,30 +1964,32 @@
   </div>
 
   <!-- Worktree Cleanup -->
-  <div class="modal" id="worktreeCleanupModal">
-    <div class="modal-backdrop"></div>
+  <div id="worktreeCleanupModal" class="modal modal-sm" role="dialog" aria-modal="true">
+    <div class="modal-overlay" onclick="document.getElementById('worktreeCleanupModal').classList.remove('active')"></div>
     <div class="modal-content">
       <div class="modal-header">
-        <h3>🌿 <span id="worktreeCleanupBranch"></span></h3>
-      </div>
-      <div class="modal-body">
-        <p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:4px;" id="worktreeCleanupDesc">Session ended — what should happen to this worktree?</p>
-        <div class="worktree-cleanup-actions">
-          <button class="btn btn-secondary" onclick="app.worktreeCleanupKeep()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-            Keep worktree
-          </button>
-          <button class="btn btn-primary" onclick="app.worktreeCleanupMerge()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-            Merge into <span id="worktreeCleanupMergeTarget"></span>
-          </button>
-          <button class="btn btn-danger" onclick="app.worktreeCleanupRemove()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-            Remove worktree
-          </button>
+        <div class="modal-header-left">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+          <code id="worktreeCleanupBranch" class="modal-branch-name">branch</code>
         </div>
-        <div id="worktreeCleanupOutput" class="worktree-cleanup-output" style="display:none"></div>
+        <button class="modal-close-btn" onclick="document.getElementById('worktreeCleanupModal').classList.remove('active')" aria-label="Close">×</button>
       </div>
+      <p id="worktreeCleanupDesc" class="modal-subtitle">What should happen to this worktree?</p>
+      <div class="modal-actions-stack">
+        <button class="modal-action-card" onclick="app.worktreeCleanupMerge()">
+          <span class="action-card-title">Merge into <span id="worktreeCleanupMergeTarget">project</span></span>
+          <span class="action-card-desc">Fast-forward branch into master</span>
+        </button>
+        <button class="modal-action-card" onclick="app.worktreeCleanupKeep()">
+          <span class="action-card-title">Keep worktree</span>
+          <span class="action-card-desc">Saves dormant worktree, branch untouched</span>
+        </button>
+        <button class="modal-action-card modal-action-danger" onclick="app.worktreeCleanupRemove()">
+          <span class="action-card-title">Remove worktree</span>
+          <span class="action-card-desc">Deletes branch and working files</span>
+        </button>
+      </div>
+      <div id="worktreeCleanupOutput" class="modal-output" style="display:none"></div>
     </div>
   </div>
 
@@ -1956,8 +1997,8 @@
   <script defer src="mobile-handlers.js?v=0.4.10"></script>
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
-  <script defer src="keyboard-accessory.js?v=0.4.11"></script>
-  <script defer src="app.js?v=0.4.39"></script>
+  <script defer src="keyboard-accessory.js?v=0.4.14"></script>
+  <script defer src="app.js?v=0.4.60"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
