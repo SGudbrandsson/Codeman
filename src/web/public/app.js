@@ -666,10 +666,10 @@ class CodemanApp {
     // Previously caused "page unresponsive" crashes from synchronous GPU stalls,
     // but the 48KB/frame flush cap in flushPendingWrites() now prevents
     // oversized terminal.write() calls that triggered the stalls.
-    // Disable with ?nowebgl URL param if GPU issues return.
+    // Enable GPU-accelerated rendering with ?webgl URL param (canvas renderer is default).
     this._webglAddon = null;
     const skipWebGL = MobileDetection.getDeviceType() !== 'desktop';
-    if (!skipWebGL && !new URLSearchParams(location.search).has('nowebgl') && typeof WebglAddon !== 'undefined') {
+    if (!skipWebGL && new URLSearchParams(location.search).has('webgl') && typeof WebglAddon !== 'undefined') {
       try {
         this._webglAddon = new WebglAddon.WebglAddon();
         this._webglAddon.onContextLoss(() => {
@@ -1534,6 +1534,11 @@ class CodemanApp {
    */
   _updateStatusStrip() {
     if (!this.terminal) return;
+    // Throttle: status strip doesn't need sub-second updates; scanning the xterm
+    // buffer on every flush (potentially 60×/sec) wastes CPU under heavy output.
+    const now = Date.now();
+    if (now - (this._lastStatusStripUpdate || 0) < 500) return;
+    this._lastStatusStripUpdate = now;
     if (!this._statusStripEl) this._statusStripEl = document.getElementById('terminalStatusStrip');
     const strip = this._statusStripEl;
     if (!strip) return;
@@ -11215,7 +11220,7 @@ class CodemanApp {
         lineHeight: 1.2,
         cursorBlink: true,
         cursorStyle: 'block',
-        scrollback: 5000,
+        scrollback: 500,
         allowTransparency: true,
         allowProposedApi: true,
       });
