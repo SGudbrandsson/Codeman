@@ -408,14 +408,21 @@ const TranscriptView = {
   },
 
   _detachXterm(_sessionId) {
-    // NOTE: implementor (Task 10) — find the xterm Terminal instance for this session.
-    // Search app.js for `new Terminal(` and `.dispose()` to understand the lifecycle.
-    // Then dispose the Terminal for this session and hide the terminal container.
+    // There is one shared xterm Terminal instance (app.terminal) rendered into #terminalContainer.
+    // Hide the container so the transcript view (position:absolute; inset:0) takes the full area.
+    const termContainer = document.getElementById('terminalContainer');
+    if (termContainer) termContainer.style.visibility = 'hidden';
   },
 
   _attachXterm(_sessionId) {
-    // NOTE: implementor (Task 10) — re-create the Terminal for this session and show container.
-    // Find how tab switching initializes or re-attaches a terminal in app.js and replicate.
+    // Restore the terminal container. The shared app.terminal instance stays mounted —
+    // no re-open needed.  sendResize corrects the PTY dimensions if the container
+    // was hidden long enough that the terminal lost its size.
+    const termContainer = document.getElementById('terminalContainer');
+    if (termContainer) termContainer.style.visibility = '';
+    if (typeof app !== 'undefined' && _sessionId && app.activeSessionId === _sessionId) {
+      app.sendResize?.(_sessionId);
+    }
   },
 
   _scrollToBottom(force) {
@@ -4495,6 +4502,18 @@ class CodemanApp {
     this.renderElicitationPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
+
+    // Restore transcript vs terminal view for this session and update the accessory button.
+    // Hide the previous session's transcript view first, then apply this session's preference.
+    const _tvMode = TranscriptView.getViewMode(sessionId);
+    if (_tvMode === 'web') {
+      TranscriptView.show(sessionId);
+    } else {
+      TranscriptView.hide(sessionId);
+    }
+    if (typeof KeyboardAccessoryBar !== 'undefined') {
+      KeyboardAccessoryBar.updateViewModeBtn(sessionId);
+    }
     // Update context pill for newly active session
     const _activeSess = this.sessions.get(sessionId);
     const _activeTokens = _activeSess?.tokens;
