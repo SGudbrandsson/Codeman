@@ -4481,14 +4481,15 @@ class CodemanApp {
   openWorktreeCleanupForSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session?.worktreeBranch) return;
-    const descEl = document.getElementById('worktreeCleanupDesc');
-    if (descEl) descEl.textContent = 'What do you want to do with this worktree?';
-    this._onWorktreeSessionEnded({
-      id: sessionId,
-      worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch,
-      worktreeOriginId: session.worktreeOriginId,
-    });
+    this._onWorktreeSessionEnded(
+      {
+        id: sessionId,
+        worktreePath: session.worktreePath,
+        worktreeBranch: session.worktreeBranch,
+        worktreeOriginId: session.worktreeOriginId,
+      },
+      'What should happen to this worktree?'
+    );
   }
 
   nextSession() {
@@ -6209,7 +6210,7 @@ class CodemanApp {
     }
   }
 
-  _onWorktreeSessionEnded(data) {
+  _onWorktreeSessionEnded(data, desc) {
     this._pendingWorktreeCleanup = data;
     document.getElementById('worktreeCleanupBranch').textContent = data.worktreeBranch;
     const originSession = data.worktreeOriginId ? this.sessions.get(data.worktreeOriginId) : null;
@@ -6218,9 +6219,8 @@ class CodemanApp {
     const out = document.getElementById('worktreeCleanupOutput');
     out.style.display = 'none';
     out.textContent = '';
-    // Reset desc to "session ended" in case it was previously overridden by manual open
     const descEl = document.getElementById('worktreeCleanupDesc');
-    if (descEl) descEl.textContent = 'Session ended — what should happen to this worktree?';
+    if (descEl) descEl.textContent = desc ?? 'Session ended — what should happen to this worktree?';
     document.getElementById('worktreeCleanupModal').classList.add('active');
   }
 
