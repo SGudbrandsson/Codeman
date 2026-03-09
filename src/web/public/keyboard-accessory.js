@@ -244,7 +244,7 @@ const KeyboardAccessoryBar = {
     projectBtn.appendChild(projName);
     projectBtn.appendChild(projCaret);
     projectBtn.addEventListener('click', () => {
-      window.app?.openCasePickerModal?.();
+      window.app?.showMobileCasePicker?.();
     });
     this.element.appendChild(projectBtn);
 
