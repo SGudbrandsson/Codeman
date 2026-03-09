@@ -13431,9 +13431,9 @@ const InputPanel = {
     // Expand/collapse button — desktop only
     const expandBtn = document.getElementById('composeExpandBtn');
     if (expandBtn) {
-      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
+      expandBtn.removeAttribute('style'); // Always clear inline style — CSS media query hides it on mobile
+      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
       if (isDesktop) {
-        expandBtn.removeAttribute('style'); // Let desktop CSS (display: inline-flex !important) take over
         const wrap = document.querySelector('.compose-textarea-wrap');
         if (wrap && localStorage.getItem('desktopComposeExpanded') === 'true') {
           wrap.classList.add('expanded');
@@ -13447,7 +13447,7 @@ const InputPanel = {
       }
     }
     // Set initial padding on desktop so .main doesn't jump on first keystroke
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop') {
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile') {
       const ta = this._getTextarea();
       if (ta) this._autoGrow(ta);
     }
