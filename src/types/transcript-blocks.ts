@@ -66,14 +66,26 @@ export function parseTranscriptEntry(entry: TranscriptEntry): TranscriptBlock[] 
 
   if (entry.type === 'user' && entry.message) {
     const c = entry.message.content;
-    const text =
-      typeof c === 'string'
-        ? c
-        : (c as TranscriptContentBlock[])
-            .filter((b) => b.type === 'text')
-            .map((b) => b.text ?? '')
-            .join('');
-    if (text.trim()) blocks.push({ type: 'text', role: 'user', text, timestamp: ts });
+    if (typeof c === 'string') {
+      if (c.trim()) blocks.push({ type: 'text', role: 'user', text: c, timestamp: ts });
+    } else {
+      for (const b of c) {
+        if (b.type === 'text' && b.text) {
+          blocks.push({ type: 'text', role: 'user', text: b.text, timestamp: ts });
+        } else if (b.type === 'tool_result') {
+          const raw = b.content;
+          const resultContent =
+            typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((r) => r.text ?? '').join('') : '';
+          blocks.push({
+            type: 'tool_result',
+            toolUseId: b.tool_use_id ?? '',
+            content: resultContent,
+            isError: b.is_error ?? false,
+            timestamp: ts,
+          });
+        }
+      }
+    }
   }
 
   if (entry.type === 'assistant' && entry.message) {
@@ -86,28 +98,14 @@ export function parseTranscriptEntry(entry: TranscriptEntry): TranscriptBlock[] 
           type: 'tool_use',
           id: b.id ?? '',
           name: b.name ?? '',
-          input: (b.input as Record<string, unknown>) ?? {},
-          timestamp: ts,
-        });
-      } else if (b.type === 'tool_result') {
-        const raw = b.content;
-        const resultContent =
-          typeof raw === 'string'
-            ? raw
-            : Array.isArray(raw)
-              ? (raw as Array<{ type: string; text?: string }>).map((c) => c.text ?? '').join('')
-              : '';
-        blocks.push({
-          type: 'tool_result',
-          toolUseId: b.tool_use_id ?? '',
-          content: resultContent,
-          isError: b.is_error ?? false,
+          input: b.input ?? {},
           timestamp: ts,
         });
       }
     }
   }
 
+  // 'system' entries (system prompts) are intentionally not rendered in the web view
   if (entry.type === 'result') {
     blocks.push({
       type: 'result',
