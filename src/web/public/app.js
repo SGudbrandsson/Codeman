@@ -158,6 +158,137 @@ HTMLCanvasElement.prototype.getContext = function(type, ...args) {
 
 
 // ═══════════════════════════════════════════════════════════════
+// Markdown Renderer
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Minimal Markdown to HTML renderer.
+ * SECURITY: All user/assistant text is HTML-escaped via esc() before processing.
+ * Link hrefs are protocol-validated (only http/https/relative allowed).
+ * The resulting HTML is safe to set via innerHTML on .tv-markdown elements.
+ * @param {string} text
+ * @returns {string} HTML string
+ */
+function renderMarkdown(text) {
+  function esc(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  // Validate link href — only allow safe protocols
+  function safeHref(url) {
+    const trimmed = url.trim().toLowerCase();
+    if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('vbscript:')) {
+      return '#';
+    }
+    return url;
+  }
+
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (/^```/.test(line)) {
+      const lang = line.slice(3).trim();
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      const code = esc(codeLines.join('\n'));
+      out.push('<pre><code class="tv-code' + (lang ? ' language-' + esc(lang) : '') + '">' + code + '</code></pre>');
+      i++;
+      continue;
+    }
+
+    // Heading
+    const hMatch = line.match(/^(#{1,3})\s+(.*)/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      out.push('<h' + level + '>' + inlineMarkdown(esc(hMatch[2]), safeHref) + '</h' + level + '>');
+      i++; continue;
+    }
+
+    // Horizontal rule
+    if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim())) {
+      out.push('<hr>');
+      i++; continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const bqLines = [];
+      while (i < lines.length && lines[i].startsWith('> ')) {
+        bqLines.push(lines[i].slice(2));
+        i++;
+      }
+      out.push('<blockquote>' + renderMarkdown(bqLines.join('\n')) + '</blockquote>');
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+] /.test(line)) {
+      out.push('<ul>');
+      while (i < lines.length && /^[-*+] /.test(lines[i])) {
+        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^[-*+] /, '')), safeHref) + '</li>');
+        i++;
+      }
+      out.push('</ul>');
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\. /.test(line)) {
+      out.push('<ol>');
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref) + '</li>');
+        i++;
+      }
+      out.push('</ol>');
+      continue;
+    }
+
+    // Blank line
+    if (line.trim() === '') { i++; continue; }
+
+    // Paragraph — collect consecutive non-special lines
+    const paraLines = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !/^(#{1,3} |```|> |[-*+] |\d+\. |---+$|\*\*\*+$)/.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length) {
+      out.push('<p>' + inlineMarkdown(esc(paraLines.join(' ')), safeHref) + '</p>');
+    }
+  }
+  return out.join('\n');
+}
+
+/** Process inline markdown on already-HTML-escaped text. */
+function inlineMarkdown(escaped, safeHref) {
+  return escaped
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/_([^_]+)_/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
+      '<a href="' + safeHref(url) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // SSE Handler Map — event-to-method routing table
 // ═══════════════════════════════════════════════════════════════
 // connectSSE() iterates this array to register all listeners in a single loop.
