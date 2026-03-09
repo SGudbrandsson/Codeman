@@ -9206,3 +9206,278 @@ kbd {
     box-shadow: none;
   }
 }
+
+/* ================================================================
+   Transcript Web View
+   Renders Claude Code JSONL as formatted conversation.
+   ================================================================ */
+
+.transcript-view {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 16px 8px;
+  background: #0d0d0d;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+  scroll-behavior: smooth;
+}
+
+.tv-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.tv-block {
+  margin-bottom: 12px;
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+  content-visibility: auto;
+}
+
+/* User block */
+.tv-block--user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.tv-block--user .tv-bubble {
+  background: #1e3a5f;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 12px 12px 2px 12px;
+  padding: 10px 14px;
+  max-width: 80%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tv-block--user .tv-label {
+  font-size: 0.7rem;
+  color: #475569;
+  margin-bottom: 4px;
+}
+
+/* Assistant block */
+.tv-block--assistant .tv-label {
+  font-size: 0.7rem;
+  color: #475569;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tv-assistant-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #06b6d4;
+  display: inline-block;
+}
+.tv-block--assistant .tv-content {
+  padding-left: 2px;
+}
+
+/* Markdown rendered content */
+.tv-markdown p { margin: 0 0 8px; }
+.tv-markdown p:last-child { margin-bottom: 0; }
+.tv-markdown h1, .tv-markdown h2, .tv-markdown h3 {
+  margin: 12px 0 6px;
+  color: #f1f5f9;
+  font-weight: 600;
+}
+.tv-markdown h1 { font-size: 1.2rem; }
+.tv-markdown h2 { font-size: 1.05rem; }
+.tv-markdown h3 { font-size: 0.95rem; }
+.tv-markdown ul, .tv-markdown ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.tv-markdown li { margin-bottom: 3px; }
+.tv-markdown code {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.82em;
+  color: #a5f3fc;
+}
+.tv-markdown pre {
+  background: #111827;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.tv-markdown pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.8rem;
+  color: #e2e8f0;
+}
+.tv-markdown blockquote {
+  border-left: 3px solid rgba(6,182,212,0.4);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: #94a3b8;
+}
+.tv-markdown strong { color: #f1f5f9; font-weight: 600; }
+.tv-markdown em { color: #cbd5e1; font-style: italic; }
+.tv-markdown a { color: #38bdf8; text-decoration: underline; }
+.tv-markdown hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin: 12px 0;
+}
+
+/* Tool use row (collapsed by default) */
+.tv-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  margin: 4px 0;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+.tv-tool-row:hover { background: rgba(255,255,255,0.07); }
+.tv-tool-row--error { border-color: rgba(239,68,68,0.3); }
+.tv-tool-arrow {
+  font-size: 0.7rem;
+  color: #64748b;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.tv-tool-row.open .tv-tool-arrow { transform: rotate(90deg); }
+.tv-tool-name {
+  font-family: monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #93c5fd;
+  flex-shrink: 0;
+}
+.tv-tool-row--error .tv-tool-name { color: #f87171; }
+.tv-tool-arg {
+  font-size: 0.75rem;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tv-tool-status {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: #4ade80;
+  flex-shrink: 0;
+}
+.tv-tool-row--error .tv-tool-status { color: #f87171; }
+
+/* Tool expand panel */
+.tv-tool-panel {
+  display: none;
+  background: #0a0f1a;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.tv-tool-panel.open { display: block; }
+.tv-tool-section {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tv-tool-section:last-child { border-bottom: none; }
+.tv-tool-section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  margin-bottom: 6px;
+}
+.tv-tool-section pre {
+  background: none;
+  margin: 0;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #cbd5e1;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.tv-tool-truncated {
+  font-size: 0.7rem;
+  color: #64748b;
+  margin-top: 4px;
+}
+.tv-tool-show-more {
+  background: none;
+  border: none;
+  color: #38bdf8;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* Result block */
+.tv-block--result {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 860px;
+  margin: 4px auto 16px;
+}
+.tv-result-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: #475569;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.tv-result-ok { color: #4ade80; }
+.tv-result-error { color: #f87171; }
+
+/* View mode toggle button in accessory bar */
+.accessory-btn-view-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(6,182,212,0.1);
+  border: 1px solid rgba(6,182,212,0.3);
+  border-radius: 5px;
+  color: #06b6d4;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.accessory-btn-view-mode:hover { background: rgba(6,182,212,0.18); }
+.accessory-btn-view-mode.terminal-mode {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.15);
+  color: #94a3b8;
+}
