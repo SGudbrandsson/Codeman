@@ -532,6 +532,10 @@ class CodemanApp {
     if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
       InputPanel.init();
     }
+    // Always-visible compose bar on mobile (no pencil toggle needed)
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.isMobile()) {
+      InputPanel.open();
+    }
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
