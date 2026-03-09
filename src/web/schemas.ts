@@ -399,6 +399,16 @@ export const LinkCaseSchema = z.object({
   path: safePathSchema,
 });
 
+/** POST /api/cases/clone */
+export const CloneCaseSchema = z.object({
+  url: z.string().url('Invalid git URL'),
+  name: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid project name')
+    .optional(),
+  targetDir: safePathSchema.optional(),
+});
+
 /** POST /api/auth/revoke */
 export const RevokeSessionSchema = z.object({
   sessionToken: z.string().min(1).max(200).optional(),

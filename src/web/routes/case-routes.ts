@@ -11,7 +11,8 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { ApiResponse, CaseInfo } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
-import { CreateCaseSchema, LinkCaseSchema } from '../schemas.js';
+import { CreateCaseSchema, LinkCaseSchema, CloneCaseSchema } from '../schemas.js';
+import { gitClone } from '../../utils/git-utils.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR } from '../route-helpers.js';
@@ -106,6 +107,51 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
+  });
+
+  // Clone a git repo and register it as a case
+  app.post('/api/cases/clone', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+    const result = CloneCaseSchema.safeParse(req.body);
+    if (!result.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
+    }
+    const { url } = result.data;
+
+    // Derive name from URL if not provided
+    const urlName =
+      url
+        .split('/')
+        .pop()
+        ?.replace(/\.git$/, '') ?? '';
+    const name = result.data.name || urlName.replace(/[^a-zA-Z0-9_-]/g, '-') || 'cloned-project';
+
+    // Target directory: use provided or default to ~/sources/<name>
+    const targetDir = result.data.targetDir ?? join(homedir(), 'sources', name);
+
+    if (existsSync(targetDir)) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `Directory already exists: ${targetDir}`);
+    }
+
+    try {
+      await gitClone(url, targetDir);
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Git clone failed: ${getErrorMessage(err)}`);
+    }
+
+    // Register as a linked case
+    const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+    let linkedCases: Record<string, string> = {};
+    try {
+      linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+    } catch {
+      /* no file yet */
+    }
+
+    linkedCases[name] = targetDir;
+    await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+    ctx.broadcast(SseEvent.CaseLinked, { name, path: targetDir });
+
+    return { success: true, data: { case: { name, path: targetDir } } };
   });
 
   // Link an existing folder as a case
