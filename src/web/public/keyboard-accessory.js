@@ -108,8 +108,7 @@ const KeyboardAccessoryBar = {
 
   /** Create and inject the accessory bar */
   init() {
-    // Only on mobile
-    if (!MobileDetection.isTouchDevice()) return;
+    // Initializes on all platforms; bar is always visible on desktop
 
     // Create accessory bar element
     this.element = document.createElement('div');
@@ -270,6 +269,11 @@ const KeyboardAccessoryBar = {
     const toolbar = document.querySelector('.toolbar');
     if (toolbar && toolbar.parentNode) {
       toolbar.parentNode.insertBefore(this.element, toolbar);
+    }
+
+    // On desktop, bar is always visible (not gated by keyboard appearance)
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile') {
+      this.element.classList.add('visible');
     }
 
     // Show immediately — bar is always visible on mobile, not keyboard-dependent
