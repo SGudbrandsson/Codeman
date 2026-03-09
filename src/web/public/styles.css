@@ -882,17 +882,30 @@ body {
 
 .btn-hamburger { display: flex; }
 
-/* Session drawer — desktop (non-touch) */
+/* ══════════════════════════════════════════════════════════════
+   Session Drawer
+   ══════════════════════════════════════════════════════════════ */
+
+/* Running dot pulse animation */
+@keyframes dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.5); }
+  60%       { box-shadow: 0 0 0 5px rgba(74, 222, 128, 0); }
+}
+@keyframes dot-pulse-ralph {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
+  60%       { box-shadow: 0 0 0 5px rgba(251, 191, 36, 0); }
+}
+
 .session-drawer {
   position: fixed;
   top: var(--header-height);
   right: 0;
-  width: 280px;
+  width: 300px;
   height: calc(100vh - var(--header-height));
-  background: var(--bg-secondary, #1e1e2e);
-  border-left: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  background: #0d1117;
+  border-left: 1px solid rgba(255,255,255,0.07);
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 1200;
   overflow-y: auto;
   display: flex;
@@ -905,176 +918,522 @@ body {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
   z-index: 1199;
 }
 .session-drawer-overlay.open {
   display: block;
 }
 
-/* ── Grouped Session Drawer ───────────────────────────── */
-
-/* Project group header */
-.drawer-project-group { margin-bottom: 4px; }
-.drawer-project-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px 4px;
-  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
-  color: #64748b; text-transform: uppercase; user-select: none;
+/* ── Drawer title bar ─────────────────────────────────────── */
+.session-drawer-title {
+  display: flex;
+  align-items: center;
+  padding: 14px 14px 12px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #475569;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
+  gap: 8px;
+  user-select: none;
 }
-.drawer-project-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-drawer-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  background: linear-gradient(to bottom, #3b82f6, #1d4ed8);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── List area ────────────────────────────────────────────── */
+.session-drawer-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px 0 4px;
+}
+.session-drawer-list::-webkit-scrollbar { width: 3px; }
+.session-drawer-list::-webkit-scrollbar-track { background: transparent; }
+.session-drawer-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+/* ── Footer — "New Session or Worktree" ───────────────────── */
+.session-drawer-footer {
+  padding: 10px 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
+}
+.session-drawer-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 14px;
+  background: rgba(59,130,246,0.08);
+  border: 1px solid rgba(59,130,246,0.2);
+  border-radius: 8px;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  letter-spacing: 0.01em;
+}
+.session-drawer-new-btn:hover {
+  background: rgba(59,130,246,0.14);
+  border-color: rgba(59,130,246,0.38);
+  color: #93c5fd;
+}
+.session-drawer-new-btn svg { opacity: 0.8; flex-shrink: 0; }
+
+/* ── Grouped drawer: project groups ───────────────────────── */
+.drawer-project-group {
+  margin-bottom: 2px;
+}
+.drawer-project-group + .drawer-project-group {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  padding-top: 4px;
+}
+.drawer-project-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 4px 12px;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: #475569;
+  text-transform: uppercase;
+  user-select: none;
+  cursor: default;
+}
+.drawer-project-header:hover .drawer-add-btn { opacity: 1; }
+.drawer-project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .drawer-project-branch {
-  font-size: 0.65rem; font-weight: 500; font-family: monospace; color: #475569;
-  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 4px; padding: 1px 5px;
+  font-size: 0.6rem;
+  font-weight: 500;
+  font-family: monospace;
+  color: #334155;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
 }
 .drawer-add-btn {
-  background: none; border: none; color: #475569; cursor: pointer;
-  font-size: 1rem; padding: 2px 4px; border-radius: 4px; line-height: 1; flex-shrink: 0;
+  opacity: 0.4;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
-.drawer-add-btn:hover { background: rgba(255,255,255,0.08); color: #94a3b8; }
+.drawer-add-btn:hover {
+  opacity: 1;
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.3);
+  color: #60a5fa;
+}
 
-/* Worktree sub-group */
+/* ── Worktree sub-group ───────────────────────────────────── */
 .drawer-worktree-group {
-  margin: 2px 8px 4px;
-  border-left: 2px solid rgba(6, 182, 212, 0.28);
-  background: rgba(6, 182, 212, 0.03);
+  margin: 2px 8px 4px 10px;
+  border-left: 2px solid rgba(6, 182, 212, 0.3);
+  background: rgba(6, 182, 212, 0.025);
   border-radius: 0 6px 6px 0;
 }
 .drawer-worktree-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px 3px; font-size: 0.7rem; color: #22d3ee;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px 4px;
+  font-size: 0.68rem;
+  color: #0891b2;
 }
-.drawer-worktree-icon { opacity: 0.8; }
+.drawer-worktree-icon { opacity: 0.7; flex-shrink: 0; }
 .drawer-worktree-branch {
-  flex: 1; font-family: monospace; font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1;
+  font-family: monospace;
+  font-weight: 600;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #22d3ee;
 }
 .drawer-merge-btn {
-  background: none; border: 1px solid rgba(6, 182, 212, 0.3); color: #22d3ee;
-  cursor: pointer; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px;
+  background: none;
+  border: 1px solid rgba(6, 182, 212, 0.25);
+  color: #0891b2;
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
 }
-.drawer-merge-btn:hover { background: rgba(6, 182, 212, 0.1); }
+.drawer-merge-btn:hover {
+  background: rgba(6, 182, 212, 0.1);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.4);
+}
 
-/* Session rows */
+/* ── Session rows ─────────────────────────────────────────── */
 .drawer-session-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px; cursor: pointer;
-  border-radius: 6px; margin: 1px 4px;
-  transition: background 0.12s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 6px;
+  border-left: 2px solid transparent;
+  transition: background 0.13s, border-color 0.13s;
+  position: relative;
 }
-.drawer-session-row:hover { background: rgba(255,255,255,0.06); }
-.drawer-session-row.active { background: rgba(59,130,246,0.12); }
+.drawer-session-row:hover {
+  background: rgba(255,255,255,0.05);
+  border-left-color: rgba(255,255,255,0.1);
+}
+.drawer-session-row.active {
+  background: rgba(59,130,246,0.1);
+  border-left-color: #3b82f6;
+}
+.drawer-session-row:hover .drawer-session-close {
+  opacity: 1;
+}
+
+/* Status dot */
 .drawer-session-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #4ade80;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #4ade80;
+  transition: background 0.2s;
 }
-.drawer-session-dot.idle { background: #475569; }
+.drawer-session-dot.idle { background: #334155; }
+.drawer-session-dot.running {
+  background: #4ade80;
+  animation: dot-pulse 2.2s ease-in-out infinite;
+}
+.drawer-session-dot.ralph {
+  background: #fbbf24;
+  animation: dot-pulse-ralph 2.2s ease-in-out infinite;
+}
+
+/* Session name */
 .drawer-session-name {
-  flex: 1; font-size: 0.82rem; color: #cbd5e1;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1;
+  font-size: 0.815rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.13s;
 }
-.drawer-worktree-group .drawer-session-name { font-size: 0.78rem; color: #94a3b8; }
+.drawer-session-row.active .drawer-session-name { color: #cbd5e1; }
+.drawer-session-row:hover .drawer-session-name { color: #b8c5d6; }
+.drawer-worktree-group .drawer-session-name { font-size: 0.78rem; }
 
-/* X close button per session row */
+/* ── Mode badges ──────────────────────────────────────────── */
+.session-mode-badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  text-transform: lowercase;
+}
+.session-mode-badge[data-mode="claude"] {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.09);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+}
+.session-mode-badge[data-mode="shell"] {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.07);
+  border: 1px solid rgba(74, 222, 128, 0.2);
+}
+.session-mode-badge[data-mode="opencode"] {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.2);
+}
+
+/* ── Close button ─────────────────────────────────────────── */
 .drawer-session-close {
-  width: 26px; height: 26px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: #334155; font-size: 14px;
-  cursor: pointer; border-radius: 4px; transition: background 0.12s, color 0.12s;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
-.drawer-session-close:hover { background: rgba(239,68,68,0.12); color: #f87171; }
+.drawer-session-close:hover {
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+  opacity: 1;
+}
 
-/* Drawer footer */
+/* ── JS-rendered footer (New Project / Clone from Git) ────── */
 .drawer-footer {
-  padding: 10px 12px; border-top: 1px solid rgba(255,255,255,0.06);
-  display: flex; gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  gap: 6px;
 }
 .drawer-footer-btn {
-  flex: 1; padding: 8px 10px;
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px; color: #94a3b8; font-size: 0.78rem; cursor: pointer; text-align: center;
+  flex: 1;
+  padding: 7px 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 7px;
+  color: #64748b;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.drawer-footer-btn:hover { background: rgba(255,255,255,0.08); color: #e2e8f0; }
+.drawer-footer-btn:hover {
+  background: rgba(255,255,255,0.07);
+  color: #94a3b8;
+  border-color: rgba(255,255,255,0.12);
+}
 
-/* Quick-add popover */
+/* ── Quick-add popover ────────────────────────────────────── */
 .drawer-quick-add {
-  position: absolute; background: #1e2d42;
-  border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 100; min-width: 200px;
+  position: absolute;
+  background: #141c2b;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3);
+  z-index: 100;
+  min-width: 210px;
 }
-.drawer-quick-add-title { font-size: 0.72rem; color: #64748b; padding: 0 4px 6px; font-weight: 600; }
+.drawer-quick-add-title {
+  font-size: 0.7rem;
+  color: #475569;
+  padding: 0 2px 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
 .drawer-quick-add-row { display: flex; gap: 6px; }
 .drawer-mode-btn {
-  flex: 1; padding: 8px 4px;
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px; color: #94a3b8; font-size: 0.72rem; cursor: pointer;
-  text-align: center; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  flex: 1;
+  padding: 10px 4px 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.drawer-mode-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
-.drawer-mode-btn.selected { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93c5fd; }
-.drawer-mode-btn-icon { font-size: 1rem; }
+.drawer-mode-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: #cbd5e1;
+  border-color: rgba(255,255,255,0.15);
+}
+.drawer-mode-btn.selected {
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.35);
+  color: #93c5fd;
+}
+.drawer-mode-btn-icon { font-size: 1.1rem; }
 
-/* Worktree creation form (inside popover) */
-.drawer-worktree-form { padding: 8px 4px 4px; display: flex; flex-direction: column; gap: 8px; }
-.drawer-form-back { background: none; border: none; color: #64748b; font-size: 0.72rem; cursor: pointer; padding: 2px 0; text-align: left; }
-.drawer-form-back:hover { color: #94a3b8; }
-.drawer-form-label { font-size: 0.7rem; color: #64748b; margin-bottom: 2px; }
-.drawer-form-input {
-  width: 100%; padding: 6px 8px;
-  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 6px; color: #e2e8f0; font-size: 0.8rem; font-family: monospace;
+/* ── Worktree creation form ───────────────────────────────── */
+.drawer-worktree-form {
+  padding: 8px 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+.drawer-form-back {
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+.drawer-form-back:hover { color: #64748b; }
+.drawer-form-label {
+  font-size: 0.68rem;
+  color: #475569;
+  margin-bottom: 3px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.drawer-form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-family: monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.drawer-form-input:focus { border-color: rgba(59,130,246,0.4); }
 .drawer-from-chips { display: flex; gap: 4px; flex-wrap: wrap; }
 .drawer-from-chip {
-  padding: 3px 8px;
-  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 20px; color: #94a3b8; font-size: 0.72rem; cursor: pointer;
+  padding: 3px 9px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 20px;
+  color: #64748b;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
-.drawer-from-chip.selected { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93c5fd; }
+.drawer-from-chip.selected {
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.35);
+  color: #93c5fd;
+}
 .drawer-create-btn {
-  padding: 8px; background: #2563eb; border: none; border-radius: 8px;
-  color: #fff; font-size: 0.82rem; font-weight: 600; cursor: pointer; width: 100%;
+  padding: 9px;
+  background: #2563eb;
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  font-family: inherit;
+  transition: background 0.15s;
 }
 .drawer-create-btn:hover { background: #1d4ed8; }
 
-/* Mobile close confirmation sheet (pinned to bottom of drawer) */
+/* ── Close confirmation sheet ─────────────────────────────── */
 .drawer-close-sheet {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  background: #1a2236; border-top: 1px solid rgba(255,255,255,0.1);
-  border-radius: 12px 12px 0 0; padding: 12px; z-index: 10;
-  display: flex; flex-direction: column; gap: 8px;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #111827;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px 12px 0 0;
+  padding: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 .drawer-close-sheet-title {
-  font-size: 0.8rem; color: #94a3b8; padding: 0 4px 4px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.78rem;
+  color: #64748b;
+  padding: 0 2px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .close-sheet-option {
-  padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
-  cursor: pointer; display: flex; flex-direction: column; gap: 2px;
-  background: rgba(255,255,255,0.03); width: 100%; text-align: left;
+  padding: 11px 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255,255,255,0.02);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.15s;
 }
-.close-sheet-option:hover { background: rgba(255,255,255,0.07); }
-.close-sheet-option.danger { border-color: rgba(239,68,68,0.3); }
-.close-sheet-option.danger:hover { background: rgba(239,68,68,0.08); }
-.close-sheet-option-title { font-size: 0.88rem; font-weight: 600; color: #e2e8f0; }
+.close-sheet-option:hover { background: rgba(255,255,255,0.06); }
+.close-sheet-option.danger { border-color: rgba(239,68,68,0.25); }
+.close-sheet-option.danger:hover { background: rgba(239,68,68,0.07); }
+.close-sheet-option-title { font-size: 0.875rem; font-weight: 600; color: #e2e8f0; }
 .close-sheet-option.danger .close-sheet-option-title { color: #f87171; }
-.close-sheet-option-desc { font-size: 0.72rem; color: #64748b; }
+.close-sheet-option-desc { font-size: 0.7rem; color: #475569; }
 .close-sheet-cancel {
-  background: none; border: none; color: #64748b; font-size: 0.85rem;
-  cursor: pointer; padding: 8px; text-align: center; width: 100%;
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 8px;
+  text-align: center;
+  width: 100%;
+  font-family: inherit;
 }
-.close-sheet-cancel:hover { color: #94a3b8; }
+.close-sheet-cancel:hover { color: #64748b; }
 
-/* Desktop pinned sidebar */
+/* ── Desktop pinned sidebar ───────────────────────────────── */
 @media (min-width: 1024px) {
   body.sidebar-pinned .session-drawer { transform: translateX(0) !important; }
   body.sidebar-pinned .session-drawer-overlay { display: none; }
   body.sidebar-pinned .main-content { margin-right: 300px; }
   .drawer-pin-btn {
-    background: none; border: none; color: #64748b; cursor: pointer;
-    font-size: 0.9rem; padding: 2px 6px; border-radius: 4px; margin-left: auto;
+    background: none;
+    border: none;
+    color: #334155;
+    cursor: pointer;
+    font-size: 1rem;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    margin-left: auto;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
   }
-  .drawer-pin-btn:hover { color: #94a3b8; }
+  .drawer-pin-btn:hover {
+    color: #94a3b8;
+    background: rgba(255,255,255,0.06);
+  }
 }
 
 /* context pill — shown in header on all screen sizes when context data is available */
@@ -1161,32 +1520,7 @@ body {
   color: #10b981;
 }
 
-/* Session mode badges — per-mode contrast colors */
-.session-mode-badge {
-  display: inline-block;
-  font-size: 0.6rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 1px 5px;
-  border-radius: 4px;
-  vertical-align: middle;
-  text-transform: lowercase;
-}
-.session-mode-badge[data-mode="claude"] {
-  color: #60a5fa;
-  background: rgba(59, 130, 246, 0.09);
-  border: 1px solid rgba(59, 130, 246, 0.25);
-}
-.session-mode-badge[data-mode="shell"] {
-  color: #4ade80;
-  background: rgba(74, 222, 128, 0.07);
-  border: 1px solid rgba(74, 222, 128, 0.22);
-}
-.session-mode-badge[data-mode="opencode"] {
-  color: #fb923c;
-  background: rgba(251, 146, 60, 0.08);
-  border: 1px solid rgba(251, 146, 60, 0.22);
-}
+/* (session-mode-badge styles live in the drawer section above) */
 
 /* Timer Banner - Compact */
 .timer-banner {
