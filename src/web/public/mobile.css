@@ -2364,7 +2364,7 @@ html.mobile-init .file-browser-panel {
   flex-direction: row;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 2px;
+  padding: 8px 44px 4px 44px;
   -webkit-overflow-scrolling: touch;
 }
 .compose-thumb {

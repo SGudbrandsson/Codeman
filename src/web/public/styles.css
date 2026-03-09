@@ -8829,7 +8829,7 @@ kbd {
     flex-direction: row;
     gap: 6px;
     overflow-x: auto;
-    padding-bottom: 4px;
+    padding: 8px 44px 4px 44px;
     scrollbar-width: thin;
   }
   .compose-thumb {
