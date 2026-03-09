@@ -2061,6 +2061,23 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
+   Layout Overrides — Compose Bar Always On
+   ============================================================================ */
+
+/* Hide legacy footer toolbar on mobile — replaced by compose bar + accessory bar */
+.toolbar {
+  display: none !important;
+}
+
+/* Always-on compose bar — remove toggle-hidden behavior on mobile */
+.mobile-input-panel {
+  display: flex !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(0) !important;
+}
+
+/* ============================================================================
    Hover State Fallbacks for Touch
    ============================================================================ */
 @media (hover: none) and (pointer: coarse) {
