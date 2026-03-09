@@ -533,7 +533,7 @@ class CodemanApp {
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
-    if (!MobileDetection.getDeviceType() === 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
+    if (MobileDetection.getDeviceType() !== 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
       document.body.classList.add('sidebar-pinned');
     }
     this.applyHeaderVisibilitySettings();
@@ -13445,6 +13445,11 @@ const InputPanel = {
           localStorage.setItem('desktopComposeExpanded', String(expanded));
         });
       }
+    }
+    // Set initial padding on desktop so .main doesn't jump on first keystroke
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop') {
+      const ta = this._getTextarea();
+      if (ta) this._autoGrow(ta);
     }
   },
 
