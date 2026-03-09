@@ -9,7 +9,7 @@
  *   and user-configured custom commands. Destructive actions (/clear, /compact) require
  *   double-tap confirmation (2s amber state) inside the drawer.
  *   Commands are sent as text + Enter separately for Ink compatibility.
- *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
+ *   Initializes on all platforms; always visible on desktop, keyboard-triggered on mobile.
  *
  * - FocusTrap (class) — Traps Tab/Shift+Tab keyboard focus within a modal element.
  *   Saves and restores previously focused element on deactivate. Used by Ralph wizard
@@ -18,7 +18,7 @@
  * @globals {object} KeyboardAccessoryBar
  * @globals {class} FocusTrap
  *
- * @dependency mobile-handlers.js (MobileDetection.isTouchDevice)
+ * @dependency mobile-handlers.js (MobileDetection.getDeviceType)
  * @dependency app.js (uses global `app` for sendInput, activeSessionId, terminal)
  * @loadorder 5 of 9 — loaded after notification-manager.js, before app.js
  */
