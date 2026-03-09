@@ -536,6 +536,10 @@ class CodemanApp {
     if (typeof MobileDetection !== 'undefined' && MobileDetection.isMobile()) {
       InputPanel.open();
     }
+    // Restore desktop sidebar pin state
+    if (!MobileDetection.isMobile() && localStorage.getItem('sidebarPinned') === 'true') {
+      document.body.classList.add('sidebar-pinned');
+    }
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
@@ -13661,6 +13665,25 @@ const SessionDrawer = {
     this._getOverlay()?.classList.add('open');
     const drawer = this._getEl();
     if (drawer) { drawer.classList.add('open'); this._render(); }
+    // Add pin toggle button on desktop (≥1024px)
+    if (!MobileDetection.isMobile() && window.innerWidth >= 1024) {
+      const titleEl = document.querySelector('.session-drawer-title');
+      if (titleEl && !titleEl.querySelector('.drawer-pin-btn')) {
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'drawer-pin-btn';
+        const isPinned = document.body.classList.contains('sidebar-pinned');
+        pinBtn.textContent = isPinned ? '\u21a4' : '\u21a6';
+        pinBtn.title = isPinned ? 'Unpin sidebar' : 'Pin sidebar';
+        pinBtn.addEventListener('click', () => {
+          const nowPinned = !document.body.classList.contains('sidebar-pinned');
+          document.body.classList.toggle('sidebar-pinned', nowPinned);
+          localStorage.setItem('sidebarPinned', String(nowPinned));
+          pinBtn.textContent = nowPinned ? '\u21a4' : '\u21a6';
+          pinBtn.title = nowPinned ? 'Unpin sidebar' : 'Pin sidebar';
+        });
+        titleEl.appendChild(pinBtn);
+      }
+    }
   },
   close() {
     this._getOverlay()?.classList.remove('open');
