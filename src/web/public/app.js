@@ -12969,10 +12969,16 @@ class CodemanApp {
   }
 
   updateMobileCaseLabel(caseName) {
+    // Keep activeCaseName in sync for accessory bar project button
+    this.activeCaseName = caseName;
     const label = document.getElementById('mobileCaseName');
     if (label) {
       // Let CSS handle truncation via text-overflow: ellipsis
       label.textContent = caseName;
+    }
+    // Update the accessory bar project name pill
+    if (typeof KeyboardAccessoryBar !== 'undefined') {
+      KeyboardAccessoryBar.updateProjectName();
     }
   }
 
