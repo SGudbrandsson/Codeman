@@ -2167,12 +2167,18 @@ html.mobile-init .file-browser-panel {
   right: 0;
   width: 260px;
   max-height: 60vh;
-  overflow-y: auto;
+  overflow-y: hidden;
   transform: translateX(100%);
   transition: transform 0.25s ease;
   border-radius: 0 0 0 8px;
   z-index: 1500;
-  display: block; /* reset desktop display: flex */
+  display: flex;
+  flex-direction: column;
+}
+.session-drawer-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .session-drawer.open { transform: translateX(0); }
 
@@ -2207,6 +2213,81 @@ html.mobile-init .file-browser-panel {
 }
 .session-drawer-dot.running { background: #22c55e; }
 .session-drawer-dot.ralph   { background: #f59e0b; }
+
+.session-drawer-status {
+  font-size: 0.68rem;
+  margin-left: 5px;
+}
+.session-drawer-status.busy    { color: #f59e0b; }
+.session-drawer-status.idle    { color: var(--text-muted); }
+.session-drawer-status.stopped { color: rgba(239,68,68,0.6); }
+
+.session-drawer-merge-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 3px 6px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--green);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  opacity: 0.85;
+  transition: all 0.15s;
+}
+.session-drawer-merge-btn:hover {
+  background: rgba(34, 197, 94, 0.22);
+  border-color: var(--green);
+  opacity: 1;
+}
+
+.session-drawer-close-btn {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.session-drawer-close-btn:hover {
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+  opacity: 1;
+}
+
+.session-drawer-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #1a1a2e;
+  flex-shrink: 0;
+}
+.session-drawer-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  background: rgba(59,130,246,0.08);
+  border: 1px solid rgba(59,130,246,0.25);
+  border-radius: 7px;
+  color: #60a5fa;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.session-drawer-new-btn:hover,
+.session-drawer-new-btn:active {
+  background: rgba(59,130,246,0.15);
+  border-color: rgba(59,130,246,0.45);
+}
 
 /* ── Compose Panel ────────────────────────────────────────── */
 .mobile-input-panel {
@@ -2433,5 +2514,57 @@ html.mobile-init .file-browser-panel {
 
   .update-actions {
     flex-direction: column;
+  }
+}
+
+/* ============================================================================
+   Accessory bar context pill and new-session button styles
+   ============================================================================ */
+@media (max-width: 429px) {
+  .accessory-btn-new {
+    background: #1a2a1a;
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+    font-size: 1.1rem;
+    font-weight: 400;
+    padding: 4px 10px;
+    line-height: 1;
+  }
+  .accessory-btn-new:active { background: #223322; }
+
+  .accessory-ctx-pill {
+    --ctx-color: #22c55e;
+    display: none;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--ctx-color);
+    background: color-mix(in srgb, var(--ctx-color) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ctx-color) 40%, transparent);
+    border-radius: 10px;
+    padding: 3px 8px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: default;
+    transition: color 0.4s, background 0.4s, border-color 0.4s;
+  }
+
+  /* New picker as bottom sheet on phone */
+  #newPickerModal.active {
+    align-items: flex-end;
+  }
+  #newPickerModal .modal-content {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    border-bottom: none;
+    max-height: 70vh;
+    margin: 0;
+    animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
   }
 }

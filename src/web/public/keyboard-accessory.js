@@ -78,7 +78,7 @@ const KeyboardAccessoryBar = {
   },
 
   /** Default hotbar button set */
-  _defaultButtons: ['tab', 'scroll-up', 'scroll-down', 'commands', 'copy'],
+  _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'copy'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
@@ -131,13 +131,7 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn accessory-btn-commands" data-action="commands" title="Commands">/ ▲</button>
-      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-        </svg>
-      </button>
-      <button class="accessory-btn" data-action="copy" title="Copy selected text">
+<button class="accessory-btn" data-action="copy" title="Copy selected text">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -221,6 +215,14 @@ const KeyboardAccessoryBar = {
         if (typeof SessionDrawer !== 'undefined') SessionDrawer.toggle();
       });
       this.element.appendChild(hamburgerBtn);
+
+      // Context window pill (rightmost)
+      const ctxPill = document.createElement('span');
+      ctxPill.id = 'accessoryContextPill';
+      ctxPill.className = 'accessory-ctx-pill';
+      ctxPill.style.display = 'none';
+      ctxPill.title = 'Context window usage';
+      this.element.appendChild(ctxPill);
     }
 
     // Insert before toolbar

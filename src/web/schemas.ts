@@ -554,6 +554,7 @@ export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
 export const CreateWorktreeSchema = z.object({
   branch: z.string().min(1).max(200),
   isNew: z.boolean(),
+  mode: z.enum(['claude', 'opencode', 'shell']).optional(),
 });
 
 export const RemoveWorktreeSchema = z.object({
