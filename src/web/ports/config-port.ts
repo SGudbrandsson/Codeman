@@ -20,4 +20,5 @@ export interface ConfigPort {
   getLightSessionsState(): unknown[];
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
   stopTranscriptWatcher(sessionId: string): void;
+  getTranscriptPath(sessionId: string): string | null;
 }
