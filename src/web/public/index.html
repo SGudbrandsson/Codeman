@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1654">
+  <link rel="stylesheet" href="styles.css?v=0.1655">
   <link rel="stylesheet" href="mobile.css?v=0.1656" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -322,48 +322,6 @@
       </div>
     </div>
 
-    <!-- Desktop Bar — shown on desktop (≥1024px), replaces the old toolbar -->
-    <div class="desktop-bar" id="desktopBar">
-      <!-- Run group -->
-      <div class="desktop-bar-run-group">
-        <button class="desktop-bar-run" id="desktopRunBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <span id="desktopRunBtnLabel">Run</span>
-        </button>
-        <button class="desktop-bar-run-gear" onclick="app.toggleRunModeMenu(event)" title="Select AI backend">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-      </div>
-      <div class="desktop-bar-count-group">
-        <button class="desktop-bar-count-btn" onclick="app.decrementTabCount()">−</button>
-        <input type="number" class="desktop-bar-count-input" id="desktopTabCount" value="1" min="1" max="20" readonly title="Session count">
-        <button class="desktop-bar-count-btn" onclick="app.incrementTabCount()">+</button>
-      </div>
-      <button class="desktop-bar-stop" onclick="app.stopClaude()" title="Stop (Ctrl+C)">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
-      </button>
-      <button class="desktop-bar-shell" onclick="app.runShell()" title="Run Shell">Shell</button>
-      <div class="desktop-bar-count-group">
-        <button class="desktop-bar-count-btn" onclick="app.decrementShellCount()">−</button>
-        <input type="number" class="desktop-bar-count-input" id="desktopShellCount" value="1" min="1" max="20" readonly title="Shell count">
-        <button class="desktop-bar-count-btn" onclick="app.incrementShellCount()">+</button>
-      </div>
-      <!-- Project picker — visual alias; syncs to hidden #quickStartCase -->
-      <div class="desktop-bar-project-group">
-        <svg class="desktop-bar-project-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <select id="desktopProjectSelect" class="desktop-bar-project-select" title="Select project" onchange="app._syncDesktopProject(this.value)">
-          <option value="testcase">testcase</option>
-        </select>
-      </div>
-      <div class="desktop-bar-spacer"></div>
-      <span class="desktop-bar-version" id="desktopVersionDisplay" title="Codeman version">v0.0.0</span>
-      <!-- Session drawer toggle -->
-      <button class="desktop-bar-sessions" onclick="if(typeof SessionDrawer!=='undefined')SessionDrawer.toggle()" title="Sessions (≡)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        Sessions
-      </button>
-    </div>
-
     <!-- Bottom Toolbar (hidden on desktop, kept for mobile legacy + JS targets) -->
     <footer class="toolbar">
       <div class="toolbar-left">
@@ -464,10 +422,6 @@
 
       <div class="toolbar-right">
         <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
-        <button class="btn-toolbar btn-sessions-desktop" onclick="if(typeof SessionDrawer!=='undefined')SessionDrawer.toggle()" title="Sessions">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-          Sessions
-        </button>
       </div>
     </footer>
 
@@ -1872,6 +1826,30 @@
         </svg>
       </button>
 
+      <!-- Expand/collapse button — desktop only (hidden via style, shown via desktop CSS) -->
+      <button class="compose-inset-btn compose-expand-btn" id="composeExpandBtn"
+              type="button" aria-label="Expand compose area"
+              onmousedown="event.preventDefault()"
+              ontouchstart="event.preventDefault()"
+              style="display:none;">
+        <!-- Expand icon (default): shown when textarea is narrow -->
+        <svg class="compose-expand-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <polyline points="15 3 21 3 21 9"/>
+          <polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/>
+          <line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+        <!-- Collapse icon: shown when textarea is full-width -->
+        <svg class="compose-collapse-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true" style="display:none;">
+          <polyline points="4 14 10 14 10 20"/>
+          <polyline points="20 10 14 10 14 4"/>
+          <line x1="10" y1="14" x2="3" y2="21"/>
+          <line x1="21" y1="3" x2="14" y2="10"/>
+        </svg>
+      </button>
+
       <!-- Send button — bottom-right inside textarea -->
       <button class="compose-inset-btn compose-send-btn" id="composeSendBtn"
               type="button" aria-label="Send"
@@ -2004,8 +1982,8 @@
   <script defer src="mobile-handlers.js?v=0.4.10"></script>
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
-  <script defer src="keyboard-accessory.js?v=0.4.13"></script>
-  <script defer src="app.js?v=0.4.50"></script>
+  <script defer src="keyboard-accessory.js?v=0.4.14"></script>
+  <script defer src="app.js?v=0.4.51"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
