@@ -13041,10 +13041,32 @@ class CodemanApp {
     }
   }
 
-  cloneRepoFromPicker() {
+  async cloneRepoFromPicker() {
     const url = document.getElementById('pickerCloneUrl')?.value.trim();
     if (!url) { this.showToast('Enter a repository URL', 'error'); return; }
-    this.showToast('Git clone is not yet supported from the UI — run `git clone` in a shell session', 'info');
+    const btn = document.querySelector('#casePickerTab-clone .case-picker-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Cloning…'; }
+    try {
+      const res = await fetch('/api/cases/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const name = data.data?.case?.name;
+        this.closeMobileCasePicker();
+        await this.loadQuickStartCases(name);
+        if (name) await this.saveLastUsedCase(name);
+        this.showToast(`Cloned "${name}" successfully`, 'success');
+      } else {
+        this.showToast(data.error || 'Clone failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Clone failed: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Clone & Open'; }
+    }
   }
 
   renderMuxSessions() {
