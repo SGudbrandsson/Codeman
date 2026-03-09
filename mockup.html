@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Codeman Mobile UX v2 — Design Preview</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #060a10; display: flex; align-items: flex-start; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; gap: 44px; padding: 36px 20px; flex-wrap: wrap; }
+
+    .sidebar { width: 270px; color: #94a3b8; padding-top: 6px; flex-shrink: 0; }
+    .sidebar h1 { font-size: 19px; font-weight: 700; color: #f1f5f9; letter-spacing: -0.03em; margin-bottom: 3px; }
+    .tagline { font-size: 11px; color: #334155; margin-bottom: 24px; letter-spacing: 0.04em; text-transform: uppercase; }
+    .sidebar h3 { font-size: 10px; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.1em; margin: 18px 0 8px; }
+    .demo-btn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 11px; background: #0d1117; border: 1px solid #161f2e; border-radius: 7px; color: #64748b; font-size: 12px; cursor: pointer; font-family: inherit; text-align: left; margin-bottom: 4px; transition: all 0.15s; }
+    .demo-btn:hover { background: #111827; color: #94a3b8; border-color: #1e293b; }
+    .demo-btn.active { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.35); color: #60a5fa; }
+    .btn-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .changes-list { list-style: none; }
+    .changes-list li { font-size: 12px; color: #475569; padding: 5px 0; border-bottom: 1px solid #0d1117; display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; }
+    .changes-list li::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #22c55e; flex-shrink: 0; margin-top: 4px; }
+    .workflow-card { background: #0d1117; border: 1px solid #161f2e; border-radius: 9px; padding: 12px 14px; margin-bottom: 8px; }
+    .wf-title { font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 6px; }
+    .wf-steps { font-size: 11px; color: #475569; line-height: 1.7; font-family: 'SF Mono', monospace; }
+    .wf-badge { display: inline-block; font-size: 10px; color: #3b82f6; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
+    .wf-badge.wt { color: #22d3ee; background: rgba(6,182,212,0.1); border-color: rgba(6,182,212,0.2); }
+    .sidebar-sep { height: 1px; background: #0d1117; margin: 10px 0; }
+
+    /* Phone */
+    .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .phone-frame { width: 390px; height: 844px; background: #0a0e18; border-radius: 46px; border: 2px solid #1a2333; overflow: hidden; position: relative; box-shadow: 0 0 0 6px #0d1117, 0 0 0 7px #161f2e, 0 0 50px rgba(0,0,0,0.7); display: flex; flex-direction: column; flex-shrink: 0; }
+    .status-bar { height: 50px; background: #080c14; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 26px 8px; flex-shrink: 0; }
+    .status-time { font-size: 15px; font-weight: 600; color: #f1f5f9; }
+    .status-icons { display: flex; align-items: center; gap: 5px; color: #f1f5f9; }
+    .app-header { height: 46px; background: #080c14; border-bottom: 1px solid #111827; display: flex; align-items: center; padding: 0 12px; gap: 9px; flex-shrink: 0; }
+    .header-logo { font-size: 13px; font-weight: 800; color: #3b82f6; letter-spacing: -0.03em; }
+    .header-tab { flex: 1; display: flex; align-items: center; gap: 7px; padding: 5px 9px; background: #0d1117; border-radius: 7px; border: 1px solid #1a2333; min-width: 0; }
+    .tab-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; flex-shrink: 0; animation: pdot 2s ease-in-out infinite; }
+    .tab-dot.idle { background: #1e293b; animation: none; }
+    @keyframes pdot { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,0.4)} 50%{opacity:.8;box-shadow:0 0 0 3px rgba(34,197,94,0)} }
+    .tab-name { flex:1; font-size:13px; color:#e2e8f0; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .hdr-icon { padding:6px; background:transparent; border:none; color:#334155; cursor:pointer; border-radius:5px; display:flex; align-items:center; justify-content:center; transition:all 0.12s; flex-shrink:0; }
+    .hdr-icon:hover { background:#111827; color:#64748b; }
+
+    .terminal { flex:1; background:#060a10; overflow:hidden; padding:12px 13px; font-family:'SF Mono','Cascadia Code',Monaco,monospace; font-size:11.5px; line-height:1.55; color:#c9d1d9; }
+    .tp{color:#22c55e} .tc{color:#79c0ff} .to{color:#6e7681} .tk{color:#22c55e} .tw{color:#f59e0b} .td{color:#30363d}
+    .tcur{display:inline-block;width:7px;height:12px;background:#3b82f6;animation:blink 1.1s step-end infinite;vertical-align:text-bottom;border-radius:1px;}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+    .compose-bar { background: #0a0e18; border-top: 1px solid #111827; padding: 7px 11px; display: flex; align-items: flex-end; gap: 7px; flex-shrink: 0; }
+    .compose-attach { width: 32px; height: 32px; border-radius: 9px; background: #0d1117; border: 1px solid #1a2333; color: #334155; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; margin-bottom: 2px; }
+    .compose-input { flex:1; background:#0d1117; border:1px solid #1a2333; border-radius:14px; padding:8px 13px; color:#e2e8f0; font-size:14px; font-family:inherit; resize:none; min-height:36px; max-height:120px; line-height:1.45; outline:none; overflow-y:auto; }
+    .compose-input::placeholder { color:#1e293b; }
+    .compose-send { width:34px; height:34px; border-radius:10px; background:#3b82f6; border:none; color:white; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; margin-bottom:1px; box-shadow:0 2px 8px rgba(59,130,246,0.3); }
+
+    .accessory-bar { background:#060a10; border-top:1px solid #0d1117; display:flex; align-items:center; padding:4px 7px; gap:2px; flex-shrink:0; height:44px; }
+    .acc { display:flex; align-items:center; justify-content:center; padding:5px 7px; border-radius:6px; border:none; background:transparent; color:#334155; cursor:pointer; font-size:12px; font-family:inherit; white-space:nowrap; gap:3px; flex-shrink:0; }
+    .acc-pill { background:rgba(34,197,94,0.07); border:1px solid rgba(34,197,94,0.18); color:#22c55e; font-weight:700; font-size:11px; padding:3px 7px; border-radius:9px; }
+    .acc-spacer { flex:1; }
+    .acc-project { background:#0d1117; border:1px solid #1a2333; border-radius:6px; color:#64748b; font-size:11px; max-width:105px; overflow:hidden; padding:4px 7px; gap:4px; cursor:pointer; }
+    .acc-project span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
+    .acc-cmd { font-size:11px; font-weight:700; }
+
+    .overlay { position:absolute; inset:0; background:rgba(0,0,0,0.6); z-index:100; display:none; backdrop-filter:blur(2px); }
+    .overlay.open { display:block; }
+
+    .bottom-sheet { position:absolute; bottom:0; left:0; right:0; background:#0a0e18; border-radius:18px 18px 0 0; border:1px solid #111827; border-bottom:none; z-index:101; transform:translateY(100%); transition:transform 0.3s cubic-bezier(0.32,0.72,0,1); display:flex; flex-direction:column; max-height:74%; }
+    .bottom-sheet.open { transform:translateY(0); }
+    .sheet-handle { width:36px; height:4px; background:#1a2333; border-radius:2px; margin:10px auto 0; flex-shrink:0; }
+    .sheet-hdr { padding:13px 16px 9px; flex-shrink:0; }
+    .sheet-hdr-title { font-size:17px; font-weight:700; color:#f1f5f9; letter-spacing:-0.02em; margin-bottom:2px; }
+    .sheet-hdr-sub { font-size:12px; color:#334155; }
+    .sheet-tabs { display:flex; padding:0 16px; border-bottom:1px solid #111827; flex-shrink:0; }
+    .stab { padding:8px 13px; font-size:13px; font-weight:500; color:#334155; border:none; background:transparent; border-bottom:2px solid transparent; cursor:pointer; font-family:inherit; margin-bottom:-1px; }
+    .stab.active { color:#60a5fa; border-bottom-color:#3b82f6; }
+    .sheet-body { flex:1; overflow-y:auto; padding:12px 16px 18px; }
+    .proj-list { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+    .proj-item { display:flex; align-items:center; gap:11px; padding:10px 11px; background:#0d1117; border:1px solid #1a2333; border-radius:10px; cursor:pointer; }
+    .proj-item.cur { background:rgba(59,130,246,0.07); border-color:rgba(59,130,246,0.3); }
+    .proj-icon { width:34px; height:34px; border-radius:8px; background:#060a10; display:flex; align-items:center; justify-content:center; color:#2d4a7a; flex-shrink:0; }
+    .proj-item.cur .proj-icon { color:#3b82f6; }
+    .proj-info { flex:1; min-width:0; }
+    .proj-name { font-size:13px; font-weight:600; color:#e2e8f0; }
+    .proj-path { font-size:11px; color:#1e293b; font-family:'SF Mono',monospace; margin-top:1px; }
+    .proj-item.cur .proj-path { color:#334155; }
+    .proj-check { color:#3b82f6; opacity:0; flex-shrink:0; }
+    .proj-item.cur .proj-check { opacity:1; }
+    .row-btns { display:flex; gap:7px; }
+    .act-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 8px; background:#0d1117; border:1px solid #1a2333; border-radius:10px; color:#64748b; font-size:12px; font-weight:500; cursor:pointer; font-family:inherit; }
+    .act-icon { width:30px; height:30px; border-radius:7px; background:#060a10; display:flex; align-items:center; justify-content:center; color:#2d4a7a; }
+    .fg { margin-bottom:12px; }
+    .flabel { display:block; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px; }
+    .finput { width:100%; background:#060a10; border:1px solid #1a2333; border-radius:8px; padding:9px 11px; color:#e2e8f0; font-size:13px; font-family:'SF Mono',monospace; outline:none; }
+    .finput::placeholder { color:#161f2e; }
+    .fhint { font-size:11px; color:#1e293b; margin-top:4px; }
+    .input-row { display:flex; gap:6px; }
+    .input-row .finput { flex:1; }
+    .paste-btn { padding:0 11px; background:#0d1117; border:1px solid #1a2333; border-radius:8px; color:#334155; font-size:12px; cursor:pointer; }
+    .branch-row { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+    .bchip { padding:4px 10px; border-radius:5px; background:#060a10; border:1px solid #1a2333; color:#334155; font-size:11px; cursor:pointer; font-family:'SF Mono',monospace; }
+    .bchip.sel { background:rgba(59,130,246,0.08); border-color:rgba(59,130,246,0.35); color:#60a5fa; }
+    .action-btn { width:100%; padding:12px; background:#3b82f6; border:none; border-radius:10px; color:white; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; margin-top:5px; }
+    .action-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .clone-progress { display:none; align-items:center; gap:9px; padding:11px 13px; background:#060a10; border:1px solid #1a2333; border-radius:9px; margin-top:9px; font-size:12px; color:#334155; }
+    .clone-progress.show { display:flex; }
+    .clone-progress-text { flex:1; }
+    .spinner { width:15px; height:15px; border:2px solid #1a2333; border-top-color:#3b82f6; border-radius:50%; animation:spin 0.7s linear infinite; flex-shrink:0; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+
+    /* ═══ SESSION DRAWER ═══ */
+    .sess-drawer { position:absolute; top:0; right:0; width:300px; height:100%; background:#0a0e18; border-left:1px solid #111827; z-index:102; transform:translateX(100%); transition:transform 0.26s cubic-bezier(0.32,0.72,0,1); display:flex; flex-direction:column; }
+    .sess-drawer.open { transform:translateX(0); }
+    .sd-hdr { padding:13px 14px 10px; border-bottom:1px solid #0d1117; display:flex; align-items:center; gap:9px; flex-shrink:0; }
+    .sd-title { flex:1; font-size:11px; font-weight:700; color:#1e293b; text-transform:uppercase; letter-spacing:0.1em; }
+    .sd-close { padding:4px; background:transparent; border:none; color:#1e293b; cursor:pointer; font-size:16px; line-height:1; border-radius:4px; }
+    .sd-close:hover { background:#0d1117; color:#334155; }
+    .sd-list { flex:1; overflow-y:auto; }
+
+    .proj-group { padding:0 0 4px; }
+    .proj-group-hdr { display:flex; align-items:center; gap:8px; padding:10px 14px 6px; position:sticky; top:0; background:#0a0e18; z-index:1; }
+    .proj-group-name { flex:1; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.08em; }
+    .proj-group-branch { font-size:10px; color:#22c55e; font-family:'SF Mono',monospace; opacity:0.6; }
+    .proj-group-add { display:flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:5px; background:#0d1117; border:1px solid #1a2333; color:#334155; cursor:pointer; font-size:14px; line-height:1; transition:all 0.12s; flex-shrink:0; font-family:inherit; }
+    .proj-group-add:hover { background:#111827; border-color:#1e293b; color:#64748b; }
+    .proj-group-divider { height:1px; background:#0d1117; margin:4px 14px 0; }
+
+    /* Regular session rows */
+    .sd-item { padding:8px 14px; cursor:pointer; display:flex; flex-direction:column; gap:3px; transition:background 0.1s; }
+    .sd-item:hover { background:#0d1117; }
+    .sd-item.active { background:rgba(59,130,246,0.05); border-left:2px solid #3b82f6; padding-left:12px; }
+    .sd-row1 { display:flex; align-items:center; gap:7px; min-width:0; }
+    .sd-dot { width:6px; height:6px; border-radius:50%; background:#22c55e; flex-shrink:0; }
+    .sd-dot.busy { background:#f59e0b; animation:pdot 1.5s ease-in-out infinite; }
+    .sd-dot.idle { background:#1a2333; animation:none; }
+    .sd-name { flex:1; font-size:13px; font-weight:500; color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    .sd-row2 { display:flex; align-items:center; gap:5px; padding-left:13px; }
+
+    /* ── Mode badge (FIXED contrast) ── */
+    .sd-badge { font-size:10px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; border:1px solid; }
+    .sd-badge.claude { color:#60a5fa; background:rgba(59,130,246,0.09); border-color:rgba(59,130,246,0.22); }
+    .sd-badge.shell { color:#4ade80; background:rgba(74,222,128,0.07); border-color:rgba(74,222,128,0.18); }
+    .sd-badge.opencode { color:#fb923c; background:rgba(251,146,60,0.08); border-color:rgba(251,146,60,0.2); }
+
+    /* ── Session close (×) button ──
+       Appears at end of row1. Subtle by default,
+       turns red on hover. Touch-friendly 28px target. */
+    .sd-kill { width:26px; height:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:transparent; border:none; color:#1e293b; cursor:pointer; border-radius:5px; font-size:14px; line-height:1; transition:all 0.15s; margin-left:2px; }
+    .sd-kill:hover { background:rgba(239,68,68,0.12); color:#f87171; }
+    .sd-kill:active { background:rgba(239,68,68,0.2); color:#ef4444; transform:scale(0.92); }
+
+    /* Quick-add popovers */
+    .quick-add { display:none; margin:0 14px 8px; padding:10px 12px; background:#0d1117; border:1px solid #1a2333; border-radius:8px; }
+    .quick-add.open { display:block; }
+    .quick-add-label { font-size:10px; color:#334155; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px; font-weight:700; }
+    .quick-add-row { display:flex; gap:5px; }
+    .qa-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; padding:9px 4px; background:#060a10; border:1px solid #1a2333; border-radius:7px; color:#475569; font-size:10px; cursor:pointer; font-family:inherit; transition:all 0.13s; }
+    .qa-btn:hover { background:#111827; border-color:#1e293b; color:#94a3b8; }
+    .qa-btn-icon { font-size:15px; line-height:1; }
+    .qa-btn.qa-wt { color:#22d3ee; background:rgba(6,182,212,0.05); border-color:rgba(6,182,212,0.18); }
+    .qa-btn.qa-wt:hover { background:rgba(6,182,212,0.12); border-color:rgba(6,182,212,0.4); }
+
+    /* ═══ WORKTREE SUB-GROUP ═══ */
+    .wt-group { margin:4px 8px 4px; border:1px solid rgba(6,182,212,0.18); border-radius:9px; background:rgba(6,182,212,0.025); overflow:hidden; }
+    .wt-group-hdr { display:flex; align-items:center; gap:7px; padding:8px 10px 7px; background:rgba(6,182,212,0.04); border-bottom:1px solid rgba(6,182,212,0.1); }
+    .wt-group-icon { color:#22d3ee; opacity:0.7; font-size:12px; font-family:'SF Mono',monospace; font-weight:700; flex-shrink:0; }
+    .wt-group-branch { flex:1; font-size:12px; font-weight:700; color:#67e8f9; font-family:'SF Mono',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .wt-group-merge { padding:2px 8px; background:rgba(6,182,212,0.08); border:1px solid rgba(6,182,212,0.25); color:#22d3ee; font-size:10px; font-weight:700; border-radius:4px; cursor:pointer; flex-shrink:0; transition:all 0.12s; font-family:inherit; }
+    .wt-group-merge:hover { background:rgba(6,182,212,0.16); border-color:#22d3ee; }
+    .wt-group-add { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:4px; background:rgba(6,182,212,0.06); border:1px solid rgba(6,182,212,0.18); color:#22d3ee; cursor:pointer; font-size:13px; line-height:1; transition:all 0.12s; flex-shrink:0; font-family:inherit; opacity:0.7; }
+    .wt-group-add:hover { opacity:1; background:rgba(6,182,212,0.14); border-color:#22d3ee; }
+
+    .wt-session-item { display:flex; flex-direction:column; gap:3px; padding:8px 10px; cursor:pointer; transition:background 0.1s; border-top:1px solid rgba(6,182,212,0.06); }
+    .wt-session-item:hover { background:rgba(6,182,212,0.04); }
+    .wt-session-item.active { background:rgba(6,182,212,0.07); }
+    .wt-session-row1 { display:flex; align-items:center; gap:7px; min-width:0; }
+    .wt-session-name { flex:1; font-size:12px; color:#94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+
+    .wt-quick-add { display:none; margin:0; padding:9px 10px; background:rgba(6,182,212,0.03); border-top:1px solid rgba(6,182,212,0.08); }
+    .wt-quick-add.open { display:block; }
+    .wt-quick-add-label { font-size:9px; color:#164e63; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:7px; font-weight:700; }
+    .wt-qa-row { display:flex; gap:5px; }
+    .wt-qa-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 4px; background:rgba(6,182,212,0.04); border:1px solid rgba(6,182,212,0.12); border-radius:6px; color:#22d3ee; font-size:10px; cursor:pointer; font-family:inherit; opacity:0.7; transition:all 0.13s; }
+    .wt-qa-btn:hover { opacity:1; background:rgba(6,182,212,0.1); border-color:rgba(6,182,212,0.3); }
+
+    /* ═══ WORKTREE INLINE CREATION FORM ═══ */
+    .wt-inline-form { display:none; margin-top:9px; border-top:1px solid #0d1117; padding-top:11px; }
+    .wt-inline-form.open { display:block; }
+    .wt-inline-hdr { display:flex; align-items:center; gap:7px; margin-bottom:10px; }
+    .wt-inline-title { font-size:11px; font-weight:700; color:#22d3ee; flex:1; font-family:'SF Mono',monospace; }
+    .wt-inline-back { background:transparent; border:none; color:#334155; cursor:pointer; font-size:11px; padding:3px 6px; border-radius:4px; font-family:inherit; }
+    .wt-inline-back:hover { background:#060a10; color:#475569; }
+    .wt-inline-finput { width:100%; background:#060a10; border:1px solid rgba(6,182,212,0.2); border-radius:7px; padding:8px 10px; color:#e2e8f0; font-size:12px; font-family:'SF Mono',monospace; outline:none; transition:border-color 0.15s; margin-bottom:9px; }
+    .wt-inline-finput:focus { border-color:#22d3ee; box-shadow:0 0 0 3px rgba(6,182,212,0.1); }
+    .wt-inline-finput::placeholder { color:#1a2333; }
+    .wt-from-row { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
+    .wt-from-chip { padding:3px 9px; border-radius:5px; background:#060a10; border:1px solid #1a2333; color:#334155; font-size:10px; cursor:pointer; font-family:'SF Mono',monospace; transition:all 0.12s; }
+    .wt-from-chip:hover { border-color:#1e293b; color:#475569; }
+    .wt-from-chip.sel { background:rgba(6,182,212,0.08); border-color:rgba(6,182,212,0.35); color:#22d3ee; }
+    .wt-mode-row { display:flex; gap:5px; margin-bottom:10px; }
+    .wt-mode-btn { flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:7px 6px; background:#060a10; border:1px solid #1a2333; border-radius:7px; color:#334155; font-size:11px; font-weight:500; cursor:pointer; font-family:inherit; transition:all 0.13s; }
+    .wt-mode-btn:hover { background:#0d1117; border-color:#1e293b; color:#64748b; }
+    .wt-mode-btn.sel-claude { background:rgba(59,130,246,0.1); border-color:rgba(59,130,246,0.4); color:#60a5fa; }
+    .wt-mode-btn.sel-shell { background:rgba(74,222,128,0.07); border-color:rgba(74,222,128,0.3); color:#4ade80; }
+    .wt-mode-btn.sel-opencode { background:rgba(251,146,60,0.08); border-color:rgba(251,146,60,0.3); color:#fb923c; }
+    .wt-create-btn { width:100%; padding:9px; background:#0891b2; border:none; border-radius:8px; color:white; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; display:flex; align-items:center; justify-content:center; gap:7px; }
+    .wt-create-btn:hover { background:#0e7490; }
+    .wt-create-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .wt-creating { display:none; align-items:center; gap:8px; padding:8px 10px; background:#060a10; border:1px solid rgba(6,182,212,0.15); border-radius:7px; margin-top:7px; font-size:11px; color:#22d3ee; }
+    .wt-creating.show { display:flex; }
+
+    .sd-footer { padding:10px 14px; border-top:1px solid #0d1117; flex-shrink:0; display:flex; gap:6px; }
+    .sd-footer-btn { flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:9px; background:#0d1117; border:1px solid #1a2333; border-radius:8px; color:#334155; font-size:11px; font-weight:500; cursor:pointer; font-family:inherit; }
+    .sd-footer-btn:hover { background:#111827; border-color:#1e293b; color:#475569; }
+
+    /* ═══ WORKTREE MERGE SHEET ═══ */
+    .wt-modal { position:absolute; inset:0; display:none; align-items:flex-end; z-index:200; }
+    .wt-modal.open { display:flex; }
+    .wt-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.65); backdrop-filter:blur(2px); }
+    .wt-sheet { position:relative; z-index:1; background:#0a0e18; border-radius:18px 18px 0 0; border:1px solid #111827; border-bottom:none; width:100%; padding:0 0 20px; }
+    .wt-handle { width:36px; height:4px; background:#1a2333; border-radius:2px; margin:10px auto 0; }
+    .wt-hdr { display:flex; align-items:center; gap:11px; padding:14px 16px 11px; border-bottom:1px solid #0d1117; }
+    .wt-icon { width:36px; height:36px; border-radius:9px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .wt-icon.merge-icon { background:rgba(6,182,212,0.08); border:1px solid rgba(6,182,212,0.2); color:#22d3ee; }
+    .wt-icon.close-icon { background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.18); color:#f87171; }
+    .wt-hdr-info { flex:1; }
+    .wt-hdr-title { font-size:15px; font-weight:700; color:#e2e8f0; font-family:'SF Mono',monospace; }
+    .wt-hdr-sub { font-size:11px; color:#334155; margin-top:2px; font-family:inherit; }
+    .wt-close { padding:4px; background:transparent; border:none; color:#1e293b; cursor:pointer; font-size:17px; line-height:1; border-radius:4px; }
+    .wt-close:hover { background:#0d1117; color:#334155; }
+    .wt-body { padding:12px 16px; display:flex; flex-direction:column; gap:7px; }
+    .wt-btn { display:flex; align-items:center; gap:11px; padding:12px 13px; background:#0d1117; border:1px solid #1a2333; border-radius:10px; cursor:pointer; font-family:inherit; width:100%; transition:all 0.13s; }
+    .wt-btn:hover { background:#111827; border-color:#1e293b; }
+    .wt-bicon { width:30px; height:30px; border-radius:7px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .wt-btn.merge .wt-bicon { background:rgba(6,182,212,0.1); color:#22d3ee; }
+    .wt-btn.merge:hover { border-color:rgba(6,182,212,0.35); }
+    .wt-btn.keep .wt-bicon { background:rgba(34,197,94,0.08); color:#22c55e; }
+    .wt-btn.secondary .wt-bicon { background:rgba(100,116,139,0.1); color:#64748b; }
+    .wt-btn.danger .wt-bicon { background:rgba(239,68,68,0.08); color:#f87171; }
+    .wt-btn.danger:hover { border-color:rgba(239,68,68,0.25); background:rgba(239,68,68,0.04); }
+    .wt-btn-text { text-align:left; }
+    .wt-btn-label { font-size:13px; font-weight:600; color:#e2e8f0; }
+    .wt-btn-desc { font-size:11px; color:#334155; margin-top:1px; }
+
+    /* ═══════════════════════════════════════════════
+       CLOSE SESSION SHEET
+       Slides up from bottom of drawer when × tapped.
+       Two clear actions: Kill (destructive) or Hide.
+       Cancel always available.
+       ═══════════════════════════════════════════════ */
+    .close-session-overlay { position:absolute; inset:0; background:rgba(0,0,0,0.55); z-index:300; display:none; backdrop-filter:blur(1px); }
+    .close-session-overlay.open { display:block; }
+    .close-session-sheet { position:absolute; bottom:0; left:0; right:0; background:#0a0e18; border-radius:18px 18px 0 0; border:1px solid #111827; border-bottom:none; z-index:301; transform:translateY(100%); transition:transform 0.28s cubic-bezier(0.32,0.72,0,1); padding:0 0 24px; }
+    .close-session-sheet.open { transform:translateY(0); }
+    .cs-handle { width:36px; height:4px; background:#1a2333; border-radius:2px; margin:10px auto 12px; }
+    .cs-name { font-size:13px; font-weight:600; color:#64748b; text-align:center; padding:0 20px 14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .cs-name span { color:#94a3b8; }
+    .cs-divider { height:1px; background:#0d1117; margin:0 16px 12px; }
+    .cs-options { padding:0 16px; display:flex; flex-direction:column; gap:8px; }
+
+    /* Kill option — prominent red destructive action */
+    .cs-kill { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.2); border-radius:12px; cursor:pointer; font-family:inherit; transition:all 0.15s; text-align:left; }
+    .cs-kill:hover { background:rgba(239,68,68,0.12); border-color:rgba(239,68,68,0.4); }
+    .cs-kill:active { background:rgba(239,68,68,0.18); transform:scale(0.99); }
+    .cs-kill-icon { width:32px; height:32px; border-radius:8px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.2); display:flex; align-items:center; justify-content:center; color:#f87171; flex-shrink:0; }
+    .cs-kill-text { flex:1; }
+    .cs-kill-title { font-size:14px; font-weight:700; color:#fca5a5; display:block; margin-bottom:2px; }
+    .cs-kill-desc { font-size:11px; color:#7f1d1d; }
+
+    /* Hide option — neutral secondary action */
+    .cs-hide { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; background:#0d1117; border:1px solid #1a2333; border-radius:12px; cursor:pointer; font-family:inherit; transition:all 0.15s; text-align:left; }
+    .cs-hide:hover { background:#111827; border-color:#1e293b; }
+    .cs-hide-icon { width:32px; height:32px; border-radius:8px; background:#060a10; border:1px solid #1e293b; display:flex; align-items:center; justify-content:center; color:#475569; flex-shrink:0; }
+    .cs-hide-text { flex:1; }
+    .cs-hide-title { font-size:14px; font-weight:600; color:#94a3b8; display:block; margin-bottom:2px; }
+    .cs-hide-desc { font-size:11px; color:#334155; }
+
+    /* Cancel — text button, low emphasis */
+    .cs-cancel { width:100%; padding:12px; background:transparent; border:none; color:#334155; font-size:14px; font-weight:500; cursor:pointer; font-family:inherit; border-radius:8px; transition:all 0.15s; margin-top:2px; }
+    .cs-cancel:hover { color:#475569; background:#0d1117; }
+
+    .phone-caption { font-size:11px; color:#1e293b; text-align:center; letter-spacing:0.03em; }
+  </style>
+</head>
+<body>
+
+<div class="sidebar">
+  <h1>Codeman Mobile UX</h1>
+  <p class="tagline">Design Preview v2 &#8212; Approach C</p>
+
+  <h3>Screens</h3>
+  <button class="demo-btn active" id="btn-default" onclick="setState('default')"><span class="btn-dot" style="background:#22c55e"></span>Default view</button>
+  <button class="demo-btn" id="btn-sessions" onclick="setState('sessions')"><span class="btn-dot" style="background:#64748b"></span>Session drawer</button>
+  <button class="demo-btn" id="btn-quickadd" onclick="setState('quickadd')"><span class="btn-dot" style="background:#22c55e"></span>Add session [+]</button>
+  <button class="demo-btn" id="btn-projects" onclick="setState('projects')"><span class="btn-dot" style="background:#3b82f6"></span>Project picker</button>
+  <button class="demo-btn" id="btn-new" onclick="setState('new-project')"><span class="btn-dot" style="background:#8b5cf6"></span>New project</button>
+  <button class="demo-btn" id="btn-clone" onclick="setState('clone')"><span class="btn-dot" style="background:#f59e0b"></span>Clone from Git</button>
+  <button class="demo-btn" id="btn-close-sess" onclick="setState('close-sess')"><span class="btn-dot" style="background:#f87171"></span>Close session (&#215; button)</button>
+
+  <div class="sidebar-sep"></div>
+  <h3>Worktree Workflow</h3>
+  <button class="demo-btn" id="btn-wt-create" onclick="setState('wt-create')"><span class="btn-dot" style="background:#22d3ee"></span>&#8489; Create worktree</button>
+  <button class="demo-btn" id="btn-wt-active" onclick="setState('wt-active')"><span class="btn-dot" style="background:#06b6d4"></span>&#8489; Worktree sessions</button>
+  <button class="demo-btn" id="btn-wt-addsess" onclick="setState('wt-addsess')"><span class="btn-dot" style="background:#0891b2"></span>&#8489; Add session to worktree</button>
+  <button class="demo-btn" id="btn-worktree" onclick="setState('worktree')"><span class="btn-dot" style="background:#164e63"></span>&#8489; Merge / cleanup</button>
+
+  <h3>Workflow map</h3>
+  <div class="workflow-card">
+    <div class="wf-title">Switch to existing session</div>
+    <div class="wf-steps">&#8801; &#8594; tap session <span class="wf-badge">2 taps</span></div>
+  </div>
+  <div class="workflow-card">
+    <div class="wf-title">Close / kill a session</div>
+    <div class="wf-steps">&#8801; &#8594; &#215; &#8594; Kill Session <span class="wf-badge">3 taps</span></div>
+  </div>
+  <div class="workflow-card">
+    <div class="wf-title">New session, same project</div>
+    <div class="wf-steps">&#8801; &#8594; [+] &#8594; Claude/Shell <span class="wf-badge">3 taps</span></div>
+  </div>
+  <div class="workflow-card">
+    <div class="wf-title">Create worktree</div>
+    <div class="wf-steps">&#8801; &#8594; [+] &#8594; &#8489; Worktree &#8594; branch &#8594; mode &#8594; Create <span class="wf-badge wt">6 taps</span></div>
+  </div>
+  <div class="workflow-card">
+    <div class="wf-title">Add session to worktree</div>
+    <div class="wf-steps">&#8801; &#8594; [+] on worktree &#8594; Claude/Shell <span class="wf-badge wt">3 taps</span></div>
+  </div>
+  <div class="workflow-card">
+    <div class="wf-title">Merge worktree</div>
+    <div class="wf-steps">&#8801; &#8594; [merge] on worktree &#8594; Merge <span class="wf-badge wt">3 taps</span></div>
+  </div>
+</div>
+
+<div class="phone-wrap">
+  <div class="phone-frame">
+
+    <div class="status-bar">
+      <span class="status-time">9:41</span>
+      <div class="status-icons">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="4" width="3" height="7" rx="1"/><rect x="4" y="2.5" width="3" height="8.5" rx="1"/><rect x="8" y="1" width="3" height="10" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity="0.25"/></svg>
+        <svg width="14" height="11" viewBox="0 0 14 11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 2.5C9.4 2.5 11.5 3.5 13 5.1L11.5 6.5C10.4 5.3 8.8 4.5 7 4.5S3.6 5.3 2.5 6.5L1 5.1C2.5 3.5 4.6 2.5 7 2.5z"/><path d="M7 5.5c1.4 0 2.7.6 3.6 1.5L9 8.5c-.6-.6-1.3-.9-2-.9s-1.4.3-2 .9L3.4 7C4.3 6.1 5.6 5.5 7 5.5z"/><circle cx="7" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12" fill="none"><rect x="0.5" y="0.5" width="21" height="11" rx="3.5" stroke="currentColor" stroke-opacity="0.3"/><rect x="2" y="2" width="16" height="8" rx="2" fill="currentColor"/><path d="M23 4.5v3a1.5 1.5 0 0 0 0-3z" fill="currentColor" fill-opacity="0.4"/></svg>
+      </div>
+    </div>
+
+    <div class="app-header">
+      <span class="header-logo">codeman</span>
+      <div class="header-tab">
+        <div class="tab-dot"></div>
+        <span class="tab-name">fix mobile UX &#8212; bottom bar refactor</span>
+      </div>
+      <button class="hdr-icon" onclick="setState('sessions')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div class="terminal">
+      <div><span class="tp">&#10095;</span> <span class="tc">Working on mobile UX&#8230;</span></div>
+      <div><span class="to">Claude [working] Analyzing session close UX</span></div>
+      <div><span class="to">  &gt; × button on each session row</span></div>
+      <div><span class="to">  &gt; Two-step: subtle icon &#8594; confirm sheet</span></div>
+      <div><span class="to">  &gt; Kill vs Remove Tab — clear distinction</span></div>
+      <div>&nbsp;</div>
+      <div><span class="tw">&#9670; UX principle: destructive = red + confirm</span></div>
+      <div><span class="to">  Never kill without one tap of confirmation</span></div>
+      <div><span class="to">  But make that confirmation fast and clear</span></div>
+      <div>&nbsp;</div>
+      <div><span class="tk">&#10003; Mockup updated</span> <span class="tcur"></span></div>
+    </div>
+
+    <!-- COMPOSE BAR -->
+    <div class="compose-bar">
+      <button class="compose-attach">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </button>
+      <textarea class="compose-input" id="composeInput" placeholder="Message Claude&#8230;" rows="1" oninput="autoGrow(this)"></textarea>
+      <button class="compose-send">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+
+    <!-- ACCESSORY BAR -->
+    <div class="accessory-bar">
+      <button class="acc">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="acc acc-pill">64%</button>
+      <button class="acc"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 15l7-7 7 7"/></svg></button>
+      <button class="acc"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 9l-7 7-7-7"/></svg></button>
+      <button class="acc acc-cmd">/ &#9650;</button>
+      <div class="acc-spacer"></div>
+      <button class="acc acc-project" onclick="setState('projects')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>Codeman</span>
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <button class="acc" onclick="setState('sessions')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+
+    <!-- Sheet overlay -->
+    <div class="overlay" id="sheetOverlay" onclick="closeSheet()"></div>
+
+    <!-- Project picker sheet -->
+    <div class="bottom-sheet" id="projectSheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-hdr"><div class="sheet-hdr-title">Projects</div><div class="sheet-hdr-sub">Set active project for quick-start sessions</div></div>
+      <div class="sheet-tabs">
+        <button class="stab active" id="stab-projects" onclick="switchTab('projects')">My Projects</button>
+        <button class="stab" id="stab-new" onclick="switchTab('new')">New</button>
+        <button class="stab" id="stab-clone" onclick="switchTab('clone')">Clone from Git</button>
+      </div>
+      <div class="sheet-body">
+        <div id="tab-projects">
+          <div class="proj-list">
+            <div class="proj-item cur">
+              <div class="proj-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
+              <div class="proj-info"><div class="proj-name">Codeman</div><div class="proj-path">~/sources/Codeman</div></div>
+              <div class="proj-check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+            </div>
+            <div class="proj-item">
+              <div class="proj-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
+              <div class="proj-info"><div class="proj-name">my-api-service</div><div class="proj-path">~/sources/my-api-service</div></div>
+              <div class="proj-check"></div>
+            </div>
+          </div>
+          <div class="row-btns">
+            <button class="act-btn" onclick="closeSheet(); switchTab('new'); openSheet()"><div class="act-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>New Project</button>
+            <button class="act-btn" onclick="closeSheet(); switchTab('clone'); openSheet()"><div class="act-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 9v5a2 2 0 0 0 2 2h3"/><polyline points="15 18 18 21 21 18"/></svg></div>Clone from Git</button>
+          </div>
+        </div>
+        <div id="tab-new" style="display:none">
+          <div class="fg"><label class="flabel">Project name</label><input class="finput" type="text" placeholder="my-project"></div>
+          <div class="fg"><label class="flabel">Location</label><input class="finput" type="text" value="~/sources/"><div class="fhint">Folder will be created at this path</div></div>
+          <button class="action-btn">Create Project</button>
+        </div>
+        <div id="tab-clone" style="display:none">
+          <div class="fg"><label class="flabel">Repository URL</label><div class="input-row"><input class="finput" type="text" id="cloneUrl" placeholder="https://github.com/user/repo.git" oninput="onUrlChange(this.value)"><button class="paste-btn" onclick="simulatePaste()">Paste</button></div></div>
+          <div id="branchSection" style="display:none">
+            <div class="fg"><label class="flabel">Branch</label><div class="branch-row"><button class="bchip sel" onclick="selectBranch(this)">master</button><button class="bchip" onclick="selectBranch(this)">develop</button></div></div>
+            <div class="fg"><label class="flabel">Clone into</label><input class="finput" type="text" value="~/sources/"></div>
+            <button class="action-btn" onclick="startClone()">Clone &amp; Open</button>
+            <div class="clone-progress" id="cloneProgress"><div class="spinner"></div><span class="clone-progress-text">Cloning repository&#8230;</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drawer overlay -->
+    <div class="overlay" id="drawerOverlay" style="z-index:101;" onclick="closeDrawer()"></div>
+
+    <!-- ═══════════════════════════════════════════
+         SESSION DRAWER
+         ═══════════════════════════════════════════ -->
+    <div class="sess-drawer" id="sessDrawer">
+      <div class="sd-hdr">
+        <span class="sd-title">Sessions</span>
+        <button class="sd-close" onclick="closeDrawer()">&#215;</button>
+      </div>
+
+      <div class="sd-list">
+
+        <!-- PROJECT: Codeman -->
+        <div class="proj-group">
+          <div class="proj-group-hdr">
+            <span class="proj-group-name">Codeman</span>
+            <span class="proj-group-branch">master</span>
+            <button class="proj-group-add" onclick="toggleQuickAdd('codeman')">+</button>
+          </div>
+
+          <div class="quick-add" id="qa-codeman">
+            <div class="quick-add-label">Start new session in Codeman</div>
+            <div class="quick-add-row" id="qa-codeman-btns">
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9654;</span>Claude</button>
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9889;</span>Shell</button>
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9672;</span>OpenCode</button>
+              <button class="qa-btn qa-wt" onclick="showWorktreeForm('codeman')"><span class="qa-btn-icon">&#8489;</span>Worktree</button>
+            </div>
+            <div class="wt-inline-form" id="wt-form-codeman">
+              <div class="wt-inline-hdr"><span class="wt-inline-title">&#8489; New worktree in Codeman</span><button class="wt-inline-back" onclick="hideWorktreeForm('codeman')">&#8592; back</button></div>
+              <div style="margin-bottom:8px"><label class="flabel">Branch name</label><input class="wt-inline-finput" type="text" placeholder="feat/my-feature" id="wt-branch-codeman"></div>
+              <div style="margin-bottom:9px"><label class="flabel">From</label><div class="wt-from-row"><button class="wt-from-chip sel" onclick="selFromChip(this)">master</button><button class="wt-from-chip" onclick="selFromChip(this)">develop</button></div></div>
+              <div style="margin-bottom:10px"><label class="flabel">Start with</label>
+                <div class="wt-mode-row" id="wt-mode-codeman">
+                  <button class="wt-mode-btn sel-claude" onclick="selMode('codeman','claude',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>Claude</button>
+                  <button class="wt-mode-btn" onclick="selMode('codeman','shell',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Shell</button>
+                  <button class="wt-mode-btn" onclick="selMode('codeman','opencode',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>OpenCode</button>
+                </div>
+              </div>
+              <button class="wt-create-btn" id="wt-create-codeman" onclick="createWorktree('codeman')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>Create &amp; Start</button>
+              <div class="wt-creating" id="wt-creating-codeman"><div class="spinner" style="border-color:rgba(6,182,212,0.2);border-top-color:#22d3ee"></div><span>Creating worktree&#8230;</span></div>
+            </div>
+          </div>
+
+          <!-- Worktree sub-group: feat/better-ux -->
+          <div class="wt-group">
+            <div class="wt-group-hdr">
+              <span class="wt-group-icon">&#8489;</span>
+              <span class="wt-group-branch">feat/better-ux</span>
+              <button class="wt-group-merge" onclick="closeDrawer(); setState('worktree')">merge</button>
+              <button class="wt-group-add" onclick="toggleWtQuickAdd('wt-qa-codeman')">+</button>
+            </div>
+            <div class="wt-quick-add" id="wt-qa-codeman">
+              <div class="wt-quick-add-label">Add session to feat/better-ux</div>
+              <div class="wt-qa-row">
+                <button class="wt-qa-btn" onclick="closeDrawer()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>Claude</button>
+                <button class="wt-qa-btn" onclick="closeDrawer()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Shell</button>
+                <button class="wt-qa-btn" onclick="closeDrawer()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>OpenCode</button>
+              </div>
+            </div>
+            <!-- Worktree session 1 (active, Claude) -->
+            <div class="wt-session-item active">
+              <div class="wt-session-row1">
+                <div class="sd-dot"></div>
+                <span class="wt-session-name">fix mobile UX &#8212; bottom bar refactor</span>
+                <span class="sd-badge claude">claude</span>
+                <button class="sd-kill" onclick="showCloseSheet('fix mobile UX &#8212; bottom bar refactor')">&#215;</button>
+              </div>
+            </div>
+            <!-- Worktree session 2 (idle, Shell) -->
+            <div class="wt-session-item">
+              <div class="wt-session-row1">
+                <div class="sd-dot idle"></div>
+                <span class="wt-session-name">terminal</span>
+                <span class="sd-badge shell">shell</span>
+                <button class="sd-kill" onclick="showCloseSheet('terminal')">&#215;</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Regular sessions in Codeman -->
+          <div class="sd-item" style="margin-top:4px">
+            <div class="sd-row1">
+              <div class="sd-dot idle"></div>
+              <span class="sd-name">write tests for worktree flow</span>
+              <span class="sd-badge claude" style="flex-shrink:0">claude</span>
+              <button class="sd-kill" onclick="showCloseSheet('write tests for worktree flow')">&#215;</button>
+            </div>
+          </div>
+          <div class="proj-group-divider"></div>
+        </div>
+
+        <!-- PROJECT: my-api-service -->
+        <div class="proj-group">
+          <div class="proj-group-hdr">
+            <span class="proj-group-name">my-api-service</span>
+            <button class="proj-group-add" onclick="toggleQuickAdd('api')">+</button>
+          </div>
+          <div class="quick-add" id="qa-api">
+            <div class="quick-add-label">Start new session in my-api-service</div>
+            <div class="quick-add-row" id="qa-api-btns">
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9654;</span>Claude</button>
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9889;</span>Shell</button>
+              <button class="qa-btn" onclick="closeDrawer()"><span class="qa-btn-icon">&#9672;</span>OpenCode</button>
+              <button class="qa-btn qa-wt" onclick="showWorktreeForm('api')"><span class="qa-btn-icon">&#8489;</span>Worktree</button>
+            </div>
+            <div class="wt-inline-form" id="wt-form-api">
+              <div class="wt-inline-hdr"><span class="wt-inline-title">&#8489; New worktree in my-api-service</span><button class="wt-inline-back" onclick="hideWorktreeForm('api')">&#8592; back</button></div>
+              <div style="margin-bottom:8px"><label class="flabel">Branch name</label><input class="wt-inline-finput" type="text" placeholder="feat/my-feature" id="wt-branch-api"></div>
+              <div style="margin-bottom:9px"><label class="flabel">From</label><div class="wt-from-row"><button class="wt-from-chip sel" onclick="selFromChip(this)">main</button><button class="wt-from-chip" onclick="selFromChip(this)">develop</button></div></div>
+              <div style="margin-bottom:10px"><label class="flabel">Start with</label>
+                <div class="wt-mode-row" id="wt-mode-api">
+                  <button class="wt-mode-btn sel-claude" onclick="selMode('api','claude',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>Claude</button>
+                  <button class="wt-mode-btn" onclick="selMode('api','shell',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Shell</button>
+                  <button class="wt-mode-btn" onclick="selMode('api','opencode',this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>OpenCode</button>
+                </div>
+              </div>
+              <button class="wt-create-btn" id="wt-create-api" onclick="createWorktree('api')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>Create &amp; Start</button>
+              <div class="wt-creating" id="wt-creating-api"><div class="spinner" style="border-color:rgba(6,182,212,0.2);border-top-color:#22d3ee"></div><span>Creating worktree&#8230;</span></div>
+            </div>
+          </div>
+          <div class="sd-item">
+            <div class="sd-row1">
+              <div class="sd-dot busy"></div>
+              <span class="sd-name">implement rate limiting middleware</span>
+              <span class="sd-badge claude" style="flex-shrink:0">claude</span>
+              <button class="sd-kill" onclick="showCloseSheet('implement rate limiting middleware')">&#215;</button>
+            </div>
+          </div>
+          <div class="sd-item">
+            <div class="sd-row1">
+              <div class="sd-dot idle"></div>
+              <span class="sd-name">update OpenAPI docs for v3</span>
+              <span class="sd-badge shell" style="flex-shrink:0">shell</span>
+              <button class="sd-kill" onclick="showCloseSheet('update OpenAPI docs for v3')">&#215;</button>
+            </div>
+          </div>
+          <div class="proj-group-divider"></div>
+        </div>
+
+      </div>
+
+      <div class="sd-footer">
+        <button class="sd-footer-btn" onclick="closeDrawer(); switchTab('new'); openSheet()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Project
+        </button>
+        <button class="sd-footer-btn" onclick="closeDrawer(); switchTab('clone'); openSheet()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 9v5a2 2 0 0 0 2 2h3"/><polyline points="15 18 18 21 21 18"/></svg>
+          Clone from Git
+        </button>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════
+           CLOSE SESSION SHEET
+           Appears above the drawer content when × tapped.
+           Uses absolute positioning within the drawer.
+           ═══════════════════════════════════════════════ -->
+      <div class="close-session-overlay" id="closeOverlay" onclick="hideCloseSheet()"></div>
+      <div class="close-session-sheet" id="closeSheet">
+        <div class="cs-handle"></div>
+        <div class="cs-name">Close <span id="csSessionName"></span></div>
+        <div class="cs-divider"></div>
+        <div class="cs-options">
+          <!-- Kill: terminates tmux entirely -->
+          <button class="cs-kill" onclick="simulateKill()">
+            <div class="cs-kill-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            </div>
+            <div class="cs-kill-text">
+              <span class="cs-kill-title">Kill Session</span>
+              <span class="cs-kill-desc">Stops Claude &amp; kills tmux &#8212; cannot be undone</span>
+            </div>
+          </button>
+          <!-- Remove tab: hides, tmux keeps running -->
+          <button class="cs-hide" onclick="simulateHide()">
+            <div class="cs-hide-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </div>
+            <div class="cs-hide-text">
+              <span class="cs-hide-title">Remove Tab</span>
+              <span class="cs-hide-desc">Hides from drawer &#8212; tmux keeps running in background</span>
+            </div>
+          </button>
+          <button class="cs-cancel" onclick="hideCloseSheet()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Worktree merge / cleanup sheet -->
+    <div class="wt-modal" id="wtModal">
+      <div class="wt-backdrop" onclick="closeWt()"></div>
+      <div class="wt-sheet">
+        <div class="wt-handle"></div>
+        <div class="wt-hdr">
+          <div class="wt-icon merge-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+          <div class="wt-hdr-info"><div class="wt-hdr-title">feat/better-ux</div><div class="wt-hdr-sub">What should happen to this worktree?</div></div>
+          <button class="wt-close" onclick="closeWt()">&#215;</button>
+        </div>
+        <div class="wt-body">
+          <button class="wt-btn merge">
+            <div class="wt-bicon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+            <div class="wt-btn-text"><div class="wt-btn-label">Merge into Codeman</div><div class="wt-btn-desc">Fast-forward feat/better-ux into master</div></div>
+          </button>
+          <button class="wt-btn keep">
+            <div class="wt-bicon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></div>
+            <div class="wt-btn-text"><div class="wt-btn-label">Keep worktree</div><div class="wt-btn-desc">Save for later &#8212; branch and files untouched</div></div>
+          </button>
+          <button class="wt-btn danger">
+            <div class="wt-bicon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></div>
+            <div class="wt-btn-text"><div class="wt-btn-label">Remove worktree</div><div class="wt-btn-desc">Delete branch and working files</div></div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div class="phone-caption">iPhone 14 Pro &#8212; 390 &#215; 844</div>
+</div>
+
+<script>
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function setState(s) {
+    closeSheet(); closeDrawer(); closeWt(); hideCloseSheet();
+    document.querySelectorAll('.demo-btn').forEach(function(b) { b.classList.remove('active'); });
+    var btnEl = document.getElementById('btn-' + s);
+    if (btnEl) btnEl.classList.add('active');
+    if (s === 'projects') { switchTab('projects'); openSheet(); }
+    else if (s === 'new-project') { switchTab('new'); openSheet(); }
+    else if (s === 'clone') { switchTab('clone'); openSheet(); }
+    else if (s === 'sessions') { openDrawer(); }
+    else if (s === 'quickadd') { openDrawer(); setTimeout(function(){ toggleQuickAdd('codeman'); }, 320); }
+    else if (s === 'wt-create') { openDrawer(); setTimeout(function(){ toggleQuickAdd('codeman'); setTimeout(function(){ showWorktreeForm('codeman'); }, 200); }, 320); }
+    else if (s === 'wt-active') { openDrawer(); }
+    else if (s === 'wt-addsess') { openDrawer(); setTimeout(function(){ toggleWtQuickAdd('wt-qa-codeman'); }, 320); }
+    else if (s === 'worktree') { document.getElementById('wtModal').classList.add('open'); }
+    else if (s === 'close-sess') { openDrawer(); setTimeout(function(){ showCloseSheet('implement rate limiting middleware'); }, 340); }
+  }
+
+  function openSheet() { document.getElementById('sheetOverlay').classList.add('open'); document.getElementById('projectSheet').classList.add('open'); }
+  function closeSheet() { document.getElementById('sheetOverlay').classList.remove('open'); document.getElementById('projectSheet').classList.remove('open'); }
+
+  function openDrawer() { document.getElementById('drawerOverlay').classList.add('open'); document.getElementById('sessDrawer').classList.add('open'); }
+  function closeDrawer() {
+    document.getElementById('drawerOverlay').classList.remove('open');
+    document.getElementById('sessDrawer').classList.remove('open');
+    hideCloseSheet();
+    closeAllQuickAdds();
+  }
+  function closeWt() { document.getElementById('wtModal').classList.remove('open'); }
+
+  /* ── Close session sheet ── */
+  function showCloseSheet(name) {
+    var el = document.getElementById('csSessionName');
+    if (el) el.textContent = name;
+    document.getElementById('closeOverlay').classList.add('open');
+    document.getElementById('closeSheet').classList.add('open');
+  }
+  function hideCloseSheet() {
+    document.getElementById('closeOverlay').classList.remove('open');
+    document.getElementById('closeSheet').classList.remove('open');
+  }
+  function simulateKill() {
+    hideCloseSheet();
+    setTimeout(function() { closeDrawer(); }, 200);
+  }
+  function simulateHide() {
+    hideCloseSheet();
+    setTimeout(function() { closeDrawer(); }, 200);
+  }
+
+  /* ── Quick-add popovers ── */
+  function closeAllQuickAdds() {
+    document.querySelectorAll('.quick-add').forEach(function(el) { el.classList.remove('open'); });
+    document.querySelectorAll('.wt-quick-add').forEach(function(el) { el.classList.remove('open'); });
+    ['codeman','api'].forEach(function(id) { hideWorktreeForm(id); });
+  }
+  function toggleQuickAdd(id) {
+    var el = document.getElementById('qa-' + id);
+    if (el.classList.contains('open')) { el.classList.remove('open'); }
+    else { closeAllQuickAdds(); el.classList.add('open'); }
+  }
+  function toggleWtQuickAdd(id) {
+    var el = document.getElementById(id);
+    if (el.classList.contains('open')) { el.classList.remove('open'); }
+    else { document.querySelectorAll('.wt-quick-add').forEach(function(e){ e.classList.remove('open'); }); el.classList.add('open'); }
+  }
+
+  /* ── Worktree form ── */
+  var selectedModes = { codeman: 'claude', api: 'claude' };
+  function selMode(group, mode, btn) {
+    selectedModes[group] = mode;
+    var row = document.getElementById('wt-mode-' + group);
+    if (!row) return;
+    row.querySelectorAll('.wt-mode-btn').forEach(function(b) { b.className = 'wt-mode-btn'; });
+    btn.className = 'wt-mode-btn sel-' + mode;
+  }
+  function showWorktreeForm(id) {
+    var row = document.getElementById('qa-' + id + '-btns');
+    var form = document.getElementById('wt-form-' + id);
+    if (row) row.style.display = 'none';
+    if (form) form.classList.add('open');
+    var inp = document.getElementById('wt-branch-' + id);
+    if (inp) setTimeout(function() { inp.focus(); }, 50);
+  }
+  function hideWorktreeForm(id) {
+    var row = document.getElementById('qa-' + id + '-btns');
+    var form = document.getElementById('wt-form-' + id);
+    if (row) row.style.display = '';
+    if (form) form.classList.remove('open');
+    var creating = document.getElementById('wt-creating-' + id);
+    if (creating) creating.classList.remove('show');
+    var btn = document.getElementById('wt-create-' + id);
+    if (btn) btn.disabled = false;
+    var inp = document.getElementById('wt-branch-' + id);
+    if (inp) inp.value = '';
+  }
+  function createWorktree(id) {
+    var inp = document.getElementById('wt-branch-' + id);
+    var branch = inp ? inp.value.trim() : '';
+    if (!branch) { if (inp) { inp.style.borderColor='#ef4444'; inp.focus(); setTimeout(function(){ inp.style.borderColor=''; },1500); } return; }
+    var creating = document.getElementById('wt-creating-' + id);
+    var btn = document.getElementById('wt-create-' + id);
+    if (creating) creating.classList.add('show');
+    if (btn) btn.disabled = true;
+    setTimeout(function() { closeDrawer(); setTimeout(function() { hideWorktreeForm(id); }, 400); }, 1800);
+  }
+  function selFromChip(el) {
+    var row = el.closest('.wt-from-row');
+    if (row) row.querySelectorAll('.wt-from-chip').forEach(function(c) { c.classList.remove('sel'); });
+    el.classList.add('sel');
+  }
+
+  /* ── Project sheet tabs ── */
+  function switchTab(t) {
+    document.querySelectorAll('.stab').forEach(function(s) { s.classList.remove('active'); });
+    var tabBtn = document.getElementById('stab-' + t);
+    if (tabBtn) tabBtn.classList.add('active');
+    document.querySelectorAll('#projectSheet .sheet-body > div').forEach(function(d) { d.style.display = 'none'; });
+    var tabEl = document.getElementById('tab-' + t);
+    if (tabEl) tabEl.style.display = '';
+  }
+  function selectBranch(el) {
+    document.querySelectorAll('.bchip').forEach(function(c) { c.classList.remove('sel'); });
+    el.classList.add('sel');
+  }
+  function onUrlChange(val) {
+    document.getElementById('branchSection').style.display = val.trim().length > 8 ? '' : 'none';
+    document.getElementById('cloneProgress').classList.remove('show');
+    var t = document.querySelector('.clone-progress-text');
+    if (t) { t.textContent = 'Cloning repository\u2026'; t.style.color = ''; }
+    var sp = document.querySelector('.clone-progress .spinner');
+    if (sp) sp.style.display = '';
+  }
+  function simulatePaste() {
+    var inp = document.getElementById('cloneUrl');
+    inp.value = 'https://github.com/SGudbrandsson/Codeman.git';
+    onUrlChange(inp.value);
+  }
+  function startClone() {
+    var prog = document.getElementById('cloneProgress');
+    prog.classList.add('show');
+    var t = prog.querySelector('.clone-progress-text');
+    t.textContent = 'Cloning SGudbrandsson/Codeman\u2026';
+    setTimeout(function() {
+      prog.querySelector('.spinner').style.display = 'none';
+      t.textContent = '\u2713 Cloned! Opening project\u2026';
+      t.style.color = '#22c55e';
+      setTimeout(function() { closeSheet(); }, 1200);
+    }, 2000);
+  }
+</script>
+</body>
+</html>
