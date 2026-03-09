@@ -8802,9 +8802,10 @@ kbd {
   .compose-send-btn:hover { background: #2563eb; }
   .compose-send-btn.is-working { background: #ef4444; }
   .compose-send-btn.is-working:hover { background: #dc2626; }
+  .compose-send-btn .compose-send-icon { display: flex; }
   .compose-send-btn .compose-stop-icon { display: none; }
   .compose-send-btn.is-working .compose-send-icon { display: none; }
-  .compose-send-btn.is-working .compose-stop-icon { display: block; }
+  .compose-send-btn.is-working .compose-stop-icon { display: flex; }
 
   /* Expand button: show on desktop (inline style="display:none" is overridden) */
   .compose-expand-btn {
@@ -9234,8 +9235,9 @@ kbd {
 
 /* Inline pill for skipped command messages (e.g. /compact) */
 .tv-command-pill {
-  display: inline-block;
+  display: block;
   margin: 4px auto;
+  max-width: 860px;
   padding: 2px 10px;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
@@ -9244,6 +9246,37 @@ kbd {
   color: #64748b;
   font-family: monospace;
   text-align: center;
+}
+
+/* Send / stop icon toggle — global (applies to all viewport sizes) */
+.compose-send-btn .compose-send-icon { display: flex; }
+.compose-send-btn .compose-stop-icon { display: none; }
+.compose-send-btn.is-working { background: #ef4444; transition: background 0.15s; }
+.compose-send-btn.is-working .compose-send-icon { display: none; }
+.compose-send-btn.is-working .compose-stop-icon { display: flex; }
+
+/* Typing indicator — 3 bouncing dots shown while Claude is working */
+.tv-typing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 4px;
+  max-width: 860px;
+  margin: 0 auto 8px;
+}
+.tv-typing-dot {
+  width: 8px;
+  height: 8px;
+  background: #3b82f6;
+  border-radius: 50%;
+  opacity: 0.4;
+  animation: tv-dot-bounce 1.4s infinite ease-in-out;
+}
+.tv-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.tv-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes tv-dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-7px); opacity: 1; }
 }
 
 .tv-placeholder {

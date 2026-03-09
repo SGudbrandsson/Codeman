@@ -361,7 +361,9 @@ const TranscriptView = {
       for (const block of blocks) {
         this._appendBlock(block, false);
       }
-      this._scrollToBottom(true);
+      // Double-RAF: wait for two paint cycles so the browser finishes layout
+      // (content-visibility:auto on blocks means scrollHeight is stale until painted)
+      requestAnimationFrame(() => requestAnimationFrame(() => this._scrollToBottom(true)));
     } catch {
       this._setPlaceholder('Could not load session history.');
     }
@@ -433,6 +435,26 @@ const TranscriptView = {
     this._container.scrollTo({ top: this._container.scrollHeight, behavior: 'instant' });
   },
 
+  /** Show or hide the "Claude is thinking" typing indicator at the bottom of the transcript */
+  setWorking(isWorking) {
+    if (!this._container) return;
+    const existing = this._container.querySelector('.tv-typing');
+    if (isWorking) {
+      if (existing) return; // already shown
+      const ind = document.createElement('div');
+      ind.className = 'tv-typing';
+      for (let i = 0; i < 3; i++) {
+        const dot = document.createElement('span');
+        dot.className = 'tv-typing-dot';
+        ind.appendChild(dot);
+      }
+      this._container.appendChild(ind);
+      this._scrollToBottom(false);
+    } else {
+      if (existing) existing.remove();
+    }
+  },
+
   _appendBlock(block, scroll) {
     if (!this._container) return;
     let el = null;
@@ -462,14 +484,18 @@ const TranscriptView = {
   },
 
   _renderTextBlock(block) {
-    // Skip Claude Code internal command messages (e.g. /compact, /clear) that only contain XML-like tags
-    if (block.role === 'user' && /^<command-message>[^<]*<\/command-message>(\n<command-name>[^<]*<\/command-name>)?\s*$/.test(block.text)) {
-      const nameMatch = block.text.match(/<command-name>([^<]*)<\/command-name>/);
-      const cmdName = nameMatch ? nameMatch[1].trim() : 'command';
-      const pill = document.createElement('div');
-      pill.className = 'tv-command-pill';
-      pill.textContent = '/' + cmdName;
-      return pill;
+    // Skip Claude Code internal command messages (e.g. /compact, /clear).
+    // These contain only <command-name>, <command-message>, <command-args> XML tags — no real text.
+    if (block.role === 'user') {
+      const stripped = block.text.replace(/<command-[^>]*>[^<]*<\/command-[^>]*>/g, '').trim();
+      if (!stripped) {
+        const nameMatch = block.text.match(/<command-name>([^<]*)<\/command-name>/);
+        const cmdName = (nameMatch ? nameMatch[1].trim() : 'command').replace(/^\//, '');
+        const pill = document.createElement('div');
+        pill.className = 'tv-command-pill';
+        pill.textContent = '/' + cmdName;
+        return pill;
+      }
     }
     const div = document.createElement('div');
     div.className = 'tv-block tv-block--' + (block.role === 'user' ? 'user' : 'assistant');
@@ -2597,6 +2623,7 @@ class CodemanApp {
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
         this._updateSendBtn(false);
+        if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(false);
       }
     }
     // Start stuck detection timer (only if no respawn running)
@@ -2631,6 +2658,7 @@ class CodemanApp {
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
         this._updateSendBtn(true);
+        if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(true);
       }
     }
     // Clear stuck detection timer
@@ -4554,7 +4582,9 @@ class CodemanApp {
     this.renderSessionTabs();
     this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
-    this._updateSendBtn(_switchedSession?.status === 'busy');
+    const _switchedWorking = _switchedSession?.status === 'busy';
+    this._updateSendBtn(_switchedWorking);
+    if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(_switchedWorking);
 
     // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the
