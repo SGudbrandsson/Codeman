@@ -212,7 +212,7 @@ function renderMarkdown(text) {
     const hMatch = line.match(/^(#{1,3})\s+(.*)/);
     if (hMatch) {
       const level = hMatch[1].length;
-      out.push('<h' + level + '>' + inlineMarkdown(esc(hMatch[2]), safeHref) + '</h' + level + '>');
+      out.push('<h' + level + '>' + inlineMarkdown(esc(hMatch[2]), safeHref, esc) + '</h' + level + '>');
       i++; continue;
     }
 
@@ -237,7 +237,7 @@ function renderMarkdown(text) {
     if (/^[-*+] /.test(line)) {
       out.push('<ul>');
       while (i < lines.length && /^[-*+] /.test(lines[i])) {
-        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^[-*+] /, '')), safeHref) + '</li>');
+        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^[-*+] /, '')), safeHref, esc) + '</li>');
         i++;
       }
       out.push('</ul>');
@@ -248,7 +248,7 @@ function renderMarkdown(text) {
     if (/^\d+\. /.test(line)) {
       out.push('<ol>');
       while (i < lines.length && /^\d+\. /.test(lines[i])) {
-        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref) + '</li>');
+        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref, esc) + '</li>');
         i++;
       }
       out.push('</ol>');
@@ -269,14 +269,14 @@ function renderMarkdown(text) {
       i++;
     }
     if (paraLines.length) {
-      out.push('<p>' + inlineMarkdown(esc(paraLines.join(' ')), safeHref) + '</p>');
+      out.push('<p>' + inlineMarkdown(esc(paraLines.join(' ')), safeHref, esc) + '</p>');
     }
   }
   return out.join('\n');
 }
 
 /** Process inline markdown on already-HTML-escaped text. */
-function inlineMarkdown(escaped, safeHref) {
+function inlineMarkdown(escaped, safeHref, esc) {
   return escaped
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -284,7 +284,7 @@ function inlineMarkdown(escaped, safeHref) {
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
     .replace(/_([^_]+)_/g, '<em>$1</em>')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
-      '<a href="' + safeHref(url) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
+      '<a href="' + esc(safeHref(url)) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
     );
 }
 
