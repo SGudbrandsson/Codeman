@@ -78,7 +78,7 @@ const KeyboardAccessoryBar = {
   },
 
   /** Default hotbar button set */
-  _defaultButtons: ['scroll-up', 'scroll-down', 'commands', 'copy'],
+  _defaultButtons: ['scroll-up', 'scroll-down', 'commands'],
 
   /** Return the configured button list from saved settings */
   _getButtonConfig() {
@@ -111,34 +111,89 @@ const KeyboardAccessoryBar = {
     // Only on mobile
     if (!MobileDetection.isTouchDevice()) return;
 
-    // Create accessory bar element with all possible buttons (hidden by default, shown by config)
+    // Create accessory bar element
     this.element = document.createElement('div');
     this.element.className = 'keyboard-accessory-bar';
-    this.element.innerHTML = `
-      <button class="accessory-btn" data-action="tab" title="Tab">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 12h14M12 5l7 7-7 7"/><line x1="21" y1="5" x2="21" y2="19" stroke-width="2.5"/>
-        </svg>
-      </button>
-      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M5 15l7-7 7 7"/>
-        </svg>
-      </button>
-      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-down" title="Arrow down">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M19 9l-7 7-7-7"/>
-        </svg>
-      </button>
-      <button class="accessory-btn accessory-btn-commands" data-action="commands" title="Commands">/ ▲</button>
-<button class="accessory-btn" data-action="copy" title="Copy selected text">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-        </svg>
-      </button>
-    `;
-    // Show only configured buttons
+
+    // Helper: create SVG element with attributes
+    const mkSvg = (w, h, extras) => {
+      const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      s.setAttribute('width', String(w)); s.setAttribute('height', String(h));
+      s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none');
+      s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2');
+      s.setAttribute('aria-hidden', 'true');
+      if (extras) Object.entries(extras).forEach(([k, v]) => s.setAttribute(k, v));
+      return s;
+    };
+    const mkEl = (tag, ns, attrs) => {
+      const el = ns
+        ? document.createElementNS('http://www.w3.org/2000/svg', tag)
+        : document.createElement(tag);
+      if (attrs) Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      return el;
+    };
+
+    // 1. Settings gear button (leftmost)
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'accessory-btn accessory-btn-settings';
+    settingsBtn.title = 'Settings';
+    settingsBtn.setAttribute('aria-label', 'Settings');
+    settingsBtn.type = 'button';
+    {
+      const gSvg = mkSvg(16, 16, { 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+      gSvg.appendChild(mkEl('circle', true, { cx: '12', cy: '12', r: '3' }));
+      gSvg.appendChild(mkEl('path', true, { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }));
+      settingsBtn.appendChild(gSvg);
+    }
+    settingsBtn.addEventListener('click', () => {
+      document.getElementById('settingsModal')?.classList.add('active');
+    });
+    this.element.appendChild(settingsBtn);
+
+    // 2. Context window pill (second position)
+    const ctxPill = document.createElement('span');
+    ctxPill.id = 'accessoryContextPill';
+    ctxPill.className = 'accessory-ctx-pill';
+    ctxPill.style.display = 'none';
+    ctxPill.title = 'Context window usage';
+    this.element.appendChild(ctxPill);
+
+    // 3. Scroll-up button
+    const scrollUpBtn = document.createElement('button');
+    scrollUpBtn.className = 'accessory-btn accessory-btn-arrow';
+    scrollUpBtn.dataset.action = 'scroll-up';
+    scrollUpBtn.title = 'Arrow up';
+    scrollUpBtn.type = 'button';
+    {
+      const s = mkSvg(16, 16, { 'stroke-width': '2.5' });
+      s.appendChild(mkEl('path', true, { d: 'M5 15l7-7 7 7' }));
+      scrollUpBtn.appendChild(s);
+    }
+    this.element.appendChild(scrollUpBtn);
+
+    // 4. Scroll-down button
+    const scrollDownBtn = document.createElement('button');
+    scrollDownBtn.className = 'accessory-btn accessory-btn-arrow';
+    scrollDownBtn.dataset.action = 'scroll-down';
+    scrollDownBtn.title = 'Arrow down';
+    scrollDownBtn.type = 'button';
+    {
+      const s = mkSvg(16, 16, { 'stroke-width': '2.5' });
+      s.appendChild(mkEl('path', true, { d: 'M19 9l-7 7-7-7' }));
+      scrollDownBtn.appendChild(s);
+    }
+    this.element.appendChild(scrollDownBtn);
+
+    // 5. Commands button
+    const commandsBtn = document.createElement('button');
+    commandsBtn.className = 'accessory-btn accessory-btn-commands';
+    commandsBtn.dataset.action = 'commands';
+    commandsBtn.title = 'Commands';
+    commandsBtn.type = 'button';
+    commandsBtn.textContent = '/ \u25b2';
+    this.element.appendChild(commandsBtn);
+
+    // Show only configured buttons (applies to data-action buttons)
     const enabled = this._getButtonConfig();
     this.element.querySelectorAll('.accessory-btn[data-action]').forEach(btn => {
       btn.style.display = enabled.includes(btn.dataset.action) ? '' : 'none';
@@ -164,66 +219,52 @@ const KeyboardAccessoryBar = {
       this.handleAction(btn.dataset.action, btn);
     });
 
-    // Input panel toggle button (pencil icon)
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
-      const inputToggleBtn = document.createElement('button');
-      inputToggleBtn.className = 'accessory-btn';
-      inputToggleBtn.title = 'Compose';
-      inputToggleBtn.setAttribute('aria-label', 'Compose');
-      inputToggleBtn.type = 'button';
+    // 6. Flex spacer
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    this.element.appendChild(spacer);
 
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('width', '18'); svg.setAttribute('height', '18');
-      svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
-      svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
-      svg.setAttribute('aria-hidden', 'true');
-      const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path1.setAttribute('d', 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7');
-      const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path2.setAttribute('d', 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z');
-      svg.appendChild(path1);
-      svg.appendChild(path2);
-      inputToggleBtn.appendChild(svg);
-      inputToggleBtn.addEventListener('click', () => {
-        if (typeof InputPanel !== 'undefined') {
-          InputPanel.toggle();
-          inputToggleBtn.classList.toggle('active', InputPanel._open);
-        }
-      });
-      this.element.appendChild(inputToggleBtn);
-      this._inputToggleBtn = inputToggleBtn;
+    // 7. Project picker button (second-to-last)
+    const projectBtn = document.createElement('button');
+    projectBtn.className = 'accessory-btn accessory-btn-project';
+    projectBtn.id = 'accessoryProjectBtn';
+    projectBtn.title = 'Switch project';
+    projectBtn.type = 'button';
+    const projIcon = document.createElement('span');
+    projIcon.className = 'accessory-project-icon';
+    projIcon.textContent = '\u{1F4C1}';
+    const projName = document.createElement('span');
+    projName.className = 'accessory-project-name';
+    projName.id = 'accessoryProjectName';
+    projName.textContent = 'Project';
+    const projCaret = document.createElement('span');
+    projCaret.className = 'accessory-project-caret';
+    projCaret.textContent = '\u25be';
+    projectBtn.appendChild(projIcon);
+    projectBtn.appendChild(projName);
+    projectBtn.appendChild(projCaret);
+    projectBtn.addEventListener('click', () => {
+      window.app?.openCasePickerModal?.();
+    });
+    this.element.appendChild(projectBtn);
 
-      // Hamburger (session drawer) button
-      const hamburgerBtn = document.createElement('button');
-      hamburgerBtn.className = 'accessory-btn';
-      hamburgerBtn.title = 'Sessions';
-      hamburgerBtn.setAttribute('aria-label', 'Open session list');
-      hamburgerBtn.type = 'button';
-      const hSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      hSvg.setAttribute('width', '18'); hSvg.setAttribute('height', '18');
-      hSvg.setAttribute('viewBox', '0 0 24 24'); hSvg.setAttribute('fill', 'none');
-      hSvg.setAttribute('stroke', 'currentColor'); hSvg.setAttribute('stroke-width', '2');
-      hSvg.setAttribute('aria-hidden', 'true');
+    // 8. Hamburger (session drawer) button (last)
+    const hamburgerBtn = document.createElement('button');
+    hamburgerBtn.className = 'accessory-btn';
+    hamburgerBtn.title = 'Sessions';
+    hamburgerBtn.setAttribute('aria-label', 'Open session list');
+    hamburgerBtn.type = 'button';
+    {
+      const hSvg = mkSvg(18, 18);
       [6, 12, 18].forEach(y => {
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', '3'); line.setAttribute('y1', String(y));
-        line.setAttribute('x2', '21'); line.setAttribute('y2', String(y));
-        hSvg.appendChild(line);
+        hSvg.appendChild(mkEl('line', true, { x1: '3', y1: String(y), x2: '21', y2: String(y) }));
       });
       hamburgerBtn.appendChild(hSvg);
-      hamburgerBtn.addEventListener('click', () => {
-        if (typeof SessionDrawer !== 'undefined') SessionDrawer.toggle();
-      });
-      this.element.appendChild(hamburgerBtn);
-
-      // Context window pill (rightmost)
-      const ctxPill = document.createElement('span');
-      ctxPill.id = 'accessoryContextPill';
-      ctxPill.className = 'accessory-ctx-pill';
-      ctxPill.style.display = 'none';
-      ctxPill.title = 'Context window usage';
-      this.element.appendChild(ctxPill);
     }
+    hamburgerBtn.addEventListener('click', () => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.toggle();
+    });
+    this.element.appendChild(hamburgerBtn);
 
     // Insert before toolbar
     const toolbar = document.querySelector('.toolbar');
@@ -233,6 +274,15 @@ const KeyboardAccessoryBar = {
 
     // Show immediately — bar is always visible on mobile, not keyboard-dependent
     this.show();
+  },
+
+  /** Update the project picker label to reflect the active case name */
+  updateProjectName() {
+    const projNameEl = document.getElementById('accessoryProjectName');
+    if (projNameEl) {
+      const name = window.app?.activeCaseName || 'Project';
+      projNameEl.textContent = name.length > 10 ? name.slice(0, 9) + '\u2026' : name;
+    }
   },
 
   _confirmTimer: null,
