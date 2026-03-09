@@ -70,6 +70,7 @@ import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
+import { isGitWorktreeDir, getCurrentBranch } from '../utils/git-utils.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { UpdateChecker } from '../update-checker.js';
@@ -2564,6 +2565,24 @@ export class WebServer extends EventEmitter {
 
             // Create a session object for this mux session
             const recoveryClaudeMode = await this.getClaudeModeConfig();
+
+            // Restore worktree metadata from savedState, or auto-detect if the working
+            // dir is a git worktree that was started outside of Codeman's worktree UI
+            let worktreePath = savedState?.worktreePath;
+            let worktreeBranch = savedState?.worktreeBranch;
+            const worktreeOriginId = savedState?.worktreeOriginId;
+            if (!worktreeBranch && muxSession.workingDir && isGitWorktreeDir(muxSession.workingDir)) {
+              try {
+                worktreeBranch = await getCurrentBranch(muxSession.workingDir);
+                worktreePath = worktreePath ?? muxSession.workingDir;
+                console.log(
+                  `[Server] Auto-detected worktree branch "${worktreeBranch}" for session ${muxSession.sessionId}`
+                );
+              } catch {
+                // Not a valid git repo or branch detection failed — leave as undefined
+              }
+            }
+
             const session = new Session({
               id: muxSession.sessionId, // Preserve the original session ID
               workingDir: muxSession.workingDir,
@@ -2574,6 +2593,10 @@ export class WebServer extends EventEmitter {
               muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
               claudeMode: recoveryClaudeMode.claudeMode,
               allowedTools: recoveryClaudeMode.allowedTools,
+              // Restored/auto-detected worktree metadata so drawer grouping and merge actions survive restarts
+              worktreePath,
+              worktreeBranch,
+              worktreeOriginId,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
