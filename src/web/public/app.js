@@ -1428,13 +1428,13 @@ class CodemanApp {
 
     const segments = extractSyncSegments(joined);
 
-    // Write segments respecting a per-frame byte budget.
+    // Write segments respecting a per-frame time budget.
     // Each DEC 2026 sync segment is a complete Ink redraw — writing whole segments
-    // preserves atomicity (no flicker). But when total data exceeds 48KB, defer
-    // remaining segments to the next frame to prevent terminal.write() from blocking
-    // the main thread. 141KB single-frame writes have been observed to freeze Chrome
-    // for 2+ minutes even with the canvas renderer.
-    const MAX_FRAME_BYTES = 65536; // 64KB budget per frame
+    // preserves atomicity (no flicker). After each write, check elapsed time and
+    // defer remaining segments if we've used more than 8ms of the frame budget.
+    // Time-based budgeting adapts to actual render cost (canvas 2D draw calls,
+    // content complexity, GPU load) rather than assuming bytes ∝ render time.
+    const MAX_FRAME_MS = 8; // 8ms — half a 60fps frame, leaves headroom for browser paint
     let bytesThisFrame = 0;
     let deferred = false;
 
@@ -1446,10 +1446,14 @@ class CodemanApp {
         : segment;
       if (!content) continue;
 
-      // If we'd exceed the budget, defer this and all remaining segments
-      if (bytesThisFrame > 0 && bytesThisFrame + content.length > MAX_FRAME_BYTES) {
-        // Re-queue remaining segments as raw content for next flush
-        const remaining = segments.slice(i).map(s => {
+      this.terminal.write(content);
+      bytesThisFrame += content.length;
+
+      // Check elapsed time after each write — defer remaining if over budget.
+      // Checking after (not before) ensures at least one segment is always written,
+      // preventing starvation when a single segment alone exceeds the budget.
+      if (performance.now() - _t0 > MAX_FRAME_MS) {
+        const remaining = segments.slice(i + 1).map(s => {
           if (!s) return '';
           return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
         }).filter(Boolean).join('');
@@ -1462,13 +1466,10 @@ class CodemanApp {
               this.writeFrameScheduled = false;
             });
           }
+          deferred = true;
         }
-        deferred = true;
         break;
       }
-
-      this.terminal.write(content);
-      bytesThisFrame += content.length;
     }
     const _dt = performance.now() - _t0;
     if (_dt > 100 || deferred) console.warn(`[CRASH-DIAG] flushPendingWrites: ${_dt.toFixed(0)}ms, ${(bytesThisFrame/1024).toFixed(0)}KB written${deferred ? ', rest deferred' : ''} (total ${(_joinedLen/1024).toFixed(0)}KB)`);
