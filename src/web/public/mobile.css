@@ -19,7 +19,7 @@
 .keyboard-accessory-bar {
   display: none;
   position: fixed;
-  bottom: calc(var(--safe-area-bottom) + 40px); /* Above .toolbar footer */
+  bottom: var(--safe-area-bottom, 0px); /* Flush with safe-area edge */
   left: 0;
   right: 0;
   height: 44px;
@@ -46,7 +46,7 @@
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--safe-area-bottom) + 84px); /* above accessory bar (44px) + toolbar (40px) */
+  bottom: calc(var(--safe-area-bottom, 0px) + 44px); /* Sits directly above accessory bar */
   z-index: 52;
   background: #0d0d0d;
   border-top: 1px solid #1a1a2e;
@@ -818,7 +818,7 @@ html.mobile-init .file-browser-panel {
   .keyboard-accessory-bar {
     display: none;
     position: fixed;
-    bottom: calc(var(--safe-area-bottom) + 40px); /* Above toolbar */
+    bottom: var(--safe-area-bottom, 0px); /* Flush with safe-area edge */
     left: 0;
     right: 0;
     height: 44px;
@@ -2399,7 +2399,7 @@ html.mobile-init .file-browser-panel {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--safe-area-bottom) + 84px); /* above accessory bar */
+  bottom: calc(var(--safe-area-bottom, 0px) + 44px); /* Sits directly above accessory bar */
   z-index: 52;
   background: #0d0d0d;
   border-top: 1px solid #1a1a2e;
