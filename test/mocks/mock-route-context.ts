@@ -87,6 +87,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     }),
     startTranscriptWatcher: vi.fn(),
     stopTranscriptWatcher: vi.fn(),
+    getTranscriptPath: vi.fn((_id: string) => null),
 
     // -- InfraPort --
     mux: {

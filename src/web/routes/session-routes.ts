@@ -43,6 +43,7 @@ import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
+import { parseTranscriptJSONL } from '../../types/transcript-blocks.js';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -920,6 +921,27 @@ export function registerSessionRoutes(
       // Clean up session on error to prevent orphaned resources
       await ctx.cleanupSession(session.id, true, 'quick_start_error');
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Transcript (web view)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== GET /api/sessions/:id/transcript ==========
+
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/transcript', async (req, reply) => {
+    const { id } = req.params;
+    const transcriptPath = ctx.getTranscriptPath(id);
+    if (!transcriptPath) {
+      return reply.send([]);
+    }
+    try {
+      const content = await fs.readFile(transcriptPath, 'utf-8');
+      const blocks = parseTranscriptJSONL(content);
+      return reply.send(blocks);
+    } catch {
+      return reply.send([]);
     }
   });
 }
