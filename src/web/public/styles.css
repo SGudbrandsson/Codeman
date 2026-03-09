@@ -4179,6 +4179,109 @@ body {
   background: var(--bg-hover);
 }
 
+/* ── Case Picker Tabs ────────────────────────────────────────── */
+.case-picker-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+.case-picker-tab {
+  flex: 1;
+  padding: 10px 4px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #5a6478;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+.case-picker-tab:hover { color: #94a3b8; }
+.case-picker-tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
+
+/* ── Case Picker Form (New / Clone tabs) ─────────────────────── */
+.case-picker-form {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.case-picker-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.case-picker-form-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.case-picker-input {
+  width: 100%;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.case-picker-input:focus { border-color: #3b82f6; }
+.case-picker-input::placeholder { color: #2d3748; }
+.case-picker-submit {
+  width: 100%;
+  padding: 11px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+  margin-top: 4px;
+}
+.case-picker-submit:hover { background: #2563eb; }
+.case-picker-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Session Drawer Footer ───────────────────────────────────── */
+.drawer-footer {
+  display: flex;
+  gap: 7px;
+  padding: 10px 14px;
+  border-top: 1px solid #1a1a2e;
+  flex-shrink: 0;
+}
+.drawer-footer-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 8px;
+  background: #0d1117;
+  border: 1px solid #1a2333;
+  border-radius: 8px;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.13s;
+  white-space: nowrap;
+}
+.drawer-footer-btn:hover { background: #111827; border-color: #1e293b; color: #64748b; }
+.drawer-footer-btn:active { background: #0f172a; }
+
 .btn-case-create-mobile svg {
   width: 16px;
   height: 16px;
@@ -8632,6 +8735,7 @@ kbd {
     max-width: 720px;
     margin: 0 auto;
     position: relative;
+    overflow: hidden; /* clip thumbnail strip to rounded corners */
     /* Base styles from mobile.css don't load on desktop — replicate here */
     border: 1px solid #1a1a2e;
     border-radius: 12px;
@@ -8829,7 +8933,8 @@ kbd {
     flex-direction: row;
     gap: 6px;
     overflow-x: auto;
-    padding: 8px 44px 4px 44px;
+    padding: 8px 44px 6px 44px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
     scrollbar-width: thin;
   }
   .compose-thumb {

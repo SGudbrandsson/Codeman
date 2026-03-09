@@ -2358,13 +2358,14 @@ html.mobile-init .file-browser-panel {
   gap: 6px;
 }
 
-/* Thumbnail strip */
+/* Thumbnail strip — sits inside compose-textarea-wrap above the textarea */
 .compose-thumb-strip {
   display: flex;
   flex-direction: row;
   gap: 8px;
   overflow-x: auto;
-  padding: 8px 44px 4px 44px;
+  padding: 8px 44px 6px 44px;
+  border-bottom: 1px solid #1a1a2e; /* divider between attachments and text, no separate box */
   -webkit-overflow-scrolling: touch;
 }
 .compose-thumb {
@@ -2406,6 +2407,7 @@ html.mobile-init .file-browser-panel {
 /* Textarea wrapper — relative so inset buttons are absolute */
 .compose-textarea-wrap {
   position: relative;
+  overflow: hidden; /* clip thumbnail strip to rounded corners */
   border: 1px solid #1a1a2e;
   border-radius: 12px;
   background: #0d0d0d;

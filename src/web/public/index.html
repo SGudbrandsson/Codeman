@@ -1431,19 +1431,45 @@
       <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>
       <div class="mobile-case-picker-sheet">
         <div class="mobile-case-picker-header">
-          <h3>Select Project</h3>
+          <h3>Projects</h3>
           <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close project picker">&times;</button>
         </div>
-        <div class="mobile-case-picker-body">
-          <div class="mobile-case-list" id="mobileCaseList">
-            <!-- Cases populated by JS -->
-          </div>
+        <!-- Tab bar -->
+        <div class="case-picker-tabs">
+          <button class="case-picker-tab active" data-tab="projects" onclick="app.switchCasePickerTab('projects')">My Projects</button>
+          <button class="case-picker-tab" data-tab="new" onclick="app.switchCasePickerTab('new')">New</button>
+          <button class="case-picker-tab" data-tab="clone" onclick="app.switchCasePickerTab('clone')">Clone from Git</button>
         </div>
-        <div class="mobile-case-picker-footer">
-          <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Create New Project
-          </button>
+        <div class="mobile-case-picker-body">
+          <!-- My Projects tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-projects">
+            <div class="mobile-case-list" id="mobileCaseList">
+              <!-- Cases populated by JS -->
+            </div>
+          </div>
+          <!-- New Project tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-new" style="display:none">
+            <div class="case-picker-form">
+              <div class="case-picker-form-group">
+                <label class="case-picker-form-label">Project name</label>
+                <input class="case-picker-input" type="text" id="pickerNewCaseName" placeholder="my-project"
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <button class="case-picker-submit" onclick="app.createCaseFromPicker()">Create Project</button>
+            </div>
+          </div>
+          <!-- Clone from Git tab -->
+          <div class="case-picker-tab-content" id="casePickerTab-clone" style="display:none">
+            <div class="case-picker-form">
+              <div class="case-picker-form-group">
+                <label class="case-picker-form-label">Repository URL</label>
+                <input class="case-picker-input" type="text" id="pickerCloneUrl"
+                       placeholder="https://github.com/user/repo.git"
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <button class="case-picker-submit" onclick="app.cloneRepoFromPicker()">Clone &amp; Open</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
