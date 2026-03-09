@@ -33,15 +33,22 @@ import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/ind
 const BRANCH_PATTERN = /^[a-zA-Z0-9._\-/]+$/;
 
 async function resolveCasePath(name: string): Promise<string | null> {
-  const casePath = join(CASES_DIR, name);
-  if (existsSync(casePath)) return casePath;
+  let linkedPath: string | null = null;
   try {
     const linked: Record<string, string> = JSON.parse(
       await fs.readFile(join(homedir(), '.codeman', 'linked-cases.json'), 'utf-8')
     );
-    if (linked[name] && existsSync(linked[name])) return linked[name];
+    if (linked[name] && existsSync(linked[name])) linkedPath = linked[name];
   } catch {}
-  return null;
+
+  const caseDirPath = join(CASES_DIR, name);
+  if (existsSync(caseDirPath)) {
+    // Prefer linked path when CASES_DIR entry has no git repo but linked one does
+    if (linkedPath && !findGitRoot(caseDirPath) && findGitRoot(linkedPath)) return linkedPath;
+    return caseDirPath;
+  }
+
+  return linkedPath;
 }
 
 export function registerWorktreeSessionRoutes(
