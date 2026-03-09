@@ -289,6 +289,333 @@ function inlineMarkdown(escaped, safeHref) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// TranscriptView — rich web view of the Claude Code JSONL transcript
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * TranscriptView — renders Claude Code JSONL as a rich web view.
+ *
+ * Per-session state in app._transcriptState[sessionId]:
+ *   { viewMode: 'terminal'|'web', blocks: Block[], scrolledUp: boolean }
+ *
+ * Block types:
+ *   { type:'text', role:'user'|'assistant', text, timestamp }
+ *   { type:'tool_use', id, name, input, timestamp }
+ *   { type:'tool_result', toolUseId, content, isError, timestamp }
+ *   { type:'result', cost, durationMs, error, timestamp }
+ */
+const TranscriptView = {
+  _container: null,
+  _sessionId: null,
+  _pendingToolUses: {},
+
+  init() {
+    this._container = document.getElementById('transcriptView');
+    if (!this._container) return;
+    this._container.addEventListener('scroll', () => {
+      const state = this._sessionId ? this._getState(this._sessionId) : null;
+      if (!state) return;
+      const el = this._container;
+      state.scrolledUp = el.scrollTop < el.scrollHeight - el.clientHeight - 100;
+    }, { passive: true });
+  },
+
+  _getState(sessionId) {
+    if (!app._transcriptState) app._transcriptState = {};
+    if (!app._transcriptState[sessionId]) {
+      app._transcriptState[sessionId] = { viewMode: 'terminal', blocks: [], scrolledUp: false };
+    }
+    return app._transcriptState[sessionId];
+  },
+
+  getViewMode(sessionId) {
+    const stored = localStorage.getItem('transcriptViewMode:' + sessionId);
+    if (stored === 'web' || stored === 'terminal') return stored;
+    return 'web'; // default to web view for Claude sessions
+  },
+
+  setViewMode(sessionId, mode) {
+    localStorage.setItem('transcriptViewMode:' + sessionId, mode);
+    this._getState(sessionId).viewMode = mode;
+  },
+
+  async load(sessionId) {
+    this._sessionId = sessionId;
+    this._pendingToolUses = {};
+    const state = this._getState(sessionId);
+    state.blocks = [];
+    state.scrolledUp = false;
+    if (!this._container) return;
+
+    this._setPlaceholder('Loading session history\u2026');
+
+    try {
+      const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blocks = await res.json();
+      this._container.textContent = '';
+      if (!blocks.length) {
+        this._setPlaceholder('Waiting for Claude to start\u2026');
+        return;
+      }
+      for (const block of blocks) {
+        this._appendBlock(block, false);
+      }
+      this._scrollToBottom(true);
+    } catch {
+      this._setPlaceholder('Could not load session history.');
+    }
+  },
+
+  _setPlaceholder(text) {
+    if (!this._container) return;
+    this._container.textContent = '';
+    const p = document.createElement('div');
+    p.className = 'tv-placeholder';
+    p.textContent = text;
+    this._container.appendChild(p);
+  },
+
+  append(block) {
+    if (!this._container || !this._sessionId) return;
+    this._getState(this._sessionId).blocks.push(block);
+    const placeholder = this._container.querySelector('.tv-placeholder');
+    if (placeholder) placeholder.remove();
+    this._appendBlock(block, true);
+  },
+
+  clear() {
+    this._pendingToolUses = {};
+    if (this._sessionId) {
+      const state = this._getState(this._sessionId);
+      state.blocks = [];
+      state.scrolledUp = false;
+    }
+    if (this._container) this._container.textContent = '';
+    if (this._sessionId) this.load(this._sessionId);
+  },
+
+  show(sessionId) {
+    this._sessionId = sessionId;
+    if (this._container) this._container.style.display = '';
+    this._detachXterm(sessionId);
+    this.load(sessionId);
+  },
+
+  hide(sessionId) {
+    if (this._container) this._container.style.display = 'none';
+    this._attachXterm(sessionId);
+  },
+
+  _detachXterm(_sessionId) {
+    // NOTE: implementor (Task 10) — find the xterm Terminal instance for this session.
+    // Search app.js for `new Terminal(` and `.dispose()` to understand the lifecycle.
+    // Then dispose the Terminal for this session and hide the terminal container.
+  },
+
+  _attachXterm(_sessionId) {
+    // NOTE: implementor (Task 10) — re-create the Terminal for this session and show container.
+    // Find how tab switching initializes or re-attaches a terminal in app.js and replicate.
+  },
+
+  _scrollToBottom(force) {
+    if (!this._container) return;
+    const state = this._sessionId ? this._getState(this._sessionId) : null;
+    if (!force && state?.scrolledUp) return;
+    this._container.scrollTop = this._container.scrollHeight;
+  },
+
+  _appendBlock(block, scroll) {
+    if (!this._container) return;
+    let el = null;
+    if (block.type === 'text') {
+      el = this._renderTextBlock(block);
+    } else if (block.type === 'tool_use') {
+      this._pendingToolUses[block.id] = block;
+      el = this._renderToolWrapper(block, null);
+      el.dataset.toolId = block.id;
+    } else if (block.type === 'tool_result') {
+      const pendingEl = block.toolUseId
+        ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
+        : null;
+      if (pendingEl) {
+        this._updateToolWrapper(pendingEl, block);
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
+      el = this._renderToolWrapper(null, block);
+    } else if (block.type === 'result') {
+      el = this._renderResultBlock(block);
+    }
+    if (el) {
+      this._container.appendChild(el);
+      if (scroll) this._scrollToBottom(false);
+    }
+  },
+
+  _renderTextBlock(block) {
+    const div = document.createElement('div');
+    div.className = 'tv-block tv-block--' + (block.role === 'user' ? 'user' : 'assistant');
+    const label = document.createElement('div');
+    label.className = 'tv-label';
+    if (block.role === 'user') {
+      label.textContent = 'You';
+      const bubble = document.createElement('div');
+      bubble.className = 'tv-bubble';
+      bubble.textContent = block.text; // plain text — no HTML needed
+      div.appendChild(label);
+      div.appendChild(bubble);
+    } else {
+      const dot = document.createElement('span');
+      dot.className = 'tv-assistant-dot';
+      label.appendChild(dot);
+      label.appendChild(document.createTextNode('Claude'));
+      const content = document.createElement('div');
+      content.className = 'tv-content tv-markdown';
+      // renderMarkdown escapes all user/assistant text via esc() before processing.
+      // Link hrefs are protocol-validated (only http/https/relative allowed).
+      // The resulting HTML is safe to assign on .tv-markdown elements.
+      content.innerHTML = renderMarkdown(block.text);
+      div.appendChild(label);
+      div.appendChild(content);
+    }
+    return div;
+  },
+
+  _renderToolWrapper(toolUse, toolResult) {
+    const name = toolUse?.name ?? 'Tool';
+    const isError = toolResult?.isError ?? false;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tv-block';
+
+    const row = document.createElement('div');
+    row.className = 'tv-tool-row' + (isError ? ' tv-tool-row--error' : '');
+
+    const arrow = document.createElement('span');
+    arrow.className = 'tv-tool-arrow';
+    arrow.textContent = '\u25B6'; // ▶
+
+    const nameSp = document.createElement('span');
+    nameSp.className = 'tv-tool-name';
+    nameSp.textContent = name; // tool names are internal, but still use textContent
+
+    const argSp = document.createElement('span');
+    argSp.className = 'tv-tool-arg';
+    if (toolUse?.input) {
+      const vals = Object.values(toolUse.input);
+      argSp.textContent = vals.length ? String(vals[0]).slice(0, 80) : '';
+    }
+
+    const status = document.createElement('span');
+    status.className = 'tv-tool-status';
+    status.textContent = toolResult ? (isError ? '\u2717' : '\u2713') : ''; // ✗ or ✓
+
+    row.appendChild(arrow);
+    row.appendChild(nameSp);
+    row.appendChild(argSp);
+    row.appendChild(status);
+
+    const panel = document.createElement('div');
+    panel.className = 'tv-tool-panel';
+    this._buildToolPanel(panel, toolUse, toolResult);
+
+    row.addEventListener('click', () => {
+      const open = row.classList.toggle('open');
+      panel.classList.toggle('open', open);
+    });
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(panel);
+    return wrapper;
+  },
+
+  _buildToolPanel(panel, toolUse, toolResult) {
+    panel.textContent = ''; // clear using textContent
+    if (toolUse?.input && Object.keys(toolUse.input).length) {
+      const sec = this._makeToolSection('Input');
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(toolUse.input, null, 2);
+      sec.appendChild(pre);
+      panel.appendChild(sec);
+    }
+    if (toolResult) {
+      const MAX = 10 * 1024;
+      const content = toolResult.content ?? '';
+      const sec = this._makeToolSection(toolResult.isError ? 'Error Output' : 'Output');
+      const pre = document.createElement('pre');
+      pre.textContent = content.slice(0, MAX);
+      sec.appendChild(pre);
+      if (content.length > MAX) {
+        const note = document.createElement('div');
+        note.className = 'tv-tool-truncated';
+        const btn = document.createElement('button');
+        btn.className = 'tv-tool-show-more';
+        btn.textContent = 'Show full output (' + Math.round(content.length / 1024) + '\u202fKB)';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          pre.textContent = content;
+          note.remove();
+        });
+        note.appendChild(btn);
+        sec.appendChild(note);
+      }
+      panel.appendChild(sec);
+    }
+  },
+
+  _makeToolSection(labelText) {
+    const sec = document.createElement('div');
+    sec.className = 'tv-tool-section';
+    const lbl = document.createElement('div');
+    lbl.className = 'tv-tool-section-label';
+    lbl.textContent = labelText;
+    sec.appendChild(lbl);
+    return sec;
+  },
+
+  _updateToolWrapper(wrapper, toolResult) {
+    const row = wrapper.querySelector('.tv-tool-row');
+    const panel = wrapper.querySelector('.tv-tool-panel');
+    if (!row || !panel) return;
+    if (toolResult.isError) row.classList.add('tv-tool-row--error');
+    const status = row.querySelector('.tv-tool-status');
+    if (status) status.textContent = toolResult.isError ? '\u2717' : '\u2713';
+    const toolUse = wrapper.dataset.toolId ? this._pendingToolUses[wrapper.dataset.toolId] : null;
+    this._buildToolPanel(panel, toolUse, toolResult);
+  },
+
+  _renderResultBlock(block) {
+    const div = document.createElement('div');
+    div.className = 'tv-block tv-block--result';
+    const line = document.createElement('div');
+    line.className = 'tv-result-line';
+    if (block.error) {
+      const e = document.createElement('span');
+      e.className = 'tv-result-error';
+      e.textContent = '\u2717 Error: ' + block.error;
+      line.appendChild(e);
+    } else {
+      const ok = document.createElement('span');
+      ok.className = 'tv-result-ok';
+      ok.textContent = '\u2713 Completed';
+      line.appendChild(ok);
+    }
+    if (block.cost != null) {
+      const cost = document.createElement('span');
+      cost.textContent = '\u00b7 $' + block.cost.toFixed(4);
+      line.appendChild(cost);
+    }
+    if (block.durationMs != null) {
+      const dur = document.createElement('span');
+      dur.textContent = '\u00b7 ' + (block.durationMs / 1000).toFixed(1) + 's';
+      line.appendChild(dur);
+    }
+    div.appendChild(line);
+    return div;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
 // SSE Handler Map — event-to-method routing table
 // ═══════════════════════════════════════════════════════════════
 // connectSSE() iterates this array to register all listeners in a single loop.
@@ -661,6 +988,7 @@ class CodemanApp {
     VoiceInput.init();
     KeyboardAccessoryBar.init();
     InputPanel.init();
+    TranscriptView.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
