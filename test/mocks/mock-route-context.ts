@@ -38,6 +38,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     batchTerminalData: vi.fn(),
     broadcastSessionStateDebounced: vi.fn(),
     batchTaskUpdate: vi.fn(),
+    getSseClientCount: vi.fn(() => 0),
 
     // -- RespawnPort --
     respawnControllers: new Map(),

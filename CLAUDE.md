@@ -113,7 +113,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 | **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | |
 | **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (12 route modules + barrel), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
 | **Frontend** | `src/web/public/app.js` ★ (~12.1K lines) + 9 JS modules (incl. `sw.js` service worker) | |
-| **Types** | `src/types/index.ts` → 13 domain files | See `@fileoverview` in index.ts |
+| **Types** | `src/types/index.ts` → 14 domain files | See `@fileoverview` in index.ts |
 
 ★ = Large file (>50KB). All files have `@fileoverview` JSDoc — read that before diving in.
 

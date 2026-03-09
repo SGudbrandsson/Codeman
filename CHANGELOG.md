@@ -71,10 +71,17 @@
 
 - feat: 8 UX improvements — configurable mobile hotbar, newline insertion (Shift+Enter + hotbar ↵ button), Ctrl+Shift+B voice input, Ctrl+Shift+V clipboard paste, Ctrl+X copy selection, mobile Copy hotbar button, keyboard shortcuts tab in Settings, and Close-on-Clean-Exit toggle (auto-removes session tab when process exits with code 0)
 
+## 0.3.8
+
+### Patch Changes
+
+- Add tunnel status indicator with control panel — green pulsing dot in header when Cloudflare tunnel is active, dropdown with URL, remote clients, auth sessions, and start/stop/QR/revoke controls
+
 ## 0.3.7
 
 ### Patch Changes
 
+- Operation Lightspeed: 5 parallel performance optimizations — multi-layer backpressure to prevent terminal write freezes, TERMINAL_TAIL_SIZE constant with client-drop recovery, tab switching SSE gating, and local echo improvements
 - Codebase cleanup: remove dead code (unused token validation exports, PlanPhase alias), add execPattern() regex helper to eliminate repetitive .lastIndex resets, centralize 11 magic number constants into config files, fix CLAUDE.md inaccuracies, and add 316 new tests for utilities, respawn helpers, and system-routes
 
 ## 0.3.6

@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const execFileP = promisify(execFile);
@@ -13,6 +13,12 @@ const execFileP = promisify(execFile);
 async function git(args: string[], cwd: string): Promise<string> {
   const { stdout } = await execFileP('git', args, { cwd, timeout: 30_000 });
   return stdout.trim();
+}
+
+export function isGitWorktreeDir(dir: string): boolean {
+  const gitPath = join(dir, '.git');
+  if (!existsSync(gitPath)) return false;
+  return statSync(gitPath).isFile();
 }
 
 export function findGitRoot(startDir: string): string | null {

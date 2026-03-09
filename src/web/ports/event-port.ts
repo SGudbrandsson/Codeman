@@ -11,4 +11,5 @@ export interface EventPort {
   batchTerminalData(sessionId: string, data: string): void;
   broadcastSessionStateDebounced(sessionId: string): void;
   batchTaskUpdate(sessionId: string, task: BackgroundTask): void;
+  getSseClientCount(): number;
 }
