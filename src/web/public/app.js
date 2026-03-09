@@ -533,11 +533,11 @@ class CodemanApp {
       InputPanel.init();
     }
     // Always-visible compose bar on mobile (no pencil toggle needed)
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.isMobile()) {
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'mobile') {
       InputPanel.open();
     }
     // Restore desktop sidebar pin state
-    if (!MobileDetection.isMobile() && localStorage.getItem('sidebarPinned') === 'true') {
+    if (!MobileDetection.getDeviceType() === 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
       document.body.classList.add('sidebar-pinned');
     }
     this.applyHeaderVisibilitySettings();
@@ -13671,7 +13671,7 @@ const SessionDrawer = {
     const drawer = this._getEl();
     if (drawer) { drawer.classList.add('open'); this._render(); }
     // Add pin toggle button on desktop (≥1024px)
-    if (!MobileDetection.isMobile() && window.innerWidth >= 1024) {
+    if (!MobileDetection.getDeviceType() === 'mobile' && window.innerWidth >= 1024) {
       const titleEl = document.querySelector('.session-drawer-title');
       if (titleEl && !titleEl.querySelector('.drawer-pin-btn')) {
         const pinBtn = document.createElement('button');
@@ -13888,7 +13888,7 @@ const SessionDrawer = {
 
   _showCloseSheet(sessionId, sessionName) {
     // Desktop: delegate to existing modal flow
-    if (!MobileDetection.isMobile()) {
+    if (!MobileDetection.getDeviceType() === 'mobile') {
       app.requestCloseSession(sessionId);
       return;
     }
