@@ -13858,9 +13858,77 @@ const SessionDrawer = {
     list.appendChild(footer);
   },
 
-  _showCloseSheet(sessionId, _sessionName) {
-    // Implemented in Task 13
-    app.requestCloseSession(sessionId);
+  _showCloseSheet(sessionId, sessionName) {
+    // Desktop: delegate to existing modal flow
+    if (!MobileDetection.isMobile()) {
+      app.requestCloseSession(sessionId);
+      return;
+    }
+
+    // Mobile: show confirmation sheet inside the drawer
+    document.querySelector('.drawer-close-sheet')?.remove();
+
+    const drawer = document.getElementById('sessionDrawer');
+    if (!drawer) return;
+
+    const truncated = sessionName.length > 40 ? sessionName.slice(0, 39) + '…' : sessionName;
+
+    const sheet = document.createElement('div');
+    sheet.className = 'drawer-close-sheet';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'drawer-close-sheet-title';
+    titleEl.textContent = 'Close "' + truncated + '"';
+
+    // Kill Session option (danger)
+    const killBtn = document.createElement('button');
+    killBtn.className = 'close-sheet-option danger';
+    const killTitle = document.createElement('div');
+    killTitle.className = 'close-sheet-option-title';
+    killTitle.textContent = '× Kill Session';
+    const killDesc = document.createElement('div');
+    killDesc.className = 'close-sheet-option-desc';
+    killDesc.textContent = 'Stops Claude & kills tmux — cannot be undone';
+    killBtn.appendChild(killTitle);
+    killBtn.appendChild(killDesc);
+    killBtn.addEventListener('click', () => {
+      sheet.remove();
+      // Set pendingCloseSessionId before calling confirmCloseSession
+      app.pendingCloseSessionId = sessionId;
+      app.confirmCloseSession?.(true);
+    });
+
+    // Remove Tab option
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'close-sheet-option';
+    const removeTitle = document.createElement('div');
+    removeTitle.className = 'close-sheet-option-title';
+    removeTitle.textContent = '○ Remove Tab';
+    const removeDesc = document.createElement('div');
+    removeDesc.className = 'close-sheet-option-desc';
+    removeDesc.textContent = 'Hides from drawer — tmux keeps running in background';
+    removeBtn.appendChild(removeTitle);
+    removeBtn.appendChild(removeDesc);
+    removeBtn.addEventListener('click', () => {
+      sheet.remove();
+      app.pendingCloseSessionId = sessionId;
+      app.confirmCloseSession?.(false);
+    });
+
+    // Cancel
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'close-sheet-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => sheet.remove());
+
+    sheet.appendChild(titleEl);
+    sheet.appendChild(killBtn);
+    sheet.appendChild(removeBtn);
+    sheet.appendChild(cancelBtn);
+
+    drawer.style.position = 'relative';
+    drawer.style.overflow = 'hidden';
+    drawer.appendChild(sheet);
   },
 
   _showQuickAdd(anchorEl, caseId, groupName, worktreeOnly) {
