@@ -12904,7 +12904,7 @@ class CodemanApp {
   // Mobile Case Picker
   // ═══════════════════════════════════════════════════════════════
 
-  showMobileCasePicker() {
+  showMobileCasePicker(initialTab = 'projects') {
     const modal = document.getElementById('mobileCasePickerModal');
     const listContainer = document.getElementById('mobileCaseList');
     const select = document.getElementById('quickStartCase');
@@ -12940,6 +12940,8 @@ class CodemanApp {
 
     listContainer.innerHTML = html;
     modal.classList.add('active');
+    // Switch to requested tab (default: projects)
+    this.switchCasePickerTab(initialTab);
   }
 
   closeMobileCasePicker() {
@@ -12983,6 +12985,66 @@ class CodemanApp {
     modal.classList.add('from-mobile');
     // Remove animation class after it plays
     setTimeout(() => modal.classList.remove('from-mobile'), 300);
+  }
+
+  // Open project picker to the "New" tab — wired to drawer footer "+ New Project" button
+  openNewCaseModal() {
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    this.showMobileCasePicker('new');
+  }
+
+  // Open project picker to the "Clone from Git" tab — wired to drawer footer button
+  openCloneModal() {
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    this.showMobileCasePicker('clone');
+  }
+
+  switchCasePickerTab(tab) {
+    document.querySelectorAll('.case-picker-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('.case-picker-tab-content').forEach(el => {
+      el.style.display = 'none';
+    });
+    const target = document.getElementById('casePickerTab-' + tab);
+    if (target) target.style.display = '';
+    // Auto-focus the first input in the tab
+    const input = target?.querySelector('input');
+    if (input) setTimeout(() => input.focus(), 50);
+  }
+
+  async createCaseFromPicker() {
+    const nameEl = document.getElementById('pickerNewCaseName');
+    const name = nameEl?.value.trim();
+    if (!name) { this.showToast('Enter a project name', 'error'); nameEl?.focus(); return; }
+    const btn = document.querySelector('#casePickerTab-new .case-picker-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+      const res = await fetch('/api/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.closeMobileCasePicker();
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+        this.showToast(`Project "${name}" created`, 'success');
+      } else {
+        this.showToast(data.error || 'Failed to create project', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to create project: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Create Project'; }
+    }
+  }
+
+  cloneRepoFromPicker() {
+    const url = document.getElementById('pickerCloneUrl')?.value.trim();
+    if (!url) { this.showToast('Enter a repository URL', 'error'); return; }
+    this.showToast('Git clone is not yet supported from the UI — run `git clone` in a shell session', 'info');
   }
 
   renderMuxSessions() {
