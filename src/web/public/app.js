@@ -13669,81 +13669,204 @@ const SessionDrawer = {
   toggle() {
     if (this._getEl()?.classList.contains('open')) this.close(); else this.open();
   },
+  _esc(str) {
+    return String(str ?? '');
+  },
+
+  _renderSessionRow(s) {
+    const isActive = s.id === app.activeSessionId;
+    const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
+    const hasRalph  = app.ralphStates?.get(s.id)?.enabled;
+    const modeLabel = s.cliMode || s.mode || 'claude';
+
+    const row = document.createElement('div');
+    row.className = 'drawer-session-row' + (isActive ? ' active' : '');
+    row.dataset.sessionId = s.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'drawer-session-dot'
+      + (isRunning ? ' running' : ' idle')
+      + (hasRalph  ? ' ralph'   : '');
+
+    const name = document.createElement('span');
+    name.className = 'drawer-session-name';
+    name.textContent = app.getSessionName(s);
+
+    const badge = document.createElement('span');
+    badge.className = 'session-mode-badge';
+    badge.setAttribute('data-mode', modeLabel);
+    badge.textContent = modeLabel;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'drawer-session-close';
+    closeBtn.setAttribute('aria-label', 'Close session');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      this._showCloseSheet(s.id, app.getSessionName(s));
+    });
+
+    row.appendChild(dot);
+    row.appendChild(name);
+    row.appendChild(badge);
+    row.appendChild(closeBtn);
+
+    row.addEventListener('click', () => {
+      app.selectSession(s.id);
+      SessionDrawer.close();
+    });
+
+    return row;
+  },
+
   _render() {
     const list = this._getList();
     if (!list || typeof app === 'undefined') return;
     list.replaceChildren();
 
-    for (const id of app.sessionOrder) {
-      const session = app.sessions.get(id);
-      if (!session) continue;
-      const isActive  = id === app.activeSessionId;
-      const isRunning = session.status === 'running' || session.status === 'active';
-      const hasRalph  = app.ralphStates?.get(id)?.enabled;
+    // Build groups: caseName -> { caseObj, worktrees: Map(branch -> Session[]), sessions: Session[] }
+    // Sessions are matched to cases by checking if workingDir starts with case.path
+    const groups = new Map();
+    const caseList = app.cases || [];
 
-      const item = document.createElement('div');
-      item.className = 'session-drawer-item' + (isActive ? ' active' : '');
+    // Helper: find the best-matching case for a session (longest path match)
+    const findCase = (workingDir) => {
+      if (!workingDir) return null;
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cPath = c.path.endsWith('/') ? c.path : c.path + '/';
+        const wDir  = workingDir.endsWith('/') ? workingDir : workingDir + '/';
+        if ((wDir === cPath || wDir.startsWith(cPath)) && c.path.length > bestLen) {
+          best = c;
+          bestLen = c.path.length;
+        }
+      }
+      return best;
+    };
+
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (!s) continue;
+      const caseObj = findCase(s.workingDir);
+      const groupKey = caseObj ? caseObj.name : '__ungrouped__';
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { caseObj: caseObj || null, worktrees: new Map(), sessions: [] });
+      }
+      const g = groups.get(groupKey);
+      if (s.worktreeBranch) {
+        if (!g.worktrees.has(s.worktreeBranch)) g.worktrees.set(s.worktreeBranch, []);
+        g.worktrees.get(s.worktreeBranch).push(s);
+      } else {
+        g.sessions.push(s);
+      }
+    }
+
+    for (const [groupKey, group] of groups) {
+      const projectName = group.caseObj?.name || groupKey;
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'drawer-project-group';
+
+      // Project header
+      const header = document.createElement('div');
+      header.className = 'drawer-project-header';
 
       const nameSpan = document.createElement('span');
-      nameSpan.className = 'session-drawer-item-name';
-      nameSpan.textContent = app.getSessionName(session); // textContent — safe
+      nameSpan.className = 'drawer-project-name';
+      nameSpan.textContent = projectName.toUpperCase();
 
-      const meta = document.createElement('span');
-      meta.className = 'session-drawer-item-meta';
-
-      const badge = document.createElement('span');
-      badge.className = 'session-drawer-badge';
-      badge.textContent = session.mode || 'claude'; // textContent — safe
-
-      const dot = document.createElement('span');
-      dot.className = 'session-drawer-dot'
-        + (isRunning ? ' running' : '')
-        + (hasRalph  ? ' ralph'   : '');
-
-      const statusLabelMap = { busy: 'working', idle: 'waiting', stopped: 'stopped' };
-      const statusLabelText = statusLabelMap[session.status];
-      const statusLabel = document.createElement('span');
-      if (statusLabelText) {
-        statusLabel.className = 'session-drawer-status ' + session.status;
-        statusLabel.textContent = statusLabelText; // textContent — safe
-      }
-
-      meta.appendChild(badge);
-      meta.appendChild(dot);
-      if (statusLabelText) meta.appendChild(statusLabel);
-      item.appendChild(nameSpan);
-      item.appendChild(meta);
-
-      if (session.worktreeBranch) {
-        const mergeBtn = document.createElement('button');
-        mergeBtn.className = 'session-drawer-merge-btn';
-        mergeBtn.title = 'Merge ' + session.worktreeBranch; // safe — title attr
-        mergeBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
-        mergeBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          app.openWorktreeCleanupForSession(id);
-          this.close();
-        });
-        item.appendChild(mergeBtn);
-      }
-
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'session-drawer-close-btn';
-      closeBtn.textContent = '×'; // textContent — safe
-      closeBtn.addEventListener('click', (e) => {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'drawer-add-btn';
+      addBtn.textContent = '+';
+      addBtn.title = 'New session in ' + this._esc(projectName);
+      addBtn.addEventListener('click', e => {
         e.stopPropagation();
-        app.requestCloseSession(id);
-        this.close();
+        this._showQuickAdd(e.currentTarget, groupKey, projectName, false);
       });
-      item.appendChild(closeBtn);
 
-      item.addEventListener('click', () => {
-        app.selectSession(id);
-        this.close();
-      });
-      list.appendChild(item);
+      header.appendChild(nameSpan);
+      header.appendChild(addBtn);
+      groupEl.appendChild(header);
+
+      // Worktree sub-groups
+      for (const [branch, wtSessions] of group.worktrees) {
+        const wtGroup = document.createElement('div');
+        wtGroup.className = 'drawer-worktree-group';
+
+        const wtHeader = document.createElement('div');
+        wtHeader.className = 'drawer-worktree-header';
+
+        const wtIcon = document.createElement('span');
+        wtIcon.className = 'drawer-worktree-icon';
+        wtIcon.textContent = '⎇';
+
+        const wtBranch = document.createElement('span');
+        wtBranch.className = 'drawer-worktree-branch';
+        wtBranch.textContent = branch;
+
+        const mergeBtn = document.createElement('button');
+        mergeBtn.className = 'drawer-merge-btn';
+        mergeBtn.textContent = 'merge';
+        mergeBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (wtSessions[0]) app.openWorktreeCleanupForSession(wtSessions[0].id);
+        });
+
+        const wtAddBtn = document.createElement('button');
+        wtAddBtn.className = 'drawer-add-btn';
+        wtAddBtn.textContent = '+';
+        wtAddBtn.title = 'Add session to ' + this._esc(branch);
+        wtAddBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          this._showQuickAdd(e.currentTarget, groupKey, branch, true);
+        });
+
+        wtHeader.appendChild(wtIcon);
+        wtHeader.appendChild(wtBranch);
+        wtHeader.appendChild(mergeBtn);
+        wtHeader.appendChild(wtAddBtn);
+        wtGroup.appendChild(wtHeader);
+
+        for (const s of wtSessions) wtGroup.appendChild(this._renderSessionRow(s));
+        groupEl.appendChild(wtGroup);
+      }
+
+      // Regular sessions in this project
+      for (const s of group.sessions) groupEl.appendChild(this._renderSessionRow(s));
+
+      list.appendChild(groupEl);
     }
-  }
+
+    // Drawer footer
+    const footer = document.createElement('div');
+    footer.className = 'drawer-footer';
+
+    const newBtn = document.createElement('button');
+    newBtn.className = 'drawer-footer-btn';
+    newBtn.textContent = '+ New Project';
+    newBtn.addEventListener('click', () => app.openNewCaseModal?.());
+
+    const cloneBtn = document.createElement('button');
+    cloneBtn.className = 'drawer-footer-btn';
+    cloneBtn.textContent = 'Clone from Git';
+    cloneBtn.addEventListener('click', () => app.openCloneModal?.());
+
+    footer.appendChild(newBtn);
+    footer.appendChild(cloneBtn);
+    list.appendChild(footer);
+  },
+
+  _showCloseSheet(sessionId, _sessionName) {
+    // Implemented in Task 13
+    app.requestCloseSession(sessionId);
+  },
+
+  _showQuickAdd(_anchorEl, _caseKey, _groupName, _worktreeOnly) {
+    // Implemented in Task 12
+    console.log('_showQuickAdd called', _caseKey, _groupName, _worktreeOnly);
+  },
 };
 
 // Initialize
