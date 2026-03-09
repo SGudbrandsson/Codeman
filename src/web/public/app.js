@@ -244,9 +244,10 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Ordered list
+    // Ordered list — preserve start number so "3. item" renders as 3, not 1
     if (/^\d+\. /.test(line)) {
-      out.push('<ol>');
+      const startNum = parseInt(line.match(/^(\d+)\. /)[1], 10);
+      out.push(startNum !== 1 ? `<ol start="${startNum}">` : '<ol>');
       while (i < lines.length && /^\d+\. /.test(lines[i])) {
         out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref, esc) + '</li>');
         i++;
@@ -308,10 +309,19 @@ const TranscriptView = {
   _container: null,
   _sessionId: null,
   _pendingToolUses: {},
+  _loadGen: 0,       // incremented each load(); SSE blocks check this to avoid races
 
   init() {
     this._container = document.getElementById('transcriptView');
     if (!this._container) return;
+    // Keep padding-bottom in sync with compose panel height so last message is never hidden
+    const panel = document.getElementById('mobileInputPanel');
+    if (panel && window.ResizeObserver) {
+      new ResizeObserver(() => {
+        const h = panel.getBoundingClientRect().height;
+        document.documentElement.style.setProperty('--desktop-compose-height', h + 'px');
+      }).observe(panel);
+    }
     this._container.addEventListener('scroll', () => {
       const state = this._sessionId ? this._getState(this._sessionId) : null;
       if (!state) return;
@@ -342,9 +352,11 @@ const TranscriptView = {
   async load(sessionId) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
+    const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
     state.blocks = [];
     state.scrolledUp = false;
+    state._sseBuffer = [];  // collect SSE blocks that arrive during the HTTP fetch
     if (!this._container) return;
 
     this._setPlaceholder('Loading session history\u2026');
@@ -353,6 +365,8 @@ const TranscriptView = {
       const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const blocks = await res.json();
+      // Abort if a newer load() was started (user switched sessions mid-fetch)
+      if (myGen !== this._loadGen) return;
       this._container.textContent = '';
       if (!blocks.length) {
         this._setPlaceholder('Waiting for Claude to start\u2026');
@@ -361,8 +375,13 @@ const TranscriptView = {
       for (const block of blocks) {
         this._appendBlock(block, false);
       }
-      // Double-RAF: wait for two paint cycles so the browser finishes layout
-      // (content-visibility:auto on blocks means scrollHeight is stale until painted)
+      // Replay any SSE blocks that arrived after the HTTP snapshot was taken
+      const httpLastTs = blocks[blocks.length - 1]?.timestamp ?? '';
+      for (const b of (state._sseBuffer ?? [])) {
+        if (!httpLastTs || b.timestamp > httpLastTs) this._appendBlock(b, false);
+      }
+      state._sseBuffer = null;
+      // Double-RAF so browser finishes layout before we read scrollHeight
       requestAnimationFrame(() => requestAnimationFrame(() => this._scrollToBottom(true)));
     } catch {
       this._setPlaceholder('Could not load session history.');
@@ -406,6 +425,8 @@ const TranscriptView = {
 
   hide(sessionId) {
     if (this._container) this._container.style.display = 'none';
+    const overlay = document.getElementById('tvTypingIndicator');
+    if (overlay) overlay.style.display = 'none';
     this._attachXterm(sessionId);
   },
 
@@ -435,24 +456,12 @@ const TranscriptView = {
     this._container.scrollTo({ top: this._container.scrollHeight, behavior: 'instant' });
   },
 
-  /** Show or hide the "Claude is thinking" typing indicator at the bottom of the transcript */
+  /** Show or hide the "Claude is thinking" typing indicator (fixed overlay, not in scroll flow) */
   setWorking(isWorking) {
-    if (!this._container) return;
-    const existing = this._container.querySelector('.tv-typing');
-    if (isWorking) {
-      if (existing) return; // already shown
-      const ind = document.createElement('div');
-      ind.className = 'tv-typing';
-      for (let i = 0; i < 3; i++) {
-        const dot = document.createElement('span');
-        dot.className = 'tv-typing-dot';
-        ind.appendChild(dot);
-      }
-      this._container.appendChild(ind);
-      this._scrollToBottom(false);
-    } else {
-      if (existing) existing.remove();
-    }
+    const overlay = document.getElementById('tvTypingIndicator');
+    if (!overlay) return;
+    const isTranscriptVisible = this._container && this._container.style.display !== 'none';
+    overlay.style.display = (isWorking && isTranscriptVisible) ? 'flex' : 'none';
   },
 
   _appendBlock(block, scroll) {
@@ -6803,13 +6812,19 @@ class CodemanApp {
 
   _onTranscriptBlock(data) {
     const { sessionId, block } = data;
-    if (TranscriptView._sessionId === sessionId &&
-        document.getElementById('transcriptView')?.style.display !== 'none') {
-      TranscriptView.append(block);
+    const state = app._transcriptState?.[sessionId];
+    if (TranscriptView._sessionId === sessionId) {
+      const transcriptEl = document.getElementById('transcriptView');
+      if (transcriptEl?.style.display !== 'none') {
+        // If load() is in progress, buffer the block; it will be replayed after HTTP snapshot
+        if (state && state._sseBuffer !== null && state._sseBuffer !== undefined) {
+          state._sseBuffer.push(block);
+        } else {
+          TranscriptView.append(block);
+        }
+      }
     }
-    if (app._transcriptState?.[sessionId]) {
-      app._transcriptState[sessionId].blocks.push(block);
-    }
+    if (state) state.blocks.push(block);
   }
 
   _onTranscriptClear(data) {
