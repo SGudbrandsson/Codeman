@@ -3711,7 +3711,7 @@ class CodemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
       const worktreeBadge = session.worktreeBranch
-        ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">🌿 ${escapeHtml(session.worktreeBranch)}</span>`
+        ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">${BRANCH_SVG} ${escapeHtml(session.worktreeBranch)}</span>`
         : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
@@ -6131,7 +6131,7 @@ class CodemanApp {
     if (dormant.length > 0) {
       html += `<div class="worktree-section-label">Resume</div>`;
       dormant.forEach(w => {
-        html += `<button class="worktree-resume-btn" onclick="app._resumeWorktree('${escapeHtml(w.id)}')">🌿 ${escapeHtml(w.branch)} <span class="worktree-resume-project">${escapeHtml(w.projectName)}</span></button>`;
+        html += `<button class="worktree-resume-btn" onclick="app._resumeWorktree('${escapeHtml(w.id)}')">${BRANCH_SVG} ${escapeHtml(w.branch)} <span class="worktree-resume-project">${escapeHtml(w.projectName)}</span></button>`;
       });
       html += `<hr class="worktree-divider">`;
     }
@@ -13391,6 +13391,9 @@ try {
     }
   }
 } catch {}
+
+/** Centralized branch/worktree SVG icon — use everywhere instead of 🌿 */
+const BRANCH_SVG = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="4" cy="3" r="1.5"/><circle cx="4" cy="13" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 4.5v7"/><path d="M4 4.5 C4 7 12 6 12 6.5"/></svg>';
 
 /**
  * Built-in Claude Code slash commands — always available in the compose panel,

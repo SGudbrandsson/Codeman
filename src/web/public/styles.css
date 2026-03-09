@@ -15,7 +15,7 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --header-height: 48px;
+  --header-height: 34px;
   --toolbar-height: 40px;
 
   /* Session color palette */
@@ -131,7 +131,7 @@ body {
   display: flex;
   align-items: flex-start;
   min-height: var(--header-height);
-  padding: 0.35rem 0.75rem;
+  padding: 0 0.75rem;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -208,8 +208,8 @@ body {
 .session-tab {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.5rem;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
