@@ -13979,7 +13979,7 @@ const SessionDrawer = {
 
       btn.addEventListener('click', () => {
         if (mode === 'worktree') {
-          this._showWorktreeForm(popover, caseId, groupName);
+          this._showWorktreeForm(popover, caseId, groupName, anchorEl);
         } else {
           popover.remove();
           app.startSessionInCase?.(caseId, mode);
@@ -14008,7 +14008,7 @@ const SessionDrawer = {
     setTimeout(() => document.addEventListener('click', dismiss, true), 50);
   },
 
-  _showWorktreeForm(popover, caseId, groupName) {
+  _showWorktreeForm(popover, caseId, groupName, anchorEl) {
     // Clear popover and rebuild as worktree creation form
     popover.textContent = '';
 
@@ -14016,7 +14016,7 @@ const SessionDrawer = {
     backBtn.className = 'drawer-form-back';
     backBtn.textContent = '← back';
     backBtn.addEventListener('click', () => {
-      this._showQuickAdd(backBtn, caseId, groupName, false);
+      this._showQuickAdd(anchorEl, caseId, groupName, false);
     });
 
     const title = document.createElement('div');
@@ -14045,12 +14045,8 @@ const SessionDrawer = {
     const fromChips = document.createElement('div');
     fromChips.className = 'drawer-from-chips';
 
-    // Find branches for this case from app.cases
-    const caseObj = (app.cases || []).find(c => {
-      // Match by path prefix (same logic as _render grouping)
-      return c.path && caseId !== '__ungrouped__';
-    });
-    const branches = caseObj?.branches || ['master'];
+    // CaseInfo has no branch data — default to master
+    const branches = ['master'];
     let selectedFrom = branches[0];
 
     for (const b of branches) {
