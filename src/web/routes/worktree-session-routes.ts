@@ -176,12 +176,18 @@ export function registerWorktreeSessionRoutes(
       }
     }
 
-    try {
-      await removeWorktree(gitRoot, session.worktreePath, force);
-      return { success: true };
-    } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to remove worktree: ${String(err)}`);
+    // If the directory is already gone, we can skip git worktree remove and just clean up
+    const dirGone = !existsSync(session.worktreePath);
+    if (!dirGone) {
+      try {
+        await removeWorktree(gitRoot, session.worktreePath, force);
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to remove worktree: ${String(err)}`);
+      }
     }
+    // Close the session now that the worktree directory is gone
+    await ctx.cleanupSession(id, true, 'worktree_deleted');
+    return { success: true };
   });
 
   // GET /api/cases/:name/worktree/branches
