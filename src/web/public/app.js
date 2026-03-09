@@ -529,13 +529,9 @@ class CodemanApp {
     SwipeHandler.init();
     VoiceInput.init();
     KeyboardAccessoryBar.init();
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
-      InputPanel.init();
-    }
-    // Always-visible compose bar on mobile (no pencil toggle needed)
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'mobile') {
-      InputPanel.open();
-    }
+    InputPanel.init();
+    // Always-visible compose bar on mobile and desktop
+    InputPanel.open();
     // Restore desktop sidebar pin state
     if (!MobileDetection.getDeviceType() === 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
       document.body.classList.add('sidebar-pinned');
@@ -3311,7 +3307,6 @@ class CodemanApp {
     if (data.version) {
       const versionEl = this.$('versionDisplay');
       const headerVersionEl = this.$('headerVersion');
-      const desktopVersionEl = this.$('desktopVersionDisplay');
       if (versionEl) {
         versionEl.textContent = `v${data.version}`;
         versionEl.title = `Codeman v${data.version}`;
@@ -3319,10 +3314,6 @@ class CodemanApp {
       if (headerVersionEl) {
         headerVersionEl.textContent = `v${data.version}`;
         headerVersionEl.title = `Codeman v${data.version}`;
-      }
-      if (desktopVersionEl) {
-        desktopVersionEl.textContent = `v${data.version}`;
-        desktopVersionEl.title = `Codeman v${data.version}`;
       }
     }
 
@@ -4607,12 +4598,6 @@ class CodemanApp {
       }
 
       select.innerHTML = options;
-      // Sync desktop bar project select by cloning options
-      const desktopSel = document.getElementById('desktopProjectSelect');
-      if (desktopSel) {
-        while (desktopSel.options.length) desktopSel.remove(0);
-        for (const opt of select.options) desktopSel.add(new Option(opt.text, opt.value));
-      }
       console.log('[loadQuickStartCases] Set options:', select.innerHTML.substring(0, 200));
 
       // If a specific case was requested, select it
@@ -4638,18 +4623,12 @@ class CodemanApp {
         this.updateMobileCaseLabel('testcase');
       }
 
-      // Sync desktop select value to match hidden select
-      const desktopSel2 = document.getElementById('desktopProjectSelect');
-      if (desktopSel2) desktopSel2.value = select.value;
-
       // Only add event listener once (on first load)
       if (!select.dataset.listenerAdded) {
         select.addEventListener('change', () => {
           this.updateDirDisplayForCase(select.value);
           this.saveLastUsedCase(select.value);
           this.updateMobileCaseLabel(select.value);
-          const ds = document.getElementById('desktopProjectSelect');
-          if (ds) ds.value = select.value;
         });
         select.dataset.listenerAdded = 'true';
       }
@@ -4756,54 +4735,40 @@ class CodemanApp {
   }
 
   // Tab count stepper functions
-  _setCount(primaryId, desktopId, value) {
+  _setCount(primaryId, value) {
     const a = document.getElementById(primaryId);
-    const b = document.getElementById(desktopId);
     if (a) a.value = value;
-    if (b) b.value = value;
   }
 
-  _getCount(primaryId, desktopId) {
+  _getCount(primaryId) {
     const a = document.getElementById(primaryId);
-    const b = document.getElementById(desktopId);
-    return parseInt(a?.value || b?.value || '1') || 1;
+    return parseInt(a?.value || '1') || 1;
   }
 
   incrementTabCount() {
-    const v = Math.min(20, this._getCount('tabCount', 'desktopTabCount') + 1);
-    this._setCount('tabCount', 'desktopTabCount', v);
+    const v = Math.min(20, this._getCount('tabCount') + 1);
+    this._setCount('tabCount', v);
   }
 
   decrementTabCount() {
-    const v = Math.max(1, this._getCount('tabCount', 'desktopTabCount') - 1);
-    this._setCount('tabCount', 'desktopTabCount', v);
+    const v = Math.max(1, this._getCount('tabCount') - 1);
+    this._setCount('tabCount', v);
   }
 
   // Shell count stepper functions
   incrementShellCount() {
-    const v = Math.min(20, this._getCount('shellCount', 'desktopShellCount') + 1);
-    this._setCount('shellCount', 'desktopShellCount', v);
+    const v = Math.min(20, this._getCount('shellCount') + 1);
+    this._setCount('shellCount', v);
   }
 
   decrementShellCount() {
-    const v = Math.max(1, this._getCount('shellCount', 'desktopShellCount') - 1);
-    this._setCount('shellCount', 'desktopShellCount', v);
-  }
-
-  /** Sync desktop project select → hidden #quickStartCase (and update mobile label) */
-  _syncDesktopProject(caseName) {
-    const sel = document.getElementById('quickStartCase');
-    if (sel) sel.value = caseName;
-    this.updateMobileCaseLabel(caseName);
-    this.updateDirDisplayForCase(caseName);
-    this.saveLastUsedCase(caseName);
-    KeyboardAccessoryBar?.updateProjectName?.();
+    const v = Math.max(1, this._getCount('shellCount') - 1);
+    this._setCount('shellCount', v);
   }
 
   async runClaude() {
-    const caseName = document.getElementById('desktopProjectSelect')?.value ||
-      document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = Math.min(20, Math.max(1, this._getCount('tabCount', 'desktopTabCount')));
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const tabCount = Math.min(20, Math.max(1, this._getCount('tabCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
@@ -4945,9 +4910,8 @@ class CodemanApp {
   }
 
   async runShell() {
-    const caseName = document.getElementById('desktopProjectSelect')?.value ||
-      document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, this._getCount('shellCount', 'desktopShellCount')));
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const shellCount = Math.min(20, Math.max(1, this._getCount('shellCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;33m Starting ${shellCount} Shell session(s) in ${caseName}...\x1b[0m`);
@@ -13463,15 +13427,41 @@ const InputPanel = {
     // Send button
     const sendBtn = document.getElementById('composeSendBtn');
     if (sendBtn) sendBtn.addEventListener('click', () => this.send());
+
+    // Expand/collapse button — desktop only
+    const expandBtn = document.getElementById('composeExpandBtn');
+    if (expandBtn) {
+      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
+      if (isDesktop) {
+        expandBtn.style.display = '';
+        const wrap = document.querySelector('.compose-textarea-wrap');
+        if (wrap && localStorage.getItem('desktopComposeExpanded') === 'true') {
+          wrap.classList.add('expanded');
+        }
+        expandBtn.addEventListener('click', () => {
+          const w = document.querySelector('.compose-textarea-wrap');
+          if (!w) return;
+          const expanded = w.classList.toggle('expanded');
+          localStorage.setItem('desktopComposeExpanded', String(expanded));
+        });
+      }
+    }
   },
 
   /** Auto-grow the textarea up to the available viewport height */
   _autoGrow(ta) {
     ta.style.height = 'auto';
+    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
     const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    const maxH = Math.max(80, vvh - 200);
+    const maxH = isDesktop ? 200 : Math.max(80, vvh - 200);
     ta.style.maxHeight = maxH + 'px';
     ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
+    if (isDesktop) {
+      // Update CSS var so .main padding-bottom tracks actual compose bar height
+      const panel = document.getElementById('mobileInputPanel');
+      const h = panel ? panel.getBoundingClientRect().height : 52;
+      document.documentElement.style.setProperty('--desktop-compose-height', String(h) + 'px');
+    }
   },
 
   toggle() { if (this._open) this.close(); else this.open(); },
@@ -13525,7 +13515,9 @@ const InputPanel = {
     this._autoGrow(ta);
     this._images = [];
     this._renderThumbnails();
-    this.close();
+    // Desktop: keep panel open (always-visible); mobile: close after send
+    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
+    if (!isDesktop) this.close();
   },
 
   clear() {
