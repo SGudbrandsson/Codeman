@@ -3543,7 +3543,7 @@ body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 8px 0;
-  max-height: 50vh;
+  min-height: 0;
 }
 
 .mobile-case-list {
@@ -7918,3 +7918,17 @@ kbd {
   opacity: 1;
 }
 
+
+/* Session/Worktree creator modals: scrollable with proper height on mobile */
+#sessionCreatorModal .modal-content,
+#worktreeCreatorModal .modal-content {
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+#sessionCreatorModal .modal-body,
+#worktreeCreatorModal .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
