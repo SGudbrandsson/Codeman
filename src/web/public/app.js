@@ -13879,10 +13879,55 @@ const SessionDrawer = {
       return best;
     };
 
+    // Helper: extract case name from session name convention (w1-caseName, s1-caseName)
+    const findCaseBySessionName = (name) => {
+      const m = name && name.match(/^[ws]\d+-(.+)$/i);
+      if (!m) return null;
+      const suffix = m[1].toLowerCase();
+      return caseList.find(c => c.name.toLowerCase() === suffix) || null;
+    };
+
+    // Helper: match worktree dirs like "Codeman-feat-better-ux" → case with path ending in "Codeman"
+    const findCaseByWorktreeDirPrefix = (workingDir) => {
+      if (!workingDir) return null;
+      const dirBase = (workingDir.split('/').pop() || '').toLowerCase();
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cBase = (c.path.split('/').pop() || '').toLowerCase();
+        if (cBase && (dirBase === cBase || dirBase.startsWith(cBase + '-') || dirBase.startsWith(cBase + '_'))) {
+          if (c.path.length > bestLen) { best = c; bestLen = c.path.length; }
+        }
+      }
+      return best;
+    };
+
+    // Helper: resolve the best case for a session — prefers name convention, then dir prefix, then path
+    const resolveCase = (s) => {
+      const byName = findCaseBySessionName(s.name);
+      if (byName) return byName;
+      // For worktree sessions with a known origin, use origin's case
+      if (s.worktreeOriginId) {
+        const origin = app.sessions.get(s.worktreeOriginId);
+        if (origin) {
+          const byOriginName = findCaseBySessionName(origin.name);
+          if (byOriginName) return byOriginName;
+        }
+      }
+      // Path-based (longest match wins)
+      const byPath = findCase(s.workingDir);
+      // Dir-prefix heuristic for git worktree dirs (e.g. "Codeman-feat-better-ux" → case "Codeman")
+      const byDirPrefix = findCaseByWorktreeDirPrefix(s.workingDir);
+      // Prefer dir prefix if it gives a longer (more specific) case path than the path match
+      if (byDirPrefix && (!byPath || byDirPrefix.path.length > byPath.path.length)) return byDirPrefix;
+      return byPath;
+    };
+
     for (const id of (app.sessionOrder || [])) {
       const s = app.sessions.get(id);
       if (!s) continue;
-      const caseObj = findCase(s.workingDir);
+      const caseObj = resolveCase(s);
       const groupKey = caseObj ? caseObj.name : '__ungrouped__';
       if (!groups.has(groupKey)) {
         groups.set(groupKey, { caseObj: caseObj || null, worktrees: new Map(), sessions: [] });
