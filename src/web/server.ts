@@ -802,9 +802,19 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  /** Return the transcript file path for a session, or null if no watcher exists yet. */
+  /** Return the transcript file path for a session.
+   * First checks the active watcher (set when a hook fires).
+   * Falls back to deriving the path from the session's working directory, which
+   * works even before the first hook event fires. */
   private getTranscriptPath(sessionId: string): string | null {
-    return this.transcriptWatchers.get(sessionId)?.transcriptPath ?? null;
+    const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
+    if (watcherPath) return watcherPath;
+
+    const session = this.sessions.get(sessionId);
+    if (!session?.workingDir) return null;
+    // Claude stores transcripts at ~/.claude/projects/{escaped-workingDir}/{sessionId}.jsonl
+    const escapedDir = session.workingDir.replace(/\//g, '-');
+    return join(homedir(), '.claude', 'projects', escapedDir, `${sessionId}.jsonl`);
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
