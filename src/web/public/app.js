@@ -13863,9 +13863,197 @@ const SessionDrawer = {
     app.requestCloseSession(sessionId);
   },
 
-  _showQuickAdd(_anchorEl, _caseKey, _groupName, _worktreeOnly) {
-    // Implemented in Task 12
-    console.log('_showQuickAdd called', _caseKey, _groupName, _worktreeOnly);
+  _showQuickAdd(anchorEl, caseId, groupName, worktreeOnly) {
+    // Remove any existing popover
+    document.querySelector('.drawer-quick-add')?.remove();
+
+    const drawer = document.getElementById('sessionDrawer');
+    if (!drawer) return;
+
+    const popover = document.createElement('div');
+    popover.className = 'drawer-quick-add';
+    drawer.style.position = 'relative';
+
+    // Title
+    const title = document.createElement('div');
+    title.className = 'drawer-quick-add-title';
+    title.textContent = worktreeOnly
+      ? 'Add session to ' + groupName
+      : 'Start new session in ' + groupName;
+    popover.appendChild(title);
+
+    // Mode buttons row
+    const row = document.createElement('div');
+    row.className = 'drawer-quick-add-row';
+
+    const modes = [
+      { mode: 'claude', icon: '▶', label: 'Claude' },
+      { mode: 'shell', icon: '⚡', label: 'Shell' },
+      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
+    ];
+    if (!worktreeOnly) {
+      modes.push({ mode: 'worktree', icon: '⎇', label: 'Worktree' });
+    }
+
+    for (const { mode, icon, label } of modes) {
+      const btn = document.createElement('button');
+      btn.className = 'drawer-mode-btn';
+
+      const iconEl = document.createElement('span');
+      iconEl.className = 'drawer-mode-btn-icon';
+      iconEl.textContent = icon;
+
+      const labelEl = document.createElement('span');
+      labelEl.textContent = label;
+
+      btn.appendChild(iconEl);
+      btn.appendChild(labelEl);
+
+      btn.addEventListener('click', () => {
+        if (mode === 'worktree') {
+          this._showWorktreeForm(popover, caseId, groupName);
+        } else {
+          popover.remove();
+          app.startSessionInCase?.(caseId, mode);
+        }
+      });
+      row.appendChild(btn);
+    }
+    popover.appendChild(row);
+
+    // Position: below the anchor, right-aligned to drawer
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const drawerRect = drawer.getBoundingClientRect();
+    popover.style.position = 'absolute';
+    popover.style.top = (anchorRect.bottom - drawerRect.top + 4) + 'px';
+    popover.style.right = '8px';
+
+    drawer.appendChild(popover);
+
+    // Dismiss on outside click
+    const dismiss = e => {
+      if (!popover.contains(e.target)) {
+        popover.remove();
+        document.removeEventListener('click', dismiss, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', dismiss, true), 50);
+  },
+
+  _showWorktreeForm(popover, caseId, groupName) {
+    // Clear popover and rebuild as worktree creation form
+    popover.textContent = '';
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'drawer-form-back';
+    backBtn.textContent = '← back';
+    backBtn.addEventListener('click', () => {
+      this._showQuickAdd(backBtn, caseId, groupName, false);
+    });
+
+    const title = document.createElement('div');
+    title.className = 'drawer-quick-add-title';
+    title.textContent = '⎇ New worktree in ' + groupName;
+
+    const form = document.createElement('div');
+    form.className = 'drawer-worktree-form';
+
+    // Branch input
+    const branchLabel = document.createElement('div');
+    branchLabel.className = 'drawer-form-label';
+    branchLabel.textContent = 'Branch';
+    const branchInput = document.createElement('input');
+    branchInput.className = 'drawer-form-input';
+    branchInput.type = 'text';
+    branchInput.placeholder = 'feat/…';
+    const branchGroup = document.createElement('div');
+    branchGroup.appendChild(branchLabel);
+    branchGroup.appendChild(branchInput);
+
+    // From chips
+    const fromLabel = document.createElement('div');
+    fromLabel.className = 'drawer-form-label';
+    fromLabel.textContent = 'From';
+    const fromChips = document.createElement('div');
+    fromChips.className = 'drawer-from-chips';
+
+    // Find branches for this case from app.cases
+    const caseObj = (app.cases || []).find(c => {
+      // Match by path prefix (same logic as _render grouping)
+      return c.path && caseId !== '__ungrouped__';
+    });
+    const branches = caseObj?.branches || ['master'];
+    let selectedFrom = branches[0];
+
+    for (const b of branches) {
+      const chip = document.createElement('button');
+      chip.className = 'drawer-from-chip' + (b === selectedFrom ? ' selected' : '');
+      chip.textContent = b;
+      chip.addEventListener('click', () => {
+        fromChips.querySelectorAll('.drawer-from-chip').forEach(c => c.classList.remove('selected'));
+        chip.classList.add('selected');
+        selectedFrom = b;
+      });
+      fromChips.appendChild(chip);
+    }
+    const fromGroup = document.createElement('div');
+    fromGroup.appendChild(fromLabel);
+    fromGroup.appendChild(fromChips);
+
+    // Mode selector
+    const modeLabel = document.createElement('div');
+    modeLabel.className = 'drawer-form-label';
+    modeLabel.textContent = 'Start with';
+    const modeRow = document.createElement('div');
+    modeRow.className = 'drawer-quick-add-row';
+
+    let selectedMode = 'claude';
+    for (const { mode, icon, label } of [
+      { mode: 'claude', icon: '▶', label: 'Claude' },
+      { mode: 'shell', icon: '⚡', label: 'Shell' },
+      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
+    ]) {
+      const btn = document.createElement('button');
+      btn.className = 'drawer-mode-btn' + (mode === selectedMode ? ' selected' : '');
+      const iconEl = document.createElement('span');
+      iconEl.className = 'drawer-mode-btn-icon';
+      iconEl.textContent = icon;
+      const labelEl = document.createElement('span');
+      labelEl.textContent = label;
+      btn.appendChild(iconEl);
+      btn.appendChild(labelEl);
+      btn.addEventListener('click', () => {
+        modeRow.querySelectorAll('.drawer-mode-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedMode = mode;
+      });
+      modeRow.appendChild(btn);
+    }
+    const modeGroup = document.createElement('div');
+    modeGroup.appendChild(modeLabel);
+    modeGroup.appendChild(modeRow);
+
+    // Create button
+    const createBtn = document.createElement('button');
+    createBtn.className = 'drawer-create-btn';
+    createBtn.textContent = 'Create & Start';
+    createBtn.addEventListener('click', async () => {
+      const branch = branchInput.value.trim();
+      if (!branch) { branchInput.focus(); return; }
+      popover.remove();
+      await app.createWorktreeAndStartSession?.(caseId, branch, selectedFrom, selectedMode);
+    });
+
+    form.appendChild(branchGroup);
+    form.appendChild(fromGroup);
+    form.appendChild(modeGroup);
+
+    popover.appendChild(backBtn);
+    popover.appendChild(title);
+    popover.appendChild(form);
+    popover.appendChild(createBtn);
+
+    branchInput.focus();
   },
 };
 
