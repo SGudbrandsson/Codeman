@@ -8230,3 +8230,179 @@ kbd {
   flex: 1;
   min-height: 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Desktop Bar — replaces .toolbar on desktop (≥1024px)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Hide old toolbar on desktop */
+@media (min-width: 1024px) {
+  .toolbar { display: none !important; }
+}
+
+.desktop-bar {
+  display: none; /* hidden on mobile — shown only on desktop below */
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 10px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 10;
+  contain: style;
+}
+
+@media (min-width: 1024px) {
+  .desktop-bar { display: flex; }
+}
+
+/* Run button group */
+.desktop-bar-run-group {
+  display: flex;
+  align-items: center;
+}
+.desktop-bar-run {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 5px 0 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  height: 28px;
+  white-space: nowrap;
+}
+.desktop-bar-run:hover { background: #1e40af; }
+.desktop-bar-run-gear {
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  background: #1e40af;
+  color: #93c5fd;
+  border: none;
+  border-radius: 0 5px 5px 0;
+  border-left: 1px solid rgba(255,255,255,0.15);
+  height: 28px;
+  cursor: pointer;
+}
+.desktop-bar-run-gear:hover { background: #1e3a8a; }
+
+/* Stop button */
+.desktop-bar-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: rgba(239,68,68,0.12);
+  color: #f87171;
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.desktop-bar-stop:hover { background: rgba(239,68,68,0.22); }
+
+/* Shell button */
+.desktop-bar-shell {
+  padding: 4px 10px;
+  height: 28px;
+  background: rgba(74,222,128,0.08);
+  color: #4ade80;
+  border: 1px solid rgba(74,222,128,0.18);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.desktop-bar-shell:hover { background: rgba(74,222,128,0.16); }
+
+/* Count steppers */
+.desktop-bar-count-group {
+  display: flex;
+  align-items: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  height: 28px;
+}
+.desktop-bar-count-btn {
+  width: 22px;
+  height: 100%;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.desktop-bar-count-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.desktop-bar-count-input {
+  width: 26px;
+  border: none;
+  background: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 0;
+  -moz-appearance: textfield;
+}
+.desktop-bar-count-input::-webkit-outer-spin-button,
+.desktop-bar-count-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+/* Project picker */
+.desktop-bar-project-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 8px;
+  height: 28px;
+}
+.desktop-bar-project-icon { color: var(--text-muted); flex-shrink: 0; }
+.desktop-bar-project-select {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  max-width: 160px;
+}
+
+/* Spacer + version */
+.desktop-bar-spacer { flex: 1; }
+.desktop-bar-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+/* Sessions button */
+.desktop-bar-sessions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  height: 28px;
+  background: rgba(100,116,139,0.1);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.desktop-bar-sessions:hover { background: rgba(100,116,139,0.2); color: var(--text-primary); }
