@@ -8315,6 +8315,7 @@ kbd {
 
   /* Expand button: show on desktop (inline style="display:none" is overridden) */
   .compose-expand-btn {
+    position: absolute;
     display: inline-flex !important;
     right: 44px;   /* Left of send button */
     bottom: 8px;
