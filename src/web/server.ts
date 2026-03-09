@@ -535,6 +535,7 @@ export class WebServer extends EventEmitter {
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
+      getTranscriptPath: this.getTranscriptPath.bind(this),
       // InfraPort
       mux: this.mux,
       runSummaryTrackers: this.runSummaryTrackers,
@@ -790,6 +791,11 @@ export class WebServer extends EventEmitter {
       watcher.stop();
       this.transcriptWatchers.delete(sessionId);
     }
+  }
+
+  /** Return the transcript file path for a session, or null if no watcher exists yet. */
+  private getTranscriptPath(sessionId: string): string | null {
+    return this.transcriptWatchers.get(sessionId)?.transcriptPath ?? null;
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */

@@ -91,7 +91,7 @@ const PLAN_MODE_PATTERNS = [/ExitPlanMode/i, /AskUserQuestion/i, /Ready for user
 // ========== TranscriptWatcher Class ==========
 
 export class TranscriptWatcher extends EventEmitter {
-  private transcriptPath: string | null = null;
+  private _transcriptPath: string | null = null;
   private fileWatcher: FSWatcher | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
   private filePosition: number = 0;
@@ -101,6 +101,11 @@ export class TranscriptWatcher extends EventEmitter {
 
   constructor() {
     super();
+  }
+
+  /** The path to the transcript JSONL file being watched, or null if not started. */
+  get transcriptPath(): string | null {
+    return this._transcriptPath;
   }
 
   private getInitialState(): TranscriptState {
@@ -124,14 +129,14 @@ export class TranscriptWatcher extends EventEmitter {
    * @param transcriptPath - Path to the JSONL transcript file
    */
   start(transcriptPath: string): void {
-    if (this._isRunning && this.transcriptPath === transcriptPath) {
+    if (this._isRunning && this._transcriptPath === transcriptPath) {
       return; // Already watching this file
     }
 
     // Stop any existing watcher
     this.stop();
 
-    this.transcriptPath = transcriptPath;
+    this._transcriptPath = transcriptPath;
     this._isRunning = true;
     this.state = this.getInitialState();
     this.filePosition = 0;
@@ -172,7 +177,7 @@ export class TranscriptWatcher extends EventEmitter {
       this.pollInterval = null;
     }
 
-    this.transcriptPath = null;
+    this._transcriptPath = null;
     this.state = this.getInitialState();
   }
 
@@ -194,7 +199,7 @@ export class TranscriptWatcher extends EventEmitter {
    * Update the transcript path (e.g., from a new hook event)
    */
   updatePath(transcriptPath: string): void {
-    if (this.transcriptPath !== transcriptPath) {
+    if (this._transcriptPath !== transcriptPath) {
       this.start(transcriptPath);
     }
   }
@@ -205,9 +210,9 @@ export class TranscriptWatcher extends EventEmitter {
     if (this.pollInterval) return;
 
     this.pollInterval = setInterval(() => {
-      if (!this.transcriptPath || !this._isRunning) return;
+      if (!this._transcriptPath || !this._isRunning) return;
 
-      if (existsSync(this.transcriptPath)) {
+      if (existsSync(this._transcriptPath)) {
         // File now exists, switch to file watching
         clearInterval(this.pollInterval!);
         this.pollInterval = null;
@@ -217,10 +222,10 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   private setupFileWatcher(): void {
-    if (!this.transcriptPath || !this._isRunning) return;
+    if (!this._transcriptPath || !this._isRunning) return;
 
     try {
-      this.fileWatcher = watch(this.transcriptPath, (eventType) => {
+      this.fileWatcher = watch(this._transcriptPath, (eventType) => {
         if (eventType === 'change') {
           this.processNewContent();
         }
@@ -247,12 +252,12 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   private async processNewContent(): Promise<void> {
-    if (!this.transcriptPath || !this._isRunning) return;
+    if (!this._transcriptPath || !this._isRunning) return;
     if (this._isProcessing) return; // Guard against concurrent calls
     this._isProcessing = true;
 
     try {
-      const stat = statSync(this.transcriptPath);
+      const stat = statSync(this._transcriptPath);
       if (stat.size < this.filePosition) {
         // File was truncated/replaced — reset and re-read from start
         this.filePosition = 0;
@@ -280,13 +285,13 @@ export class TranscriptWatcher extends EventEmitter {
 
   private readNewEntries(): Promise<TranscriptEntry[]> {
     return new Promise((resolve, reject) => {
-      if (!this.transcriptPath) {
+      if (!this._transcriptPath) {
         resolve([]);
         return;
       }
 
       const entries: TranscriptEntry[] = [];
-      const transcriptPath = this.transcriptPath;
+      const transcriptPath = this._transcriptPath;
 
       const stream = createReadStream(transcriptPath, {
         start: this.filePosition,
