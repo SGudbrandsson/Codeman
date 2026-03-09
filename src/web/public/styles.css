@@ -9011,3 +9011,198 @@ kbd {
   .drawer-cmd-name { color: #e5e5e5; font-size: 0.9rem; font-family: monospace; }
   .drawer-cmd-desc { color: #6b7280; font-size: 0.75rem; margin-top: 1px; }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Desktop Project Picker — centered dialog, fixed dimensions.
+   Overrides the mobile bottom-sheet layout for screens ≥ 1024px.
+   ════════════════════════════════════════════════════════════════ */
+@media (min-width: 1024px) {
+  /* Backdrop: full-screen dim */
+  .mobile-case-picker .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
+
+  /* Sheet: centered dialog, FIXED dimensions so no jumping between tabs */
+  .mobile-case-picker-sheet {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    bottom: auto;
+    width: 500px;
+    height: 500px;
+    max-height: none;
+    border-radius: 12px;
+    background: #0f1318;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 32px 80px rgba(0, 0, 0, 0.75),
+                0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header: compact label style */
+  .mobile-case-picker-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+  }
+  .mobile-case-picker-header h3 {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #4b5563;
+  }
+  .mobile-case-picker-header .modal-close {
+    color: #374151;
+    font-size: 1.3rem;
+    transition: color 0.15s;
+  }
+  .mobile-case-picker-header .modal-close:hover {
+    color: #9ca3af;
+  }
+
+  /* Tab bar: compact segment-style pills, NOT full-width stretching */
+  .case-picker-tabs {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: #0f1318;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .case-picker-tab {
+    flex: none;
+    padding: 6px 14px;
+    font-size: 0.77rem;
+    font-weight: 600;
+    border-radius: 6px;
+    color: #4b5563;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, background 0.15s;
+    margin-bottom: 0;
+  }
+  .case-picker-tab:hover {
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .case-picker-tab.active {
+    color: #e2e8f0;
+    background: rgba(255, 255, 255, 0.08);
+    border-bottom-color: transparent;
+  }
+
+  /* Body: fills remaining fixed height — NO overflow at container level */
+  .mobile-case-picker-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  /* Each tab content: fills 100% of body, flex column */
+  .case-picker-tab-content {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Projects tab: scrollable list inside fixed area */
+  #casePickerTab-projects {
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+  #casePickerTab-projects::-webkit-scrollbar { width: 4px; }
+  #casePickerTab-projects::-webkit-scrollbar-track { background: transparent; }
+  #casePickerTab-projects::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+
+  /* Project list items: tighter, monospace names, teal selected state */
+  .mobile-case-item {
+    padding: 9px 20px;
+    font-size: 0.875rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    letter-spacing: -0.02em;
+    gap: 10px;
+    border-left: 2px solid transparent;
+  }
+  .mobile-case-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .mobile-case-item.selected {
+    background: rgba(34, 211, 238, 0.07);
+    color: #22d3ee;
+    border-left-color: #22d3ee;
+  }
+  .mobile-case-item.selected .mobile-case-item-icon {
+    color: #22d3ee;
+  }
+  .mobile-case-item-icon { color: #374151; }
+  .mobile-case-item-check { color: #22d3ee; }
+
+  /* Form tabs (New / Clone): vertically centered form content */
+  .case-picker-form {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 32px 44px 36px;
+    gap: 18px;
+  }
+  .case-picker-form-group {
+    gap: 8px;
+  }
+  .case-picker-form-label {
+    font-size: 0.68rem;
+    color: #374151;
+    letter-spacing: 0.11em;
+  }
+  .case-picker-input {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 7px;
+    padding: 12px 14px;
+    font-size: 0.9rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    color: #e2e8f0;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .case-picker-input:focus {
+    border-color: rgba(34, 211, 238, 0.4);
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.07);
+    outline: none;
+  }
+  .case-picker-input::placeholder {
+    color: #1f2937;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  }
+  /* Submit button: right-aligned, teal accent */
+  .case-picker-submit {
+    width: auto;
+    align-self: flex-end;
+    padding: 10px 28px;
+    border-radius: 7px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: #0e7490;
+    color: #fff;
+    margin-top: 4px;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  .case-picker-submit:hover {
+    background: #0891b2;
+    box-shadow: 0 4px 16px rgba(8, 145, 178, 0.3);
+  }
+  .case-picker-submit:disabled {
+    background: #0e7490;
+    opacity: 0.4;
+    box-shadow: none;
+  }
+}
