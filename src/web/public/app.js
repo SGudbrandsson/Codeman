@@ -4769,13 +4769,13 @@ class CodemanApp {
           body: JSON.stringify({ name: caseName, description: '' })
         });
         const createCaseData = await createCaseRes.json();
-        if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create case');
+        if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create project');
         // Use the newly created case data (API returns { success, case: { name, path } })
         caseData = createCaseData.case;
       }
 
       const workingDir = caseData.path;
-      if (!workingDir) throw new Error('Case path not found');
+      if (!workingDir) throw new Error('Project path not found');
       let firstSessionId = null;
 
       // Find the highest existing w-number for THIS case to avoid duplicates
@@ -4900,11 +4900,11 @@ class CodemanApp {
     this.terminal.writeln('');
 
     try {
-      // Get the case path
+      // Get the project path
       const caseRes = await fetch(`/api/cases/${caseName}`);
       const caseData = await caseRes.json();
       const workingDir = caseData.path;
-      if (!workingDir) throw new Error('Case path not found');
+      if (!workingDir) throw new Error('Project path not found');
 
       // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
@@ -5983,16 +5983,16 @@ class CodemanApp {
     if (!body) return;
     const cases = this._sessionCreatorCases;
     if (!cases) {
-      body['inner' + 'HTML'] = '<div class="worktree-git-loading">Loading cases...</div>';
+      body['inner' + 'HTML'] = '<div class="worktree-git-loading">Loading projects...</div>';
       return;
     }
     const selectedCase = this._sessionCreatorCaseName;
     const currentMode = this._sessionCreatorMode || 'claude';
     let html = '';
     if (cases.length === 0) {
-      html += '<div class="worktree-git-loading">No cases found. Create a case first.</div>';
+      html += '<div class="worktree-git-loading">No projects found. Create a project first.</div>';
     } else {
-      html += '<div class="worktree-section-label">Case</div><div class="session-creator-cases">';
+      html += '<div class="worktree-section-label">Project</div><div class="session-creator-cases">';
       cases.forEach(c => {
         const isSelected = c.name === selectedCase;
         html += `<button class="session-creator-case-card${isSelected ? ' selected' : ''}" onclick="app._selectSessionCase('${escapeHtml(c.name)}')">` +
@@ -6099,7 +6099,7 @@ class CodemanApp {
     const gitCases = this._worktreeGitCases || [];
     const selectedCase = this._worktreeCreatorCaseName;
     if (gitCases.length === 0 && dormant.length === 0) {
-      html += `<div class="worktree-git-loading">No git repositories found in cases.</div>`;
+      html += `<div class="worktree-git-loading">No git repositories found in projects.</div>`;
     } else if (!selectedCase && gitCases.length > 1) {
       html += `<div class="worktree-section-label">Branch from</div><div class="session-creator-cases">`;
       gitCases.forEach(c => {
@@ -6181,7 +6181,7 @@ class CodemanApp {
 
   async _submitCreateWorktree() {
     const caseName = this._worktreeCreatorCaseName;
-    if (!caseName) { alert('Please select a case'); return; }
+    if (!caseName) { alert('Please select a project'); return; }
     const type = document.querySelector('input[name="worktreeBranchType"]:checked')?.value ?? 'new';
     const isNew = type === 'new';
     const branch = (isNew
@@ -12747,7 +12747,7 @@ class CodemanApp {
     const description = document.getElementById('newCaseDescription').value.trim();
 
     if (!name) {
-      this.showToast('Please enter a case name', 'error');
+      this.showToast('Please enter a project name', 'error');
       return;
     }
 
@@ -12766,17 +12766,17 @@ class CodemanApp {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.showToast(`Case "${name}" created`, 'success');
+        this.showToast(`Project "${name}" created`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
         // Save as last used case
         await this.saveLastUsedCase(name);
       } else {
-        this.showToast(data.error || 'Failed to create case', 'error');
+        this.showToast(data.error || 'Failed to create project', 'error');
       }
     } catch (err) {
-      console.error('Failed to create case:', err);
-      this.showToast('Failed to create case: ' + err.message, 'error');
+      console.error('Failed to create project:', err);
+      this.showToast('Failed to create project: ' + err.message, 'error');
     }
   }
 
@@ -12785,7 +12785,7 @@ class CodemanApp {
     const path = document.getElementById('linkCasePath').value.trim();
 
     if (!name) {
-      this.showToast('Please enter a case name', 'error');
+      this.showToast('Please enter a project name', 'error');
       return;
     }
 
@@ -12809,17 +12809,17 @@ class CodemanApp {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.showToast(`Case "${name}" linked to ${path}`, 'success');
+        this.showToast(`Project "${name}" linked to ${path}`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
         // Save as last used case
         await this.saveLastUsedCase(name);
       } else {
-        this.showToast(data.error || 'Failed to link case', 'error');
+        this.showToast(data.error || 'Failed to link project', 'error');
       }
     } catch (err) {
-      console.error('Failed to link case:', err);
-      this.showToast('Failed to link case: ' + err.message, 'error');
+      console.error('Failed to link project:', err);
+      this.showToast('Failed to link project: ' + err.message, 'error');
     }
   }
 
