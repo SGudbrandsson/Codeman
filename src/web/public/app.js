@@ -13433,7 +13433,7 @@ const InputPanel = {
     if (expandBtn) {
       const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
       if (isDesktop) {
-        expandBtn.style.display = '';
+        expandBtn.removeAttribute('style'); // Let desktop CSS (display: inline-flex !important) take over
         const wrap = document.querySelector('.compose-textarea-wrap');
         if (wrap && localStorage.getItem('desktopComposeExpanded') === 'true') {
           wrap.classList.add('expanded');
