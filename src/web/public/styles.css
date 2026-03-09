@@ -9255,14 +9255,18 @@ kbd {
 .compose-send-btn.is-working .compose-send-icon { display: none; }
 .compose-send-btn.is-working .compose-stop-icon { display: flex; }
 
-/* Typing indicator — 3 bouncing dots shown while Claude is working */
-.tv-typing {
+/* Typing indicator — fixed overlay at bottom of .main, above transcript content, does NOT affect scroll */
+.tv-typing-overlay {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: calc(var(--desktop-compose-height, 60px) + 40px + 8px);
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 10px 4px;
-  max-width: 860px;
-  margin: 0 auto 8px;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  pointer-events: none;
+  z-index: 53;
 }
 .tv-typing-dot {
   width: 8px;
@@ -9293,7 +9297,6 @@ kbd {
   max-width: 860px;
   margin-left: auto;
   margin-right: auto;
-  content-visibility: auto;
 }
 
 /* User block */
