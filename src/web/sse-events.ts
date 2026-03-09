@@ -241,6 +241,10 @@ export const TranscriptPlanMode = 'transcript:plan_mode' as const;
 export const TranscriptToolStart = 'transcript:tool_start' as const;
 /** Tool invocation ended in transcript. */
 export const TranscriptToolEnd = 'transcript:tool_end' as const;
+/** A new transcript block is available for display. */
+export const TranscriptBlock = 'transcript:block' as const;
+/** Transcript cleared (e.g. session reset). */
+export const TranscriptClear = 'transcript:clear' as const;
 
 // ─── Plan Orchestration ──────────────────────────────────────────────────────
 
@@ -429,6 +433,8 @@ export const SseEvent = {
   TranscriptPlanMode,
   TranscriptToolStart,
   TranscriptToolEnd,
+  TranscriptBlock,
+  TranscriptClear,
 
   // Plan orchestration
   PlanStarted,

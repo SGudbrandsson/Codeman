@@ -85,6 +85,7 @@ import {
   type PersistedRespawnConfig,
   type NiceConfig,
   type ImageDetectedEvent,
+  type TranscriptBlock,
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
 import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
@@ -768,6 +769,14 @@ export class WebServer extends EventEmitter {
           isError,
           timestamp: Date.now(),
         });
+      });
+
+      watcher.on('transcript:block', (block: TranscriptBlock) => {
+        this.broadcast(SseEvent.TranscriptBlock, { sessionId, block });
+      });
+
+      watcher.on('transcript:clear', () => {
+        this.broadcast(SseEvent.TranscriptClear, { sessionId });
       });
 
       watcher.on('transcript:error', (error: Error) => {

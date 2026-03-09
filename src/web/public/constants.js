@@ -283,6 +283,10 @@ const SSE_EVENTS = {
   PLAN_CANCELLED: 'plan:cancelled',
   PLAN_COMPLETED: 'plan:completed',
 
+  // Transcript
+  TRANSCRIPT_BLOCK: 'transcript:block',
+  TRANSCRIPT_CLEAR: 'transcript:clear',
+
   // Worktree
   WORKTREE_SESSION_ENDED: 'worktree:sessionEnded',
 
