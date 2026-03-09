@@ -14,6 +14,8 @@ import { EventEmitter } from 'node:events';
 import { watch, statSync, existsSync, FSWatcher } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
+import type { TranscriptBlock } from './types/index.js';
+import { parseTranscriptEntry } from './types/transcript-blocks.js';
 
 // ========== Types ==========
 
@@ -75,6 +77,8 @@ export interface TranscriptWatcherEvents {
   'transcript:tool_end': (toolName: string, isError: boolean) => void;
   'transcript:error': (error: Error) => void;
   'transcript:plan_mode': () => void;
+  'transcript:block': (block: TranscriptBlock) => void;
+  'transcript:clear': () => void;
 }
 
 // ========== Constants ==========
@@ -177,6 +181,7 @@ export class TranscriptWatcher extends EventEmitter {
       this.pollInterval = null;
     }
 
+    this.emit('transcript:clear');
     this._transcriptPath = null;
     this.state = this.getInitialState();
   }
@@ -200,6 +205,7 @@ export class TranscriptWatcher extends EventEmitter {
    */
   updatePath(transcriptPath: string): void {
     if (this._transcriptPath !== transcriptPath) {
+      this.emit('transcript:clear');
       this.start(transcriptPath);
     }
   }
@@ -354,6 +360,12 @@ export class TranscriptWatcher extends EventEmitter {
 
     // Check for plan mode patterns
     this.checkPlanMode(entry);
+
+    // Emit full block content for transcript web view
+    const blocks = parseTranscriptEntry(entry);
+    for (const block of blocks) {
+      this.emit('transcript:block', block as TranscriptBlock);
+    }
   }
 
   private handleAssistantEntry(entry: TranscriptEntry): void {
