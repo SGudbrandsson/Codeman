@@ -912,6 +912,171 @@ body {
   display: block;
 }
 
+/* ── Grouped Session Drawer ───────────────────────────── */
+
+/* Project group header */
+.drawer-project-group { margin-bottom: 4px; }
+.drawer-project-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px 4px;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+  color: #64748b; text-transform: uppercase; user-select: none;
+}
+.drawer-project-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-project-branch {
+  font-size: 0.65rem; font-weight: 500; font-family: monospace; color: #475569;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 4px; padding: 1px 5px;
+}
+.drawer-add-btn {
+  background: none; border: none; color: #475569; cursor: pointer;
+  font-size: 1rem; padding: 2px 4px; border-radius: 4px; line-height: 1; flex-shrink: 0;
+}
+.drawer-add-btn:hover { background: rgba(255,255,255,0.08); color: #94a3b8; }
+
+/* Worktree sub-group */
+.drawer-worktree-group {
+  margin: 2px 8px 4px;
+  border-left: 2px solid rgba(6, 182, 212, 0.28);
+  background: rgba(6, 182, 212, 0.03);
+  border-radius: 0 6px 6px 0;
+}
+.drawer-worktree-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px 3px; font-size: 0.7rem; color: #22d3ee;
+}
+.drawer-worktree-icon { opacity: 0.8; }
+.drawer-worktree-branch {
+  flex: 1; font-family: monospace; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drawer-merge-btn {
+  background: none; border: 1px solid rgba(6, 182, 212, 0.3); color: #22d3ee;
+  cursor: pointer; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px;
+}
+.drawer-merge-btn:hover { background: rgba(6, 182, 212, 0.1); }
+
+/* Session rows */
+.drawer-session-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; cursor: pointer;
+  border-radius: 6px; margin: 1px 4px;
+  transition: background 0.12s;
+}
+.drawer-session-row:hover { background: rgba(255,255,255,0.06); }
+.drawer-session-row.active { background: rgba(59,130,246,0.12); }
+.drawer-session-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #4ade80;
+}
+.drawer-session-dot.idle { background: #475569; }
+.drawer-session-name {
+  flex: 1; font-size: 0.82rem; color: #cbd5e1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drawer-worktree-group .drawer-session-name { font-size: 0.78rem; color: #94a3b8; }
+
+/* X close button per session row */
+.drawer-session-close {
+  width: 26px; height: 26px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: #334155; font-size: 14px;
+  cursor: pointer; border-radius: 4px; transition: background 0.12s, color 0.12s;
+}
+.drawer-session-close:hover { background: rgba(239,68,68,0.12); color: #f87171; }
+
+/* Drawer footer */
+.drawer-footer {
+  padding: 10px 12px; border-top: 1px solid rgba(255,255,255,0.06);
+  display: flex; gap: 8px;
+}
+.drawer-footer-btn {
+  flex: 1; padding: 8px 10px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; color: #94a3b8; font-size: 0.78rem; cursor: pointer; text-align: center;
+}
+.drawer-footer-btn:hover { background: rgba(255,255,255,0.08); color: #e2e8f0; }
+
+/* Quick-add popover */
+.drawer-quick-add {
+  position: absolute; background: #1e2d42;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 100; min-width: 200px;
+}
+.drawer-quick-add-title { font-size: 0.72rem; color: #64748b; padding: 0 4px 6px; font-weight: 600; }
+.drawer-quick-add-row { display: flex; gap: 6px; }
+.drawer-mode-btn {
+  flex: 1; padding: 8px 4px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; color: #94a3b8; font-size: 0.72rem; cursor: pointer;
+  text-align: center; display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.drawer-mode-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
+.drawer-mode-btn.selected { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93c5fd; }
+.drawer-mode-btn-icon { font-size: 1rem; }
+
+/* Worktree creation form (inside popover) */
+.drawer-worktree-form { padding: 8px 4px 4px; display: flex; flex-direction: column; gap: 8px; }
+.drawer-form-back { background: none; border: none; color: #64748b; font-size: 0.72rem; cursor: pointer; padding: 2px 0; text-align: left; }
+.drawer-form-back:hover { color: #94a3b8; }
+.drawer-form-label { font-size: 0.7rem; color: #64748b; margin-bottom: 2px; }
+.drawer-form-input {
+  width: 100%; padding: 6px 8px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px; color: #e2e8f0; font-size: 0.8rem; font-family: monospace;
+}
+.drawer-from-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.drawer-from-chip {
+  padding: 3px 8px;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px; color: #94a3b8; font-size: 0.72rem; cursor: pointer;
+}
+.drawer-from-chip.selected { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93c5fd; }
+.drawer-create-btn {
+  padding: 8px; background: #2563eb; border: none; border-radius: 8px;
+  color: #fff; font-size: 0.82rem; font-weight: 600; cursor: pointer; width: 100%;
+}
+.drawer-create-btn:hover { background: #1d4ed8; }
+
+/* Mobile close confirmation sheet (pinned to bottom of drawer) */
+.drawer-close-sheet {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: #1a2236; border-top: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px 12px 0 0; padding: 12px; z-index: 10;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.drawer-close-sheet-title {
+  font-size: 0.8rem; color: #94a3b8; padding: 0 4px 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.close-sheet-option {
+  padding: 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+  cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  background: rgba(255,255,255,0.03); width: 100%; text-align: left;
+}
+.close-sheet-option:hover { background: rgba(255,255,255,0.07); }
+.close-sheet-option.danger { border-color: rgba(239,68,68,0.3); }
+.close-sheet-option.danger:hover { background: rgba(239,68,68,0.08); }
+.close-sheet-option-title { font-size: 0.88rem; font-weight: 600; color: #e2e8f0; }
+.close-sheet-option.danger .close-sheet-option-title { color: #f87171; }
+.close-sheet-option-desc { font-size: 0.72rem; color: #64748b; }
+.close-sheet-cancel {
+  background: none; border: none; color: #64748b; font-size: 0.85rem;
+  cursor: pointer; padding: 8px; text-align: center; width: 100%;
+}
+.close-sheet-cancel:hover { color: #94a3b8; }
+
+/* Desktop pinned sidebar */
+@media (min-width: 1024px) {
+  body.sidebar-pinned .session-drawer { transform: translateX(0) !important; }
+  body.sidebar-pinned .session-drawer-overlay { display: none; }
+  body.sidebar-pinned .main-content { margin-right: 300px; }
+  .drawer-pin-btn {
+    background: none; border: none; color: #64748b; cursor: pointer;
+    font-size: 0.9rem; padding: 2px 6px; border-radius: 4px; margin-left: auto;
+  }
+  .drawer-pin-btn:hover { color: #94a3b8; }
+}
+
 /* context pill — shown in header on all screen sizes when context data is available */
 .mobile-ctx-pill {
   --ctx-color: #22c55e;
