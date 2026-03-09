@@ -11250,12 +11250,35 @@ class CodemanApp {
       setTimeout(() => {
         try { fitAddon.fit(); } catch {}
 
-        // Fetch initial pane buffer
+        // Fetch initial pane buffer. Pane captures can be large (up to 5000 lines of
+        // tmux scrollback with ANSI sequences = potentially 500KB+). Write in time-budgeted
+        // chunks to avoid blocking the main thread when the window is opened mid-session.
+        const writeChunked = (term, data) => {
+          const CHUNK_MS = 8;
+          const CHUNK_BYTES = 32 * 1024;
+          if (!data) return;
+          let offset = 0;
+          const writeNext = () => {
+            if (!document.contains(body)) return; // window was closed
+            const t0 = performance.now();
+            while (offset < data.length) {
+              const end = Math.min(offset + CHUNK_BYTES, data.length);
+              try { term.write(data.slice(offset, end)); } catch { return; }
+              offset = end;
+              if (performance.now() - t0 > CHUNK_MS && offset < data.length) {
+                requestAnimationFrame(writeNext);
+                return;
+              }
+            }
+          };
+          requestAnimationFrame(writeNext);
+        };
+
         fetch(`/api/sessions/${sessionId}/teammate-pane-buffer/${encodeURIComponent(paneInfo.paneTarget)}`)
           .then(r => r.json())
           .then(resp => {
             if (resp.success && resp.data?.buffer) {
-              try { terminal.write(resp.data.buffer); } catch {}
+              writeChunked(terminal, resp.data.buffer);
             }
           })
           .catch(err => console.error('[TeammateTerminal] Failed to fetch buffer:', err));
