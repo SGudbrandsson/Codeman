@@ -1429,16 +1429,17 @@ class CodemanApp {
     const segments = extractSyncSegments(joined);
 
     // Write segments respecting a per-frame time budget.
-    // Each DEC 2026 sync segment is a complete Ink redraw — writing whole segments
-    // preserves atomicity (no flicker). After each write, check elapsed time and
-    // defer remaining segments if we've used more than 8ms of the frame budget.
-    // Time-based budgeting adapts to actual render cost (canvas 2D draw calls,
-    // content complexity, GPU load) rather than assuming bytes ∝ render time.
+    // After each sub-chunk write, check elapsed time and defer remaining content
+    // if we've used more than 8ms of the frame budget. Sub-chunk size (8KB) is
+    // small enough that a single write rarely blocks >2ms even on canvas 2D.
+    // This sacrifices strict DEC 2026 sync atomicity in exchange for never blocking
+    // the main thread — the flicker filter upstream already handles cursor-up redraws.
     const MAX_FRAME_MS = 8; // 8ms — half a 60fps frame, leaves headroom for browser paint
+    const SUB_CHUNK = 8192; // 8KB per write — small enough to check budget frequently
     let bytesThisFrame = 0;
     let deferred = false;
 
-    for (let i = 0; i < segments.length; i++) {
+    outer: for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       if (!segment) continue;
       const content = segment.startsWith(DEC_SYNC_START)
@@ -1446,29 +1447,36 @@ class CodemanApp {
         : segment;
       if (!content) continue;
 
-      this.terminal.write(content);
-      bytesThisFrame += content.length;
+      // Write content in sub-chunks so the time check fires frequently enough
+      // to defer mid-segment when a single Ink redraw exceeds the frame budget.
+      let subOffset = 0;
+      while (subOffset < content.length) {
+        const sub = content.slice(subOffset, subOffset + SUB_CHUNK);
+        this.terminal.write(sub);
+        subOffset += SUB_CHUNK;
+        bytesThisFrame += sub.length;
 
-      // Check elapsed time after each write — defer remaining if over budget.
-      // Checking after (not before) ensures at least one segment is always written,
-      // preventing starvation when a single segment alone exceeds the budget.
-      if (performance.now() - _t0 > MAX_FRAME_MS) {
-        const remaining = segments.slice(i + 1).map(s => {
-          if (!s) return '';
-          return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
-        }).filter(Boolean).join('');
-        if (remaining) {
-          this.pendingWrites.push(remaining);
-          if (!this.writeFrameScheduled) {
-            this.writeFrameScheduled = true;
-            requestAnimationFrame(() => {
-              this.flushPendingWrites();
-              this.writeFrameScheduled = false;
-            });
+        if (performance.now() - _t0 > MAX_FRAME_MS) {
+          // Defer: remaining of this segment + all following segments
+          const restOfSegment = content.slice(subOffset);
+          const restOfSegments = segments.slice(i + 1).map(s => {
+            if (!s) return '';
+            return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
+          }).filter(Boolean).join('');
+          const remaining = restOfSegment + restOfSegments;
+          if (remaining) {
+            this.pendingWrites.push(remaining);
+            if (!this.writeFrameScheduled) {
+              this.writeFrameScheduled = true;
+              requestAnimationFrame(() => {
+                this.flushPendingWrites();
+                this.writeFrameScheduled = false;
+              });
+            }
+            deferred = true;
           }
-          deferred = true;
+          break outer;
         }
-        break;
       }
     }
     const _dt = performance.now() - _t0;
