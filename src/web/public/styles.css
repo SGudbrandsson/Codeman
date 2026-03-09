@@ -3506,6 +3506,14 @@ body {
   backdrop-filter: blur(2px);
 }
 
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(2px);
+  cursor: default;
+}
+
 .modal-content {
   position: relative;
   background: var(--bg-card);
@@ -4338,6 +4346,103 @@ body {
 
 .modal-close:hover {
   color: var(--text);
+}
+
+/* Worktree cleanup modal — action card layout */
+.modal.modal-sm .modal-content {
+  max-width: 340px;
+  padding: 1rem;
+}
+
+.modal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-branch-name {
+  font-family: monospace;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+
+.modal-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
+.modal-subtitle {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+
+.modal-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.modal-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+  width: 100%;
+}
+
+.modal-action-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.modal-action-card.modal-action-danger {
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.modal-action-card.modal-action-danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.action-card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.action-card-desc {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.modal-output {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .modal-body {
