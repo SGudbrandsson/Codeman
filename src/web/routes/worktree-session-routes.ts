@@ -9,12 +9,16 @@
 
 import { FastifyInstance } from 'fastify';
 import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { Session } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { CreateWorktreeSchema, RemoveWorktreeSchema, MergeWorktreeSchema } from '../schemas.js';
 import {
   findGitRoot,
+  isGitWorktreeDir,
   listBranches,
   getCurrentBranch,
   addWorktree,
@@ -22,10 +26,23 @@ import {
   isWorktreeDirty,
   mergeBranch,
 } from '../../utils/git-utils.js';
+import { CASES_DIR } from '../route-helpers.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 // Validate branch name: alphanumeric, dots, hyphens, forward slashes only
 const BRANCH_PATTERN = /^[a-zA-Z0-9._\-/]+$/;
+
+async function resolveCasePath(name: string): Promise<string | null> {
+  const casePath = join(CASES_DIR, name);
+  if (existsSync(casePath)) return casePath;
+  try {
+    const linked: Record<string, string> = JSON.parse(
+      await fs.readFile(join(homedir(), '.codeman', 'linked-cases.json'), 'utf-8')
+    );
+    if (linked[name] && existsSync(linked[name])) return linked[name];
+  } catch {}
+  return null;
+}
 
 export function registerWorktreeSessionRoutes(
   app: FastifyInstance,
@@ -42,7 +59,7 @@ export function registerWorktreeSessionRoutes(
 
     try {
       const [branches, current] = await Promise.all([listBranches(gitRoot), getCurrentBranch(gitRoot)]);
-      return { success: true, branches, current };
+      return { success: true, branches, current, isWorktree: isGitWorktreeDir(session.workingDir) };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `git error: ${String(err)}`);
     }
@@ -57,7 +74,7 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew } = parsed.data;
+    const { branch, isNew, mode } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
@@ -83,7 +100,7 @@ export function registerWorktreeSessionRoutes(
 
     const newSession = new Session({
       workingDir: worktreePath,
-      mode: session.mode,
+      mode: mode ?? session.mode,
       name: branch,
       mux: ctx.mux,
       useMux: true,
@@ -158,5 +175,64 @@ export function registerWorktreeSessionRoutes(
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to remove worktree: ${String(err)}`);
     }
+  });
+
+  // GET /api/cases/:name/worktree/branches
+  app.get('/api/cases/:name/worktree/branches', async (req) => {
+    const { name } = req.params as { name: string };
+    const casePath = await resolveCasePath(name);
+    if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
+    const gitRoot = findGitRoot(casePath);
+    if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
+    try {
+      const [branches, current] = await Promise.all([listBranches(gitRoot), getCurrentBranch(gitRoot)]);
+      return { success: true, branches, current };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `git error: ${String(err)}`);
+    }
+  });
+
+  // POST /api/cases/:name/worktree
+  app.post('/api/cases/:name/worktree', async (req) => {
+    const { name } = req.params as { name: string };
+    const casePath = await resolveCasePath(name);
+    if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
+    const parsed = CreateWorktreeSchema.safeParse(req.body);
+    if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+    const { branch, isNew, mode } = parsed.data;
+    if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
+    const gitRoot = findGitRoot(casePath);
+    if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
+    const projectName = gitRoot.split('/').pop() ?? 'project';
+    const worktreePath = join(dirname(gitRoot), `${projectName}-${branch.replace(/\//g, '-')}`);
+    try {
+      await addWorktree(gitRoot, worktreePath, branch, isNew);
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create worktree: ${String(err)}`);
+    }
+    const [globalNice, modelConfig, claudeModeConfig] = await Promise.all([
+      ctx.getGlobalNiceConfig(),
+      ctx.getModelConfig(),
+      ctx.getClaudeModeConfig(),
+    ]);
+    const newSession = new Session({
+      workingDir: worktreePath,
+      mode: mode ?? 'claude',
+      name: branch,
+      mux: ctx.mux,
+      useMux: true,
+      niceConfig: globalNice,
+      model: modelConfig?.defaultModel,
+      claudeMode: claudeModeConfig.claudeMode,
+      allowedTools: claudeModeConfig.allowedTools,
+      worktreePath,
+      worktreeBranch: branch,
+    });
+    ctx.addSession(newSession);
+    ctx.persistSessionState(newSession);
+    await ctx.setupSessionListeners(newSession);
+    const lightState = ctx.getSessionStateWithRespawn(newSession);
+    ctx.broadcast(SseEvent.SessionCreated, lightState);
+    return { success: true, session: lightState, worktreePath };
   });
 }

@@ -4398,6 +4398,20 @@ class CodemanApp {
         : 'Kill Tmux & Claude Code';
     }
 
+    // Show merge option for worktree sessions
+    const mergeOption = document.getElementById('closeConfirmMergeOption');
+    if (mergeOption) {
+      if (session.worktreeBranch) {
+        const originSession = session.worktreeOriginId ? this.sessions.get(session.worktreeOriginId) : null;
+        const targetName = originSession ? this.getSessionName(originSession) : 'origin';
+        document.getElementById('closeConfirmMergeBranch').textContent = session.worktreeBranch;
+        document.getElementById('closeConfirmMergeTarget').textContent = targetName;
+        mergeOption.style.display = '';
+      } else {
+        mergeOption.style.display = 'none';
+      }
+    }
+
     document.getElementById('closeConfirmModal').classList.add('active');
   }
 
@@ -4413,6 +4427,58 @@ class CodemanApp {
     if (sessionId) {
       await this.closeSession(sessionId, killMux);
     }
+  }
+
+  async confirmCloseSessionWithMerge() {
+    const sessionId = this.pendingCloseSessionId;
+    const session = this.sessions.get(sessionId);
+    this.cancelCloseSession();
+    if (!session?.worktreeBranch) return;
+
+    const originSession = session.worktreeOriginId ? this.sessions.get(session.worktreeOriginId) : null;
+    if (!originSession) {
+      this.showToast('Origin session not found — cannot merge', 'error');
+      return;
+    }
+
+    this.showToast(`Merging ${session.worktreeBranch}…`, 'info');
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(originSession.id)}/worktree/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch: session.worktreeBranch }),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        this.showToast('Merge failed: ' + (result.error || 'Unknown error'), 'error');
+        return;
+      }
+      this.showToast('Merged! Cleaning up worktree…', 'success');
+      // Remove worktree from disk
+      await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/worktree`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      // Close the session tab
+      await this.closeSession(sessionId, true);
+    } catch (err) {
+      this.showToast('Merge error: ' + err.message, 'error');
+    }
+  }
+
+  // Open the worktree cleanup panel for a running (or stopped) worktree session
+  openWorktreeCleanupForSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.worktreeBranch) return;
+    const descEl = document.getElementById('worktreeCleanupDesc');
+    if (descEl) descEl.textContent = 'What do you want to do with this worktree?';
+    this._onWorktreeSessionEnded({
+      id: sessionId,
+      worktreePath: session.worktreePath,
+      worktreeBranch: session.worktreeBranch,
+      worktreeOriginId: session.worktreeOriginId,
+    });
   }
 
   nextSession() {
@@ -5195,24 +5261,32 @@ class CodemanApp {
    * Uses explicit inline-flex to override the CSS display:none on desktop.
    */
   updateContextPill(totalTokens) {
-    const pill = document.getElementById('mobileContextPill');
-    if (!pill) return;
-    if (!totalTokens || totalTokens <= 0) {
-      pill.style.display = 'none';
-      return;
+    const pills = [
+      document.getElementById('mobileContextPill'),
+      document.getElementById('accessoryContextPill'),
+    ];
+    const titleText = totalTokens > 0
+      ? `Context: ${Math.min(100, Math.round((totalTokens / 200000) * 100))}% full (${(totalTokens / 1000).toFixed(1)}k / 200k tokens)`
+      : 'Context window usage';
+    for (const pill of pills) {
+      if (!pill) continue;
+      if (!totalTokens || totalTokens <= 0) {
+        pill.style.display = 'none';
+        continue;
+      }
+      const MAX_CONTEXT = 200000;
+      const pct = Math.min(100, Math.round((totalTokens / MAX_CONTEXT) * 100));
+      // Color gradient: green(0%) → yellow(50%) → orange(75%) → red(90%+)
+      let color;
+      if (pct < 50)       color = '#22c55e';  // green
+      else if (pct < 75)  color = '#eab308';  // yellow
+      else if (pct < 90)  color = '#f97316';  // orange
+      else                color = '#ef4444';  // red
+      pill.style.display = 'inline-flex';
+      pill.style.setProperty('--ctx-color', color);
+      pill.textContent = `${pct}%`;
+      pill.title = titleText;
     }
-    const MAX_CONTEXT = 200000;
-    const pct = Math.min(100, Math.round((totalTokens / MAX_CONTEXT) * 100));
-    // Color gradient: green(0%) → yellow(50%) → orange(75%) → red(90%+)
-    let color;
-    if (pct < 50)       color = '#22c55e';  // green
-    else if (pct < 75)  color = '#eab308';  // yellow
-    else if (pct < 90)  color = '#f97316';  // orange
-    else                color = '#ef4444';  // red
-    pill.style.display = 'inline-flex';
-    pill.style.setProperty('--ctx-color', color);
-    pill.textContent = `${pct}%`;
-    pill.title = `Context: ${pct}% full (${(totalTokens / 1000).toFixed(1)}k / 200k tokens)`;
   }
 
   // Update CLI info display (tokens, version, model - shown on mobile)
@@ -5839,30 +5913,170 @@ class CodemanApp {
 
   async openWorktreeCreator() {
     this.closeNewPicker();
-    const gitSessions = [...this.sessions.values()].filter(s => !s.worktreeBranch);
-    this._worktreeCreatorSessions = gitSessions;
-    this._worktreeCreatorSourceId = gitSessions.length === 1 ? gitSessions[0].id : null;
     let dormant = [];
+    let allCases = [];
     try {
-      const res = await fetch('/api/worktrees');
-      const data = await res.json();
-      if (data.success) dormant = data.worktrees;
+      const [worktreeRes, casesRes] = await Promise.all([fetch('/api/worktrees'), fetch('/api/cases')]);
+      const worktreeData = await worktreeRes.json();
+      if (worktreeData.success) dormant = worktreeData.worktrees;
+      const casesData = await casesRes.json();
+      allCases = Array.isArray(casesData) ? casesData : (casesData.cases || []);
     } catch {}
     this._dormantWorktrees = dormant;
-    this._renderWorktreeCreator();
+    this._worktreeCreatorSourceId = null;
+    this._worktreeCreatorCaseName = null;
+    this._worktreeCreatorMode = null;
+    this._renderWorktreeCreator(true);
     document.getElementById('worktreeCreatorModal').classList.add('active');
+    // Probe each case for git support
+    const results = await Promise.allSettled(
+      allCases.map(async c => {
+        const res = await fetch(`/api/cases/${encodeURIComponent(c.name)}/worktree/branches`);
+        const data = await res.json();
+        if (!data.success) throw new Error('not a git repo');
+        return c;
+      })
+    );
+    this._worktreeGitCases = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+    if (this._worktreeGitCases.length === 1) {
+      this._worktreeCreatorCaseName = this._worktreeGitCases[0].name;
+      this._loadWorktreeBranchesByCase(this._worktreeCreatorCaseName);
+    }
+    this._renderWorktreeCreator(false);
+  }
+
+  openSessionCreator() {
+    this._sessionCreatorCaseName = null;
+    this._sessionCreatorMode = this._runMode || 'claude';
+    this._sessionCreatorCases = null;
+    document.getElementById('sessionCreatorModal').classList.add('active');
+    this._loadSessionCreatorCases();
+  }
+
+  closeSessionCreator() {
+    document.getElementById('sessionCreatorModal').classList.remove('active');
+  }
+
+  async _loadSessionCreatorCases() {
+    try {
+      const res = await fetch('/api/cases');
+      const data = await res.json();
+      this._sessionCreatorCases = Array.isArray(data) ? data : (data.cases || []);
+    } catch {
+      this._sessionCreatorCases = [];
+    }
+    this._renderSessionCreator();
+  }
+
+  _renderSessionCreator() {
+    const body = document.getElementById('sessionCreatorBody');
+    if (!body) return;
+    const cases = this._sessionCreatorCases;
+    if (!cases) {
+      body['inner' + 'HTML'] = '<div class="worktree-git-loading">Loading cases...</div>';
+      return;
+    }
+    const selectedCase = this._sessionCreatorCaseName;
+    const currentMode = this._sessionCreatorMode || 'claude';
+    let html = '';
+    if (cases.length === 0) {
+      html += '<div class="worktree-git-loading">No cases found. Create a case first.</div>';
+    } else {
+      html += '<div class="worktree-section-label">Case</div><div class="session-creator-cases">';
+      cases.forEach(c => {
+        const isSelected = c.name === selectedCase;
+        html += `<button class="session-creator-case-card${isSelected ? ' selected' : ''}" onclick="app._selectSessionCase('${escapeHtml(c.name)}')">` +
+          `<svg class="session-creator-case-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>` +
+          `<span class="session-creator-case-name">${escapeHtml(c.name)}</span>` +
+          `<svg class="worktree-session-card-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>` +
+          `</button>`;
+      });
+      html += '</div>';
+    }
+    html += '<div class="worktree-section-label">Run with</div><div class="worktree-mode-selector">' +
+      `<button class="worktree-mode-btn${currentMode === 'claude' ? ' selected' : ''}" onclick="app._setSessionMode('claude')"><span class="run-mode-dot claude"></span>Claude Code</button>` +
+      `<button class="worktree-mode-btn${currentMode === 'opencode' ? ' selected' : ''}" onclick="app._setSessionMode('opencode')"><span class="run-mode-dot opencode"></span>OpenCode</button>` +
+      `<button class="worktree-mode-btn${currentMode === 'shell' ? ' selected' : ''}" onclick="app._setSessionMode('shell')"><span class="run-mode-dot shell"></span>Shell</button>` +
+      '</div>';
+    html += '<div class="worktree-creator-actions">' +
+      '<button class="btn btn-secondary" onclick="app.closeSessionCreator()">Cancel</button>' +
+      `<button class="btn btn-primary" id="sessionCreatorStartBtn" onclick="app._submitCreateSession()"${!selectedCase ? ' disabled' : ''}>Start</button>` +
+      '</div>';
+    body['inner' + 'HTML'] = html;
+  }
+
+  _selectSessionCase(caseName) {
+    this._sessionCreatorCaseName = caseName;
+    document.querySelectorAll('.session-creator-case-card').forEach(card => {
+      const cardMode = card.getAttribute('onclick')?.match(/_selectSessionCase\('([^']+)'\)/)?.[1];
+      card.classList.toggle('selected', cardMode === caseName);
+    });
+    const startBtn = document.getElementById('sessionCreatorStartBtn');
+    if (startBtn) startBtn.disabled = false;
+  }
+
+  _setSessionMode(mode) {
+    this._sessionCreatorMode = mode;
+    document.querySelectorAll('#sessionCreatorBody .worktree-mode-btn').forEach(btn => {
+      const btnMode = btn.getAttribute('onclick')?.match(/_setSessionMode\('(\w+)'\)/)?.[1];
+      btn.classList.toggle('selected', btnMode === mode);
+    });
+  }
+
+  async _submitCreateSession() {
+    const caseName = this._sessionCreatorCaseName;
+    const mode = this._sessionCreatorMode || 'claude';
+    if (!caseName) return;
+    const startBtn = document.getElementById('sessionCreatorStartBtn');
+    if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Starting...'; }
+    this.closeSessionCreator();
+    // Set the quickStartCase select to the chosen case so runClaude/runShell/runOpenCode can use it
+    const caseSelect = document.getElementById('quickStartCase');
+    if (caseSelect) caseSelect.value = caseName;
+    if (mode === 'opencode') {
+      await this.runOpenCode();
+    } else if (mode === 'shell') {
+      await this.runShell();
+    } else {
+      await this.runClaude();
+    }
   }
 
   closeWorktreeCreator() {
     document.getElementById('worktreeCreatorModal').classList.remove('active');
   }
 
-  _renderWorktreeCreator() {
+  _selectWorktreeCase(caseName) {
+    this._worktreeCreatorCaseName = caseName;
+    document.querySelectorAll('.session-creator-case-card').forEach(card => {
+      const m = card.getAttribute('onclick')?.match(/_selectWorktreeCase\('([^']+)'\)/);
+      card.classList.toggle('selected', m?.[1] === caseName);
+    });
+    const picker = document.getElementById('worktreeBranchPicker');
+    if (picker) picker.style.display = 'block';
+    this._loadWorktreeBranchesByCase(caseName);
+  }
+
+  _setWorktreeMode(mode) {
+    this._worktreeCreatorMode = mode;
+    document.querySelectorAll('.worktree-mode-btn').forEach(btn => {
+      const btnMode = btn.getAttribute('onclick')?.match(/_setWorktreeMode\('(\w+)'\)/)?.[1];
+      btn.classList.toggle('selected', btnMode === mode);
+    });
+  }
+
+  _renderWorktreeCreator(loading = false) {
     const body = document.getElementById('worktreeCreatorBody');
     const dormant = this._dormantWorktrees || [];
     const sessions = this._worktreeCreatorSessions || [];
     const sourceId = this._worktreeCreatorSourceId;
     let html = '';
+
+    if (loading) {
+      html += `<div class="worktree-git-loading">Checking for git repositories…</div>`;
+      body.innerHTML = html;
+      return;
+    }
 
     if (dormant.length > 0) {
       html += `<div class="worktree-section-label">Resume</div>`;
@@ -5872,21 +6086,37 @@ class CodemanApp {
       html += `<hr class="worktree-divider">`;
     }
 
-    if (!sourceId && sessions.length > 1) {
-      html += `<div class="worktree-section-label">Branch from</div><div class="worktree-session-list">`;
-      sessions.forEach(s => {
-        html += `<label class="worktree-session-radio"><input type="radio" name="worktreeSource" value="${escapeHtml(s.id)}" onchange="app._worktreeCreatorSourceId=this.value; app._loadWorktreeBranches(this.value);"> ${escapeHtml(this.getSessionName(s))}</label>`;
+    const gitCases = this._worktreeGitCases || [];
+    const selectedCase = this._worktreeCreatorCaseName;
+    if (gitCases.length === 0 && dormant.length === 0) {
+      html += `<div class="worktree-git-loading">No git repositories found in cases.</div>`;
+    } else if (!selectedCase && gitCases.length > 1) {
+      html += `<div class="worktree-section-label">Branch from</div><div class="session-creator-cases">`;
+      gitCases.forEach(c => {
+        html += `<button class="session-creator-case-card" onclick="app._selectWorktreeCase('${escapeHtml(c.name)}')">` +
+          `<svg class="session-creator-case-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>` +
+          `<span class="session-creator-case-name">${escapeHtml(c.name)}</span>` +
+          `<svg class="worktree-session-card-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>` +
+          `</button>`;
       });
       html += `</div>`;
-    } else if (sourceId) {
-      this._loadWorktreeBranches(sourceId);
     }
 
-    html += `<div id="worktreeBranchPicker" style="display:${sourceId ? 'block' : 'none'}">
+    const currentMode = this._worktreeCreatorMode || this._runMode || 'claude';
+    html += `<div class="worktree-section-label">Run with</div><div class="worktree-mode-selector">` +
+      `<button class="worktree-mode-btn${currentMode === 'claude' ? ' selected' : ''}" onclick="app._setWorktreeMode('claude')">` +
+      `<span class="run-mode-dot claude"></span>Claude Code</button>` +
+      `<button class="worktree-mode-btn${currentMode === 'opencode' ? ' selected' : ''}" onclick="app._setWorktreeMode('opencode')">` +
+      `<span class="run-mode-dot opencode"></span>OpenCode</button>` +
+      `<button class="worktree-mode-btn${currentMode === 'shell' ? ' selected' : ''}" onclick="app._setWorktreeMode('shell')">` +
+      `<span class="run-mode-dot shell"></span>Shell</button>` +
+      `</div>`;
+
+    html += `<div id="worktreeBranchPicker" style="display:${selectedCase ? 'block' : 'none'}">
       <div class="worktree-section-label">Branch</div>
       <div class="worktree-branch-type">
-        <label><input type="radio" name="worktreeBranchType" value="new" checked onchange="app._onWorktreeBranchTypeChange(this.value)"> New branch</label>
-        <label><input type="radio" name="worktreeBranchType" value="existing" onchange="app._onWorktreeBranchTypeChange(this.value)"> Existing</label>
+        <label><input type="radio" name="worktreeBranchType" value="new" checked onchange="app._onWorktreeBranchTypeChange(this.value)"><span>New branch</span></label>
+        <label><input type="radio" name="worktreeBranchType" value="existing" onchange="app._onWorktreeBranchTypeChange(this.value)"><span>Existing</span></label>
       </div>
       <input type="text" id="worktreeNewBranchInput" class="form-input" placeholder="feature/my-thing" oninput="app._updateWorktreePathPreview()">
       <select id="worktreeExistingBranchSelect" class="form-select" style="display:none" onchange="app._updateWorktreePathPreview()"><option value="">Loading...</option></select>
@@ -5900,11 +6130,11 @@ class CodemanApp {
     body.innerHTML = html;
   }
 
-  async _loadWorktreeBranches(sessionId) {
+  async _loadWorktreeBranchesByCase(caseName) {
     const picker = document.getElementById('worktreeBranchPicker');
     if (picker) picker.style.display = 'block';
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/worktree/branches`);
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/worktree/branches`);
       const data = await res.json();
       if (!data.success) return;
       const sel = document.getElementById('worktreeExistingBranchSelect');
@@ -5940,8 +6170,8 @@ class CodemanApp {
   }
 
   async _submitCreateWorktree() {
-    const sourceId = this._worktreeCreatorSourceId;
-    if (!sourceId) { alert('Please select a source session'); return; }
+    const caseName = this._worktreeCreatorCaseName;
+    if (!caseName) { alert('Please select a case'); return; }
     const type = document.querySelector('input[name="worktreeBranchType"]:checked')?.value ?? 'new';
     const isNew = type === 'new';
     const branch = (isNew
@@ -5952,10 +6182,10 @@ class CodemanApp {
     const btn = document.querySelector('#worktreeCreatorBody .btn-primary');
     if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sourceId)}/worktree`, {
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/worktree`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ branch, isNew }),
+        body: JSON.stringify({ branch, isNew, mode: this._worktreeCreatorMode || undefined }),
       });
       const data = await res.json();
       if (data.success) { this.closeWorktreeCreator(); this.selectSession(data.session.id); }
@@ -5978,6 +6208,9 @@ class CodemanApp {
     const out = document.getElementById('worktreeCleanupOutput');
     out.style.display = 'none';
     out.textContent = '';
+    // Reset desc to "session ended" in case it was previously overridden by manual open
+    const descEl = document.getElementById('worktreeCleanupDesc');
+    if (descEl) descEl.textContent = 'Session ended — what should happen to this worktree?';
     document.getElementById('worktreeCleanupModal').classList.add('active');
   }
 
@@ -13227,7 +13460,7 @@ const SessionDrawer = {
 
       const nameSpan = document.createElement('span');
       nameSpan.className = 'session-drawer-item-name';
-      nameSpan.textContent = session.name || id.slice(0, 8); // textContent — safe
+      nameSpan.textContent = app.getSessionName(session); // textContent — safe
 
       const meta = document.createElement('span');
       meta.className = 'session-drawer-item-meta';
@@ -13241,10 +13474,42 @@ const SessionDrawer = {
         + (isRunning ? ' running' : '')
         + (hasRalph  ? ' ralph'   : '');
 
+      const statusLabelMap = { busy: 'working', idle: 'waiting', stopped: 'stopped' };
+      const statusLabelText = statusLabelMap[session.status];
+      const statusLabel = document.createElement('span');
+      if (statusLabelText) {
+        statusLabel.className = 'session-drawer-status ' + session.status;
+        statusLabel.textContent = statusLabelText; // textContent — safe
+      }
+
       meta.appendChild(badge);
       meta.appendChild(dot);
+      if (statusLabelText) meta.appendChild(statusLabel);
       item.appendChild(nameSpan);
       item.appendChild(meta);
+
+      if (session.worktreeBranch) {
+        const mergeBtn = document.createElement('button');
+        mergeBtn.className = 'session-drawer-merge-btn';
+        mergeBtn.title = 'Merge ' + session.worktreeBranch; // safe — title attr
+        mergeBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+        mergeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          app.openWorktreeCleanupForSession(id);
+          this.close();
+        });
+        item.appendChild(mergeBtn);
+      }
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'session-drawer-close-btn';
+      closeBtn.textContent = '×'; // textContent — safe
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        app.requestCloseSession(id);
+        this.close();
+      });
+      item.appendChild(closeBtn);
 
       item.addEventListener('click', () => {
         app.selectSession(id);

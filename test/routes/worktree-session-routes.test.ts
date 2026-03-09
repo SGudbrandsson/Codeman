@@ -3,6 +3,7 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 
 vi.mock('../../src/utils/git-utils.js', () => ({
   findGitRoot: vi.fn().mockReturnValue('/tmp/test-repo'),
+  isGitWorktreeDir: vi.fn().mockReturnValue(false),
   listBranches: vi.fn().mockResolvedValue(['main', 'feature/x']),
   getCurrentBranch: vi.fn().mockResolvedValue('main'),
   addWorktree: vi.fn().mockResolvedValue(undefined),
@@ -33,6 +34,7 @@ import * as gitUtils from '../../src/utils/git-utils.js';
 describe('worktree-session routes', () => {
   beforeEach(() => {
     vi.mocked(gitUtils.findGitRoot).mockReturnValue('/tmp/test-repo');
+    vi.mocked(gitUtils.isGitWorktreeDir).mockReturnValue(false);
     vi.mocked(gitUtils.listBranches).mockResolvedValue(['main', 'feature/x']);
     vi.mocked(gitUtils.getCurrentBranch).mockResolvedValue('main');
     vi.mocked(gitUtils.addWorktree).mockResolvedValue(undefined);
