@@ -8231,31 +8231,8 @@ kbd {
   min-height: 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Desktop Bar — replaces .toolbar on desktop (≥1024px)
-   ═══════════════════════════════════════════════════════════════ */
-
-/* Hide old toolbar on desktop */
-@media (min-width: 1024px) {
-  .toolbar { display: none !important; }
-}
-
-.desktop-bar {
-  display: none; /* hidden on mobile — shown only on desktop below */
-  align-items: center;
-  gap: 6px;
-  height: 40px;
-  padding: 0 10px;
-  background: var(--bg-card);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  z-index: 10;
-  contain: style;
-}
-
-@media (min-width: 1024px) {
-  .desktop-bar { display: flex; }
-}
+/* Desktop bar is hidden — toolbar stays on desktop */
+.desktop-bar { display: none !important; }
 
 /* Run button group */
 .desktop-bar-run-group {
@@ -8406,3 +8383,20 @@ kbd {
   white-space: nowrap;
 }
 .desktop-bar-sessions:hover { background: rgba(100,116,139,0.2); color: var(--text-primary); }
+
+/* Desktop Sessions button in toolbar-right */
+.btn-sessions-desktop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 4px 10px;
+  background: rgba(100,116,139,0.12);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-sessions-desktop:hover { background: rgba(100,116,139,0.22); color: var(--text-primary); }
