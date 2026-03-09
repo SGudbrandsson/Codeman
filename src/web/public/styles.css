@@ -8231,159 +8231,6 @@ kbd {
   min-height: 0;
 }
 
-/* Desktop bar is hidden — toolbar stays on desktop */
-.desktop-bar { display: none !important; }
-
-/* Run button group */
-.desktop-bar-run-group {
-  display: flex;
-  align-items: center;
-}
-.desktop-bar-run {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  background: #1d4ed8;
-  color: #fff;
-  border: none;
-  border-radius: 5px 0 0 5px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  height: 28px;
-  white-space: nowrap;
-}
-.desktop-bar-run:hover { background: #1e40af; }
-.desktop-bar-run-gear {
-  display: flex;
-  align-items: center;
-  padding: 0 6px;
-  background: #1e40af;
-  color: #93c5fd;
-  border: none;
-  border-radius: 0 5px 5px 0;
-  border-left: 1px solid rgba(255,255,255,0.15);
-  height: 28px;
-  cursor: pointer;
-}
-.desktop-bar-run-gear:hover { background: #1e3a8a; }
-
-/* Stop button */
-.desktop-bar-stop {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: rgba(239,68,68,0.12);
-  color: #f87171;
-  border: 1px solid rgba(239,68,68,0.2);
-  border-radius: 5px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.desktop-bar-stop:hover { background: rgba(239,68,68,0.22); }
-
-/* Shell button */
-.desktop-bar-shell {
-  padding: 4px 10px;
-  height: 28px;
-  background: rgba(74,222,128,0.08);
-  color: #4ade80;
-  border: 1px solid rgba(74,222,128,0.18);
-  border-radius: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.desktop-bar-shell:hover { background: rgba(74,222,128,0.16); }
-
-/* Count steppers */
-.desktop-bar-count-group {
-  display: flex;
-  align-items: center;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  overflow: hidden;
-  height: 28px;
-}
-.desktop-bar-count-btn {
-  width: 22px;
-  height: 100%;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.desktop-bar-count-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.desktop-bar-count-input {
-  width: 26px;
-  border: none;
-  background: none;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-primary);
-  padding: 0;
-  -moz-appearance: textfield;
-}
-.desktop-bar-count-input::-webkit-outer-spin-button,
-.desktop-bar-count-input::-webkit-inner-spin-button { -webkit-appearance: none; }
-
-/* Project picker */
-.desktop-bar-project-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 8px;
-  height: 28px;
-}
-.desktop-bar-project-icon { color: var(--text-muted); flex-shrink: 0; }
-.desktop-bar-project-select {
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-  max-width: 160px;
-}
-
-/* Spacer + version */
-.desktop-bar-spacer { flex: 1; }
-.desktop-bar-version {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-right: 4px;
-}
-
-/* Sessions button */
-.desktop-bar-sessions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  height: 28px;
-  background: rgba(100,116,139,0.1);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.desktop-bar-sessions:hover { background: rgba(100,116,139,0.2); color: var(--text-primary); }
-
 /* Desktop Sessions button in toolbar-right */
 .btn-sessions-desktop {
   display: flex;
@@ -8400,3 +8247,223 @@ kbd {
   cursor: pointer;
 }
 .btn-sessions-desktop:hover { background: rgba(100,116,139,0.22); color: var(--text-primary); }
+
+/* ================================================================
+   Desktop Bottom Bar (>=1024px)
+   compose-bar + accessory-bar replace the old .toolbar footer.
+   mobile.css is NOT loaded on desktop — all desktop styles live here.
+   ================================================================ */
+@media (min-width: 1024px) {
+  /* Hide old toolbar footer */
+  footer.toolbar { display: none !important; }
+
+  /* Main content area: reserve space at bottom for the two fixed bars.
+     CSS var --desktop-compose-height is updated by JS on textarea resize. */
+  .main {
+    padding-bottom: calc(var(--desktop-compose-height, 52px) + 40px);
+  }
+
+  /* ── Accessory bar ─────────────────────────────────────────── */
+  .keyboard-accessory-bar {
+    display: flex !important;   /* Always visible on desktop */
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    background: #1a1a1a;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 6px 8px;
+    gap: 8px;
+    align-items: center;
+    z-index: 51;
+    overflow: visible;
+  }
+
+  /* ── Compose bar ───────────────────────────────────────────── */
+  .mobile-input-panel {
+    position: fixed !important;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    background: #111;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 12px;
+    z-index: 52;
+    display: block !important;  /* Override inline style="display:none" */
+  }
+
+  /* Centered 720px textarea wrapper; .expanded overrides to near-full-width */
+  .compose-textarea-wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  .compose-textarea-wrap.expanded {
+    max-width: calc(100% - 24px);
+  }
+
+  /* Textarea sizing on desktop */
+  .compose-textarea {
+    font-size: 0.875rem;
+    min-height: 36px;
+    max-height: 200px;
+    /* Padding-right: room for expand btn (~28px) + send btn (~40px) */
+    padding-right: 76px;
+  }
+
+  /* Expand button: show on desktop (inline style="display:none" is overridden) */
+  .compose-expand-btn {
+    display: inline-flex !important;
+    right: 44px;   /* Left of send button */
+    bottom: 8px;
+  }
+
+  /* Swap expand/collapse icons based on wrapper state */
+  .compose-expand-icon { display: block; }
+  .compose-collapse-icon { display: none; }
+  .compose-textarea-wrap.expanded .compose-expand-icon { display: none; }
+  .compose-textarea-wrap.expanded .compose-collapse-icon { display: block; }
+
+  /* Commands drawer: slides up from accessory bar */
+  .accessory-cmd-drawer {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: #1e1e1e;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    flex-direction: column;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: transform 0.18s ease-out, opacity 0.15s ease-out;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .accessory-cmd-drawer.open {
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Accessory button base ─────────────────────────────────── */
+  .accessory-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-size: 0.65rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .accessory-btn:hover { background: #3a3a3a; }
+  .accessory-btn:active { background: #3a3a3a; }
+
+  .accessory-btn-arrow {
+    padding: 6px 10px;
+    background: #1e3a5f;
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+  }
+  .accessory-btn-arrow:hover { background: #2563eb; }
+
+  .accessory-btn-commands {
+    background: #1e2a3a;
+    border-color: rgba(100, 160, 255, 0.3);
+    color: #93c5fd;
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+  }
+  .accessory-btn-commands:hover { background: #2a3a5a; }
+
+  /* Context pill */
+  .accessory-ctx-pill {
+    display: none;   /* Hidden by default; JS shows it when context data is available */
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: #1e2e1e;
+    border: 1px solid rgba(74, 222, 128, 0.25);
+    border-radius: 6px;
+    color: #4ade80;
+    font-size: 0.65rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  /* Project button */
+  .accessory-btn-project {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 8px;
+    max-width: 160px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .accessory-project-name {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #cbd5e1;
+  }
+  .accessory-project-caret {
+    font-size: 9px;
+    color: #64748b;
+    flex-shrink: 0;
+  }
+
+  /* Flex spacer between commands and project */
+  .accessory-btn-spacer { flex: 1; }
+
+  /* Commands search input */
+  .accessory-cmd-search {
+    display: block;
+    width: 100%;
+    padding: 10px 16px;
+    background: #111;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e5e5e5;
+    font-size: 14px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .accessory-cmd-search::placeholder { color: #555; }
+
+  .accessory-cmd-items {
+    overflow-y: auto;
+    max-height: calc(40vh - 44px);
+  }
+
+  .accessory-drawer-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .accessory-drawer-item:hover { background: #2a2a2a; }
+
+  .drawer-cmd-name { color: #e5e5e5; font-size: 0.9rem; font-family: monospace; }
+  .drawer-cmd-desc { color: #6b7280; font-size: 0.75rem; margin-top: 1px; }
+}
