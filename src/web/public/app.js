@@ -1432,17 +1432,18 @@ class CodemanApp {
 
     const segments = extractSyncSegments(joined);
 
-    // Write segments respecting a per-frame byte budget.
-    // Each DEC 2026 sync segment is a complete Ink redraw — writing whole segments
-    // preserves atomicity (no flicker). But when total data exceeds 48KB, defer
-    // remaining segments to the next frame to prevent terminal.write() from blocking
-    // the main thread. 141KB single-frame writes have been observed to freeze Chrome
-    // for 2+ minutes even with the canvas renderer.
-    const MAX_FRAME_BYTES = 65536; // 64KB budget per frame
+    // Write segments respecting a per-frame time budget.
+    // After each sub-chunk write, check elapsed time and defer remaining content
+    // if we've used more than 8ms of the frame budget. Sub-chunk size (8KB) is
+    // small enough that a single write rarely blocks >2ms even on canvas 2D.
+    // This sacrifices strict DEC 2026 sync atomicity in exchange for never blocking
+    // the main thread — the flicker filter upstream already handles cursor-up redraws.
+    const MAX_FRAME_MS = 8; // 8ms — half a 60fps frame, leaves headroom for browser paint
+    const SUB_CHUNK = 8192; // 8KB per write — small enough to check budget frequently
     let bytesThisFrame = 0;
     let deferred = false;
 
-    for (let i = 0; i < segments.length; i++) {
+    outer: for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       if (!segment) continue;
       const content = segment.startsWith(DEC_SYNC_START)
@@ -1450,29 +1451,37 @@ class CodemanApp {
         : segment;
       if (!content) continue;
 
-      // If we'd exceed the budget, defer this and all remaining segments
-      if (bytesThisFrame > 0 && bytesThisFrame + content.length > MAX_FRAME_BYTES) {
-        // Re-queue remaining segments as raw content for next flush
-        const remaining = segments.slice(i).map(s => {
-          if (!s) return '';
-          return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
-        }).filter(Boolean).join('');
-        if (remaining) {
-          this.pendingWrites.push(remaining);
-          if (!this.writeFrameScheduled) {
-            this.writeFrameScheduled = true;
-            requestAnimationFrame(() => {
-              this.flushPendingWrites();
-              this.writeFrameScheduled = false;
-            });
-          }
-        }
-        deferred = true;
-        break;
-      }
+      // Write content in sub-chunks so the time check fires frequently enough
+      // to defer mid-segment when a single Ink redraw exceeds the frame budget.
+      let subOffset = 0;
+      while (subOffset < content.length) {
+        const sub = content.slice(subOffset, subOffset + SUB_CHUNK);
+        this.terminal.write(sub);
+        subOffset += SUB_CHUNK;
+        bytesThisFrame += sub.length;
 
-      this.terminal.write(content);
-      bytesThisFrame += content.length;
+        if (performance.now() - _t0 > MAX_FRAME_MS) {
+          // Defer: remaining of this segment + all following segments
+          const restOfSegment = content.slice(subOffset);
+          const restOfSegments = segments.slice(i + 1).map(s => {
+            if (!s) return '';
+            return s.startsWith(DEC_SYNC_START) ? s.slice(DEC_SYNC_START.length) : s;
+          }).filter(Boolean).join('');
+          const remaining = restOfSegment + restOfSegments;
+          if (remaining) {
+            this.pendingWrites.push(remaining);
+            if (!this.writeFrameScheduled) {
+              this.writeFrameScheduled = true;
+              requestAnimationFrame(() => {
+                this.flushPendingWrites();
+                this.writeFrameScheduled = false;
+              });
+            }
+            deferred = true;
+          }
+          break outer;
+        }
+      }
     }
     const _dt = performance.now() - _t0;
     if (_dt > 100 || deferred) console.warn(`[CRASH-DIAG] flushPendingWrites: ${_dt.toFixed(0)}ms, ${(bytesThisFrame/1024).toFixed(0)}KB written${deferred ? ', rest deferred' : ''} (total ${(_joinedLen/1024).toFixed(0)}KB)`);
@@ -11274,12 +11283,35 @@ class CodemanApp {
       setTimeout(() => {
         try { fitAddon.fit(); } catch {}
 
-        // Fetch initial pane buffer
+        // Fetch initial pane buffer. Pane captures can be large (up to 5000 lines of
+        // tmux scrollback with ANSI sequences = potentially 500KB+). Write in time-budgeted
+        // chunks to avoid blocking the main thread when the window is opened mid-session.
+        const writeChunked = (term, data) => {
+          const CHUNK_MS = 8;
+          const CHUNK_BYTES = 32 * 1024;
+          if (!data) return;
+          let offset = 0;
+          const writeNext = () => {
+            if (!document.contains(body)) return; // window was closed
+            const t0 = performance.now();
+            while (offset < data.length) {
+              const end = Math.min(offset + CHUNK_BYTES, data.length);
+              try { term.write(data.slice(offset, end)); } catch { return; }
+              offset = end;
+              if (performance.now() - t0 > CHUNK_MS && offset < data.length) {
+                requestAnimationFrame(writeNext);
+                return;
+              }
+            }
+          };
+          requestAnimationFrame(writeNext);
+        };
+
         fetch(`/api/sessions/${sessionId}/teammate-pane-buffer/${encodeURIComponent(paneInfo.paneTarget)}`)
           .then(r => r.json())
           .then(resp => {
             if (resp.success && resp.data?.buffer) {
-              try { terminal.write(resp.data.buffer); } catch {}
+              writeChunked(terminal, resp.data.buffer);
             }
           })
           .catch(err => console.error('[TeammateTerminal] Failed to fetch buffer:', err));
