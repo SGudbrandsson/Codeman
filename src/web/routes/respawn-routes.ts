@@ -28,6 +28,7 @@ const noopEventPort: EventPort = {
   batchTerminalData: () => {},
   broadcastSessionStateDebounced: () => {},
   batchTaskUpdate: () => {},
+  getSseClientCount: () => 0,
 };
 
 export function registerRespawnRoutes(
