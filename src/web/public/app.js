@@ -6047,6 +6047,19 @@ class CodemanApp {
     });
   }
 
+  /** Start a session in a specific case from the drawer quick-add popover */
+  async startSessionInCase(caseName, mode) {
+    const caseSelect = document.getElementById('quickStartCase');
+    if (caseSelect) caseSelect.value = caseName;
+    if (mode === 'opencode') {
+      await this.runOpenCode();
+    } else if (mode === 'shell') {
+      await this.runShell();
+    } else {
+      await this.runClaude();
+    }
+  }
+
   async _submitCreateSession() {
     const caseName = this._sessionCreatorCaseName;
     const mode = this._sessionCreatorMode || 'claude';
