@@ -13428,6 +13428,18 @@ const InputPanel = {
       }
     });
 
+    // Paste images — intercept clipboard image data on both desktop and mobile
+    ta.addEventListener('paste', (e) => {
+      const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
+      const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
+      if (!imageItems.length) return; // No images — let default text paste proceed
+      e.preventDefault();
+      const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      // Reuse existing file-handling logic by creating a synthetic input-like object
+      this._onFilesFromPaste(files);
+    });
+
     // Plus button — on desktop skip the mobile action sheet, open file picker directly
     const plusBtn = document.getElementById('composePlusBtn');
     if (plusBtn) plusBtn.addEventListener('click', () => {
@@ -13572,9 +13584,19 @@ const InputPanel = {
     document.getElementById(id)?.click();
   },
 
+  /** Handle files pasted from clipboard (Ctrl+V / Cmd+V with image data) */
+  async _onFilesFromPaste(files) {
+    await this._uploadFiles(files);
+  },
+
   async _onFilesChosen(input, _type) {
     const files = Array.from(input.files || []);
     input.value = '';
+    if (!files.length) return;
+    await this._uploadFiles(files);
+  },
+
+  async _uploadFiles(files) {
     if (!files.length) return;
 
     // If replacing an existing image
