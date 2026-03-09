@@ -257,9 +257,49 @@ Always visible. Auto-grows with multiline content (up to ~120px).
 ### What stays the same
 
 - Top tab bar with session tabs (dots, names, `×` buttons, gear menus)
-- Footer toolbar (settings, project picker, voice)
 - Keyboard shortcuts (Ctrl+Tab, Ctrl+W, etc.)
-- Session drawer accessible via `≡` button in header
+- Session drawer accessible via `≡` button in the new accessory bar
+
+### Bottom bar replacement
+
+The old `.toolbar` footer is **hidden on desktop** (`@media (min-width: 1024px) { .toolbar { display: none } }`). The `desktop-bar` div is removed from HTML. Both are replaced by the same two-bar system used on mobile, with desktop-specific sizing:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ terminal / session content                                               │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤  ← compose bar (48–200px tall)
+│              [📎]  [  type a message…                     ⤢ ]  [➤]      │
+│              └── max-width: 720px, centered ──────────────────┘          │
+├──────────────────────────────────────────────────────────────────────────┤  ← accessory bar (40px)
+│  ⚙️  │  64%  │  ↑  ↓  │  /▲  │      [spacer]      │  📁 Codeman ▾  │  ≡ │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Both bars `position: fixed; bottom: 0; left: 0; right: 0`. Terminal `padding-bottom` is updated whenever the compose textarea resizes to keep content visible.
+
+#### Compose bar (desktop)
+
+- `background: #111`, `border-top: 1px solid rgba(255,255,255,0.08)`
+- Textarea `max-width: 720px`, centered (`margin: 0 auto`), auto-grows from 44px to 200px
+- **Expand button (⤢)**: inside textarea trailing area; toggles `max-width: 720px` ↔ `calc(100% - 48px)`. State in `localStorage('desktopComposeExpanded')`. Icon flips to ⤡ when expanded.
+- Send button: blue rounded, same style as mobile
+- Attach button (📎): image upload via existing action sheet
+- Enter sends, Shift+Enter inserts newline
+
+#### Accessory bar (desktop)
+
+Same button order and styling as mobile (left → right):
+
+1. `⚙️` — app settings
+2. `64%` — context pill (active session)
+3. `↑` `↓` — scroll terminal up/down
+4. `/▲` — commands drawer (slash command popup)
+5. `[spacer]`
+6. `📁 Codeman ▾` — project picker
+7. `≡` — session drawer
+
+Run/Stop/Shell/count-spinners from the old desktop bar are **removed** — those actions are accessible via slash commands or the session drawer.
 
 ### Session drawer improvements (desktop)
 
@@ -305,7 +345,7 @@ The same 3-tab bottom sheet design (My Projects / New / Clone from Git) works on
 | `src/web/public/keyboard-accessory.js` | Remove pencil button; add settings gear (leftmost); move % pill left of arrows; add project picker button; reorder all buttons |
 | `src/web/public/app.js` | `SessionDrawer._render()`: group by project, worktree sub-groups, `×` close buttons, quick-add popovers, worktree inline creation form; `InputPanel`: always open on init; `openWorktreeCleanupForSession`: fix desc-reset bug; worktree creation from drawer; `Cases→Projects` string renames |
 | `src/web/public/index.html` | Worktree modal: add `×` close button, fix backdrop onclick, replace 🌿 with SVG; update `?v=` query strings on all changed assets |
-| `src/web/public/styles.css` | Session badge contrast styles; worktree tab badge; desktop drawer pin toggle; Cases→Projects label updates |
+| `src/web/public/styles.css` | Session badge contrast styles; worktree tab badge; desktop drawer pin toggle; Cases→Projects label updates; hide `.toolbar` on desktop (≥1024px); desktop compose bar + accessory bar layout |
 
 ---
 
@@ -329,3 +369,5 @@ The same 3-tab bottom sheet design (My Projects / New / Clone from Git) works on
 - ✅ Desktop: Cases→Projects rename
 - ✅ Desktop: worktree `⎇` badge on tabs
 - ✅ Desktop: optional pinned sidebar (localStorage toggle)
+- ✅ Desktop: full compose-bar + accessory-bar replaces old toolbar (same two-layer mobile design)
+- ✅ Desktop: compose textarea max-width 720px centered, expand button for full-width toggle
