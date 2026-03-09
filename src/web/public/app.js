@@ -3307,10 +3307,11 @@ class CodemanApp {
     }
     const gen = ++this._initGeneration;
 
-    // Update version displays (header and toolbar)
+    // Update version displays (header, toolbar, and desktop bar)
     if (data.version) {
       const versionEl = this.$('versionDisplay');
       const headerVersionEl = this.$('headerVersion');
+      const desktopVersionEl = this.$('desktopVersionDisplay');
       if (versionEl) {
         versionEl.textContent = `v${data.version}`;
         versionEl.title = `Codeman v${data.version}`;
@@ -3318,6 +3319,10 @@ class CodemanApp {
       if (headerVersionEl) {
         headerVersionEl.textContent = `v${data.version}`;
         headerVersionEl.title = `Codeman v${data.version}`;
+      }
+      if (desktopVersionEl) {
+        desktopVersionEl.textContent = `v${data.version}`;
+        desktopVersionEl.title = `Codeman v${data.version}`;
       }
     }
 
@@ -4602,6 +4607,12 @@ class CodemanApp {
       }
 
       select.innerHTML = options;
+      // Sync desktop bar project select by cloning options
+      const desktopSel = document.getElementById('desktopProjectSelect');
+      if (desktopSel) {
+        while (desktopSel.options.length) desktopSel.remove(0);
+        for (const opt of select.options) desktopSel.add(new Option(opt.text, opt.value));
+      }
       console.log('[loadQuickStartCases] Set options:', select.innerHTML.substring(0, 200));
 
       // If a specific case was requested, select it
@@ -4627,12 +4638,18 @@ class CodemanApp {
         this.updateMobileCaseLabel('testcase');
       }
 
+      // Sync desktop select value to match hidden select
+      const desktopSel2 = document.getElementById('desktopProjectSelect');
+      if (desktopSel2) desktopSel2.value = select.value;
+
       // Only add event listener once (on first load)
       if (!select.dataset.listenerAdded) {
         select.addEventListener('change', () => {
           this.updateDirDisplayForCase(select.value);
           this.saveLastUsedCase(select.value);
           this.updateMobileCaseLabel(select.value);
+          const ds = document.getElementById('desktopProjectSelect');
+          if (ds) ds.value = select.value;
         });
         select.dataset.listenerAdded = 'true';
       }
@@ -4739,34 +4756,54 @@ class CodemanApp {
   }
 
   // Tab count stepper functions
+  _setCount(primaryId, desktopId, value) {
+    const a = document.getElementById(primaryId);
+    const b = document.getElementById(desktopId);
+    if (a) a.value = value;
+    if (b) b.value = value;
+  }
+
+  _getCount(primaryId, desktopId) {
+    const a = document.getElementById(primaryId);
+    const b = document.getElementById(desktopId);
+    return parseInt(a?.value || b?.value || '1') || 1;
+  }
+
   incrementTabCount() {
-    const input = document.getElementById('tabCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
+    const v = Math.min(20, this._getCount('tabCount', 'desktopTabCount') + 1);
+    this._setCount('tabCount', 'desktopTabCount', v);
   }
 
   decrementTabCount() {
-    const input = document.getElementById('tabCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
+    const v = Math.max(1, this._getCount('tabCount', 'desktopTabCount') - 1);
+    this._setCount('tabCount', 'desktopTabCount', v);
   }
 
   // Shell count stepper functions
   incrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
+    const v = Math.min(20, this._getCount('shellCount', 'desktopShellCount') + 1);
+    this._setCount('shellCount', 'desktopShellCount', v);
   }
 
   decrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
+    const v = Math.max(1, this._getCount('shellCount', 'desktopShellCount') - 1);
+    this._setCount('shellCount', 'desktopShellCount', v);
+  }
+
+  /** Sync desktop project select → hidden #quickStartCase (and update mobile label) */
+  _syncDesktopProject(caseName) {
+    const sel = document.getElementById('quickStartCase');
+    if (sel) sel.value = caseName;
+    this.updateMobileCaseLabel(caseName);
+    this.updateDirDisplayForCase(caseName);
+    this.saveLastUsedCase(caseName);
+    KeyboardAccessoryBar?.updateProjectName?.();
   }
 
   async runClaude() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
+    const caseName = document.getElementById('desktopProjectSelect')?.value ||
+      document.getElementById('quickStartCase').value || 'testcase';
+    const tabCount = Math.min(20, Math.max(1, this._getCount('tabCount', 'desktopTabCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
@@ -4908,8 +4945,9 @@ class CodemanApp {
   }
 
   async runShell() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
+    const caseName = document.getElementById('desktopProjectSelect')?.value ||
+      document.getElementById('quickStartCase').value || 'testcase';
+    const shellCount = Math.min(20, Math.max(1, this._getCount('shellCount', 'desktopShellCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;33m Starting ${shellCount} Shell session(s) in ${caseName}...\x1b[0m`);
