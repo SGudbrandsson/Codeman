@@ -13699,7 +13699,7 @@ const SessionDrawer = {
     const drawer = this._getEl();
     if (drawer) { drawer.classList.add('open'); this._render(); }
     // Add pin toggle button on desktop (≥1024px)
-    if (!MobileDetection.getDeviceType() === 'mobile' && window.innerWidth >= 1024) {
+    if (MobileDetection.getDeviceType() !== 'mobile' && window.innerWidth >= 1024) {
       const titleEl = document.querySelector('.session-drawer-title');
       if (titleEl && !titleEl.querySelector('.drawer-pin-btn')) {
         const pinBtn = document.createElement('button');
@@ -13781,9 +13781,12 @@ const SessionDrawer = {
     list.replaceChildren();
 
     // Build groups: caseName -> { caseObj, worktrees: Map(branch -> Session[]), sessions: Session[] }
-    // Sessions are matched to cases by checking if workingDir starts with case.path
+    // Seed groups from all known cases first so [+] buttons always appear.
     const groups = new Map();
     const caseList = app.cases || [];
+    for (const c of caseList) {
+      groups.set(c.name, { caseObj: c, worktrees: new Map(), sessions: [] });
+    }
 
     // Helper: find the best-matching case for a session (longest path match)
     const findCase = (workingDir) => {
@@ -13916,7 +13919,7 @@ const SessionDrawer = {
 
   _showCloseSheet(sessionId, sessionName) {
     // Desktop: delegate to existing modal flow
-    if (!MobileDetection.getDeviceType() === 'mobile') {
+    if (MobileDetection.getDeviceType() !== 'mobile') {
       app.requestCloseSession(sessionId);
       return;
     }
