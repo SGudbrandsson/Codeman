@@ -956,6 +956,41 @@ html.mobile-init .file-browser-panel {
     background: #3a3a3a;
   }
 
+  /* Settings gear button */
+  .accessory-btn-settings {
+    color: #94a3b8;
+    flex-shrink: 0;
+  }
+
+  /* Project picker button */
+  .accessory-btn-project {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 8px;
+    min-width: 0;
+    max-width: 110px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .accessory-project-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .accessory-project-name {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #cbd5e1;
+  }
+  .accessory-project-caret {
+    font-size: 9px;
+    color: #64748b;
+    flex-shrink: 0;
+  }
+
   /* Voice preview — positioned above accessory bar on mobile */
   .voice-preview {
     bottom: calc(var(--safe-area-bottom) + 94px);
@@ -2026,6 +2061,23 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
+   Layout Overrides — Compose Bar Always On
+   ============================================================================ */
+
+/* Hide legacy footer toolbar on mobile — replaced by compose bar + accessory bar */
+.toolbar {
+  display: none !important;
+}
+
+/* Always-on compose bar — remove toggle-hidden behavior on mobile */
+.mobile-input-panel {
+  display: flex !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translateY(0) !important;
+}
+
+/* ============================================================================
    Hover State Fallbacks for Touch
    ============================================================================ */
 @media (hover: none) and (pointer: coarse) {
@@ -2306,13 +2358,14 @@ html.mobile-init .file-browser-panel {
   gap: 6px;
 }
 
-/* Thumbnail strip */
+/* Thumbnail strip — sits inside compose-textarea-wrap above the textarea */
 .compose-thumb-strip {
   display: flex;
   flex-direction: row;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 2px;
+  padding: 8px 44px 6px 44px;
+  border-bottom: 1px solid #1a1a2e; /* divider between attachments and text, no separate box */
   -webkit-overflow-scrolling: touch;
 }
 .compose-thumb {
@@ -2354,6 +2407,7 @@ html.mobile-init .file-browser-panel {
 /* Textarea wrapper — relative so inset buttons are absolute */
 .compose-textarea-wrap {
   position: relative;
+  overflow: hidden; /* clip thumbnail strip to rounded corners */
   border: 1px solid #1a1a2e;
   border-radius: 12px;
   background: #0d0d0d;

@@ -529,8 +529,12 @@ class CodemanApp {
     SwipeHandler.init();
     VoiceInput.init();
     KeyboardAccessoryBar.init();
-    if (typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice()) {
-      InputPanel.init();
+    InputPanel.init();
+    // Always-visible compose bar on mobile and desktop
+    InputPanel.open();
+    // Restore desktop sidebar pin state
+    if (MobileDetection.getDeviceType() !== 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
+      document.body.classList.add('sidebar-pinned');
     }
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
@@ -3308,7 +3312,7 @@ class CodemanApp {
     }
     const gen = ++this._initGeneration;
 
-    // Update version displays (header and toolbar)
+    // Update version displays (header, toolbar, and desktop bar)
     if (data.version) {
       const versionEl = this.$('versionDisplay');
       const headerVersionEl = this.$('headerVersion');
@@ -3707,7 +3711,7 @@ class CodemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
       const worktreeBadge = session.worktreeBranch
-        ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">🌿 ${escapeHtml(session.worktreeBranch)}</span>`
+        ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">${BRANCH_SVG} ${escapeHtml(session.worktreeBranch)}</span>`
         : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
@@ -4495,14 +4499,15 @@ class CodemanApp {
   openWorktreeCleanupForSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session?.worktreeBranch) return;
-    const descEl = document.getElementById('worktreeCleanupDesc');
-    if (descEl) descEl.textContent = 'What do you want to do with this worktree?';
-    this._onWorktreeSessionEnded({
-      id: sessionId,
-      worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch,
-      worktreeOriginId: session.worktreeOriginId,
-    });
+    this._onWorktreeSessionEnded(
+      {
+        id: sessionId,
+        worktreePath: session.worktreePath,
+        worktreeBranch: session.worktreeBranch,
+        worktreeOriginId: session.worktreeOriginId,
+      },
+      'What should happen to this worktree?'
+    );
   }
 
   nextSession() {
@@ -4577,6 +4582,8 @@ class CodemanApp {
       const res = await fetch('/api/cases');
       const cases = await res.json();
       this.cases = cases;
+      // Re-render drawer if open so project groups appear even if drawer was opened before cases loaded
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
       console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name), 'lastUsedCase:', lastUsedCase);
 
       const select = document.getElementById('quickStartCase');
@@ -4737,34 +4744,40 @@ class CodemanApp {
   }
 
   // Tab count stepper functions
+  _setCount(primaryId, value) {
+    const a = document.getElementById(primaryId);
+    if (a) a.value = value;
+  }
+
+  _getCount(primaryId) {
+    const a = document.getElementById(primaryId);
+    return parseInt(a?.value || '1') || 1;
+  }
+
   incrementTabCount() {
-    const input = document.getElementById('tabCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
+    const v = Math.min(20, this._getCount('tabCount') + 1);
+    this._setCount('tabCount', v);
   }
 
   decrementTabCount() {
-    const input = document.getElementById('tabCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
+    const v = Math.max(1, this._getCount('tabCount') - 1);
+    this._setCount('tabCount', v);
   }
 
   // Shell count stepper functions
   incrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
+    const v = Math.min(20, this._getCount('shellCount') + 1);
+    this._setCount('shellCount', v);
   }
 
   decrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
+    const v = Math.max(1, this._getCount('shellCount') - 1);
+    this._setCount('shellCount', v);
   }
 
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
+    const tabCount = Math.min(20, Math.max(1, this._getCount('tabCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
@@ -4783,13 +4796,13 @@ class CodemanApp {
           body: JSON.stringify({ name: caseName, description: '' })
         });
         const createCaseData = await createCaseRes.json();
-        if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create case');
+        if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create project');
         // Use the newly created case data (API returns { success, case: { name, path } })
         caseData = createCaseData.case;
       }
 
       const workingDir = caseData.path;
-      if (!workingDir) throw new Error('Case path not found');
+      if (!workingDir) throw new Error('Project path not found');
       let firstSessionId = null;
 
       // Find the highest existing w-number for THIS case to avoid duplicates
@@ -4907,18 +4920,18 @@ class CodemanApp {
 
   async runShell() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
+    const shellCount = Math.min(20, Math.max(1, this._getCount('shellCount')));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;33m Starting ${shellCount} Shell session(s) in ${caseName}...\x1b[0m`);
     this.terminal.writeln('');
 
     try {
-      // Get the case path
+      // Get the project path
       const caseRes = await fetch(`/api/cases/${caseName}`);
       const caseData = await caseRes.json();
       const workingDir = caseData.path;
-      if (!workingDir) throw new Error('Case path not found');
+      if (!workingDir) throw new Error('Project path not found');
 
       // Find the highest existing s-number for THIS case to avoid duplicates
       let startNumber = 1;
@@ -5997,16 +6010,16 @@ class CodemanApp {
     if (!body) return;
     const cases = this._sessionCreatorCases;
     if (!cases) {
-      body['inner' + 'HTML'] = '<div class="worktree-git-loading">Loading cases...</div>';
+      body['inner' + 'HTML'] = '<div class="worktree-git-loading">Loading projects...</div>';
       return;
     }
     const selectedCase = this._sessionCreatorCaseName;
     const currentMode = this._sessionCreatorMode || 'claude';
     let html = '';
     if (cases.length === 0) {
-      html += '<div class="worktree-git-loading">No cases found. Create a case first.</div>';
+      html += '<div class="worktree-git-loading">No projects found. Create a project first.</div>';
     } else {
-      html += '<div class="worktree-section-label">Case</div><div class="session-creator-cases">';
+      html += '<div class="worktree-section-label">Project</div><div class="session-creator-cases">';
       cases.forEach(c => {
         const isSelected = c.name === selectedCase;
         html += `<button class="session-creator-case-card${isSelected ? ' selected' : ''}" onclick="app._selectSessionCase('${escapeHtml(c.name)}')">` +
@@ -6045,6 +6058,19 @@ class CodemanApp {
       const btnMode = btn.getAttribute('onclick')?.match(/_setSessionMode\('(\w+)'\)/)?.[1];
       btn.classList.toggle('selected', btnMode === mode);
     });
+  }
+
+  /** Start a session in a specific case from the drawer quick-add popover */
+  async startSessionInCase(caseName, mode) {
+    const caseSelect = document.getElementById('quickStartCase');
+    if (caseSelect) caseSelect.value = caseName;
+    if (mode === 'opencode') {
+      await this.runOpenCode();
+    } else if (mode === 'shell') {
+      await this.runShell();
+    } else {
+      await this.runClaude();
+    }
   }
 
   async _submitCreateSession() {
@@ -6105,7 +6131,7 @@ class CodemanApp {
     if (dormant.length > 0) {
       html += `<div class="worktree-section-label">Resume</div>`;
       dormant.forEach(w => {
-        html += `<button class="worktree-resume-btn" onclick="app._resumeWorktree('${escapeHtml(w.id)}')">🌿 ${escapeHtml(w.branch)} <span class="worktree-resume-project">${escapeHtml(w.projectName)}</span></button>`;
+        html += `<button class="worktree-resume-btn" onclick="app._resumeWorktree('${escapeHtml(w.id)}')">${BRANCH_SVG} ${escapeHtml(w.branch)} <span class="worktree-resume-project">${escapeHtml(w.projectName)}</span></button>`;
       });
       html += `<hr class="worktree-divider">`;
     }
@@ -6113,7 +6139,7 @@ class CodemanApp {
     const gitCases = this._worktreeGitCases || [];
     const selectedCase = this._worktreeCreatorCaseName;
     if (gitCases.length === 0 && dormant.length === 0) {
-      html += `<div class="worktree-git-loading">No git repositories found in cases.</div>`;
+      html += `<div class="worktree-git-loading">No git repositories found in projects.</div>`;
     } else if (!selectedCase && gitCases.length > 1) {
       html += `<div class="worktree-section-label">Branch from</div><div class="session-creator-cases">`;
       gitCases.forEach(c => {
@@ -6195,7 +6221,7 @@ class CodemanApp {
 
   async _submitCreateWorktree() {
     const caseName = this._worktreeCreatorCaseName;
-    if (!caseName) { alert('Please select a case'); return; }
+    if (!caseName) { alert('Please select a project'); return; }
     const type = document.querySelector('input[name="worktreeBranchType"]:checked')?.value ?? 'new';
     const isNew = type === 'new';
     const branch = (isNew
@@ -6223,7 +6249,7 @@ class CodemanApp {
     }
   }
 
-  _onWorktreeSessionEnded(data) {
+  _onWorktreeSessionEnded(data, desc) {
     this._pendingWorktreeCleanup = data;
     document.getElementById('worktreeCleanupBranch').textContent = data.worktreeBranch;
     const originSession = data.worktreeOriginId ? this.sessions.get(data.worktreeOriginId) : null;
@@ -6232,9 +6258,8 @@ class CodemanApp {
     const out = document.getElementById('worktreeCleanupOutput');
     out.style.display = 'none';
     out.textContent = '';
-    // Reset desc to "session ended" in case it was previously overridden by manual open
     const descEl = document.getElementById('worktreeCleanupDesc');
-    if (descEl) descEl.textContent = 'Session ended — what should happen to this worktree?';
+    if (descEl) descEl.textContent = desc ?? 'Session ended — what should happen to this worktree?';
     document.getElementById('worktreeCleanupModal').classList.add('active');
   }
 
@@ -11596,6 +11621,21 @@ class CodemanApp {
     }
   }
 
+  /** Clean up wizard drag document-level listeners (called on SSE reconnect cleanup) */
+  cleanupWizardDragging() {
+    if (this.wizardDragListeners) {
+      document.removeEventListener('mousemove', this.wizardDragListeners.move);
+      document.removeEventListener('mouseup', this.wizardDragListeners.up);
+      if (this.wizardDragListeners.touchMove) {
+        document.removeEventListener('touchmove', this.wizardDragListeners.touchMove);
+        document.removeEventListener('touchend', this.wizardDragListeners.up);
+        document.removeEventListener('touchcancel', this.wizardDragListeners.up);
+      }
+      this.wizardDragListeners = null;
+    }
+    this.wizardDragState = null;
+  }
+
   /** Get teammate color by name */
   getTeammateColor(name) {
     const info = this.teammateMap.get(name);
@@ -12784,7 +12824,7 @@ class CodemanApp {
     const description = document.getElementById('newCaseDescription').value.trim();
 
     if (!name) {
-      this.showToast('Please enter a case name', 'error');
+      this.showToast('Please enter a project name', 'error');
       return;
     }
 
@@ -12803,17 +12843,17 @@ class CodemanApp {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.showToast(`Case "${name}" created`, 'success');
+        this.showToast(`Project "${name}" created`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
         // Save as last used case
         await this.saveLastUsedCase(name);
       } else {
-        this.showToast(data.error || 'Failed to create case', 'error');
+        this.showToast(data.error || 'Failed to create project', 'error');
       }
     } catch (err) {
-      console.error('Failed to create case:', err);
-      this.showToast('Failed to create case: ' + err.message, 'error');
+      console.error('Failed to create project:', err);
+      this.showToast('Failed to create project: ' + err.message, 'error');
     }
   }
 
@@ -12822,7 +12862,7 @@ class CodemanApp {
     const path = document.getElementById('linkCasePath').value.trim();
 
     if (!name) {
-      this.showToast('Please enter a case name', 'error');
+      this.showToast('Please enter a project name', 'error');
       return;
     }
 
@@ -12846,17 +12886,17 @@ class CodemanApp {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.showToast(`Case "${name}" linked to ${path}`, 'success');
+        this.showToast(`Project "${name}" linked to ${path}`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
         // Save as last used case
         await this.saveLastUsedCase(name);
       } else {
-        this.showToast(data.error || 'Failed to link case', 'error');
+        this.showToast(data.error || 'Failed to link project', 'error');
       }
     } catch (err) {
-      console.error('Failed to link case:', err);
-      this.showToast('Failed to link case: ' + err.message, 'error');
+      console.error('Failed to link project:', err);
+      this.showToast('Failed to link project: ' + err.message, 'error');
     }
   }
 
@@ -12864,7 +12904,7 @@ class CodemanApp {
   // Mobile Case Picker
   // ═══════════════════════════════════════════════════════════════
 
-  showMobileCasePicker() {
+  showMobileCasePicker(initialTab = 'projects') {
     const modal = document.getElementById('mobileCasePickerModal');
     const listContainer = document.getElementById('mobileCaseList');
     const select = document.getElementById('quickStartCase');
@@ -12900,6 +12940,8 @@ class CodemanApp {
 
     listContainer.innerHTML = html;
     modal.classList.add('active');
+    // Switch to requested tab (default: projects)
+    this.switchCasePickerTab(initialTab);
   }
 
   closeMobileCasePicker() {
@@ -12927,10 +12969,16 @@ class CodemanApp {
   }
 
   updateMobileCaseLabel(caseName) {
+    // Keep activeCaseName in sync for accessory bar project button
+    this.activeCaseName = caseName;
     const label = document.getElementById('mobileCaseName');
     if (label) {
       // Let CSS handle truncation via text-overflow: ellipsis
       label.textContent = caseName;
+    }
+    // Update the accessory bar project name pill
+    if (typeof KeyboardAccessoryBar !== 'undefined') {
+      KeyboardAccessoryBar.updateProjectName();
     }
   }
 
@@ -12943,6 +12991,88 @@ class CodemanApp {
     modal.classList.add('from-mobile');
     // Remove animation class after it plays
     setTimeout(() => modal.classList.remove('from-mobile'), 300);
+  }
+
+  // Open project picker to the "New" tab — wired to drawer footer "+ New Project" button
+  openNewCaseModal() {
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    this.showMobileCasePicker('new');
+  }
+
+  // Open project picker to the "Clone from Git" tab — wired to drawer footer button
+  openCloneModal() {
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    this.showMobileCasePicker('clone');
+  }
+
+  switchCasePickerTab(tab) {
+    document.querySelectorAll('.case-picker-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('.case-picker-tab-content').forEach(el => {
+      el.style.display = 'none';
+    });
+    const target = document.getElementById('casePickerTab-' + tab);
+    if (target) target.style.display = '';
+    // Auto-focus the first input in the tab
+    const input = target?.querySelector('input');
+    if (input) setTimeout(() => input.focus(), 50);
+  }
+
+  async createCaseFromPicker() {
+    const nameEl = document.getElementById('pickerNewCaseName');
+    const name = nameEl?.value.trim();
+    if (!name) { this.showToast('Enter a project name', 'error'); nameEl?.focus(); return; }
+    const btn = document.querySelector('#casePickerTab-new .case-picker-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+      const res = await fetch('/api/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.closeMobileCasePicker();
+        await this.loadQuickStartCases(name);
+        await this.saveLastUsedCase(name);
+        this.showToast(`Project "${name}" created`, 'success');
+      } else {
+        this.showToast(data.error || 'Failed to create project', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to create project: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Create Project'; }
+    }
+  }
+
+  async cloneRepoFromPicker() {
+    const url = document.getElementById('pickerCloneUrl')?.value.trim();
+    if (!url) { this.showToast('Enter a repository URL', 'error'); return; }
+    const btn = document.querySelector('#casePickerTab-clone .case-picker-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Cloning…'; }
+    try {
+      const res = await fetch('/api/cases/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const name = data.data?.case?.name;
+        this.closeMobileCasePicker();
+        await this.loadQuickStartCases(name);
+        if (name) await this.saveLastUsedCase(name);
+        this.showToast(`Cloned "${name}" successfully`, 'success');
+      } else {
+        this.showToast(data.error || 'Clone failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Clone failed: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Clone & Open'; }
+    }
   }
 
   renderMuxSessions() {
@@ -13352,6 +13482,9 @@ try {
   }
 } catch {}
 
+/** Centralized branch/worktree SVG icon — use everywhere instead of 🌿 */
+const BRANCH_SVG = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="4" cy="3" r="1.5"/><circle cx="4" cy="13" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 4.5v7"/><path d="M4 4.5 C4 7 12 6 12 6.5"/></svg>';
+
 /**
  * Built-in Claude Code slash commands — always available in the compose panel,
  * regardless of which session is active or which plugins are installed.
@@ -13412,22 +13545,80 @@ const InputPanel = {
       }
     });
 
-    // Plus button
+    // Keyboard: Shift+Enter sends on desktop; plain Enter creates newline
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        this.send();
+      }
+    });
+
+    // Paste images — intercept clipboard image data on both desktop and mobile
+    ta.addEventListener('paste', (e) => {
+      const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
+      const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
+      if (!imageItems.length) return; // No images — let default text paste proceed
+      e.preventDefault();
+      const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
+      if (!files.length) return;
+      // Reuse existing file-handling logic by creating a synthetic input-like object
+      this._onFilesFromPaste(files);
+    });
+
+    // Plus button — on desktop skip the mobile action sheet, open file picker directly
     const plusBtn = document.getElementById('composePlusBtn');
-    if (plusBtn) plusBtn.addEventListener('click', () => this._openActionSheet());
+    if (plusBtn) plusBtn.addEventListener('click', () => {
+      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
+      if (isDesktop) {
+        document.getElementById('composeFileAny')?.click();
+      } else {
+        this._openActionSheet();
+      }
+    });
 
     // Send button
     const sendBtn = document.getElementById('composeSendBtn');
     if (sendBtn) sendBtn.addEventListener('click', () => this.send());
+
+    // Expand/collapse button — desktop only
+    const expandBtn = document.getElementById('composeExpandBtn');
+    if (expandBtn) {
+      expandBtn.removeAttribute('style'); // Always clear inline style — CSS media query hides it on mobile
+      const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
+      if (isDesktop) {
+        const wrap = document.querySelector('.compose-textarea-wrap');
+        if (wrap && localStorage.getItem('desktopComposeExpanded') === 'true') {
+          wrap.classList.add('expanded');
+        }
+        expandBtn.addEventListener('click', () => {
+          const w = document.querySelector('.compose-textarea-wrap');
+          if (!w) return;
+          const expanded = w.classList.toggle('expanded');
+          localStorage.setItem('desktopComposeExpanded', String(expanded));
+        });
+      }
+    }
+    // Set initial padding on desktop so .main doesn't jump on first keystroke
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile') {
+      const ta = this._getTextarea();
+      if (ta) this._autoGrow(ta);
+    }
   },
 
   /** Auto-grow the textarea up to the available viewport height */
   _autoGrow(ta) {
     ta.style.height = 'auto';
+    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
     const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    const maxH = Math.max(80, vvh - 200);
+    const maxH = isDesktop ? 200 : Math.max(80, vvh - 200);
     ta.style.maxHeight = maxH + 'px';
     ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
+    if (isDesktop) {
+      // Update CSS var so .main padding-bottom tracks actual compose bar height
+      const panel = document.getElementById('mobileInputPanel');
+      const h = panel ? panel.getBoundingClientRect().height : 52;
+      document.documentElement.style.setProperty('--desktop-compose-height', String(h) + 'px');
+    }
   },
 
   toggle() { if (this._open) this.close(); else this.open(); },
@@ -13478,10 +13669,12 @@ const InputPanel = {
     app.sendInput(parts.join('\n') + '\r');
 
     ta.value = '';
-    this._autoGrow(ta);
     this._images = [];
-    this._renderThumbnails();
-    this.close();
+    this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
+    this._autoGrow(ta);
+    // Desktop: keep panel open (always-visible); mobile: close after send
+    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
+    if (!isDesktop) this.close();
   },
 
   clear() {
@@ -13516,9 +13709,19 @@ const InputPanel = {
     document.getElementById(id)?.click();
   },
 
+  /** Handle files pasted from clipboard (Ctrl+V / Cmd+V with image data) */
+  async _onFilesFromPaste(files) {
+    await this._uploadFiles(files);
+  },
+
   async _onFilesChosen(input, _type) {
     const files = Array.from(input.files || []);
     input.value = '';
+    if (!files.length) return;
+    await this._uploadFiles(files);
+  },
+
+  async _uploadFiles(files) {
     if (!files.length) return;
 
     // If replacing an existing image
@@ -13694,6 +13897,25 @@ const SessionDrawer = {
     this._getOverlay()?.classList.add('open');
     const drawer = this._getEl();
     if (drawer) { drawer.classList.add('open'); this._render(); }
+    // Add pin toggle button on desktop (≥1024px)
+    if (MobileDetection.getDeviceType() !== 'mobile' && window.innerWidth >= 1024) {
+      const titleEl = document.querySelector('.session-drawer-title');
+      if (titleEl && !titleEl.querySelector('.drawer-pin-btn')) {
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'drawer-pin-btn';
+        const isPinned = document.body.classList.contains('sidebar-pinned');
+        pinBtn.textContent = isPinned ? '\u21a4' : '\u21a6';
+        pinBtn.title = isPinned ? 'Unpin sidebar' : 'Pin sidebar';
+        pinBtn.addEventListener('click', () => {
+          const nowPinned = !document.body.classList.contains('sidebar-pinned');
+          document.body.classList.toggle('sidebar-pinned', nowPinned);
+          localStorage.setItem('sidebarPinned', String(nowPinned));
+          pinBtn.textContent = nowPinned ? '\u21a4' : '\u21a6';
+          pinBtn.title = nowPinned ? 'Unpin sidebar' : 'Pin sidebar';
+        });
+        titleEl.appendChild(pinBtn);
+      }
+    }
   },
   close() {
     this._getOverlay()?.classList.remove('open');
@@ -13702,81 +13924,512 @@ const SessionDrawer = {
   toggle() {
     if (this._getEl()?.classList.contains('open')) this.close(); else this.open();
   },
+  _esc(str) {
+    return String(str ?? '');
+  },
+
+  _renderSessionRow(s) {
+    const isActive = s.id === app.activeSessionId;
+    const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
+    const hasRalph  = app.ralphStates?.get(s.id)?.enabled;
+    const modeLabel = s.cliMode || s.mode || 'claude';
+
+    const row = document.createElement('div');
+    row.className = 'drawer-session-row' + (isActive ? ' active' : '');
+    row.dataset.sessionId = s.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'drawer-session-dot'
+      + (isRunning ? ' running' : ' idle')
+      + (hasRalph  ? ' ralph'   : '');
+
+    const name = document.createElement('span');
+    name.className = 'drawer-session-name';
+    name.textContent = app.getSessionName(s);
+
+    const badge = document.createElement('span');
+    badge.className = 'session-mode-badge';
+    badge.setAttribute('data-mode', modeLabel);
+    badge.textContent = modeLabel;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'drawer-session-close';
+    closeBtn.setAttribute('aria-label', 'Close session');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      this._showCloseSheet(s.id, app.getSessionName(s));
+    });
+
+    row.appendChild(dot);
+    row.appendChild(name);
+    row.appendChild(badge);
+    row.appendChild(closeBtn);
+
+    row.addEventListener('click', () => {
+      app.selectSession(s.id);
+      SessionDrawer.close();
+    });
+
+    return row;
+  },
+
   _render() {
     const list = this._getList();
     if (!list || typeof app === 'undefined') return;
     list.replaceChildren();
 
-    for (const id of app.sessionOrder) {
-      const session = app.sessions.get(id);
-      if (!session) continue;
-      const isActive  = id === app.activeSessionId;
-      const isRunning = session.status === 'running' || session.status === 'active';
-      const hasRalph  = app.ralphStates?.get(id)?.enabled;
+    // Build groups: caseName -> { caseObj, worktrees: Map(branch -> Session[]), sessions: Session[] }
+    // Seed groups from all known cases first so [+] buttons always appear.
+    const groups = new Map();
+    const caseList = app.cases || [];
+    for (const c of caseList) {
+      groups.set(c.name, { caseObj: c, worktrees: new Map(), sessions: [] });
+    }
 
-      const item = document.createElement('div');
-      item.className = 'session-drawer-item' + (isActive ? ' active' : '');
+    // Helper: find the best-matching case for a session (longest path match)
+    const findCase = (workingDir) => {
+      if (!workingDir) return null;
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cPath = c.path.endsWith('/') ? c.path : c.path + '/';
+        const wDir  = workingDir.endsWith('/') ? workingDir : workingDir + '/';
+        if ((wDir === cPath || wDir.startsWith(cPath)) && c.path.length > bestLen) {
+          best = c;
+          bestLen = c.path.length;
+        }
+      }
+      return best;
+    };
+
+    // Helper: extract case name from session name convention (w1-caseName, s1-caseName)
+    const findCaseBySessionName = (name) => {
+      const m = name && name.match(/^[ws]\d+-(.+)$/i);
+      if (!m) return null;
+      const suffix = m[1].toLowerCase();
+      return caseList.find(c => c.name.toLowerCase() === suffix) || null;
+    };
+
+    // Helper: match worktree dirs like "Codeman-feat-better-ux" → case with path ending in "Codeman"
+    const findCaseByWorktreeDirPrefix = (workingDir) => {
+      if (!workingDir) return null;
+      const dirBase = (workingDir.split('/').pop() || '').toLowerCase();
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cBase = (c.path.split('/').pop() || '').toLowerCase();
+        if (cBase && (dirBase === cBase || dirBase.startsWith(cBase + '-') || dirBase.startsWith(cBase + '_'))) {
+          if (c.path.length > bestLen) { best = c; bestLen = c.path.length; }
+        }
+      }
+      return best;
+    };
+
+    // Helper: resolve the best case for a session — prefers name convention, then dir prefix, then path
+    const resolveCase = (s) => {
+      const byName = findCaseBySessionName(s.name);
+      if (byName) return byName;
+      // For worktree sessions with a known origin, use origin's case
+      if (s.worktreeOriginId) {
+        const origin = app.sessions.get(s.worktreeOriginId);
+        if (origin) {
+          const byOriginName = findCaseBySessionName(origin.name);
+          if (byOriginName) return byOriginName;
+        }
+      }
+      // Path-based (longest match wins)
+      const byPath = findCase(s.workingDir);
+      // Dir-prefix heuristic for git worktree dirs (e.g. "Codeman-feat-better-ux" → case "Codeman")
+      const byDirPrefix = findCaseByWorktreeDirPrefix(s.workingDir);
+      // Prefer dir prefix if it gives a longer (more specific) case path than the path match
+      if (byDirPrefix && (!byPath || byDirPrefix.path.length > byPath.path.length)) return byDirPrefix;
+      return byPath;
+    };
+
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (!s) continue;
+      const caseObj = resolveCase(s);
+      const groupKey = caseObj ? caseObj.name : '__ungrouped__';
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { caseObj: caseObj || null, worktrees: new Map(), sessions: [] });
+      }
+      const g = groups.get(groupKey);
+      if (s.worktreeBranch) {
+        if (!g.worktrees.has(s.worktreeBranch)) g.worktrees.set(s.worktreeBranch, []);
+        g.worktrees.get(s.worktreeBranch).push(s);
+      } else {
+        g.sessions.push(s);
+      }
+    }
+
+    for (const [groupKey, group] of groups) {
+      const projectName = group.caseObj?.name || groupKey;
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'drawer-project-group';
+
+      // Project header
+      const header = document.createElement('div');
+      header.className = 'drawer-project-header';
 
       const nameSpan = document.createElement('span');
-      nameSpan.className = 'session-drawer-item-name';
-      nameSpan.textContent = app.getSessionName(session); // textContent — safe
+      nameSpan.className = 'drawer-project-name';
+      nameSpan.textContent = projectName.toUpperCase();
 
-      const meta = document.createElement('span');
-      meta.className = 'session-drawer-item-meta';
-
-      const badge = document.createElement('span');
-      badge.className = 'session-drawer-badge';
-      badge.textContent = session.mode || 'claude'; // textContent — safe
-
-      const dot = document.createElement('span');
-      dot.className = 'session-drawer-dot'
-        + (isRunning ? ' running' : '')
-        + (hasRalph  ? ' ralph'   : '');
-
-      const statusLabelMap = { busy: 'working', idle: 'waiting', stopped: 'stopped' };
-      const statusLabelText = statusLabelMap[session.status];
-      const statusLabel = document.createElement('span');
-      if (statusLabelText) {
-        statusLabel.className = 'session-drawer-status ' + session.status;
-        statusLabel.textContent = statusLabelText; // textContent — safe
-      }
-
-      meta.appendChild(badge);
-      meta.appendChild(dot);
-      if (statusLabelText) meta.appendChild(statusLabel);
-      item.appendChild(nameSpan);
-      item.appendChild(meta);
-
-      if (session.worktreeBranch) {
-        const mergeBtn = document.createElement('button');
-        mergeBtn.className = 'session-drawer-merge-btn';
-        mergeBtn.title = 'Merge ' + session.worktreeBranch; // safe — title attr
-        mergeBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
-        mergeBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          app.openWorktreeCleanupForSession(id);
-          this.close();
-        });
-        item.appendChild(mergeBtn);
-      }
-
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'session-drawer-close-btn';
-      closeBtn.textContent = '×'; // textContent — safe
-      closeBtn.addEventListener('click', (e) => {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'drawer-add-btn';
+      addBtn.textContent = '+';
+      addBtn.title = 'New session in ' + this._esc(projectName);
+      addBtn.addEventListener('click', e => {
         e.stopPropagation();
-        app.requestCloseSession(id);
-        this.close();
+        this._showQuickAdd(e.currentTarget, groupKey, projectName, false);
       });
-      item.appendChild(closeBtn);
 
-      item.addEventListener('click', () => {
-        app.selectSession(id);
-        this.close();
-      });
-      list.appendChild(item);
+      header.appendChild(nameSpan);
+      header.appendChild(addBtn);
+      groupEl.appendChild(header);
+
+      // Worktree sub-groups
+      for (const [branch, wtSessions] of group.worktrees) {
+        const wtGroup = document.createElement('div');
+        wtGroup.className = 'drawer-worktree-group';
+
+        const wtHeader = document.createElement('div');
+        wtHeader.className = 'drawer-worktree-header';
+
+        const wtIcon = document.createElement('span');
+        wtIcon.className = 'drawer-worktree-icon';
+        wtIcon.textContent = '⎇';
+
+        const wtBranch = document.createElement('span');
+        wtBranch.className = 'drawer-worktree-branch';
+        wtBranch.textContent = branch;
+
+        const mergeBtn = document.createElement('button');
+        mergeBtn.className = 'drawer-merge-btn';
+        mergeBtn.textContent = 'merge';
+        mergeBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (wtSessions[0]) {
+            SessionDrawer.close();
+            app.openWorktreeCleanupForSession(wtSessions[0].id);
+          }
+        });
+
+        const wtAddBtn = document.createElement('button');
+        wtAddBtn.className = 'drawer-add-btn';
+        wtAddBtn.textContent = '+';
+        wtAddBtn.title = 'Add session to ' + this._esc(branch);
+        wtAddBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          this._showQuickAdd(e.currentTarget, groupKey, branch, true);
+        });
+
+        wtHeader.appendChild(wtIcon);
+        wtHeader.appendChild(wtBranch);
+        wtHeader.appendChild(mergeBtn);
+        wtHeader.appendChild(wtAddBtn);
+        wtGroup.appendChild(wtHeader);
+
+        for (const s of wtSessions) wtGroup.appendChild(this._renderSessionRow(s));
+        groupEl.appendChild(wtGroup);
+      }
+
+      // Regular sessions in this project
+      for (const s of group.sessions) groupEl.appendChild(this._renderSessionRow(s));
+
+      list.appendChild(groupEl);
     }
-  }
+
+    // Drawer footer
+    const footer = document.createElement('div');
+    footer.className = 'drawer-footer';
+
+    const newBtn = document.createElement('button');
+    newBtn.className = 'drawer-footer-btn';
+    newBtn.textContent = '+ New Project';
+    newBtn.addEventListener('click', () => app.openNewCaseModal?.());
+
+    const cloneBtn = document.createElement('button');
+    cloneBtn.className = 'drawer-footer-btn';
+    cloneBtn.textContent = 'Clone from Git';
+    cloneBtn.addEventListener('click', () => app.openCloneModal?.());
+
+    footer.appendChild(newBtn);
+    footer.appendChild(cloneBtn);
+    list.appendChild(footer);
+  },
+
+  _showCloseSheet(sessionId, sessionName) {
+    // Desktop: delegate to existing modal flow
+    if (MobileDetection.getDeviceType() !== 'mobile') {
+      app.requestCloseSession(sessionId);
+      return;
+    }
+
+    // Mobile: show confirmation sheet inside the drawer
+    document.querySelector('.drawer-close-sheet')?.remove();
+
+    const drawer = document.getElementById('sessionDrawer');
+    if (!drawer) return;
+
+    const truncated = sessionName.length > 40 ? sessionName.slice(0, 39) + '…' : sessionName;
+
+    const sheet = document.createElement('div');
+    sheet.className = 'drawer-close-sheet';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'drawer-close-sheet-title';
+    titleEl.textContent = 'Close "' + truncated + '"';
+
+    // Kill Session option (danger)
+    const killBtn = document.createElement('button');
+    killBtn.className = 'close-sheet-option danger';
+    const killTitle = document.createElement('div');
+    killTitle.className = 'close-sheet-option-title';
+    killTitle.textContent = '× Kill Session';
+    const killDesc = document.createElement('div');
+    killDesc.className = 'close-sheet-option-desc';
+    killDesc.textContent = 'Stops Claude & kills tmux — cannot be undone';
+    killBtn.appendChild(killTitle);
+    killBtn.appendChild(killDesc);
+    killBtn.addEventListener('click', () => {
+      sheet.remove();
+      // Set pendingCloseSessionId before calling confirmCloseSession
+      app.pendingCloseSessionId = sessionId;
+      app.confirmCloseSession?.(true);
+    });
+
+    // Remove Tab option
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'close-sheet-option';
+    const removeTitle = document.createElement('div');
+    removeTitle.className = 'close-sheet-option-title';
+    removeTitle.textContent = '○ Remove Tab';
+    const removeDesc = document.createElement('div');
+    removeDesc.className = 'close-sheet-option-desc';
+    removeDesc.textContent = 'Hides from drawer — tmux keeps running in background';
+    removeBtn.appendChild(removeTitle);
+    removeBtn.appendChild(removeDesc);
+    removeBtn.addEventListener('click', () => {
+      sheet.remove();
+      app.pendingCloseSessionId = sessionId;
+      app.confirmCloseSession?.(false);
+    });
+
+    // Cancel
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'close-sheet-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => sheet.remove());
+
+    sheet.appendChild(titleEl);
+    sheet.appendChild(killBtn);
+    sheet.appendChild(removeBtn);
+    sheet.appendChild(cancelBtn);
+
+    drawer.style.position = 'relative';
+    drawer.style.overflow = 'hidden';
+    drawer.appendChild(sheet);
+  },
+
+  _showQuickAdd(anchorEl, caseId, groupName, worktreeOnly) {
+    // Remove any existing popover
+    document.querySelector('.drawer-quick-add')?.remove();
+
+    const drawer = document.getElementById('sessionDrawer');
+    if (!drawer) return;
+
+    const popover = document.createElement('div');
+    popover.className = 'drawer-quick-add';
+
+    // Title
+    const title = document.createElement('div');
+    title.className = 'drawer-quick-add-title';
+    title.textContent = worktreeOnly
+      ? 'Add session to ' + groupName
+      : 'Start new session in ' + groupName;
+    popover.appendChild(title);
+
+    // Mode buttons row
+    const row = document.createElement('div');
+    row.className = 'drawer-quick-add-row';
+
+    const modes = [
+      { mode: 'claude', icon: '▶', label: 'Claude' },
+      { mode: 'shell', icon: '⚡', label: 'Shell' },
+      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
+    ];
+    if (!worktreeOnly) {
+      modes.push({ mode: 'worktree', icon: '⎇', label: 'Worktree' });
+    }
+
+    for (const { mode, icon, label } of modes) {
+      const btn = document.createElement('button');
+      btn.className = 'drawer-mode-btn';
+
+      const iconEl = document.createElement('span');
+      iconEl.className = 'drawer-mode-btn-icon';
+      iconEl.textContent = icon;
+
+      const labelEl = document.createElement('span');
+      labelEl.textContent = label;
+
+      btn.appendChild(iconEl);
+      btn.appendChild(labelEl);
+
+      btn.addEventListener('click', () => {
+        if (mode === 'worktree') {
+          this._showWorktreeForm(popover, caseId, groupName, anchorEl);
+        } else {
+          popover.remove();
+          app.startSessionInCase?.(caseId, mode);
+        }
+      });
+      row.appendChild(btn);
+    }
+    popover.appendChild(row);
+
+    // Position: use fixed positioning relative to viewport so drawer overflow-y doesn't clip it
+    const anchorRect = anchorEl.getBoundingClientRect();
+    popover.style.position = 'fixed';
+    // Place below the anchor; if it would go off the bottom, flip above
+    const popoverHeight = 100; // estimated before insertion
+    const spaceBelow = window.innerHeight - anchorRect.bottom;
+    if (spaceBelow >= popoverHeight) {
+      popover.style.top = (anchorRect.bottom + 4) + 'px';
+    } else {
+      popover.style.bottom = (window.innerHeight - anchorRect.top + 4) + 'px';
+    }
+    popover.style.right = (window.innerWidth - anchorRect.right) + 'px';
+
+    document.body.appendChild(popover);
+
+    // Dismiss on outside click
+    const dismiss = e => {
+      if (!popover.contains(e.target)) {
+        popover.remove();
+        document.removeEventListener('click', dismiss, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', dismiss, true), 50);
+  },
+
+  _showWorktreeForm(popover, caseId, groupName, anchorEl) {
+    // Clear popover and rebuild as worktree creation form
+    popover.textContent = '';
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'drawer-form-back';
+    backBtn.textContent = '← back';
+    backBtn.addEventListener('click', () => {
+      this._showQuickAdd(anchorEl, caseId, groupName, false);
+    });
+
+    const title = document.createElement('div');
+    title.className = 'drawer-quick-add-title';
+    title.textContent = '⎇ New worktree in ' + groupName;
+
+    const form = document.createElement('div');
+    form.className = 'drawer-worktree-form';
+
+    // Branch input
+    const branchLabel = document.createElement('div');
+    branchLabel.className = 'drawer-form-label';
+    branchLabel.textContent = 'Branch';
+    const branchInput = document.createElement('input');
+    branchInput.className = 'drawer-form-input';
+    branchInput.type = 'text';
+    branchInput.placeholder = 'feat/…';
+    const branchGroup = document.createElement('div');
+    branchGroup.appendChild(branchLabel);
+    branchGroup.appendChild(branchInput);
+
+    // From chips
+    const fromLabel = document.createElement('div');
+    fromLabel.className = 'drawer-form-label';
+    fromLabel.textContent = 'From';
+    const fromChips = document.createElement('div');
+    fromChips.className = 'drawer-from-chips';
+
+    // CaseInfo has no branch data — default to master
+    const branches = ['master'];
+    let selectedFrom = branches[0];
+
+    for (const b of branches) {
+      const chip = document.createElement('button');
+      chip.className = 'drawer-from-chip' + (b === selectedFrom ? ' selected' : '');
+      chip.textContent = b;
+      chip.addEventListener('click', () => {
+        fromChips.querySelectorAll('.drawer-from-chip').forEach(c => c.classList.remove('selected'));
+        chip.classList.add('selected');
+        selectedFrom = b;
+      });
+      fromChips.appendChild(chip);
+    }
+    const fromGroup = document.createElement('div');
+    fromGroup.appendChild(fromLabel);
+    fromGroup.appendChild(fromChips);
+
+    // Mode selector
+    const modeLabel = document.createElement('div');
+    modeLabel.className = 'drawer-form-label';
+    modeLabel.textContent = 'Start with';
+    const modeRow = document.createElement('div');
+    modeRow.className = 'drawer-quick-add-row';
+
+    let selectedMode = 'claude';
+    for (const { mode, icon, label } of [
+      { mode: 'claude', icon: '▶', label: 'Claude' },
+      { mode: 'shell', icon: '⚡', label: 'Shell' },
+      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
+    ]) {
+      const btn = document.createElement('button');
+      btn.className = 'drawer-mode-btn' + (mode === selectedMode ? ' selected' : '');
+      const iconEl = document.createElement('span');
+      iconEl.className = 'drawer-mode-btn-icon';
+      iconEl.textContent = icon;
+      const labelEl = document.createElement('span');
+      labelEl.textContent = label;
+      btn.appendChild(iconEl);
+      btn.appendChild(labelEl);
+      btn.addEventListener('click', () => {
+        modeRow.querySelectorAll('.drawer-mode-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedMode = mode;
+      });
+      modeRow.appendChild(btn);
+    }
+    const modeGroup = document.createElement('div');
+    modeGroup.appendChild(modeLabel);
+    modeGroup.appendChild(modeRow);
+
+    // Create button
+    const createBtn = document.createElement('button');
+    createBtn.className = 'drawer-create-btn';
+    createBtn.textContent = 'Create & Start';
+    createBtn.addEventListener('click', async () => {
+      const branch = branchInput.value.trim();
+      if (!branch) { branchInput.focus(); return; }
+      popover.remove();
+      await app.createWorktreeAndStartSession?.(caseId, branch, selectedFrom, selectedMode);
+    });
+
+    form.appendChild(branchGroup);
+    form.appendChild(fromGroup);
+    form.appendChild(modeGroup);
+
+    popover.appendChild(backBtn);
+    popover.appendChild(title);
+    popover.appendChild(form);
+    popover.appendChild(createBtn);
+
+    branchInput.focus();
+  },
 };
 
 // Initialize

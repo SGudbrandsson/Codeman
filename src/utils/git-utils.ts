@@ -77,3 +77,10 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
 export async function mergeBranch(targetDir: string, branch: string): Promise<string> {
   return git(['merge', branch, '--no-edit'], targetDir);
 }
+
+export async function gitClone(url: string, targetPath: string): Promise<void> {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileP = promisify(execFile);
+  await execFileP('git', ['clone', '--', url, targetPath], { timeout: 120_000 });
+}

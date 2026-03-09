@@ -1262,6 +1262,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
 
       if (hasCarriageReturn) {
+        // Small delay before Enter so Ink has time to process the final line of text
+        await new Promise((resolve) => setTimeout(resolve, 100));
         await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
           timeout: EXEC_TIMEOUT_MS,
         });
