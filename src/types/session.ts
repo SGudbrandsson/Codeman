@@ -40,6 +40,20 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedToo
 /** Session mode: which CLI backend a session runs */
 export type SessionMode = 'claude' | 'shell' | 'opencode';
 
+/** A single MCP server entry stored per-session */
+export interface McpServerEntry {
+  name: string;
+  enabled: boolean;
+  // stdio transport
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  // http/sse transport
+  type?: 'http' | 'sse';
+  url?: string;
+  headers?: Record<string, string>;
+}
+
 /** OpenCode session configuration */
 export interface OpenCodeConfig {
   /** Model identifier (e.g., "anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "ollama/codellama") */
@@ -157,6 +171,10 @@ export interface SessionState {
   openCodeConfig?: OpenCodeConfig;
   /** Compose draft — text and uploaded image paths, synced across devices */
   draft?: { text: string; imagePaths: string[]; updatedAt: number };
+  /** MCP servers configured for this session */
+  mcpServers?: McpServerEntry[];
+  /** Claude session UUID for --resume (set from transcript filename) */
+  claudeResumeId?: string;
 }
 
 /**

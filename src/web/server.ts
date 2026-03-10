@@ -31,7 +31,7 @@ import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -792,6 +792,16 @@ export class WebServer extends EventEmitter {
       });
 
       this.transcriptWatchers.set(sessionId, watcher);
+    }
+
+    // Extract Claude resume ID from transcript filename (UUID without .jsonl extension)
+    const resumeId = basename(transcriptPath, '.jsonl');
+    if (resumeId && resumeId.length === 36) {
+      const session = this.sessions.get(sessionId);
+      if (session && !session.claudeResumeId) {
+        session.claudeResumeId = resumeId;
+        this.persistSessionState(session);
+      }
     }
 
     // Start or update the watcher with the transcript path
@@ -2745,6 +2755,12 @@ export class WebServer extends EventEmitter {
               }
               if (savedState.draft) {
                 session.draft = savedState.draft;
+              }
+              if (savedState.mcpServers !== undefined) {
+                session.mcpServers = savedState.mcpServers;
+              }
+              if (savedState.claudeResumeId !== undefined) {
+                session.claudeResumeId = savedState.claudeResumeId;
               }
               // Respawn controller (not supported for opencode sessions)
               if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
