@@ -73,6 +73,8 @@ export interface RespawnPaneOptions {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  /** Extra CLI arguments appended after the base command (e.g. --mcp-config, --resume) */
+  extraArgs?: string[];
 }
 
 /**

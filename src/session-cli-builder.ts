@@ -8,7 +8,10 @@
  * @module session-cli-builder
  */
 
-import type { ClaudeMode } from './types.js';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ClaudeMode, McpServerEntry } from './types.js';
 import { getAugmentedPath } from './utils/claude-cli-resolver.js';
 
 /**
@@ -64,6 +67,47 @@ export function buildPromptArgs(prompt: string, model?: string): string[] {
     args.push('--model', model);
   }
   args.push(prompt);
+  return args;
+}
+
+/**
+ * Write a temp MCP config file for the session and return CLI flags to pass to Claude.
+ * Only enabled servers are written. Returns empty array if no enabled servers.
+ *
+ * @param sessionId - Session ID used in the temp file name
+ * @param mcpServers - MCP server entries for the session
+ * @param resumeId - Optional Claude session UUID for --resume
+ * @returns Extra args to append to the Claude CLI command
+ */
+export function buildMcpArgs(
+  sessionId: string,
+  mcpServers: McpServerEntry[] | undefined,
+  resumeId: string | undefined
+): string[] {
+  const args: string[] = [];
+  const enabled = (mcpServers ?? []).filter((s) => s.enabled);
+  if (enabled.length > 0) {
+    const configPath = join(tmpdir(), `codeman-mcp-${sessionId}.json`);
+    const mcpConfig: Record<string, Record<string, unknown>> = {};
+    for (const srv of enabled) {
+      const entry: Record<string, unknown> = {};
+      if (srv.command) {
+        entry.command = srv.command;
+        if (srv.args?.length) entry.args = srv.args;
+        if (srv.env && Object.keys(srv.env).length) entry.env = srv.env;
+      } else if (srv.type && srv.url) {
+        entry.type = srv.type;
+        entry.url = srv.url;
+        if (srv.headers && Object.keys(srv.headers).length) entry.headers = srv.headers;
+      }
+      mcpConfig[srv.name] = entry;
+    }
+    writeFileSync(configPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2));
+    args.push('--mcp-config', configPath);
+  }
+  if (resumeId) {
+    args.push('--resume', resumeId);
+  }
   return args;
 }
 
