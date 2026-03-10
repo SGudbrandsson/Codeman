@@ -8871,6 +8871,48 @@ kbd {
   .compose-textarea-wrap.expanded .compose-expand-icon { display: none; }
   .compose-textarea-wrap.expanded .compose-collapse-icon { display: block; }
 
+  /* Slash command popup — mobile.css doesn't load on desktop; replicated here */
+  .compose-slash-popup {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(720px, 100%);
+    bottom: 100%;
+    margin-bottom: 6px;
+    background: #111827;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    max-height: 280px;
+    overflow-y: auto;
+    z-index: 53;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .compose-slash-item {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .compose-slash-item:last-child { border-bottom: none; }
+  .compose-slash-item:hover { background: rgba(255, 255, 255, 0.05); }
+  .compose-slash-cmd {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #93c5fd;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    flex-shrink: 0;
+  }
+  .compose-slash-desc {
+    font-size: 0.75rem;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* Commands drawer: slides up from accessory bar */
   .accessory-cmd-drawer {
     position: absolute;
