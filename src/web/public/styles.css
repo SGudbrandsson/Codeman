@@ -10025,7 +10025,7 @@ kbd {
 /* Full-width 3px bar below header, hidden until first data */
 .ctx-bar {
   position: absolute;
-  bottom: 0;
+  bottom: 1px;
   left: 0;
   right: 0;
   height: 3px;
@@ -10043,8 +10043,7 @@ kbd {
 .ctx-seg-tools   { background: #fbbf24; }
 .ctx-seg-free    { background: #1e293b; flex: 1; min-width: 0; }
 
-/* CTX chip — mirrors .plugins-chip styling */
-.ctx-chip { }
+/* CTX chip — badge color states (base appearance inherited from .mcp-chip) */
 .ctx-chip.ctx-green .mcp-chip-badge { background: rgba(74,222,128,0.2); color: #4ade80; }
 .ctx-chip.ctx-amber .mcp-chip-badge { background: rgba(251,191,36,0.2); color: #fbbf24; }
 .ctx-chip.ctx-red   .mcp-chip-badge { background: rgba(248,113,113,0.2); color: #f87171; }
