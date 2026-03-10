@@ -9994,3 +9994,29 @@ kbd {
   text-overflow: ellipsis;
   max-width: 120px;
 }
+
+/* ── Plugins panel layout overrides ────────────────────────────────────── */
+/* Active pane: flex column so list fills remaining space, install row stays bottom */
+.plugins-panel #pluginsActivePane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+/* Override the 200px cap from .mcp-active-list — let the list grow */
+.plugins-panel .mcp-active-list {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+/* Library and Skills panes: scroll independently */
+.plugins-panel #pluginsLibraryPane,
+.plugins-panel #pluginsSkillsPane {
+  padding: 4px 8px 12px;
+}
+/* Install row and status pinned at bottom, don't shrink */
+.plugins-panel .mcp-section-label { flex-shrink: 0; }
+.plugins-panel .plugins-install-row { flex-shrink: 0; padding: 4px 8px; }
+.plugins-panel .plugins-install-status { flex-shrink: 0; padding: 2px 8px 8px; }
