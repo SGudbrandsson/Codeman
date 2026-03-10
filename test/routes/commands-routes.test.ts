@@ -293,6 +293,74 @@ describe('discoverCommands', () => {
     });
   });
 
+  // ── Disabled skills filtering ──────────────────────────────────────────────
+
+  describe('disabled skills filtering (disabledSkills in ~/.codeman/settings.json)', () => {
+    it('excludes a skill disabled for the current project', () => {
+      const installPath = path.join(tmpDir, 'filter-plugin');
+      setupPlugins(homeDir, [
+        {
+          name: 'myplugin',
+          scope: 'user',
+          installPath,
+          skills: [{ dir: 'my-skill', name: 'my-skill', desc: 'My Skill' }],
+        },
+      ]);
+      // Write settings.json with the skill disabled for /my/project
+      const codemanDir = path.join(homeDir, '.codeman');
+      fs.mkdirSync(codemanDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(codemanDir, 'settings.json'),
+        JSON.stringify({ disabledSkills: { '/my/project': ['myplugin:my-skill'] } })
+      );
+
+      const cmds = discoverCommands('/my/project', homeDir);
+      expect(cmds.some((c) => c.cmd === '/myplugin:my-skill')).toBe(false);
+    });
+
+    it('includes the skill for a different project', () => {
+      const installPath = path.join(tmpDir, 'filter-plugin2');
+      setupPlugins(homeDir, [
+        {
+          name: 'myplugin',
+          scope: 'user',
+          installPath,
+          skills: [{ dir: 'my-skill', name: 'my-skill', desc: 'My Skill' }],
+        },
+      ]);
+      const codemanDir = path.join(homeDir, '.codeman');
+      fs.mkdirSync(codemanDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(codemanDir, 'settings.json'),
+        JSON.stringify({ disabledSkills: { '/my/project': ['myplugin:my-skill'] } })
+      );
+
+      const cmds = discoverCommands('/other/project', homeDir);
+      expect(cmds).toContainEqual({ cmd: '/myplugin:my-skill', desc: 'My Skill', source: 'plugin' });
+    });
+
+    it('excludes a globally disabled skill', () => {
+      const installPath = path.join(tmpDir, 'global-filter-plugin');
+      setupPlugins(homeDir, [
+        {
+          name: 'myplugin',
+          scope: 'user',
+          installPath,
+          skills: [{ dir: 'global-skill', name: 'global-skill', desc: 'Global Skill' }],
+        },
+      ]);
+      const codemanDir = path.join(homeDir, '.codeman');
+      fs.mkdirSync(codemanDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(codemanDir, 'settings.json'),
+        JSON.stringify({ disabledSkills: { __global__: ['myplugin:global-skill'] } })
+      );
+
+      const cmds = discoverCommands('/any/project', homeDir);
+      expect(cmds.some((c) => c.cmd === '/myplugin:global-skill')).toBe(false);
+    });
+  });
+
   // ── Edge cases ─────────────────────────────────────────────────────────────
 
   describe('edge cases', () => {
