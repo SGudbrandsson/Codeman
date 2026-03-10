@@ -813,4 +813,25 @@ export function registerSystemRoutes(
     reply.type(mimeMap[ext] ?? 'image/png');
     return fs.readFile(filepath);
   });
+
+  // ========== Context Window ==========
+
+  app.get('/api/sessions/:id/context', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+
+    // Trigger immediate refresh and wait for result (up to 8s)
+    return new Promise<object>((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve({ id, pct: null, inputTokens: null, maxTokens: null });
+      }, 8_000);
+
+      session.once('contextUpdate', (data) => {
+        clearTimeout(timeout);
+        resolve({ id, ...data });
+      });
+
+      session.refreshContext();
+    });
+  });
 }
