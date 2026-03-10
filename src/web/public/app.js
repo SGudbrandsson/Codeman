@@ -1165,6 +1165,10 @@ const ContextBar = {
     this._panel     = document.getElementById('contextPanel');
     this._donutArc  = document.getElementById('ctxDonutArc');
     this._donutPct  = document.getElementById('ctxDonutPct');
+    this._segSystem = document.getElementById('ctxSegSystem');
+    this._segConv   = document.getElementById('ctxSegConv');
+    this._segTools  = document.getElementById('ctxSegTools');
+    this._segFree   = document.getElementById('ctxSegFree');
 
     this._chip?.addEventListener('click', () => this.toggle());
     document.getElementById('contextPanelClose')?.addEventListener('click', () => this.close());
@@ -1219,15 +1223,15 @@ const ContextBar = {
 
     if (sys || conv || tools) {
       const free = Math.max(0, max - sys - conv - tools);
-      document.getElementById('ctxSegSystem').style.width = (sys   / max * 100).toFixed(2) + '%';
-      document.getElementById('ctxSegConv').style.width   = (conv  / max * 100).toFixed(2) + '%';
-      document.getElementById('ctxSegTools').style.width  = (tools / max * 100).toFixed(2) + '%';
-      document.getElementById('ctxSegFree').style.width   = (free  / max * 100).toFixed(2) + '%';
+      if (this._segSystem) this._segSystem.style.width = (sys   / max * 100).toFixed(2) + '%';
+      if (this._segConv)   this._segConv.style.width   = (conv  / max * 100).toFixed(2) + '%';
+      if (this._segTools)  this._segTools.style.width  = (tools / max * 100).toFixed(2) + '%';
+      if (this._segFree)   this._segFree.style.width   = (free  / max * 100).toFixed(2) + '%';
     } else {
-      document.getElementById('ctxSegSystem').style.width = '0%';
-      document.getElementById('ctxSegTools').style.width  = '0%';
-      document.getElementById('ctxSegConv').style.width   = (total / max * 100).toFixed(2) + '%';
-      document.getElementById('ctxSegFree').style.width   = (Math.max(0, max - total) / max * 100).toFixed(2) + '%';
+      if (this._segSystem) this._segSystem.style.width = '0%';
+      if (this._segTools)  this._segTools.style.width  = '0%';
+      if (this._segConv)   this._segConv.style.width   = (total / max * 100).toFixed(2) + '%';
+      if (this._segFree)   this._segFree.style.width   = (Math.max(0, max - total) / max * 100).toFixed(2) + '%';
     }
   },
 
@@ -1242,10 +1246,10 @@ const ContextBar = {
     const pct = data.pct;
 
     if (pct >= 90 && !this._dismissed90.has(sid)) {
-      this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear or /compact`;
+      if (this._bannerTxt) this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear or /compact`;
       this._banner.style.display = '';
     } else if (pct >= 80 && !this._dismissed80.has(sid) && !this._dismissed90.has(sid)) {
-      this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear`;
+      if (this._bannerTxt) this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear`;
       this._banner.style.display = '';
     } else if (pct < 80) {
       this._banner.style.display = 'none';
@@ -1283,7 +1287,7 @@ const ContextBar = {
       if (cached) this._renderPanel(cached);
       fetch(`/api/sessions/${encodeURIComponent(sid)}/context`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d && d.pct != null) { this._data.set(sid, d); this._renderPanel(d); } })
+        .then(d => { if (d && d.pct != null && sid === app.activeSessionId) { this._data.set(sid, d); this._renderPanel(d); } })
         .catch(() => {});
     }
   },
