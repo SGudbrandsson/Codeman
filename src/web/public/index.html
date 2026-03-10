@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1679">
+  <link rel="stylesheet" href="styles.css?v=0.1680">
   <link rel="stylesheet" href="mobile.css?v=0.1668" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -89,6 +89,11 @@
         <button id="mcpChipBtn" class="mcp-chip" title="MCP Servers" style="display:none" aria-label="MCP Servers">
           <span class="mcp-chip-icon">&#x26a1;</span>
           <span class="mcp-chip-label">MCP</span>
+          <span class="mcp-chip-badge" style="display:none"></span>
+        </button>
+        <button id="pluginsChipBtn" class="mcp-chip plugins-chip" title="Plugins" style="display:none" aria-label="Plugins">
+          <span class="mcp-chip-icon">&#x25a6;</span>
+          <span class="mcp-chip-label">Plugins</span>
           <span class="mcp-chip-badge" style="display:none"></span>
         </button>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
@@ -2017,10 +2022,52 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.18"></script>
-  <script defer src="app.js?v=0.4.91"></script>
+  <script defer src="app.js?v=0.4.92"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
+
+<!-- Plugin Management Panel -->
+<div id="pluginsPanel" class="mcp-panel plugins-panel" style="display:none" aria-label="Plugins">
+  <div class="mcp-panel-header">
+    <span class="mcp-panel-title">&#x25a6; Plugins</span>
+    <button class="mcp-panel-close" id="pluginsPanelClose" title="Close">&#x2715;</button>
+  </div>
+  <!-- Tabs -->
+  <div class="mcp-tabs" id="pluginsTabs">
+    <button class="mcp-tab active" data-ptab="active">Active</button>
+    <button class="mcp-tab" data-ptab="library">Library</button>
+    <button class="mcp-tab" data-ptab="skills">Skills</button>
+  </div>
+
+  <!-- Active tab -->
+  <div id="pluginsActivePane" class="mcp-pane">
+    <div id="pluginsActiveList" class="mcp-active-list">
+      <div class="mcp-empty-state" id="pluginsEmptyState">No plugins installed. Browse the Library tab.</div>
+    </div>
+    <div class="mcp-section-label" style="margin-top:12px">Install from name or URL</div>
+    <div class="plugins-install-row">
+      <input type="text" class="mcp-search" id="pluginsInstallInput" placeholder="superpowers or https://..." autocomplete="off">
+      <button class="mcp-btn-apply plugins-install-btn" id="pluginsInstallBtn">Install</button>
+    </div>
+    <div id="pluginsInstallStatus" class="plugins-install-status" style="display:none"></div>
+  </div>
+
+  <!-- Library tab -->
+  <div id="pluginsLibraryPane" class="mcp-pane" style="display:none">
+    <div id="pluginsLibraryList" class="mcp-library-grid"></div>
+    <div class="plugins-footer-link">
+      <a href="https://claude.ai/plugins" target="_blank" rel="noopener">Browse more plugins &#x2197;</a>
+    </div>
+  </div>
+
+  <!-- Skills tab -->
+  <div id="pluginsSkillsPane" class="mcp-pane" style="display:none">
+    <div class="mcp-section-label">Project</div>
+    <select id="pluginsProjectSelect" class="plugins-project-select"></select>
+    <div id="pluginsSkillsList" class="plugins-skills-list"></div>
+  </div>
+</div>
 
 <!-- MCP Server Management Panel -->
 <div id="mcpPanel" class="mcp-panel" style="display:none" aria-label="MCP Servers">
