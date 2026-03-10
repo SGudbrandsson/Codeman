@@ -816,21 +816,34 @@ export function registerSystemRoutes(
 
   // ========== Context Window ==========
 
-  app.get('/api/sessions/:id/context', async (req) => {
+  app.get('/api/sessions/:id/context', (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
 
-    // Trigger immediate refresh and wait for result (up to 8s)
+    // Trigger immediate refresh and wait for result (up to 8s).
+    // Only resolve when a full breakdown (system/conversation/tools) is present —
+    // passive contextUpdate events (pct/inputTokens/maxTokens only) are ignored.
     return new Promise<object>((resolve) => {
       const timeout = setTimeout(() => {
+        session.off('contextUpdate', onContextUpdate);
         resolve({ id, pct: null, inputTokens: null, maxTokens: null });
       }, 8_000);
 
-      session.once('contextUpdate', (data) => {
+      function onContextUpdate(data: {
+        inputTokens: number;
+        maxTokens: number;
+        pct: number;
+        system?: number;
+        conversation?: number;
+        tools?: number;
+      }) {
+        if (data.system === undefined) return; // passive update — wait for full breakdown
         clearTimeout(timeout);
+        session.off('contextUpdate', onContextUpdate);
         resolve({ id, ...data });
-      });
+      }
 
+      session.on('contextUpdate', onContextUpdate);
       session.refreshContext();
     });
   });
