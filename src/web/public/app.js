@@ -158,6 +158,20 @@ HTMLCanvasElement.prototype.getContext = function(type, ...args) {
 
 
 // ═══════════════════════════════════════════════════════════════
+// Copy-to-clipboard helper (used by renderMarkdown code blocks)
+// ═══════════════════════════════════════════════════════════════
+
+window._copyCode = function (btn) {
+  const pre = btn.nextElementSibling;
+  const text = pre ? (pre.textContent || '') : '';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {});
+};
+
+// ═══════════════════════════════════════════════════════════════
 // Markdown Renderer
 // ═══════════════════════════════════════════════════════════════
 
@@ -203,7 +217,7 @@ function renderMarkdown(text) {
         i++;
       }
       const code = esc(codeLines.join('\n'));
-      out.push('<pre><code class="tv-code' + (lang ? ' language-' + esc(lang) : '') + '">' + code + '</code></pre>');
+      out.push('<div class="tv-code-block"><button class="tv-code-copy" onclick="window._copyCode(this)" title="Copy code">Copy</button><pre><code class="tv-code' + (lang ? ' language-' + esc(lang) : '') + '">' + code + '</code></pre></div>');
       i++;
       continue;
     }
@@ -874,7 +888,7 @@ const TranscriptView = {
       const sec = this._makeToolSection('Input');
       const pre = document.createElement('pre');
       pre.textContent = JSON.stringify(toolUse.input, null, 2);
-      sec.appendChild(pre);
+      sec.appendChild(this._wrapPreWithCopy(pre));
       panel.appendChild(sec);
     }
     if (toolResult) {
@@ -883,7 +897,7 @@ const TranscriptView = {
       const sec = this._makeToolSection(toolResult.isError ? 'Error Output' : 'Output');
       const pre = document.createElement('pre');
       pre.textContent = content.slice(0, MAX);
-      sec.appendChild(pre);
+      sec.appendChild(this._wrapPreWithCopy(pre));
       if (content.length > MAX) {
         const note = document.createElement('div');
         note.className = 'tv-tool-truncated';
@@ -910,6 +924,26 @@ const TranscriptView = {
     lbl.textContent = labelText;
     sec.appendChild(lbl);
     return sec;
+  },
+
+  _wrapPreWithCopy(pre) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tv-code-block';
+    const btn = document.createElement('button');
+    btn.className = 'tv-code-copy';
+    btn.title = 'Copy code';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(pre.textContent || '').then(() => {
+        btn.textContent = '✓ Copied';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      }).catch(() => {});
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(pre);
+    return wrap;
   },
 
   _updateToolWrapper(wrapper, toolResult) {
