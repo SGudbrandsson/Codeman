@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1681">
+  <link rel="stylesheet" href="styles.css?v=0.1682">
   <link rel="stylesheet" href="mobile.css?v=0.1668" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -96,6 +96,11 @@
           <span class="mcp-chip-label">Plugins</span>
           <span class="mcp-chip-badge" style="display:none"></span>
         </button>
+        <button id="ctxChipBtn" class="mcp-chip ctx-chip" title="Context Window" style="display:none" aria-label="Context window usage">
+          <span class="mcp-chip-icon">&#x25a1;</span>
+          <span class="mcp-chip-label">CTX</span>
+          <span class="mcp-chip-badge" id="ctxChipBadge" style="display:none"></span>
+        </button>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
@@ -105,7 +110,20 @@
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
         <span class="mobile-ctx-pill" id="mobileContextPill" style="display:none;" title="Context window usage"></span>
       </div>
+      <div id="contextBar" class="ctx-bar" style="display:none" aria-label="Context usage bar">
+        <div class="ctx-bar-seg ctx-seg-system" id="ctxSegSystem" style="width:0%"></div>
+        <div class="ctx-bar-seg ctx-seg-conv" id="ctxSegConv" style="width:0%"></div>
+        <div class="ctx-bar-seg ctx-seg-tools" id="ctxSegTools" style="width:0%"></div>
+        <div class="ctx-bar-seg ctx-seg-free" id="ctxSegFree" style="width:100%"></div>
+      </div>
     </header>
+
+    <!-- Context Warning Banner -->
+    <div id="contextBanner" class="ctx-banner" style="display:none" role="alert" aria-live="polite">
+      <span class="ctx-banner-text" id="contextBannerText">Context ~0% full — consider /clear</span>
+      <button class="ctx-banner-clear" id="contextBannerClear" title="Send /clear to session">Clear</button>
+      <button class="ctx-banner-dismiss" id="contextBannerDismiss" aria-label="Dismiss">&#x00d7;</button>
+    </div>
 
     <!-- Timer Banner (shown when timed run is active) -->
     <div class="timer-banner" id="timerBanner" style="display: none;">
@@ -2022,7 +2040,7 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.18"></script>
-  <script defer src="app.js?v=0.4.92"></script>
+  <script defer src="app.js?v=0.4.93"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
@@ -2066,6 +2084,37 @@
     <div class="mcp-section-label">Project</div>
     <select id="pluginsProjectSelect" class="plugins-project-select"></select>
     <div id="pluginsSkillsList" class="plugins-skills-list"></div>
+  </div>
+</div>
+
+<!-- Context Detail Panel -->
+<div id="contextPanel" class="mcp-panel ctx-panel" style="display:none" role="dialog" aria-label="Context window details">
+  <div class="mcp-panel-header">
+    <span class="mcp-panel-title">Context Window</span>
+    <button class="mcp-panel-close" id="contextPanelClose" aria-label="Close context panel">&#x00d7;</button>
+  </div>
+  <div class="mcp-panel-body">
+    <div class="ctx-donut-wrap">
+      <svg class="ctx-donut" viewBox="0 0 100 100" width="96" height="96" aria-hidden="true">
+        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" stroke-width="12"/>
+        <circle cx="50" cy="50" r="40" fill="none" stroke="#22d3ee" stroke-width="12"
+          stroke-dasharray="251.2" stroke-dashoffset="251.2"
+          stroke-linecap="round" transform="rotate(-90 50 50)"
+          id="ctxDonutArc"/>
+      </svg>
+      <div class="ctx-donut-label" id="ctxDonutPct">--</div>
+    </div>
+    <table class="ctx-table" id="ctxTable">
+      <tbody>
+        <tr><td class="ctx-swatch ctx-swatch-system"></td><td>System</td><td class="ctx-val" id="ctxValSystem">--</td><td class="ctx-pct" id="ctxPctSystem"></td></tr>
+        <tr><td class="ctx-swatch ctx-swatch-tools"></td><td>Tools</td><td class="ctx-val" id="ctxValTools">--</td><td class="ctx-pct" id="ctxPctTools"></td></tr>
+        <tr><td class="ctx-swatch ctx-swatch-conv"></td><td>Conversation</td><td class="ctx-val" id="ctxValConv">--</td><td class="ctx-pct" id="ctxPctConv"></td></tr>
+        <tr><td class="ctx-swatch ctx-swatch-free"></td><td>Free</td><td class="ctx-val" id="ctxValFree">--</td><td class="ctx-pct" id="ctxPctFree"></td></tr>
+      </tbody>
+    </table>
+    <div class="ctx-suggestion" id="ctxSuggestion" style="display:none">
+      Consider <code>/clear</code> or <code>/compact</code> to free context.
+    </div>
   </div>
 </div>
 
