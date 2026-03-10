@@ -635,6 +635,9 @@ const KeyboardAccessoryBar = {
    *  Sends text and Enter separately so Ink processes them as distinct events. */
   sendCommand(command) {
     if (!app.activeSessionId) return;
+    if (command === '/clear' && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
+      TranscriptView.clearOnly();
+    }
     // Send command text first (without Enter)
     app.sendInput(command);
     // Send Enter separately after a brief delay so Ink has time to process the text.
