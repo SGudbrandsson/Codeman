@@ -200,12 +200,15 @@ function buildSpawnCommand(options: {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  extraArgs?: string[];
 }): string {
   if (options.mode === 'claude') {
     // Validate model to prevent command injection
     const safeModel = options.model && /^[a-zA-Z0-9._-]+$/.test(options.model) ? options.model : undefined;
     const modelFlag = safeModel ? ` --model ${safeModel}` : '';
-    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}`;
+    const extra = (options.extraArgs ?? []).map((a) => JSON.stringify(a)).join(' ');
+    const extraStr = extra ? ` ${extra}` : '';
+    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}${extraStr}`;
   }
   if (options.mode === 'opencode') {
     return buildOpenCodeCommand(options.openCodeConfig);
@@ -605,7 +608,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * preserving the session and its scrollback buffer.
    */
   async respawnPane(options: RespawnPaneOptions): Promise<number | null> {
-    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
+    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig, extraArgs } =
+      options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
@@ -641,6 +645,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      extraArgs,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);

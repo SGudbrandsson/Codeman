@@ -110,6 +110,7 @@ import {
   registerUpdateRoutes,
   registerWorktreeSessionRoutes,
   registerWorktreeRoutes,
+  registerMcpRoutes,
 } from './routes/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -729,6 +730,7 @@ export class WebServer extends EventEmitter {
     registerUpdateRoutes(this.app, ctx, updateChecker);
     registerWorktreeSessionRoutes(this.app, ctx);
     registerWorktreeRoutes(this.app, ctx);
+    registerMcpRoutes(this.app, ctx);
   }
 
   /**

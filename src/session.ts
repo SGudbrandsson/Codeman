@@ -66,6 +66,7 @@ import {
 } from './config/buffer-limits.js';
 import {
   buildInteractiveArgs,
+  buildMcpArgs,
   buildPromptArgs,
   buildClaudeEnv,
   buildMuxAttachEnv,
@@ -946,6 +947,7 @@ export class Session extends EventEmitter {
             claudeMode: this._claudeMode,
             allowedTools: this._allowedTools,
             openCodeConfig: this._openCodeConfig,
+            extraArgs: buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
           });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
@@ -1062,7 +1064,10 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
-        const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools);
+        const args = [
+          ...buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools),
+          ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
+        ];
         this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',
           cols: 120,
@@ -2185,6 +2190,45 @@ export class Session extends EventEmitter {
       console.log('[Session] Keeping mux session alive:', this._muxSession.muxName);
       this._muxSession = null; // Detach but don't kill
     }
+  }
+
+  /**
+   * Tear down the current PTY and mux session so the session can be restarted via
+   * `startInteractive()` with updated configuration (e.g., new MCP servers).
+   * Unlike `stop()`, this does NOT set `_isStopped = true`.
+   */
+  async prepareForRestart(): Promise<void> {
+    if (this.ptyProcess) {
+      const pid = this.ptyProcess.pid;
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        /* already gone */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        if (pid) process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      this.ptyProcess = null;
+    }
+    this._pid = null;
+    this._status = 'idle';
+    this._currentTaskId = null;
+    this._terminalBuffer.clear();
+    this._textOutput.clear();
+    this._errorBuffer = '';
+    this._messages = [];
+    this._lineBuffer = '';
+    if (this._muxSession && this._mux) {
+      try {
+        await this._mux.killSession(this.id);
+      } catch {
+        /* best effort */
+      }
+    }
+    this._muxSession = null;
   }
 
   assignTask(taskId: string): void {

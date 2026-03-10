@@ -325,6 +325,9 @@ export const UpdateComplete = 'update:complete' as const;
 /** Update failed. */
 export const UpdateFailed = 'update:failed' as const;
 
+/** MCP servers applied and Claude restarted. */
+export const SessionMcpRestarted = 'session:mcpRestarted' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -483,4 +486,7 @@ export const SseEvent = {
   UpdateProgress,
   UpdateComplete,
   UpdateFailed,
+
+  // MCP
+  SessionMcpRestarted,
 } as const;
