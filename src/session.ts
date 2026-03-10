@@ -335,6 +335,9 @@ export class Session extends EventEmitter {
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
+  // Compose draft (text + uploaded image paths), synced across devices
+  draft?: { text: string; imagePaths: string[]; updatedAt: number };
+
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
     taskCreated: (task: BackgroundTask) => void;
@@ -805,6 +808,7 @@ export class Session extends EventEmitter {
       cliAccountType: this._cliAccountType || undefined,
       cliLatestVersion: this._cliLatestVersion || undefined,
       openCodeConfig: this._openCodeConfig,
+      draft: this.draft,
     };
   }
 

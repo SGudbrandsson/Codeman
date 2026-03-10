@@ -939,9 +939,39 @@ export function registerSessionRoutes(
     try {
       const content = await fs.readFile(transcriptPath, 'utf-8');
       const blocks = parseTranscriptJSONL(content);
+      // Ensure watcher is running so new blocks are streamed live via SSE.
+      // startTranscriptWatcher is idempotent — safe to call even if already watching.
+      ctx.startTranscriptWatcher(id, transcriptPath);
       return reply.send(blocks);
     } catch {
       return reply.send([]);
     }
+  });
+
+  // ========== GET /api/sessions/:id/draft ==========
+
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/draft', async (req, reply) => {
+    const { id } = req.params;
+    const session = ctx.sessions.get(id);
+    if (!session) return reply.send({ text: '', imagePaths: [] });
+    return reply.send(session.draft ?? { text: '', imagePaths: [] });
+  });
+
+  // ========== PUT /api/sessions/:id/draft ==========
+
+  app.put<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/draft', async (req, reply) => {
+    const { id } = req.params;
+    const session = ctx.sessions.get(id);
+    if (!session) return reply.send({ success: false, error: 'Session not found' });
+
+    const body = req.body as { text?: string; imagePaths?: string[] };
+    const text = typeof body?.text === 'string' ? body.text : '';
+    const imagePaths = Array.isArray(body?.imagePaths)
+      ? body.imagePaths.filter((p): p is string => typeof p === 'string')
+      : [];
+
+    session.draft = { text, imagePaths, updatedAt: Date.now() };
+    ctx.persistSessionState(session);
+    return reply.send({ success: true });
   });
 }

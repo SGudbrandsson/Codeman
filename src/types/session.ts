@@ -155,6 +155,8 @@ export interface SessionState {
   cliLatestVersion?: string;
   /** OpenCode-specific configuration (only for mode === 'opencode') */
   openCodeConfig?: OpenCodeConfig;
+  /** Compose draft — text and uploaded image paths, synced across devices */
+  draft?: { text: string; imagePaths: string[]; updatedAt: number };
 }
 
 /**

@@ -244,12 +244,13 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Ordered list — preserve start number so "3. item" renders as 3, not 1
+    // Ordered list — use <li value="N"> so numbers are correct even if items end up in separate <ol>s
     if (/^\d+\. /.test(line)) {
-      const startNum = parseInt(line.match(/^(\d+)\. /)[1], 10);
-      out.push(startNum !== 1 ? `<ol start="${startNum}">` : '<ol>');
+      out.push('<ol>');
+      let itemNum = parseInt(line.match(/^(\d+)\. /)[1], 10);
       while (i < lines.length && /^\d+\. /.test(lines[i])) {
-        out.push('<li>' + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref, esc) + '</li>');
+        out.push(`<li value="${itemNum}">` + inlineMarkdown(esc(lines[i].replace(/^\d+\. /, '')), safeHref, esc) + '</li>');
+        itemNum++;
         i++;
       }
       out.push('</ol>');
@@ -354,12 +355,26 @@ const TranscriptView = {
     this._pendingToolUses = {};
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
-    state.blocks = [];
+    // NOTE: do NOT clear state.blocks here — caller (clear()) does it when needed.
+    // Preserving blocks lets us render a cached view instantly on tab switch.
     state.scrolledUp = false;
     state._sseBuffer = [];  // collect SSE blocks that arrive during the HTTP fetch
     if (!this._container) return;
 
-    this._setPlaceholder('Loading session history\u2026');
+    // Container is already opacity:0 (set by show()). Keep it hidden until content
+    // is rendered and scrolled, then reveal in one frame — no flash, no jump.
+    const hadCache = state.blocks.length > 0;
+    if (hadCache) {
+      this._container.textContent = '';
+      for (const block of state.blocks) this._appendBlock(block, false);
+      // Scroll to bottom while still invisible, then reveal
+      this._container.scrollTop = this._container.scrollHeight;
+      this._container.style.opacity = '';
+    } else {
+      // No cache — show loading message immediately so the user knows something is happening
+      this._setPlaceholder('Loading session history\u2026');
+      this._container.style.opacity = '';
+    }
 
     try {
       const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
@@ -367,23 +382,60 @@ const TranscriptView = {
       const blocks = await res.json();
       // Abort if a newer load() was started (user switched sessions mid-fetch)
       if (myGen !== this._loadGen) return;
-      this._container.textContent = '';
-      if (!blocks.length) {
-        this._setPlaceholder('Waiting for Claude to start\u2026');
-        return;
+
+      const prevCount = state.blocks.length;
+      state.blocks = [...blocks];  // update cache with authoritative server data
+
+      if (prevCount > 0 && blocks.length >= prevCount) {
+        // Incremental update — cache was rendered, just append anything new.
+        // No DOM clear, no scroll — avoids any flash or jump.
+        const newBlocks = blocks.slice(prevCount);
+        for (const block of newBlocks) this._appendBlock(block, false);
+      } else {
+        // First load or server has fewer blocks than cache (clear happened) — full re-render.
+        this._container.textContent = '';
+        this._pendingToolUses = {};
+        if (!blocks.length) {
+          this._setEmptyPlaceholder();
+          this._container.style.opacity = '';
+          state._sseBuffer = null;
+          return;
+        }
+        for (const block of blocks) this._appendBlock(block, false);
       }
-      for (const block of blocks) {
-        this._appendBlock(block, false);
-      }
+
       // Replay any SSE blocks that arrived after the HTTP snapshot was taken
       const httpLastTs = blocks[blocks.length - 1]?.timestamp ?? '';
+      const allBlocks = [...blocks];
       for (const b of (state._sseBuffer ?? [])) {
-        if (!httpLastTs || b.timestamp > httpLastTs) this._appendBlock(b, false);
+        if (!httpLastTs || b.timestamp > httpLastTs) {
+          state.blocks.push(b);
+          allBlocks.push(b);
+          this._appendBlock(b, false);
+        }
       }
       state._sseBuffer = null;
-      // Double-RAF so browser finishes layout before we read scrollHeight
-      requestAnimationFrame(() => requestAnimationFrame(() => this._scrollToBottom(true)));
+      // Scan all loaded blocks for a pending AskUserQuestion (unanswered tool_use)
+      if (typeof app !== 'undefined') {
+        let pendingQ = null;
+        for (const b of allBlocks) {
+          if (b.type === 'tool_use' && b.name === 'AskUserQuestion' && Array.isArray(b.input?.questions) && b.input.questions.length > 0) {
+            const q = b.input.questions[0];
+            pendingQ = { sessionId, header: q.header || '', question: q.question || '', options: Array.isArray(q.options) ? q.options : [], toolUseId: b.id };
+          } else if (b.type === 'tool_result' && pendingQ && b.toolUseId === pendingQ.toolUseId) {
+            pendingQ = null;
+          }
+        }
+        app.pendingAskUserQuestion = pendingQ;
+        app.renderAskUserQuestionPanel();
+      }
+      // Fresh load: scroll while still invisible, then reveal (same as cache path)
+      if (!hadCache) {
+        this._container.scrollTop = this._container.scrollHeight;
+        this._container.style.opacity = '';
+      }
     } catch {
+      this._container.style.opacity = '';
       this._setPlaceholder('Could not load session history.');
     }
   },
@@ -397,11 +449,110 @@ const TranscriptView = {
     this._container.appendChild(p);
   },
 
+  _setEmptyPlaceholder() {
+    if (!this._container) return;
+    this._container.textContent = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'tv-empty-cta';
+    const title = document.createElement('div');
+    title.className = 'tv-empty-cta-title';
+    title.textContent = 'What\u2019s on your mind today?';
+    const sub = document.createElement('div');
+    sub.className = 'tv-empty-cta-sub';
+    sub.textContent = 'Send a message to start a conversation with Claude.';
+    wrap.appendChild(title);
+    wrap.appendChild(sub);
+    this._container.appendChild(wrap);
+  },
+
+  /** Immediately show a user message bubble before the SSE block arrives. */
+  appendOptimistic(text) {
+    if (!this._container) return;
+    const el = this._renderTextBlock({ type: 'text', role: 'user', text });
+    if (el) {
+      el.dataset.optimistic = 'true';
+      const placeholder = this._container.querySelector('.tv-placeholder');
+      if (placeholder) placeholder.remove();
+      this._container.appendChild(el);
+      this._scrollToBottom(true);
+    }
+  },
+
+  /** Renders an AskUserQuestion tool block as an inline interactive question. */
+  _renderAskUserQuestionBlock(block) {
+    const q = block.input.questions[0];
+    const sessionId = this._sessionId;
+    const el = document.createElement('div');
+    el.className = 'tv-auq-block';
+    if (q.header) {
+      const hdr = document.createElement('div');
+      hdr.className = 'tv-auq-header';
+      hdr.textContent = q.header;
+      el.appendChild(hdr);
+    }
+    if (q.question) {
+      const qtxt = document.createElement('div');
+      qtxt.className = 'tv-auq-question';
+      qtxt.textContent = q.question;
+      el.appendChild(qtxt);
+    }
+    const opts = document.createElement('div');
+    opts.className = 'tv-auq-options';
+    (q.options || []).forEach((opt, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'tv-auq-option';
+      const lbl = document.createElement('span');
+      lbl.className = 'tv-auq-option-label';
+      lbl.textContent = (i + 1) + '. ' + opt.label;
+      btn.appendChild(lbl);
+      if (opt.description) {
+        const desc = document.createElement('span');
+        desc.className = 'tv-auq-option-desc';
+        desc.textContent = opt.description;
+        btn.appendChild(desc);
+      }
+      btn.addEventListener('click', () => {
+        if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, String(i + 1));
+        el.remove();
+      });
+      opts.appendChild(btn);
+    });
+    // Free-text "write your own answer" row
+    const customRow = document.createElement('div');
+    customRow.className = 'tv-auq-custom';
+    const customInput = document.createElement('input');
+    customInput.type = 'text';
+    customInput.className = 'tv-auq-custom-input';
+    customInput.placeholder = 'Write your own answer…';
+    const customBtn = document.createElement('button');
+    customBtn.className = 'tv-auq-custom-send';
+    customBtn.textContent = 'Send';
+    const sendCustom = () => {
+      const val = customInput.value.trim();
+      if (!val) return;
+      if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, val);
+      el.remove();
+    };
+    customBtn.addEventListener('click', sendCustom);
+    customInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCustom(); });
+    customRow.appendChild(customInput);
+    customRow.appendChild(customBtn);
+    opts.appendChild(customRow);
+
+    el.appendChild(opts);
+    return el;
+  },
+
   append(block) {
     if (!this._container || !this._sessionId) return;
     this._getState(this._sessionId).blocks.push(block);
     const placeholder = this._container.querySelector('.tv-placeholder');
     if (placeholder) placeholder.remove();
+    // Remove matching optimistic bubble when the real SSE block arrives
+    if (block.type === 'text' && block.role === 'user') {
+      const optimistic = this._container.querySelector('[data-optimistic="true"]');
+      if (optimistic) optimistic.remove();
+    }
     this._appendBlock(block, true);
   },
 
@@ -418,7 +569,10 @@ const TranscriptView = {
 
   show(sessionId) {
     this._sessionId = sessionId;
-    if (this._container) this._container.style.display = '';
+    if (this._container) {
+      this._container.style.opacity = '0';
+      this._container.style.display = '';
+    }
     this._detachXterm(sessionId);
     this.load(sessionId);
   },
@@ -460,8 +614,29 @@ const TranscriptView = {
   setWorking(isWorking) {
     const overlay = document.getElementById('tvTypingIndicator');
     if (!overlay) return;
-    const isTranscriptVisible = this._container && this._container.style.display !== 'none';
-    overlay.style.display = (isWorking && isTranscriptVisible) ? 'flex' : 'none';
+    if (isWorking) {
+      // Cancel any pending hide — session is still active
+      clearTimeout(this._workingHideTimer);
+      this._workingHideTimer = null;
+      // Debounce showing — avoids flash on tab switch when session briefly transitions busy→idle
+      if (!this._workingDebounce) {
+        this._workingDebounce = setTimeout(() => {
+          this._workingDebounce = null;
+          const isTranscriptVisible = this._container && this._container.style.display !== 'none';
+          if (isTranscriptVisible) overlay.style.display = 'flex';
+        }, 300);
+      }
+    } else {
+      // Debounce hiding — Claude regularly emits short idle gaps while processing
+      // (e.g. between tool calls). Don't hide until there's been 4s of genuine silence.
+      clearTimeout(this._workingDebounce);
+      this._workingDebounce = null;
+      clearTimeout(this._workingHideTimer);
+      this._workingHideTimer = setTimeout(() => {
+        this._workingHideTimer = null;
+        overlay.style.display = 'none';
+      }, 4000);
+    }
   },
 
   _appendBlock(block, scroll) {
@@ -470,6 +645,13 @@ const TranscriptView = {
     if (block.type === 'text') {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
+      if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
+        el = this._renderAskUserQuestionBlock(block);
+        el.dataset.toolId = block.id;
+        this._container.appendChild(el);
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
       this._pendingToolUses[block.id] = block;
       el = this._renderToolWrapper(block, null);
       el.dataset.toolId = block.id;
@@ -478,6 +660,11 @@ const TranscriptView = {
         ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
         : null;
       if (pendingEl) {
+        if (pendingEl.classList.contains('tv-auq-block')) {
+          pendingEl.remove();
+          if (scroll) this._scrollToBottom(false);
+          return;
+        }
         this._updateToolWrapper(pendingEl, block);
         if (scroll) this._scrollToBottom(false);
         return;
@@ -487,23 +674,123 @@ const TranscriptView = {
       el = this._renderResultBlock(block);
     }
     if (el) {
-      this._container.appendChild(el);
+      if (block.type === 'tool_use' || block.type === 'tool_result') {
+        this._appendToToolGroup(el);
+      } else {
+        this._container.appendChild(el);
+      }
       if (scroll) this._scrollToBottom(false);
     }
   },
 
+  /** Add a tool wrapper element to the current tool group, creating one if needed. */
+  _appendToToolGroup(toolEl) {
+    const lastChild = this._container.lastElementChild;
+    let group;
+    if (lastChild?.classList.contains('tv-tool-group')) {
+      group = lastChild;
+    } else {
+      group = document.createElement('div');
+      group.className = 'tv-tool-group';
+
+      const header = document.createElement('div');
+      header.className = 'tv-tool-group-header';
+
+      const arrow = document.createElement('span');
+      arrow.className = 'tv-tool-group-arrow';
+      arrow.textContent = '\u25B6';
+
+      const label = document.createElement('span');
+      label.className = 'tv-tool-group-label';
+
+      header.appendChild(arrow);
+      header.appendChild(label);
+
+      const body = document.createElement('div');
+      body.className = 'tv-tool-group-body';
+
+      header.addEventListener('click', () => {
+        const open = header.classList.toggle('open');
+        body.classList.toggle('open', open);
+      });
+
+      group.appendChild(header);
+      group.appendChild(body);
+      this._container.appendChild(group);
+    }
+    group.querySelector('.tv-tool-group-body').appendChild(toolEl);
+    this._updateToolGroupLabel(group);
+  },
+
+  /** Recount tool wrappers in a group and update the header label. */
+  _updateToolGroupLabel(group) {
+    if (!group) return;
+    const n = group.querySelectorAll('.tv-tool-group-body > [data-tool-id], .tv-tool-group-body > .tv-block').length;
+    const label = group.querySelector('.tv-tool-group-label');
+    if (label) label.textContent = n + (n === 1 ? ' tool call' : ' tool calls');
+  },
+
   _renderTextBlock(block) {
-    // Skip Claude Code internal command messages (e.g. /compact, /clear).
-    // These contain only <command-name>, <command-message>, <command-args> XML tags — no real text.
+    // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
+    // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
-      const stripped = block.text.replace(/<command-[^>]*>[^<]*<\/command-[^>]*>/g, '').trim();
+      const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+|task-notification)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+|task-notification)>/g;
+      const stripped = block.text.replace(SYSTEM_XML_RE, '').trim();
       if (!stripped) {
+        // Completely hide caveat/task-notification — pure system metadata with no user value
+        if (/<local-command-caveat>/.test(block.text) || /<task-notification>/.test(block.text)) {
+          return null;
+        }
+        // Show local command stdout as a muted monospace pill (strip ANSI codes)
+        const stdoutMatch = block.text.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+        if (stdoutMatch) {
+          const cleanText = stdoutMatch[1].replace(/\x1b\[[0-9;]*m/g, '').trim();
+          if (!cleanText) return null;
+          const pill = document.createElement('div');
+          pill.className = 'tv-command-pill';
+          pill.textContent = cleanText;
+          return pill;
+        }
+        // Show /command-name as a pill (existing behavior)
         const nameMatch = block.text.match(/<command-name>([^<]*)<\/command-name>/);
         const cmdName = (nameMatch ? nameMatch[1].trim() : 'command').replace(/^\//, '');
         const pill = document.createElement('div');
         pill.className = 'tv-command-pill';
         pill.textContent = '/' + cmdName;
         return pill;
+      }
+
+      // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill
+      const COMPACT_MARKER = 'This session is being continued from a previous conversation that ran out of context.';
+      if (block.text.startsWith(COMPACT_MARKER)) {
+        const wrap = document.createElement('div');
+        wrap.className = 'tv-compact-block';
+
+        const hdr = document.createElement('div');
+        hdr.className = 'tv-compact-header';
+
+        const arrow = document.createElement('span');
+        arrow.className = 'tv-compact-arrow';
+        arrow.textContent = '\u25B6';
+
+        const lbl = document.createElement('span');
+        lbl.textContent = 'Context summary (compacted)';
+
+        hdr.appendChild(arrow);
+        hdr.appendChild(lbl);
+
+        const body = document.createElement('div');
+        body.className = 'tv-compact-body tv-markdown';
+        body.innerHTML = renderMarkdown(block.text);
+
+        hdr.addEventListener('click', () => {
+          const open = hdr.classList.toggle('open');
+          body.classList.toggle('open', open);
+        });
+
+        wrap.appendChild(hdr);
+        wrap.appendChild(body);
+        return wrap;
       }
     }
     const div = document.createElement('div');
@@ -742,6 +1029,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.HOOK_IDLE_PROMPT, '_onHookIdlePrompt'],
   [SSE_EVENTS.HOOK_PERMISSION_PROMPT, '_onHookPermissionPrompt'],
   [SSE_EVENTS.HOOK_ELICITATION_DIALOG, '_onHookElicitationDialog'],
+  [SSE_EVENTS.HOOK_ASK_USER_QUESTION, '_onHookAskUserQuestion'],
   [SSE_EVENTS.HOOK_STOP, '_onHookStop'],
   [SSE_EVENTS.HOOK_TEAMMATE_IDLE, '_onHookTeammateIdle'],
   [SSE_EVENTS.HOOK_TASK_COMPLETED, '_onHookTaskCompleted'],
@@ -785,6 +1073,8 @@ const _SSE_HANDLER_MAP = [
   // Transcript streaming
   [SSE_EVENTS.TRANSCRIPT_BLOCK, '_onTranscriptBlock'],
   [SSE_EVENTS.TRANSCRIPT_CLEAR, '_onTranscriptClear'],
+  [SSE_EVENTS.TRANSCRIPT_ASK_USER_QUESTION, '_onTranscriptAskUserQuestion'],
+  [SSE_EVENTS.TRANSCRIPT_ASK_USER_QUESTION_RESOLVED, '_onTranscriptAskUserQuestionResolved'],
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -893,6 +1183,9 @@ class CodemanApp {
 
     // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
     this.pendingElicitation = null;
+
+    // AskUserQuestion state: { sessionId, header, question, options: [{label, description}] } | null
+    this.pendingAskUserQuestion = null;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -1017,13 +1310,18 @@ class CodemanApp {
       this.pendingElicitation = null;
       this.renderElicitationPanel();
     }
+    if (this.pendingAskUserQuestion?.sessionId === sessionId &&
+        (!hookType || hookType === 'ask_user_question')) {
+      this.pendingAskUserQuestion = null;
+      this.renderAskUserQuestionPanel();
+    }
   }
 
   updateTabAlertFromHooks(sessionId) {
     const hooks = this.pendingHooks.get(sessionId);
     if (!hooks || hooks.size === 0) {
       this.tabAlerts.delete(sessionId);
-    } else if (hooks.has('permission_prompt') || hooks.has('elicitation_dialog')) {
+    } else if (hooks.has('permission_prompt') || hooks.has('elicitation_dialog') || hooks.has('ask_user_question')) {
       this.tabAlerts.set(sessionId, 'action');
     } else if (hooks.has('idle_prompt')) {
       this.tabAlerts.set(sessionId, 'idle');
@@ -3072,6 +3370,20 @@ class CodemanApp {
     });
   }
 
+  /** Parse numbered options from a plain-text string (hook payload). */
+  _parseElicitationOptionsFromText(text) {
+    const optionRe = /\b(\d):\s*([A-Za-z][A-Za-z /\-]{0,40}?)(?=\s{2,}|\s*\d:|$|\n)/g;
+    const options = [];
+    let m;
+    while ((m = optionRe.exec(text)) !== null) {
+      options.push({ val: m[1], label: m[2].trim() });
+    }
+    if (options.length === 0) return null;
+    const firstOptionIdx = text.indexOf(options[0].val + ':');
+    const question = text.slice(0, firstOptionIdx).split('\n').map(l => l.trim()).filter(Boolean).pop() || '';
+    return { question, options };
+  }
+
   /**
    * Reads the last 20 lines of the given session's xterm buffer and extracts
    * numbered options of the form "N: Label" plus the question text above them.
@@ -3146,6 +3458,45 @@ class CodemanApp {
     this.clearPendingHooks(sessionId, 'elicitation_dialog');
     this.pendingElicitation = null;
     this.renderElicitationPanel();
+    fetch(`/api/sessions/${sessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
+    }).catch(() => {});
+  }
+
+  /** Renders or hides the AskUserQuestion panel based on this.pendingAskUserQuestion. */
+  renderAskUserQuestionPanel() {
+    const panel = document.getElementById('askUserQuestionPanel');
+    if (!panel) return;
+    const pq = this.pendingAskUserQuestion;
+    if (!pq || pq.sessionId !== this.activeSessionId) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = 'flex';
+    const escapedSessionId = pq.sessionId.replace(/'/g, "\\'");
+    const headerHtml = pq.header ? `<div class="auq-header">${pq.header}</div>` : '';
+    const questionHtml = pq.question ? `<div class="elicitation-question">${pq.question}</div>` : '';
+    const optionsHtml = pq.options.map((opt, i) => {
+      const num = i + 1;
+      const escapedLabel = opt.label.replace(/'/g, "\\'");
+      const descHtml = opt.description ? `<span class="auq-option-desc">${opt.description}</span>` : '';
+      return `<button class="auq-option-btn" ` +
+        `onclick="app.sendAskUserQuestionResponse('${escapedSessionId}','${num}')" ` +
+        `ontouchend="event.preventDefault();app.sendAskUserQuestionResponse('${escapedSessionId}','${num}')">` +
+        `<span class="auq-option-label">${num}. ${opt.label}</span>${descHtml}` +
+        `</button>`;
+    }).join('');
+    panel.innerHTML = headerHtml + questionHtml + `<div class="auq-options">${optionsHtml}</div>`;
+  }
+
+  /** Sends an AskUserQuestion response (option number) and clears the panel. */
+  sendAskUserQuestionResponse(sessionId, value) {
+    if (!value) return;
+    this.clearPendingHooks(sessionId, 'ask_user_question');
+    this.pendingAskUserQuestion = null;
+    this.renderAskUserQuestionPanel();
     fetch(`/api/sessions/${sessionId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3289,21 +3640,81 @@ class CodemanApp {
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'elicitation_dialog');
     }
+    // Try to parse question/options from the hook payload first (works in web/transcript view).
+    // Fall back to scraping the terminal buffer (works in terminal view when prompt field missing).
+    const promptText = data.prompt || data.message || '';
+    const fromPayload = promptText ? this._parseElicitationOptionsFromText(promptText) : null;
+    const fromTerminal = this._parseElicitationOptions(data.sessionId);
+    const parsed = (fromPayload?.options?.length ? fromPayload : null) || fromTerminal;
+    const question = parsed?.question || promptText.split('\n')[0]?.trim() || '';
     this.notificationManager?.notify({
       urgency: 'critical',
       category: 'hook-elicitation',
       sessionId: data.sessionId,
       sessionName: session?.name || data.sessionId,
       title: 'Question Asked',
-      message: data.question || 'Claude is asking a question and waiting for your answer',
+      message: question || 'Claude is asking a question and waiting for your answer',
     });
-    const parsed = this._parseElicitationOptions(data.sessionId);
     this.pendingElicitation = {
       sessionId: data.sessionId,
-      question: parsed?.question || '',
+      question,
       options: parsed?.options || [],
     };
     this.renderElicitationPanel();
+  }
+
+  _onTranscriptAskUserQuestion(data) {
+    if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) return;
+    const q = data.questions[0];
+    const session = this.sessions.get(data.sessionId);
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'hook-ask-user-question',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: q.header || 'Question',
+      message: q.question || 'Claude is asking a question',
+    });
+    this.pendingAskUserQuestion = {
+      sessionId: data.sessionId,
+      header: q.header || '',
+      question: q.question || '',
+      options: Array.isArray(q.options) ? q.options : [],
+    };
+    this.renderAskUserQuestionPanel();
+  }
+
+  _onTranscriptAskUserQuestionResolved(data) {
+    if (this.pendingAskUserQuestion?.sessionId === data.sessionId) {
+      this.pendingAskUserQuestion = null;
+      this.renderAskUserQuestionPanel();
+    }
+  }
+
+  _onHookAskUserQuestion(data) {
+    const session = this.sessions.get(data.sessionId);
+    if (data.sessionId) {
+      this.setPendingHook(data.sessionId, 'ask_user_question');
+    }
+    // tool_input.questions is preserved by sanitizeHookData for AskUserQuestion
+    const questions = data.tool_input?.questions;
+    if (!questions || !Array.isArray(questions) || questions.length === 0) return;
+    const q = questions[0]; // render first question (multi-question is rare)
+    this.notificationManager?.notify({
+      urgency: 'critical',
+      category: 'hook-ask-user-question',
+      sessionId: data.sessionId,
+      sessionName: session?.name || data.sessionId,
+      title: q.header || 'Question',
+      message: q.question || 'Claude is asking a question',
+    });
+    this.pendingAskUserQuestion = {
+      sessionId: data.sessionId,
+      header: q.header || '',
+      question: q.question || '',
+      options: Array.isArray(q.options) ? q.options : [],
+    };
+    this.renderAskUserQuestionPanel();
   }
 
   _onHookStop(data) {
@@ -4563,8 +4974,12 @@ class CodemanApp {
     if (this._localEchoOverlay && !this._flushedOffsets?.has(sessionId)) {
       this._localEchoOverlay.suppressBufferDetection();
     }
+    const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
+    // Save draft for old session, load draft for new session
+    if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
     this.renderElicitationPanel();
+    this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
 
@@ -6825,6 +7240,28 @@ class CodemanApp {
       }
     }
     if (state) state.blocks.push(block);
+
+    // Detect pending AskUserQuestion from the block stream (works for both HTTP replay and live SSE)
+    if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+      const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
+      if (questions.length > 0) {
+        const q = questions[0];
+        this.pendingAskUserQuestion = {
+          sessionId,
+          header: q.header || '',
+          question: q.question || '',
+          options: Array.isArray(q.options) ? q.options : [],
+          toolUseId: block.id,
+        };
+        if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
+      }
+    } else if (block.type === 'tool_result' &&
+               this.pendingAskUserQuestion?.sessionId === sessionId &&
+               this.pendingAskUserQuestion?.toolUseId === block.toolUseId) {
+      // The AskUserQuestion was answered
+      this.pendingAskUserQuestion = null;
+      if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
+    }
   }
 
   _onTranscriptClear(data) {
@@ -6834,6 +7271,10 @@ class CodemanApp {
     }
     if (TranscriptView._sessionId === sessionId) {
       TranscriptView.clear();
+    }
+    if (this.pendingAskUserQuestion?.sessionId === sessionId) {
+      this.pendingAskUserQuestion = null;
+      this.renderAskUserQuestionPanel();
     }
   }
 
@@ -14098,9 +14539,79 @@ const InputPanel = {
   _slashVisible: false,
   _replaceIdx: -1,
   _autoGrowPending: false,
+  _drafts: new Map(),       // Map<sessionId, {text, imagePaths[]}> — per-session draft cache
+  _draftSaveTimer: null,    // Debounce timer for server draft auto-save
+  _currentSessionId: null,  // Session whose draft is currently loaded
 
   _getPanel()    { return this._panelEl    || (this._panelEl    = document.getElementById('mobileInputPanel')); },
   _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('composeTextarea')); },
+
+  /** Called by selectSession when the active session changes. Saves old draft, loads new one. */
+  onSessionChange(oldId, newId) {
+    if (oldId) this._saveDraftLocal(oldId);
+    this._currentSessionId = newId;
+    if (newId) this._loadDraft(newId);
+  },
+
+  /** Save current textarea + images to in-memory draft for sessionId, then schedule server save. */
+  _saveDraftLocal(sessionId) {
+    if (!sessionId) return;
+    const ta = this._getTextarea();
+    const text = ta ? ta.value : '';
+    const imagePaths = this._images.map(img => img.path).filter(Boolean);
+    this._drafts.set(sessionId, { text, imagePaths });
+    // Auto-save to server (debounced 2s)
+    clearTimeout(this._draftSaveTimer);
+    this._draftSaveTimer = setTimeout(() => this._saveDraftServer(sessionId, text, imagePaths), 2000);
+  },
+
+  /** Persist draft to server for cross-device sync. */
+  _saveDraftServer(sessionId, text, imagePaths) {
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/draft`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, imagePaths }),
+    }).catch(() => {}); // fire-and-forget
+  },
+
+  /** Restore draft for sessionId — first from local cache, then from server. */
+  async _loadDraft(sessionId) {
+    const ta = this._getTextarea();
+    if (!ta) return;
+    // Always clear first so the previous session's text never leaks into a new session
+    ta.value = '';
+    this._restoreImages([]);
+    this._autoGrow(ta);
+    // Apply local cache immediately (fast path)
+    const local = this._drafts.get(sessionId);
+    if (local) {
+      ta.value = local.text || '';
+      this._restoreImages(local.imagePaths || []);
+      this._autoGrow(ta);
+    }
+    // Then fetch from server (handles cross-device case)
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/draft`);
+      if (!res.ok) return;
+      const data = await res.json();
+      // Only apply if server draft is newer than what we have (or local was empty)
+      if (!local && (data.text || data.imagePaths?.length)) {
+        ta.value = data.text || '';
+        this._restoreImages(data.imagePaths || []);
+        this._autoGrow(ta);
+      }
+    } catch {}
+  },
+
+  /** Rebuild _images from an array of server-side paths (no File object needed for display). */
+  _restoreImages(imagePaths) {
+    // Revoke any existing object URLs to avoid memory leaks
+    for (const img of this._images) {
+      if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
+    }
+    this._images = imagePaths.map(path => ({ objectUrl: null, file: null, path }));
+    this._renderThumbnails();
+  },
 
   /** Init — wire events once after DOM is ready */
   init() {
@@ -14116,6 +14627,15 @@ const InputPanel = {
           this._autoGrowPending = false;
           this._autoGrow(ta);
         });
+      }
+      // Auto-save draft for the current session (debounced 2s)
+      if (this._currentSessionId) {
+        clearTimeout(this._draftSaveTimer);
+        this._draftSaveTimer = setTimeout(() => {
+          const imagePaths = this._images.map(img => img.path).filter(Boolean);
+          this._saveDraftServer(this._currentSessionId, ta.value, imagePaths);
+          this._drafts.set(this._currentSessionId, { text: ta.value, imagePaths });
+        }, 2000);
       }
     });
 
@@ -14187,11 +14707,17 @@ const InputPanel = {
     const maxH = isDesktop ? 200 : Math.max(80, vvh - 200);
     ta.style.maxHeight = maxH + 'px';
     ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
-    if (isDesktop) {
-      // Update CSS var so .main padding-bottom tracks actual compose bar height
-      const panel = document.getElementById('mobileInputPanel');
-      const h = panel ? panel.getBoundingClientRect().height : 52;
-      document.documentElement.style.setProperty('--desktop-compose-height', String(h) + 'px');
+    // Update CSS var so layout containers track the actual compose bar height
+    const panel = document.getElementById('mobileInputPanel');
+    if (panel) {
+      const h = panel.getBoundingClientRect().height;
+      if (isDesktop) {
+        document.documentElement.style.setProperty('--desktop-compose-height', String(h) + 'px');
+      } else {
+        // --mobile-compose-height drives .transcript-view bottom offset so content
+        // is never hidden beneath the fixed input panel + accessory bar.
+        document.documentElement.style.setProperty('--mobile-compose-height', String(h) + 'px');
+      }
     }
   },
 
@@ -14217,7 +14743,7 @@ const InputPanel = {
     this._closeSlashPopup();
     // Revoke object URLs to prevent memory leaks
     for (const img of this._images) {
-      URL.revokeObjectURL(img.objectUrl);
+      if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
     }
     this._images = [];
     this._renderThumbnails();
@@ -14249,6 +14775,33 @@ const InputPanel = {
     // processing the image path submission from a prior Enter.
     const parts = [...images.map(img => img.path), ...(text ? [text] : [])];
     app.sendInput(parts.join('\n') + '\r');
+
+    // Verify Enter was received: poll session status every 100ms for 500ms.
+    // If session never goes busy, send a bare \r to retry the Enter key.
+    const _sendSessionId = app.activeSessionId;
+    let _sendChecks = 0;
+    const _sendCheckTimer = setInterval(() => {
+      _sendChecks++;
+      const s = app.sessions?.get(_sendSessionId);
+      if (s?.status === 'busy') { clearInterval(_sendCheckTimer); return; }
+      if (_sendChecks >= 5) {
+        clearInterval(_sendCheckTimer);
+        // Session still idle — resend Enter in case it was lost
+        if (s?.status !== 'busy') app.sendInput('\r').catch(() => {});
+      }
+    }, 100);
+
+    // Show user message immediately in transcript view (optimistic UI)
+    if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
+      TranscriptView.appendOptimistic(text);
+    }
+
+    // Clear draft for this session
+    if (this._currentSessionId) {
+      this._drafts.set(this._currentSessionId, { text: '', imagePaths: [] });
+      clearTimeout(this._draftSaveTimer);
+      this._saveDraftServer(this._currentSessionId, '', []);
+    }
 
     ta.value = '';
     this._images = [];
@@ -14357,7 +14910,8 @@ const InputPanel = {
       wrap.title = img.path ? 'Tap to preview / long-press to replace' : 'Uploading\u2026';
 
       const imgEl = document.createElement('img');
-      imgEl.src = img.objectUrl;
+      // objectUrl is null for server-restored images — use the API path instead
+      imgEl.src = img.objectUrl || (img.path ? `/api/screenshots/${encodeURIComponent(img.path.split('/').pop())}` : '');
       imgEl.alt = 'Attachment ' + (idx + 1);
       imgEl.addEventListener('click', () => this._previewImage(img));
       let pressTimer;
