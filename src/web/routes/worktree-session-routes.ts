@@ -39,7 +39,9 @@ async function resolveCasePath(name: string): Promise<string | null> {
       await fs.readFile(join(homedir(), '.codeman', 'linked-cases.json'), 'utf-8')
     );
     if (linked[name] && existsSync(linked[name])) linkedPath = linked[name];
-  } catch {}
+  } catch {
+    /* linked-cases.json not found or invalid */
+  }
 
   const caseDirPath = join(CASES_DIR, name);
   if (existsSync(caseDirPath)) {
