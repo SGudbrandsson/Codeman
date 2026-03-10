@@ -208,6 +208,7 @@ interface SessionListenerRefs {
   bashToolStart: (tool: ActiveBashTool) => void;
   bashToolEnd: (tool: ActiveBashTool) => void;
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
+  contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
 }
 
 export class WebServer extends EventEmitter {
@@ -1109,6 +1110,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolStart', listeners.bashToolStart);
         session.off('bashToolEnd', listeners.bashToolEnd);
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        session.off('contextUpdate', listeners.contextUpdate);
         this.sessionListenerRefs.delete(sessionId);
       }
 
@@ -1302,6 +1304,7 @@ export class WebServer extends EventEmitter {
             session.off('bashToolStart', listenerRefs.bashToolStart);
             session.off('bashToolEnd', listenerRefs.bashToolEnd);
             session.off('bashToolsUpdate', listenerRefs.bashToolsUpdate);
+            session.off('contextUpdate', listenerRefs.contextUpdate);
             this.sessionListenerRefs.delete(session.id);
           }
         } catch (err) {
@@ -1464,6 +1467,11 @@ export class WebServer extends EventEmitter {
       bashToolsUpdate: (tools: ActiveBashTool[]) => {
         this.broadcast(SseEvent.SessionBashToolsUpdate, { sessionId: session.id, tools });
       },
+
+      /** Broadcasts `session:contextUsage` — passive context window usage update */
+      contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => {
+        this.broadcast(SseEvent.SessionContextUsage, { id: session.id, ...data });
+      },
     };
 
     // Store listener refs for cleanup
@@ -1495,6 +1503,7 @@ export class WebServer extends EventEmitter {
     session.on('bashToolStart', listeners.bashToolStart);
     session.on('bashToolEnd', listeners.bashToolEnd);
     session.on('bashToolsUpdate', listeners.bashToolsUpdate);
+    session.on('contextUpdate', listeners.contextUpdate);
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -2953,6 +2962,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolStart', listeners.bashToolStart);
         session.off('bashToolEnd', listeners.bashToolEnd);
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        session.off('contextUpdate', listeners.contextUpdate);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();

@@ -96,6 +96,18 @@ const IDLE_DETECTION_DELAY_MS = 2000;
 /** Graceful shutdown delay when stopping session (100ms) */
 const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
+/** Context window size by model. All current Claude models: 200k. */
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  default: 200_000,
+};
+
+function getModelContextWindow(model: string): number {
+  for (const [key, size] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
+    if (model.includes(key)) return size;
+  }
+  return 200_000;
+}
+
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
 // eslint-disable-next-line no-control-regex
@@ -206,6 +218,8 @@ export interface SessionEvents {
     accountType: string | null;
     latestVersion: string | null;
   }) => void;
+  /** Passive context window usage updated */
+  contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
 }
 
 // SessionMode is imported from types.ts (single source of truth)
@@ -1697,6 +1711,16 @@ export class Session extends EventEmitter {
               // Check if we should auto-compact or auto-clear
               this._autoOps.checkAutoCompact();
               this._autoOps.checkAutoClear();
+
+              // Emit passive context usage update
+              if (inputDelta > 0 && this._totalInputTokens > 0) {
+                const maxTokens = getModelContextWindow(this._model ?? '');
+                this.emit('contextUpdate', {
+                  inputTokens: this._totalInputTokens,
+                  maxTokens,
+                  pct: Math.min(100, Math.round((this._totalInputTokens / maxTokens) * 100)),
+                });
+              }
             }
           }
 
