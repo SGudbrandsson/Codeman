@@ -265,31 +265,46 @@ const KeyboardAccessoryBar = {
     });
     this.element.appendChild(hamburgerBtn);
 
-    // 9. View mode toggle — switches between terminal and web transcript view for Claude sessions
-    const viewModeBtn = document.createElement('button');
-    viewModeBtn.id = 'accessoryViewModeBtn';
-    viewModeBtn.className = 'accessory-btn accessory-btn-view-mode terminal-mode';
-    viewModeBtn.type = 'button';
-    viewModeBtn.style.display = 'none';
-    const viewModeBtnLabel = document.createElement('span');
-    viewModeBtnLabel.textContent = 'Terminal';
-    viewModeBtn.appendChild(viewModeBtnLabel);
-    viewModeBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    viewModeBtn.addEventListener('click', () => {
-      const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
-      if (!sessionId) return;
-      const currentMode = TranscriptView.getViewMode(sessionId);
-      const newMode = currentMode === 'web' ? 'terminal' : 'web';
-      TranscriptView.setViewMode(sessionId, newMode);
-      if (newMode === 'web') {
-        TranscriptView.show(sessionId);
-      } else {
-        TranscriptView.hide(sessionId);
-      }
-      KeyboardAccessoryBar.updateViewModeBtn(sessionId);
-    });
-    // Insert the view-mode button before the spacer (between command buttons and right cluster)
-    this.element.insertBefore(viewModeBtn, spacer);
+    // 9. View mode toggle — segmented pill: [ >_ Terminal | ☰ Transcript ]
+    //    Desktop shows icons + text; mobile shows icons only (CSS hides .vmt-label)
+    const viewModeToggle = document.createElement('div');
+    viewModeToggle.id = 'accessoryViewModeBtn';  // keep same ID for compatibility
+    viewModeToggle.className = 'view-mode-toggle';
+    viewModeToggle.style.display = 'none';
+
+    const _makeSegment = (mode, iconText, labelText) => {
+      const seg = document.createElement('button');
+      seg.className = 'view-mode-seg';
+      seg.dataset.mode = mode;
+      seg.type = 'button';
+      const icon = document.createElement('span');
+      icon.className = 'vmt-icon';
+      icon.textContent = iconText;
+      const label = document.createElement('span');
+      label.className = 'vmt-label';
+      label.textContent = labelText;
+      seg.appendChild(icon);
+      seg.appendChild(label);
+      seg.addEventListener('mousedown', (e) => e.preventDefault());
+      seg.addEventListener('click', () => {
+        const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
+        if (!sessionId) return;
+        TranscriptView.setViewMode(sessionId, mode);
+        if (mode === 'web') {
+          TranscriptView.show(sessionId);
+        } else {
+          TranscriptView.hide(sessionId);
+        }
+        KeyboardAccessoryBar.updateViewModeBtn(sessionId);
+      });
+      return seg;
+    };
+
+    viewModeToggle.appendChild(_makeSegment('terminal', '>_', 'Terminal'));
+    viewModeToggle.appendChild(_makeSegment('web', '☰', 'Transcript'));
+
+    // Insert the view-mode toggle before the spacer
+    this.element.insertBefore(viewModeToggle, spacer);
 
     // Insert before toolbar
     const toolbar = document.querySelector('.toolbar');
@@ -320,25 +335,18 @@ const KeyboardAccessoryBar = {
    * Shows the button only for Claude Code sessions; hides it for opencode/shell.
    */
   updateViewModeBtn(sessionId) {
-    const btn = document.getElementById('accessoryViewModeBtn');
-    if (!btn) return;
+    const toggle = document.getElementById('accessoryViewModeBtn');
+    if (!toggle) return;
     const session = typeof app !== 'undefined' && sessionId ? app.sessions?.get(sessionId) : null;
     const mode = session?.mode;
     // Show toggle only for claude (default when mode is unset) sessions
     const isClaude = !mode || mode === 'claude';
-    btn.style.display = isClaude && sessionId ? '' : 'none';
+    toggle.style.display = isClaude && sessionId ? '' : 'none';
     if (!isClaude || !sessionId) return;
     const viewMode = typeof TranscriptView !== 'undefined' ? TranscriptView.getViewMode(sessionId) : 'terminal';
-    const label = btn.querySelector('span');
-    if (viewMode === 'web') {
-      btn.classList.remove('terminal-mode');
-      btn.title = 'Switch to terminal view';
-      if (label) label.textContent = 'Web';
-    } else {
-      btn.classList.add('terminal-mode');
-      btn.title = 'Switch to web view';
-      if (label) label.textContent = 'Terminal';
-    }
+    toggle.querySelectorAll('.view-mode-seg').forEach(seg => {
+      seg.classList.toggle('active', seg.dataset.mode === viewMode);
+    });
   },
 
   _confirmTimer: null,
