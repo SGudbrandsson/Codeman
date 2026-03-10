@@ -338,6 +338,12 @@ export class Session extends EventEmitter {
   // Compose draft (text + uploaded image paths), synced across devices
   draft?: { text: string; imagePaths: string[]; updatedAt: number };
 
+  // MCP server configuration for this session
+  mcpServers?: import('./types.js').McpServerEntry[];
+
+  // Claude session UUID for --resume (extracted from transcript filename)
+  claudeResumeId?: string;
+
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
     taskCreated: (task: BackgroundTask) => void;
@@ -809,7 +815,14 @@ export class Session extends EventEmitter {
       cliLatestVersion: this._cliLatestVersion || undefined,
       openCodeConfig: this._openCodeConfig,
       draft: this.draft,
+      ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
+      ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
     };
+  }
+
+  /** Sets the Claude resume ID (from transcript filename) and persists state */
+  setClaudeResumeId(id: string): void {
+    this.claudeResumeId = id;
   }
 
   toDetailedState() {
