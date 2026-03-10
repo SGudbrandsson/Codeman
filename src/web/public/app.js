@@ -1029,6 +1029,20 @@ const TranscriptView = {
     if (this._sessionId) this.load(this._sessionId);
   },
 
+  // Clears the view immediately without reloading from server.
+  // Used for optimistic UI when /clear is sent — the SSE transcript:clear event
+  // will arrive later (on next hook) and trigger a proper reload then.
+  clearOnly() {
+    this._pendingToolUses = {};
+    if (this._sessionId) {
+      const state = this._getState(this._sessionId);
+      state.blocks = [];
+      state.scrolledUp = false;
+      state._sseBuffer = null;
+    }
+    if (this._container) this._container.textContent = '';
+  },
+
   show(sessionId) {
     this._sessionId = sessionId;
     if (this._container) {
@@ -15286,7 +15300,11 @@ const InputPanel = {
 
     // Show user message immediately in transcript view (optimistic UI)
     if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
-      TranscriptView.appendOptimistic(text);
+      if (text.trim() === '/clear') {
+        TranscriptView.clearOnly();
+      } else {
+        TranscriptView.appendOptimistic(text);
+      }
     }
 
     // Clear draft for this session
