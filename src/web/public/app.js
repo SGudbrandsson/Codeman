@@ -3002,12 +3002,6 @@ class CodemanApp {
         this.showHelp();
       }
 
-      // Ctrl/Cmd + Enter - quick start
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        this.quickStart();
-      }
-
       // Ctrl/Cmd + W - close active session
       if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
         e.preventDefault();
@@ -3030,12 +3024,6 @@ class CodemanApp {
       if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
         e.preventDefault();
         this.clearTerminal();
-      }
-
-      // Ctrl/Cmd + Shift + R - restore terminal size (after mobile squeeze)
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
-        e.preventDefault();
-        this.restoreTerminalSize();
       }
 
       // Ctrl/Cmd + +/- - font size
@@ -3088,13 +3076,6 @@ class CodemanApp {
         // No selection → let Ctrl+X pass through to PTY
       }
 
-      // Shift+Enter - insert newline in local echo mode (without sending)
-      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        if (this._localEchoEnabled && this._localEchoOverlay && this.activeSessionId) {
-          e.preventDefault();
-          this._localEchoOverlay.appendText('\n');
-        }
-      }
     }, true); // Use capture phase to handle before terminal
 
     // Token stats click handler (with guard to prevent duplicate handlers on reconnect)
@@ -15146,9 +15127,9 @@ const InputPanel = {
       }
     });
 
-    // Keyboard: Shift+Enter sends on desktop; plain Enter creates newline
+    // Keyboard: Ctrl/Cmd+Enter sends on desktop; plain Enter creates newline
     ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.shiftKey) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         this.send();
       }

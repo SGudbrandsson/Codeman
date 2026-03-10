@@ -276,7 +276,7 @@
             <div class="welcome-qr-inner" id="welcomeQrInner"></div>
             <div class="welcome-qr-url" id="welcomeQrUrl"></div>
           </div>
-          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
+          <p class="welcome-hint">Select a project above and press Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
       </div>
@@ -332,7 +332,7 @@
         <!-- Run AI -->
         <div class="toolbar-group">
           <div class="run-btn-group">
-            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
+            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               <span id="runBtnLabel">Run</span>
             </button>
@@ -439,7 +439,7 @@
         </div>
         <div class="modal-body">
           <div class="shortcuts-grid">
-            <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
+            <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Send Message</div>
             <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions + Tmux</div>
@@ -450,7 +450,6 @@
             <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
             <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div><div>Voice Input</div>
             <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Paste from Clipboard</div>
-            <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline</div>
             <div><kbd>Escape</kbd></div><div>Close Panels</div>
           </div>
         </div>
@@ -1349,7 +1348,7 @@
           <!-- Shortcuts Tab -->
           <div class="modal-tab-content hidden" id="settings-shortcuts">
             <div class="shortcuts-grid">
-              <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Send Message</div>
               <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
               <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
               <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions</div>
@@ -1360,8 +1359,6 @@
               <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
               <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div><div>Voice Input</div>
               <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Paste from Clipboard</div>
-              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></div><div>Restore Terminal Size</div>
-              <div><kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Insert Newline (Local Echo)</div>
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
             </div>
           </div>
@@ -2020,7 +2017,7 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.18"></script>
-  <script defer src="app.js?v=0.4.90"></script>
+  <script defer src="app.js?v=0.4.91"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
