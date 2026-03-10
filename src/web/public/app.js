@@ -374,6 +374,7 @@ const McpPanel = {
   },
 
   async open(sessionId) {
+    if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
     this._sessionId = sessionId;
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
@@ -765,6 +766,381 @@ const McpPanel = {
 
   _closeForm() {
     if (this._formOverlay) this._formOverlay.style.display = 'none';
+  },
+};
+
+// Plugins Panel
+// ===================================================================
+const PluginsPanel = {
+  _sessionId: null,
+  _library: [],
+  _skills: [],
+  _projectPaths: [],
+  _selectedProject: '__global__',
+  _disabledMap: {},
+
+  init() {
+    this._panel        = document.getElementById('pluginsPanel');
+    this._chip         = document.getElementById('pluginsChipBtn');
+    this._tabs         = this._panel ? Array.from(this._panel.querySelectorAll('[data-ptab]')) : [];
+    this._activePane   = document.getElementById('pluginsActivePane');
+    this._libraryPane  = document.getElementById('pluginsLibraryPane');
+    this._skillsPane   = document.getElementById('pluginsSkillsPane');
+    this._activeList   = document.getElementById('pluginsActiveList');
+    this._libraryList  = document.getElementById('pluginsLibraryList');
+    this._skillsList   = document.getElementById('pluginsSkillsList');
+    this._installInput = document.getElementById('pluginsInstallInput');
+    this._installBtn   = document.getElementById('pluginsInstallBtn');
+    this._installStatus= document.getElementById('pluginsInstallStatus');
+    this._projectSelect= document.getElementById('pluginsProjectSelect');
+    if (!this._panel) return;
+
+    document.getElementById('pluginsPanelClose')?.addEventListener('click', () => this.close());
+    this._chip?.addEventListener('click', () => this.toggle());
+    this._installBtn?.addEventListener('click', () => this._installPlugin());
+    this._installInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._installPlugin(); });
+    this._projectSelect?.addEventListener('change', () => {
+      this._selectedProject = this._projectSelect.value;
+      this._renderSkills();
+    });
+
+    this._tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        this._tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const pane = tab.dataset.ptab;
+        this._activePane.style.display  = pane === 'active' ? '' : 'none';
+        this._libraryPane.style.display = pane === 'library' ? '' : 'none';
+        this._skillsPane.style.display  = pane === 'skills' ? '' : 'none';
+        if (pane === 'library' && !this._library.length) this._loadLibrary();
+        if (pane === 'skills' && !this._skills.length) this._loadSkills();
+      });
+    });
+
+    this._loadLibrary();
+  },
+
+  open(sessionId) {
+    this._sessionId = sessionId;
+    if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
+    this._panel.style.display = '';
+    requestAnimationFrame(() => this._panel.classList.add('open'));
+    this._chip?.classList.add('active');
+    this._loadInstalled();
+  },
+
+  close() {
+    this._panel.classList.remove('open');
+    this._chip?.classList.remove('active');
+    const panel = this._panel;
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  toggle() {
+    if (this._panel.classList.contains('open')) this.close();
+    else this.open(this._sessionId);
+  },
+
+  showChip() {
+    if (this._chip) this._chip.style.display = '';
+    this._loadInstalled();
+  },
+
+  hideChip() {
+    if (!this._chip) return;
+    this._chip.style.display = 'none';
+    this.close();
+  },
+
+  async _loadInstalled() {
+    try {
+      const res = await fetch('/api/plugins');
+      if (!res.ok) return;
+      const plugins = await res.json();
+      this._renderActiveList(plugins);
+      this._updateChipBadge(plugins.length);
+    } catch (_e) { /* network */ }
+  },
+
+  async _loadLibrary() {
+    try {
+      const res = await fetch('/api/plugins/library');
+      if (res.ok) { this._library = await res.json(); this._renderLibrary(); }
+    } catch (_e) { /* offline */ }
+  },
+
+  async _loadSkills() {
+    try {
+      const [skillsRes, disabledRes] = await Promise.all([
+        fetch('/api/plugins/skills'),
+        fetch('/api/plugins/skills/disabled'),
+      ]);
+      if (skillsRes.ok) this._skills = await skillsRes.json();
+      if (disabledRes.ok) {
+        const d = await disabledRes.json();
+        this._disabledMap['__global__'] = new Set(d.disabled);
+      }
+      this._projectPaths = [];
+      if (app.sessions) {
+        for (const s of app.sessions.values()) {
+          if (s.workingDir && !this._projectPaths.includes(s.workingDir)) {
+            this._projectPaths.push(s.workingDir);
+          }
+        }
+      }
+      this._populateProjectSelect();
+      this._renderSkills();
+    } catch (_e) { /* offline */ }
+  },
+
+  async _installPlugin() {
+    const name = this._installInput?.value.trim();
+    if (!name) { this._installInput?.focus(); return; }
+    if (this._installBtn) { this._installBtn.disabled = true; this._installBtn.textContent = 'Installing\u2026'; }
+    this._showInstallStatus('', '');
+    try {
+      const res = await fetch('/api/plugins/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        this._showInstallStatus(data.message || 'Install failed', 'error');
+      } else {
+        this._showInstallStatus('\u2713 Installed: ' + name, 'success');
+        if (this._installInput) this._installInput.value = '';
+        this._loadInstalled();
+      }
+    } catch (_e) {
+      this._showInstallStatus('Network error', 'error');
+    } finally {
+      if (this._installBtn) { this._installBtn.disabled = false; this._installBtn.textContent = 'Install'; }
+    }
+  },
+
+  async _uninstallPlugin(pluginName) {
+    if (!confirm('Uninstall plugin "' + pluginName + '"?')) return;
+    try {
+      const res = await fetch('/api/plugins/' + encodeURIComponent(pluginName), { method: 'DELETE' });
+      if (res.ok) this._loadInstalled();
+    } catch (_e) { /* network */ }
+  },
+
+  _showInstallStatus(msg, type) {
+    if (!this._installStatus) return;
+    this._installStatus.textContent = msg;
+    this._installStatus.className = 'plugins-install-status' + (type ? ' ' + type : '');
+    this._installStatus.style.display = msg ? '' : 'none';
+  },
+
+  _updateChipBadge(count) {
+    const badge = this._chip?.querySelector('.mcp-chip-badge');
+    if (!badge) return;
+    badge.style.display = count > 0 ? '' : 'none';
+    badge.textContent = String(count);
+  },
+
+  _renderActiveList(plugins) {
+    if (!this._activeList) return;
+    this._activeList.textContent = '';
+    if (!plugins.length) {
+      const empty = document.createElement('div');
+      empty.className = 'mcp-empty-state';
+      empty.textContent = 'No plugins installed. Browse the Library tab.';
+      this._activeList.appendChild(empty);
+      return;
+    }
+    const colors = ['#3b82f6','#a855f7','#22c55e','#f97316','#ec4899','#eab308','#06b6d4'];
+    plugins.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'mcp-server-card';
+
+      const colorIdx = p.pluginName.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length;
+      const avatar = document.createElement('div');
+      avatar.className = 'plugin-card-avatar';
+      avatar.style.background = colors[colorIdx] + '33';
+      avatar.style.color = colors[colorIdx];
+      avatar.textContent = (p.pluginName[0] || '?').toUpperCase();
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+
+      const nameRow = document.createElement('div');
+      nameRow.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'mcp-server-name';
+      nameEl.textContent = p.pluginName;
+
+      const scopeBadge = document.createElement('span');
+      scopeBadge.className = 'plugin-card-scope ' + (p.scope || 'user');
+      scopeBadge.textContent = p.scope === 'project' ? 'Project' : 'User';
+
+      const versionEl = document.createElement('span');
+      versionEl.className = 'plugin-card-version';
+      versionEl.textContent = p.version ? 'v' + p.version : '';
+
+      nameRow.appendChild(nameEl);
+      nameRow.appendChild(scopeBadge);
+      nameRow.appendChild(versionEl);
+
+      const desc = document.createElement('div');
+      desc.className = 'mcp-server-cmd';
+      desc.textContent = p.meta?.description || p.installPath || '';
+
+      info.appendChild(nameRow);
+      info.appendChild(desc);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'mcp-server-remove';
+      removeBtn.title = 'Uninstall';
+      removeBtn.textContent = '\u2715';
+      removeBtn.addEventListener('click', () => this._uninstallPlugin(p.pluginName));
+
+      card.appendChild(avatar);
+      card.appendChild(info);
+      card.appendChild(removeBtn);
+      this._activeList.appendChild(card);
+    });
+  },
+
+  _renderLibrary() {
+    if (!this._libraryList) return;
+    this._libraryList.textContent = '';
+    this._library.forEach(entry => {
+      const card = document.createElement('div');
+      card.className = 'mcp-lib-card';
+
+      const hdr = document.createElement('div');
+      hdr.className = 'mcp-lib-card-header';
+
+      const name = document.createElement('span');
+      name.className = 'mcp-lib-card-name';
+      name.textContent = entry.name;
+
+      const installBtn = document.createElement('button');
+      installBtn.className = 'mcp-btn-apply plugins-install-btn';
+      installBtn.style.cssText = 'padding:3px 8px;font-size:0.7rem';
+      installBtn.textContent = 'Install \u2193';
+      installBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (this._installInput) this._installInput.value = entry.installName;
+        this._tabs.forEach(t => t.classList.remove('active'));
+        const activeTab = this._tabs.find(t => t.dataset.ptab === 'active');
+        if (activeTab) activeTab.classList.add('active');
+        this._activePane.style.display = '';
+        this._libraryPane.style.display = 'none';
+        this._skillsPane.style.display = 'none';
+        this._installPlugin();
+      });
+
+      hdr.appendChild(name);
+      hdr.appendChild(installBtn);
+
+      const desc = document.createElement('div');
+      desc.className = 'mcp-lib-card-desc';
+      desc.textContent = entry.description;
+
+      const keywords = document.createElement('div');
+      keywords.className = 'plugins-lib-keywords';
+      (entry.keywords || []).forEach(kw => {
+        const tag = document.createElement('span');
+        tag.className = 'mcp-lib-card-cat';
+        tag.textContent = kw;
+        keywords.appendChild(tag);
+      });
+
+      card.appendChild(hdr);
+      card.appendChild(desc);
+      card.appendChild(keywords);
+      this._libraryList.appendChild(card);
+    });
+  },
+
+  _populateProjectSelect() {
+    if (!this._projectSelect) return;
+    this._projectSelect.textContent = '';
+    const globalOpt = document.createElement('option');
+    globalOpt.value = '__global__';
+    globalOpt.textContent = 'Global (all projects)';
+    this._projectSelect.appendChild(globalOpt);
+    this._projectPaths.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p;
+      this._projectSelect.appendChild(opt);
+    });
+    this._projectSelect.value = this._selectedProject;
+  },
+
+  _renderSkills() {
+    if (!this._skillsList) return;
+    this._skillsList.textContent = '';
+    if (!this._skills.length) {
+      const empty = document.createElement('div');
+      empty.className = 'mcp-empty-state';
+      empty.textContent = 'No plugin skills found.';
+      this._skillsList.appendChild(empty);
+      return;
+    }
+    const groups = {};
+    this._skills.forEach(s => {
+      if (!groups[s.pluginName]) groups[s.pluginName] = [];
+      groups[s.pluginName].push(s);
+    });
+    const projectKey = this._selectedProject;
+    const projectDisabled = this._disabledMap[projectKey] ?? new Set();
+    const globalDisabled = this._disabledMap['__global__'] ?? new Set();
+
+    Object.entries(groups).forEach(([pluginName, skills]) => {
+      const label = document.createElement('div');
+      label.className = 'plugins-skill-group-label';
+      label.textContent = pluginName;
+      this._skillsList.appendChild(label);
+
+      skills.forEach(skill => {
+        const row = document.createElement('div');
+        row.className = 'plugins-skill-row';
+
+        const isDisabled = projectDisabled.has(skill.fullName) || globalDisabled.has(skill.fullName);
+        const toggle = document.createElement('button');
+        toggle.className = 'mcp-toggle' + (isDisabled ? '' : ' on');
+        toggle.title = isDisabled ? 'Enable' : 'Disable';
+        toggle.addEventListener('click', async () => {
+          const nowDisabled = !toggle.classList.contains('on');
+          if (!this._disabledMap[projectKey]) this._disabledMap[projectKey] = new Set();
+          if (nowDisabled) {
+            this._disabledMap[projectKey].add(skill.fullName);
+          } else {
+            this._disabledMap[projectKey].delete(skill.fullName);
+          }
+          toggle.classList.toggle('on', !nowDisabled);
+          await fetch('/api/plugins/skills/disabled', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project: projectKey,
+              disabled: Array.from(this._disabledMap[projectKey]),
+            }),
+          });
+        });
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'plugins-skill-name';
+        nameEl.textContent = skill.skillName;
+
+        const descEl = document.createElement('span');
+        descEl.className = 'plugins-skill-desc';
+        descEl.textContent = skill.description;
+        descEl.title = skill.description;
+
+        row.appendChild(toggle);
+        row.appendChild(nameEl);
+        row.appendChild(descEl);
+        this._skillsList.appendChild(row);
+      });
+    });
   },
 };
 
@@ -1843,6 +2219,7 @@ class CodemanApp {
     InputPanel.init();
     TranscriptView.init();
     McpPanel.init();
+    PluginsPanel.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
@@ -5466,6 +5843,7 @@ class CodemanApp {
     // Save draft for old session, load draft for new session
     if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
     if (typeof McpPanel !== 'undefined') McpPanel.showForSession(sessionId);
+    PluginsPanel.showChip();
     this.renderElicitationPanel();
     this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
