@@ -9474,6 +9474,38 @@ kbd {
   font-size: 0.82em;
   color: #a5f3fc;
 }
+.tv-code-block {
+  position: relative;
+}
+.tv-code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 0.65rem;
+  font-family: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  z-index: 1;
+  line-height: 1.4;
+}
+.tv-code-block:hover .tv-code-copy,
+.tv-code-copy:focus {
+  opacity: 1;
+}
+.tv-code-copy:hover {
+  background: rgba(255,255,255,0.15);
+  color: #e2e8f0;
+}
+.tv-code-copy.copied {
+  color: #4ade80;
+  border-color: rgba(74,222,128,0.3);
+}
 .tv-markdown pre {
   background: #111827;
   border: 1px solid rgba(255,255,255,0.1);
