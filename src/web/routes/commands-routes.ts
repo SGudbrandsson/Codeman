@@ -183,6 +183,22 @@ function applicablePluginPaths(
   return applicable;
 }
 
+/** Read disabled skill names for a given project path from ~/.codeman/settings.json. */
+function disabledSkillsForProject(cwd: string, userHomeOverride?: string): Set<string> {
+  const settingsPath = path.join(userHomeOverride ?? os.homedir(), '.codeman', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+    const raw = settings.disabledSkills;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return new Set();
+    const map = raw as Record<string, string[]>;
+    const global_ = Array.isArray(map['__global__']) ? map['__global__'] : [];
+    const project = Array.isArray(map[cwd]) ? map[cwd] : [];
+    return new Set([...global_, ...project]);
+  } catch {
+    return new Set();
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /** Build the full command list for a session.
@@ -205,7 +221,14 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
     commands.push(...scanSkillsDir(path.join(installPath, 'skills'), pluginName));
   }
 
-  return commands;
+  // Filter out disabled skills
+  const disabled = disabledSkillsForProject(cwd, userHomeOverride);
+  if (disabled.size === 0) return commands;
+  return commands.filter((cmd) => {
+    if (cmd.source !== 'plugin') return true;
+    const bare = cmd.cmd.startsWith('/') ? cmd.cmd.slice(1) : cmd.cmd;
+    return !disabled.has(bare);
+  });
 }
 
 export function registerCommandsRoutes(app: FastifyInstance, ctx: SessionPort): void {
