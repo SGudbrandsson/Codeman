@@ -325,6 +325,11 @@ export class Session extends EventEmitter {
   // Flag to prevent new timers after session is stopped
   private _isStopped: boolean = false;
 
+  // Background /context refresh state
+  private _awaitingContext = false;
+  private _contextOutputLines: string[] = [];
+  private _contextRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _ralphTracker: RalphTracker;
 
@@ -1616,6 +1621,49 @@ export class Session extends EventEmitter {
     });
   }
 
+  /** Parse lines of /context command output into structured data. Returns null if incomplete. */
+  private _tryParseContextOutput(lines: string[]): {
+    inputTokens: number;
+    maxTokens: number;
+    pct: number;
+    system?: number;
+    conversation?: number;
+    tools?: number;
+  } | null {
+    const text = lines.join('\n');
+    const totalMatch = text.match(/Total:\s+([\d,]+)\s*\/\s*([\d,]+)/i);
+    if (!totalMatch) return null;
+    const parse = (s: string) => parseInt(s.replace(/,/g, ''), 10);
+    const total = parse(totalMatch[1]);
+    const max = parse(totalMatch[2]);
+    const sysMatch = text.match(/System(?:\s+prompt)?:\s+([\d,]+)\s+tokens/i);
+    const convMatch = text.match(/Conversation:\s+([\d,]+)\s+tokens/i);
+    const toolsMatch = text.match(/Tools:\s+([\d,]+)\s+tokens/i);
+    return {
+      inputTokens: total,
+      maxTokens: max,
+      pct: Math.min(100, Math.round((total / max) * 100)),
+      system: sysMatch ? parse(sysMatch[1]) : undefined,
+      conversation: convMatch ? parse(convMatch[1]) : undefined,
+      tools: toolsMatch ? parse(toolsMatch[1]) : undefined,
+    };
+  }
+
+  /** Send /context, parse output, emit contextUpdate with full category breakdown. */
+  private _refreshContext(): void {
+    if (this._isStopped || this._awaitingContext) return;
+    this._awaitingContext = true;
+    this._contextOutputLines = [];
+    void this.writeViaMux('/context\r');
+    // Safety timeout — clear flag after 8s regardless
+    setTimeout(() => {
+      if (this._awaitingContext) {
+        this._awaitingContext = false;
+        this._contextOutputLines = [];
+      }
+    }, 8_000);
+  }
+
   private processOutput(data: string): void {
     // Early return if session is stopped to prevent any processing or timer creation
     if (this._isStopped) return;
@@ -1725,6 +1773,14 @@ export class Session extends EventEmitter {
           if (msg.type === 'result' && msg.total_cost_usd) {
             this._totalCost = msg.total_cost_usd;
           }
+          if (msg.type === 'result') {
+            // Schedule a background /context refresh 60s after completion
+            if (this._contextRefreshTimer) clearTimeout(this._contextRefreshTimer);
+            this._contextRefreshTimer = setTimeout(() => {
+              this._contextRefreshTimer = null;
+              if (!this._isStopped) this._refreshContext();
+            }, 60_000);
+          }
         } catch (parseErr) {
           // Not JSON, just regular output - this is expected for non-JSON lines
           console.debug(
@@ -1734,6 +1790,16 @@ export class Session extends EventEmitter {
           this._textOutput.append(line + '\n');
         }
       } else if (trimmed) {
+        // Capture /context output if awaiting refresh
+        if (this._awaitingContext) {
+          this._contextOutputLines.push(cleanLine);
+          const parsed = this._tryParseContextOutput(this._contextOutputLines);
+          if (parsed) {
+            this._awaitingContext = false;
+            this._contextOutputLines = [];
+            this.emit('contextUpdate', parsed);
+          }
+        }
         this._textOutput.append(line + '\n');
       }
 
@@ -1994,6 +2060,11 @@ export class Session extends EventEmitter {
     return false;
   }
 
+  /** Trigger an immediate /context refresh. Result arrives via 'contextUpdate' event. */
+  refreshContext(): void {
+    this._refreshContext();
+  }
+
   /** Current PTY dimensions — used to skip no-op resizes that trigger Ink redraws */
   private _ptyCols = 120;
   private _ptyRows = 40;
@@ -2136,6 +2207,13 @@ export class Session extends EventEmitter {
       this._expensiveProcessTimer = null;
     }
     this._pendingCleanData = '';
+
+    // Clear context refresh timer
+    if (this._contextRefreshTimer) {
+      clearTimeout(this._contextRefreshTimer);
+      this._contextRefreshTimer = null;
+    }
+    this._awaitingContext = false;
 
     // Immediately cleanup Promise callbacks to prevent orphaned references
     // during the rest of stop() processing (e.g., if mux kill times out)
