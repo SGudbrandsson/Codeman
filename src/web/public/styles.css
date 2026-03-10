@@ -8957,6 +8957,47 @@ kbd {
   .accessory-btn:hover { background: #3a3a3a; }
   .accessory-btn:active { background: #3a3a3a; }
 
+  /* ── View mode segmented toggle ─────────────────────────── */
+  .view-mode-toggle {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    height: 28px; /* match accessory-btn height: 6px*2 padding + ~16px content */
+  }
+  .view-mode-seg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 10px;
+    background: #2a2a2a;
+    border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    font-size: 0.65rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .view-mode-seg:last-child { border-right: none; }
+  .view-mode-seg:hover { background: #3a3a3a; color: #e5e5e5; }
+  .view-mode-seg.active {
+    background: rgba(6, 182, 212, 0.18);
+    color: #22d3ee;
+  }
+  .view-mode-seg.active:hover { background: rgba(6, 182, 212, 0.26); }
+  .vmt-icon {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+  .vmt-label { font-size: 0.65rem; }
+
+
   .accessory-btn-arrow {
     padding: 6px 10px;
     background: #1e3a5f;
