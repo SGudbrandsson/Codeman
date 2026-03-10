@@ -329,6 +329,7 @@ export class Session extends EventEmitter {
   private _awaitingContext = false;
   private _contextOutputLines: string[] = [];
   private _contextRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private _contextSafetyTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _ralphTracker: RalphTracker;
@@ -1656,7 +1657,8 @@ export class Session extends EventEmitter {
     this._contextOutputLines = [];
     void this.writeViaMux('/context\r');
     // Safety timeout — clear flag after 8s regardless
-    setTimeout(() => {
+    this._contextSafetyTimer = setTimeout(() => {
+      this._contextSafetyTimer = null;
       if (this._awaitingContext) {
         this._awaitingContext = false;
         this._contextOutputLines = [];
@@ -1778,7 +1780,7 @@ export class Session extends EventEmitter {
             if (this._contextRefreshTimer) clearTimeout(this._contextRefreshTimer);
             this._contextRefreshTimer = setTimeout(() => {
               this._contextRefreshTimer = null;
-              if (!this._isStopped) this._refreshContext();
+              if (!this._isStopped && this.isIdle()) this._refreshContext();
             }, 60_000);
           }
         } catch (parseErr) {
@@ -1797,6 +1799,10 @@ export class Session extends EventEmitter {
           if (parsed) {
             this._awaitingContext = false;
             this._contextOutputLines = [];
+            if (this._contextSafetyTimer) {
+              clearTimeout(this._contextSafetyTimer);
+              this._contextSafetyTimer = null;
+            }
             this.emit('contextUpdate', parsed);
           }
         }
@@ -2213,7 +2219,12 @@ export class Session extends EventEmitter {
       clearTimeout(this._contextRefreshTimer);
       this._contextRefreshTimer = null;
     }
+    if (this._contextSafetyTimer) {
+      clearTimeout(this._contextSafetyTimer);
+      this._contextSafetyTimer = null;
+    }
     this._awaitingContext = false;
+    this._contextOutputLines = [];
 
     // Immediately cleanup Promise callbacks to prevent orphaned references
     // during the rest of stop() processing (e.g., if mux kill times out)
