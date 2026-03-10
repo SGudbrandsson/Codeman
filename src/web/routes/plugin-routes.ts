@@ -18,6 +18,7 @@ import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { PLUGIN_LIBRARY } from '../../plugin-library.js';
 import { SETTINGS_PATH } from '../route-helpers.js';
+import { isValidWorkingDir } from '../schemas.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,11 @@ interface SkillEntry {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const PLUGINS_FILE = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+const PLUGIN_SPAWN_TIMEOUT_MS = 3 * 60 * 1000;
+
+function isSafeInstallPath(p: string): boolean {
+  return path.isAbsolute(p) && p.startsWith(os.homedir());
+}
 
 function readPluginsJson(): InstalledPluginsJson {
   try {
@@ -88,6 +94,7 @@ function listInstalledPlugins(): InstalledPlugin[] {
   for (const [key, entries] of Object.entries(data.plugins ?? {})) {
     const pluginName = key.split('@')[0];
     for (const entry of entries) {
+      if (!isSafeInstallPath(entry.installPath)) continue;
       if (seen.has(entry.installPath)) continue;
       seen.add(entry.installPath);
       result.push({
@@ -175,12 +182,24 @@ function runClaudePlugin(subcommand: string, arg: string): Promise<{ ok: boolean
   return new Promise((resolve) => {
     const proc = spawn('claude', ['plugin', subcommand, arg], { stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks: Buffer[] = [];
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      proc.kill();
+      resolve({ ok: false, output: 'Timed out' });
+    }, PLUGIN_SPAWN_TIMEOUT_MS);
     proc.stdout.on('data', (d: Buffer) => chunks.push(d));
     proc.stderr.on('data', (d: Buffer) => chunks.push(d));
     proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({ ok: code === 0, output: Buffer.concat(chunks).toString('utf-8').trim() });
     });
     proc.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolve({ ok: false, output: err.message });
     });
   });
@@ -233,6 +252,16 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
   // GET disabled skills (optional ?project=<path> query param)
   app.get('/api/plugins/skills/disabled', async (req, reply) => {
     const { project } = req.query as { project?: string };
+    if (project !== undefined) {
+      if (
+        project === '__proto__' ||
+        project === 'constructor' ||
+        project === 'prototype' ||
+        !isValidWorkingDir(project)
+      ) {
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid project path'));
+      }
+    }
     const settings = readSettings();
     const disabledSkills = getDisabledSkills(settings);
     const key = project || '__global__';
@@ -244,6 +273,16 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
     const { project, disabled } = req.body as { project?: string; disabled?: unknown };
     if (!Array.isArray(disabled)) {
       return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'disabled must be an array'));
+    }
+    if (project !== undefined && typeof project === 'string' && project) {
+      if (
+        project === '__proto__' ||
+        project === 'constructor' ||
+        project === 'prototype' ||
+        !isValidWorkingDir(project)
+      ) {
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid project path'));
+      }
     }
     const key = typeof project === 'string' && project ? project : '__global__';
     const settings = readSettings();
