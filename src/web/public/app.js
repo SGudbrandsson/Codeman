@@ -837,6 +837,7 @@ const PluginsPanel = {
   },
 
   toggle() {
+    // No session guard needed — plugin endpoints are global, not per-session
     if (this._panel.classList.contains('open')) this.close();
     else this.open(this._sessionId);
   },
