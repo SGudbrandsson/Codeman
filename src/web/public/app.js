@@ -320,6 +320,454 @@ function inlineMarkdown(escaped, safeHref, esc) {
  *   { type:'tool_result', toolUseId, content, isError, timestamp }
  *   { type:'result', cost, durationMs, error, timestamp }
  */
+// ===================================================================
+// MCP Panel
+// ===================================================================
+const McpPanel = {
+  _sessionId: null,
+  _savedServers: [],
+  _draftServers: [],
+  _dirty: false,
+  _editingIndex: -1,
+
+  init() {
+    this._panel      = document.getElementById('mcpPanel');
+    this._chip       = document.getElementById('mcpChipBtn');
+    this._activeList = document.getElementById('mcpActiveList');
+    this._applyBtn   = document.getElementById('mcpApplyBtn');
+    this._cancelBtn  = document.getElementById('mcpCancelBtn');
+    this._tabs       = this._panel ? Array.from(this._panel.querySelectorAll('.mcp-tab')) : [];
+    this._search     = document.getElementById('mcpSearch');
+    this._libPane    = document.getElementById('mcpLibraryPane');
+    this._mktPane    = document.getElementById('mcpMarketplacePane');
+    this._mktResults = document.getElementById('mcpMarketplaceResults');
+    this._formOverlay = document.getElementById('mcpFormOverlay');
+    this._library    = [];
+    this._mktDebounce = null;
+    if (!this._panel) return;
+    document.getElementById('mcpPanelClose')?.addEventListener('click', () => this.close());
+    this._chip?.addEventListener('click', () => this.toggle());
+    this._applyBtn?.addEventListener('click', () => this._applyAndRestart());
+    this._cancelBtn?.addEventListener('click', () => this._cancelChanges());
+    this._tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        this._tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const pane = tab.dataset.tab;
+        this._libPane.style.display  = pane === 'library' ? '' : 'none';
+        this._mktPane.style.display  = pane === 'marketplace' ? '' : 'none';
+        if (pane === 'marketplace' && !this._mktResults.children.length) this._searchMarketplace('');
+      });
+    });
+    this._search?.addEventListener('input', () => {
+      const q = this._search.value;
+      const activeTab = this._panel.querySelector('.mcp-tab.active')?.dataset.tab;
+      if (activeTab === 'library') {
+        this._renderLibrary(q);
+      } else {
+        clearTimeout(this._mktDebounce);
+        this._mktDebounce = setTimeout(() => this._searchMarketplace(q), 300);
+      }
+    });
+    this._initForm();
+    this._loadLibrary();
+  },
+
+  async open(sessionId) {
+    this._sessionId = sessionId;
+    this._panel.style.display = '';
+    requestAnimationFrame(() => this._panel.classList.add('open'));
+    this._chip?.classList.add('active');
+    await this._loadServers();
+  },
+
+  close() {
+    this._panel.classList.remove('open');
+    this._chip?.classList.remove('active');
+    const panel = this._panel;
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  toggle() {
+    if (this._panel.classList.contains('open')) this.close();
+    else if (this._sessionId) this.open(this._sessionId);
+  },
+
+  showForSession(sessionId) {
+    if (!this._chip) return;
+    this._chip.style.display = '';
+    if (this._sessionId !== sessionId) {
+      this._sessionId = sessionId;
+      this._savedServers = [];
+      this._draftServers = [];
+      this._dirty = false;
+      this._renderActiveList();
+      this._updateApplyBtn();
+    }
+  },
+
+  hide() {
+    if (!this._chip) return;
+    this._chip.style.display = 'none';
+    this.close();
+  },
+
+  async _loadServers() {
+    if (!this._sessionId) return;
+    try {
+      const res = await fetch('/api/sessions/' + encodeURIComponent(this._sessionId) + '/mcp');
+      if (res.ok) {
+        this._savedServers = await res.json();
+        this._draftServers = this._savedServers.map(s => Object.assign({}, s));
+        this._dirty = false;
+        this._renderActiveList();
+        this._updateApplyBtn();
+        this._updateChipBadge();
+      }
+    } catch (_e) { /* network error */ }
+  },
+
+  _markDirty() {
+    this._dirty = true;
+    this._updateApplyBtn();
+    if (this._cancelBtn) this._cancelBtn.style.display = '';
+  },
+
+  _updateApplyBtn() {
+    if (this._applyBtn) this._applyBtn.disabled = !this._dirty;
+  },
+
+  _cancelChanges() {
+    this._draftServers = this._savedServers.map(s => Object.assign({}, s));
+    this._dirty = false;
+    this._updateApplyBtn();
+    if (this._cancelBtn) this._cancelBtn.style.display = 'none';
+    this._renderActiveList();
+  },
+
+  _renderActiveList() {
+    if (!this._activeList) return;
+    this._activeList.textContent = '';
+    if (!this._draftServers.length) {
+      const empty = document.createElement('div');
+      empty.className = 'mcp-empty-state';
+      empty.textContent = 'No MCP servers configured. Add one below.';
+      this._activeList.appendChild(empty);
+      return;
+    }
+    this._draftServers.forEach((srv, idx) => {
+      const card = document.createElement('div');
+      card.className = 'mcp-server-card';
+      const toggle = document.createElement('button');
+      toggle.className = 'mcp-toggle' + (srv.enabled ? ' on' : '');
+      toggle.title = srv.enabled ? 'Disable' : 'Enable';
+      toggle.addEventListener('click', () => {
+        srv.enabled = !srv.enabled;
+        toggle.classList.toggle('on', srv.enabled);
+        toggle.title = srv.enabled ? 'Disable' : 'Enable';
+        this._markDirty();
+        this._updateChipBadge();
+      });
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      const name = document.createElement('div');
+      name.className = 'mcp-server-name';
+      name.textContent = srv.name;
+      const cmd = document.createElement('div');
+      cmd.className = 'mcp-server-cmd';
+      cmd.textContent = srv.command ? (srv.command + ' ' + (srv.args || []).join(' ')) : (srv.url || '');
+      info.appendChild(name);
+      info.appendChild(cmd);
+      const editBtn = document.createElement('button');
+      editBtn.className = 'mcp-server-edit';
+      editBtn.title = 'Edit';
+      editBtn.textContent = '\u270e';
+      editBtn.addEventListener('click', () => this._openForm(srv, idx));
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'mcp-server-remove';
+      removeBtn.title = 'Remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.addEventListener('click', () => {
+        this._draftServers.splice(idx, 1);
+        this._markDirty();
+        this._renderActiveList();
+        this._updateChipBadge();
+      });
+      card.appendChild(toggle);
+      card.appendChild(info);
+      card.appendChild(editBtn);
+      card.appendChild(removeBtn);
+      this._activeList.appendChild(card);
+    });
+  },
+
+  _updateChipBadge() {
+    const badge = this._chip?.querySelector('.mcp-chip-badge');
+    if (!badge) return;
+    const count = this._draftServers.filter(s => s.enabled).length;
+    badge.style.display = count > 0 ? '' : 'none';
+    badge.textContent = String(count);
+  },
+
+  async _applyAndRestart() {
+    if (!this._applyBtn) return;
+    this._applyBtn.disabled = true;
+    this._applyBtn.textContent = 'Restarting\u2026';
+    try {
+      const res = await fetch('/api/sessions/' + encodeURIComponent(this._sessionId) + '/mcp/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpServers: this._draftServers }),
+      });
+      if (!res.ok) {
+        this._applyBtn.textContent = 'Restart failed \u2717';
+        setTimeout(() => { this._applyBtn.textContent = 'Apply & Restart Claude'; this._applyBtn.disabled = false; }, 3000);
+        return;
+      }
+      this._savedServers = this._draftServers.map(s => Object.assign({}, s));
+      this._dirty = false;
+      if (this._cancelBtn) this._cancelBtn.style.display = 'none';
+      this._applyBtn.textContent = 'Resumed \u2713';
+      this._chip?.classList.add('pulsing');
+      setTimeout(() => {
+        this._applyBtn.textContent = 'Apply & Restart Claude';
+        this._applyBtn.disabled = true;
+        this._chip?.classList.remove('pulsing');
+      }, 2000);
+    } catch (_e) {
+      this._applyBtn.textContent = 'Error \u2014 see console';
+      setTimeout(() => { this._applyBtn.textContent = 'Apply & Restart Claude'; this._applyBtn.disabled = false; }, 3000);
+    }
+  },
+
+  async _loadLibrary() {
+    try {
+      const res = await fetch('/api/mcp/library');
+      if (res.ok) { this._library = await res.json(); this._renderLibrary(''); }
+    } catch (_e) { /* offline */ }
+  },
+
+  _renderLibrary(filter) {
+    if (!this._libPane) return;
+    const q = filter.toLowerCase();
+    const items = q ? this._library.filter(e => e.name.toLowerCase().includes(q) || e.description.toLowerCase().includes(q) || e.category.toLowerCase().includes(q)) : this._library;
+    this._libPane.textContent = '';
+    items.forEach(entry => this._libPane.appendChild(this._makeLibCard(entry)));
+  },
+
+  _makeLibCard(entry) {
+    const card = document.createElement('div');
+    card.className = 'mcp-lib-card';
+    const hdr = document.createElement('div');
+    hdr.className = 'mcp-lib-card-header';
+    const name = document.createElement('span');
+    name.className = 'mcp-lib-card-name';
+    name.textContent = entry.name;
+    const cat = document.createElement('span');
+    cat.className = 'mcp-lib-card-cat';
+    cat.textContent = entry.category;
+    hdr.appendChild(name);
+    hdr.appendChild(cat);
+    const desc = document.createElement('div');
+    desc.className = 'mcp-lib-card-desc';
+    desc.textContent = entry.description;
+    card.appendChild(hdr);
+    card.appendChild(desc);
+    card.addEventListener('click', () => this._openFormFromLibrary(entry));
+    return card;
+  },
+
+  async _searchMarketplace(q) {
+    if (!this._mktResults) return;
+    this._mktResults.textContent = '';
+    for (let i = 0; i < 4; i++) { const sk = document.createElement('div'); sk.className = 'mcp-skeleton'; this._mktResults.appendChild(sk); }
+    try {
+      const res = await fetch('/api/mcp/marketplace?q=' + encodeURIComponent(q));
+      this._mktResults.textContent = '';
+      if (!res.ok) throw new Error('unavailable');
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : (data.servers || data.results || []);
+      if (!items.length) { const msg = document.createElement('div'); msg.className = 'mcp-empty-state'; msg.textContent = 'No results.'; this._mktResults.appendChild(msg); return; }
+      items.slice(0, 24).forEach(item => {
+        this._mktResults.appendChild(this._makeLibCard({ id: item.qualifiedName || item.name || '', name: item.displayName || item.name || item.qualifiedName || '', description: item.description || '', category: 'Marketplace', transport: item.transport || 'stdio', command: item.command, args: item.args, url: item.url }));
+      });
+    } catch (_e) {
+      this._mktResults.textContent = '';
+      const msg = document.createElement('div'); msg.className = 'mcp-empty-state'; msg.textContent = 'Marketplace unavailable \u2014 using curated library only.'; this._mktResults.appendChild(msg);
+    }
+  },
+
+  _openFormFromLibrary(entry) {
+    this._openForm({ name: entry.name, enabled: true, command: entry.command, args: entry.args, url: entry.url, type: (entry.transport !== 'stdio') ? entry.transport : undefined }, -1);
+  },
+
+  _openForm(srv, idx) {
+    if (!this._formOverlay) return;
+    this._editingIndex = idx;
+    this._formOverlay.style.display = '';
+    const ftabs = Array.from(this._formOverlay.querySelectorAll('.mcp-form-tab'));
+    ftabs.forEach((t, i) => t.classList.toggle('active', i === 0));
+    const fieldsPane = document.getElementById('mcpFieldsPane');
+    const jsonPane   = document.getElementById('mcpJsonPane');
+    if (fieldsPane) fieldsPane.style.display = '';
+    if (jsonPane)   jsonPane.style.display   = 'none';
+    const titleEl = document.getElementById('mcpFormTitle');
+    const saveBtn = document.getElementById('mcpFormSave');
+    if (titleEl) titleEl.textContent = idx >= 0 ? 'Edit Server' : 'Add Server';
+    if (saveBtn)  saveBtn.textContent = idx >= 0 ? 'Save changes' : 'Add to session';
+    const nameEl = document.getElementById('mcpFName');
+    const cmdEl  = document.getElementById('mcpFCommand');
+    const argsEl = document.getElementById('mcpFArgs');
+    const urlEl  = document.getElementById('mcpFUrl');
+    if (nameEl) nameEl.value = srv.name || '';
+    if (cmdEl)  cmdEl.value  = srv.command || '';
+    if (argsEl) argsEl.value = (srv.args || []).join(' ');
+    if (urlEl)  urlEl.value  = srv.url || '';
+    const transport = srv.type || (srv.url && !srv.command ? 'http' : 'stdio');
+    this._formOverlay.querySelectorAll('input[name=mcpTransport]').forEach(r => { r.checked = r.value === transport; });
+    this._updateTransportFields(transport);
+    this._renderKvList('mcpEnvVars', srv.env || {}, true);
+    this._renderKvList('mcpHeaders', srv.headers || {}, false);
+  },
+
+  _updateTransportFields(transport) {
+    const stdioEl = document.getElementById('mcpStdioFields');
+    const httpEl  = document.getElementById('mcpHttpFields');
+    if (stdioEl) stdioEl.style.display = transport === 'stdio' ? '' : 'none';
+    if (httpEl)  httpEl.style.display  = transport === 'stdio' ? 'none' : '';
+  },
+
+  _renderKvList(containerId, obj, sensitive) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.textContent = '';
+    Object.entries(obj).forEach(([k, v]) => this._addKvRow(container, k, v, sensitive));
+  },
+
+  _addKvRow(container, k, v, sensitive) {
+    const row = document.createElement('div');
+    row.className = 'mcp-kv-row';
+    const keyInput = document.createElement('input');
+    keyInput.type = 'text';
+    keyInput.placeholder = 'KEY';
+    keyInput.value = k;
+    const valInput = document.createElement('input');
+    valInput.type = sensitive ? 'password' : 'text';
+    valInput.placeholder = 'value';
+    valInput.value = v;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'mcp-kv-remove';
+    removeBtn.textContent = '\u2715';
+    removeBtn.addEventListener('click', () => row.remove());
+    row.appendChild(keyInput);
+    row.appendChild(valInput);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  },
+
+  _collectKvList(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return {};
+    const result = {};
+    container.querySelectorAll('.mcp-kv-row').forEach(row => {
+      const inputs = row.querySelectorAll('input');
+      const k = inputs[0]?.value?.trim();
+      const v = inputs[1]?.value ?? '';
+      if (k) result[k] = v;
+    });
+    return result;
+  },
+
+  _initForm() {
+    if (!this._formOverlay) return;
+    this._formOverlay.querySelectorAll('input[name=mcpTransport]').forEach(r => {
+      r.addEventListener('change', () => this._updateTransportFields(r.value));
+    });
+    this._formOverlay.querySelectorAll('.mcp-form-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this._formOverlay.querySelectorAll('.mcp-form-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const isJson = tab.dataset.ftab === 'json';
+        const fieldsPane = document.getElementById('mcpFieldsPane');
+        const jsonPane   = document.getElementById('mcpJsonPane');
+        if (fieldsPane) fieldsPane.style.display = isJson ? 'none' : '';
+        if (jsonPane)   jsonPane.style.display   = isJson ? '' : 'none';
+      });
+    });
+    document.getElementById('mcpAddEnvVar')?.addEventListener('click', () => { const c = document.getElementById('mcpEnvVars'); if (c) this._addKvRow(c, '', '', true); });
+    document.getElementById('mcpAddHeader')?.addEventListener('click', () => { const c = document.getElementById('mcpHeaders'); if (c) this._addKvRow(c, '', '', false); });
+    document.getElementById('mcpJsonInput')?.addEventListener('blur', () => this._parseJsonPaste());
+    document.getElementById('mcpFormSave')?.addEventListener('click', () => this._saveForm());
+    document.getElementById('mcpFormCancel')?.addEventListener('click', () => this._closeForm());
+    document.getElementById('mcpFormClose')?.addEventListener('click', () => this._closeForm());
+  },
+
+  _parseJsonPaste() {
+    const input = document.getElementById('mcpJsonInput');
+    const errEl  = document.getElementById('mcpJsonError');
+    if (!input || !errEl) return;
+    const raw = input.value.trim();
+    if (!raw) return;
+    try {
+      let parsed = JSON.parse(raw);
+      if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+        const entries = Object.entries(parsed.mcpServers);
+        if (entries.length) { const [firstName, firstEntry] = entries[0]; parsed = Object.assign({ name: firstName }, firstEntry); }
+      }
+      errEl.style.display = 'none';
+      const nameEl = document.getElementById('mcpFName');
+      const cmdEl  = document.getElementById('mcpFCommand');
+      const argsEl = document.getElementById('mcpFArgs');
+      const urlEl  = document.getElementById('mcpFUrl');
+      if (nameEl) nameEl.value = parsed.name || '';
+      if (cmdEl)  cmdEl.value  = parsed.command || '';
+      if (argsEl) argsEl.value = (parsed.args || []).join(' ');
+      if (urlEl)  urlEl.value  = parsed.url || '';
+      const transport = parsed.type || (parsed.url ? 'http' : 'stdio');
+      this._formOverlay.querySelectorAll('input[name=mcpTransport]').forEach(r => { r.checked = r.value === transport; });
+      this._updateTransportFields(transport);
+      if (parsed.env)     this._renderKvList('mcpEnvVars', parsed.env, true);
+      if (parsed.headers) this._renderKvList('mcpHeaders', parsed.headers, false);
+    } catch (_e) {
+      errEl.textContent = 'Invalid JSON \u2014 check format';
+      errEl.style.display = '';
+    }
+  },
+
+  _saveForm() {
+    const nameEl = document.getElementById('mcpFName');
+    if (!nameEl) return;
+    const name = nameEl.value.trim();
+    if (!name) { nameEl.focus(); return; }
+    const transport = this._formOverlay?.querySelector('input[name=mcpTransport]:checked')?.value || 'stdio';
+    const server = { name, enabled: true };
+    if (transport === 'stdio') {
+      const cmd  = document.getElementById('mcpFCommand')?.value.trim();
+      const args = document.getElementById('mcpFArgs')?.value.trim();
+      if (cmd) server.command = cmd;
+      server.args = args ? args.split(/\s+/) : [];
+      const env = this._collectKvList('mcpEnvVars');
+      if (Object.keys(env).length) server.env = env;
+    } else {
+      server.type = transport;
+      const url = document.getElementById('mcpFUrl')?.value.trim();
+      if (url) server.url = url;
+      const headers = this._collectKvList('mcpHeaders');
+      if (Object.keys(headers).length) server.headers = headers;
+    }
+    if (this._editingIndex >= 0) { this._draftServers[this._editingIndex] = server; }
+    else { this._draftServers.push(server); }
+    this._markDirty();
+    this._renderActiveList();
+    this._updateChipBadge();
+    this._closeForm();
+  },
+
+  _closeForm() {
+    if (this._formOverlay) this._formOverlay.style.display = 'none';
+  },
+};
+
 const TranscriptView = {
   _container: null,
   _sessionId: null,
@@ -1101,6 +1549,9 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.UPDATE_COMPLETE, '_onUpdateComplete'],
   [SSE_EVENTS.UPDATE_FAILED, '_onUpdateFailed'],
 
+  // MCP
+  [SSE_EVENTS.SESSION_MCP_RESTARTED, '_onSessionMcpRestarted'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -1377,6 +1828,7 @@ class CodemanApp {
     KeyboardAccessoryBar.init();
     InputPanel.init();
     TranscriptView.init();
+    McpPanel.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
@@ -3669,6 +4121,12 @@ class CodemanApp {
     if (updateBtn) updateBtn.disabled = false;
   }
 
+  _onSessionMcpRestarted(data) {
+    if (data.sessionId === this.activeSessionId) {
+      if (typeof McpPanel !== 'undefined') McpPanel._loadServers();
+    }
+  }
+
   _onHookElicitationDialog(data) {
     const session = this.sessions.get(data.sessionId);
     if (data.sessionId) {
@@ -5012,6 +5470,7 @@ class CodemanApp {
     this.activeSessionId = sessionId;
     // Save draft for old session, load draft for new session
     if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
+    if (typeof McpPanel !== 'undefined') McpPanel.showForSession(sessionId);
     this.renderElicitationPanel();
     this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}

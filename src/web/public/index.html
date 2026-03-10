@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1678">
+  <link rel="stylesheet" href="styles.css?v=0.1679">
   <link rel="stylesheet" href="mobile.css?v=0.1668" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -86,6 +86,11 @@
             <span class="stat-value" id="statMem">--</span>
           </div>
         </div>
+        <button id="mcpChipBtn" class="mcp-chip" title="MCP Servers" style="display:none" aria-label="MCP Servers">
+          <span class="mcp-chip-icon">&#x26a1;</span>
+          <span class="mcp-chip-label">MCP</span>
+          <span class="mcp-chip-badge" style="display:none"></span>
+        </button>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
@@ -2010,14 +2015,85 @@
     </div>
   </div>
 
-  <script defer src="constants.js?v=0.4.5"></script>
+  <script defer src="constants.js?v=0.4.6"></script>
   <script defer src="mobile-handlers.js?v=0.4.10"></script>
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.17"></script>
-  <script defer src="app.js?v=0.4.88"></script>
+  <script defer src="app.js?v=0.4.89"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
+
+<!-- MCP Server Management Panel -->
+<div id="mcpPanel" class="mcp-panel" style="display:none" aria-label="MCP Servers">
+  <div class="mcp-panel-header">
+    <span class="mcp-panel-title">⚡ MCP Servers</span>
+    <button class="mcp-panel-close" id="mcpPanelClose" title="Close">&#x2715;</button>
+  </div>
+  <div class="mcp-section-label">Active for this session</div>
+  <div id="mcpActiveList" class="mcp-active-list">
+    <div class="mcp-empty-state" id="mcpEmptyState">No MCP servers configured. Add one below.</div>
+  </div>
+  <div class="mcp-action-bar" id="mcpActionBar">
+    <button class="mcp-btn-apply" id="mcpApplyBtn" disabled>Apply &amp; Restart Claude</button>
+    <button class="mcp-btn-cancel" id="mcpCancelBtn" style="display:none">Cancel</button>
+  </div>
+  <div class="mcp-section-label" style="margin-top:12px">Add server</div>
+  <div class="mcp-tabs">
+    <button class="mcp-tab active" data-tab="library">Library</button>
+    <button class="mcp-tab" data-tab="marketplace">Marketplace</button>
+  </div>
+  <input type="text" class="mcp-search" id="mcpSearch" placeholder="Search..." autocomplete="off">
+  <div id="mcpLibraryPane" class="mcp-pane mcp-library-grid"></div>
+  <div id="mcpMarketplacePane" class="mcp-pane" style="display:none">
+    <div id="mcpMarketplaceResults" class="mcp-library-grid"></div>
+  </div>
+</div>
+
+<!-- MCP Add/Edit Server Form -->
+<div id="mcpFormOverlay" class="mcp-form-overlay" style="display:none">
+  <div class="mcp-form">
+    <div class="mcp-form-header">
+      <span id="mcpFormTitle">Add Server</span>
+      <button class="mcp-panel-close" id="mcpFormClose">&#x2715;</button>
+    </div>
+    <div class="mcp-form-tabs">
+      <button class="mcp-form-tab active" data-ftab="fields">Configure</button>
+      <button class="mcp-form-tab" data-ftab="json">Paste JSON</button>
+    </div>
+    <div id="mcpFieldsPane">
+      <div class="mcp-form-row"><label>Name</label><input type="text" id="mcpFName" placeholder="my-server"></div>
+      <div class="mcp-form-row mcp-transport-row">
+        <label>Transport</label>
+        <div class="mcp-radio-group">
+          <label><input type="radio" name="mcpTransport" value="stdio" checked> stdio</label>
+          <label><input type="radio" name="mcpTransport" value="http"> HTTP</label>
+          <label><input type="radio" name="mcpTransport" value="sse"> SSE</label>
+        </div>
+      </div>
+      <div id="mcpStdioFields">
+        <div class="mcp-form-row"><label>Command</label><input type="text" id="mcpFCommand" placeholder="npx"></div>
+        <div class="mcp-form-row"><label>Args (space-separated)</label><input type="text" id="mcpFArgs" placeholder="@playwright/mcp@latest"></div>
+        <div class="mcp-form-row"><label>Environment variables</label><div id="mcpEnvVars" class="mcp-kv-list"></div><button class="mcp-add-kv" id="mcpAddEnvVar">+ Add variable</button></div>
+      </div>
+      <div id="mcpHttpFields" style="display:none">
+        <div class="mcp-form-row"><label>URL</label><input type="text" id="mcpFUrl" placeholder="https://..."></div>
+        <div class="mcp-form-row"><label>Headers</label><div id="mcpHeaders" class="mcp-kv-list"></div><button class="mcp-add-kv" id="mcpAddHeader">+ Add header</button></div>
+      </div>
+    </div>
+    <div id="mcpJsonPane" style="display:none">
+      <div class="mcp-form-row">
+        <label>Paste mcpServers JSON</label>
+        <textarea id="mcpJsonInput" class="mcp-json-textarea" placeholder='{"command":"npx","args":["@playwright/mcp@latest"]}'></textarea>
+        <div id="mcpJsonError" class="mcp-json-error" style="display:none"></div>
+      </div>
+    </div>
+    <div class="mcp-form-actions">
+      <button class="mcp-btn-apply" id="mcpFormSave">Add to session</button>
+      <button class="mcp-btn-cancel" id="mcpFormCancel">Cancel</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
