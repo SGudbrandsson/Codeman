@@ -375,6 +375,7 @@ const McpPanel = {
 
   async open(sessionId) {
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
+    if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) ContextBar.close();
     this._sessionId = sessionId;
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
@@ -823,6 +824,7 @@ const PluginsPanel = {
   open(sessionId) {
     this._sessionId = sessionId;
     if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
+    if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) ContextBar.close();
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
     this._chip?.classList.add('active');
@@ -1142,6 +1144,193 @@ const PluginsPanel = {
         this._skillsList.appendChild(row);
       });
     });
+  },
+};
+
+// Context Bar / Chip / Banner / Panel
+// ===================================================================
+const ContextBar = {
+  _data: new Map(),          // sessionId -> latest context data
+  _dismissed80: new Set(),   // sessionIds dismissed at 80% threshold
+  _dismissed90: new Set(),   // sessionIds dismissed at 90% threshold
+
+  init() {
+    this._bar       = document.getElementById('contextBar');
+    this._chip      = document.getElementById('ctxChipBtn');
+    this._badge     = document.getElementById('ctxChipBadge');
+    this._banner    = document.getElementById('contextBanner');
+    this._bannerTxt = document.getElementById('contextBannerText');
+    this._bannerClr = document.getElementById('contextBannerClear');
+    this._bannerDis = document.getElementById('contextBannerDismiss');
+    this._panel     = document.getElementById('contextPanel');
+    this._donutArc  = document.getElementById('ctxDonutArc');
+    this._donutPct  = document.getElementById('ctxDonutPct');
+
+    this._chip?.addEventListener('click', () => this.toggle());
+    document.getElementById('contextPanelClose')?.addEventListener('click', () => this.close());
+
+    this._bannerClr?.addEventListener('click', () => {
+      if (app.activeSessionId) app.sendInput('/clear');
+    });
+    this._bannerDis?.addEventListener('click', () => {
+      const sid = app.activeSessionId;
+      if (!sid) return;
+      const d = this._data.get(sid);
+      if (d) {
+        if (d.pct >= 90) this._dismissed90.add(sid);
+        else this._dismissed80.add(sid);
+      }
+      if (this._banner) this._banner.style.display = 'none';
+    });
+  },
+
+  onContextUsage(data) {
+    this._data.set(data.id, data);
+    const sid = app.activeSessionId;
+    if (data.id === sid) {
+      this._updateBar(data);
+      this._checkBanner(data);
+      this._updateChip(data);
+      if (this._panel?.classList.contains('open')) this._renderPanel(data);
+    }
+  },
+
+  onSessionSelected(sessionId) {
+    const data = this._data.get(sessionId);
+    if (data) {
+      this._updateBar(data);
+      this._checkBanner(data);
+      this._updateChip(data);
+    } else {
+      this._clearBar();
+      if (this._banner) this._banner.style.display = 'none';
+      this._clearChip();
+    }
+  },
+
+  _updateBar(data) {
+    if (!this._bar) return;
+    this._bar.style.display = '';
+    const max = data.maxTokens || 200000;
+    const total = data.inputTokens || 0;
+    const sys   = data.system      || 0;
+    const conv  = data.conversation|| 0;
+    const tools = data.tools       || 0;
+
+    if (sys || conv || tools) {
+      const free = Math.max(0, max - sys - conv - tools);
+      document.getElementById('ctxSegSystem').style.width = (sys   / max * 100).toFixed(2) + '%';
+      document.getElementById('ctxSegConv').style.width   = (conv  / max * 100).toFixed(2) + '%';
+      document.getElementById('ctxSegTools').style.width  = (tools / max * 100).toFixed(2) + '%';
+      document.getElementById('ctxSegFree').style.width   = (free  / max * 100).toFixed(2) + '%';
+    } else {
+      document.getElementById('ctxSegSystem').style.width = '0%';
+      document.getElementById('ctxSegTools').style.width  = '0%';
+      document.getElementById('ctxSegConv').style.width   = (total / max * 100).toFixed(2) + '%';
+      document.getElementById('ctxSegFree').style.width   = (Math.max(0, max - total) / max * 100).toFixed(2) + '%';
+    }
+  },
+
+  _clearBar() {
+    if (!this._bar) return;
+    this._bar.style.display = 'none';
+  },
+
+  _checkBanner(data) {
+    if (!this._banner) return;
+    const sid = data.id;
+    const pct = data.pct;
+
+    if (pct >= 90 && !this._dismissed90.has(sid)) {
+      this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear or /compact`;
+      this._banner.style.display = '';
+    } else if (pct >= 80 && !this._dismissed80.has(sid) && !this._dismissed90.has(sid)) {
+      this._bannerTxt.textContent = `Context ~${pct}% full — consider /clear`;
+      this._banner.style.display = '';
+    } else if (pct < 80) {
+      this._banner.style.display = 'none';
+      this._dismissed80.delete(sid);
+      this._dismissed90.delete(sid);
+    }
+  },
+
+  _updateChip(data) {
+    if (!this._chip || !this._badge) return;
+    this._chip.style.display = '';
+    this._badge.style.display = '';
+    this._badge.textContent = data.pct + '%';
+    this._chip.classList.remove('ctx-green', 'ctx-amber', 'ctx-red');
+    if (data.pct >= 85) this._chip.classList.add('ctx-red');
+    else if (data.pct >= 60) this._chip.classList.add('ctx-amber');
+    else this._chip.classList.add('ctx-green');
+  },
+
+  _clearChip() {
+    if (!this._chip) return;
+    this._chip.style.display = 'none';
+  },
+
+  open(sessionId) {
+    if (!this._panel) return;
+    if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
+    if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
+    this._panel.style.display = '';
+    requestAnimationFrame(() => this._panel.classList.add('open'));
+    this._chip?.classList.add('active');
+    const sid = sessionId || app.activeSessionId;
+    if (sid) {
+      const cached = this._data.get(sid);
+      if (cached) this._renderPanel(cached);
+      fetch(`/api/sessions/${encodeURIComponent(sid)}/context`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d && d.pct != null) { this._data.set(sid, d); this._renderPanel(d); } })
+        .catch(() => {});
+    }
+  },
+
+  close() {
+    if (!this._panel) return;
+    this._panel.classList.remove('open');
+    this._chip?.classList.remove('active');
+    const panel = this._panel;
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  toggle() {
+    if (this._panel?.classList.contains('open')) this.close();
+    else this.open(app.activeSessionId);
+  },
+
+  _renderPanel(data) {
+    if (!this._donutArc || !this._donutPct) return;
+    const CIRC = 251.2;
+    const pct = data.pct || 0;
+    this._donutArc.style.strokeDashoffset = (CIRC * (1 - pct / 100)).toFixed(2);
+    if (pct >= 85) this._donutArc.style.stroke = '#f87171';
+    else if (pct >= 60) this._donutArc.style.stroke = '#fbbf24';
+    else this._donutArc.style.stroke = '#22d3ee';
+    this._donutPct.textContent = pct + '%';
+
+    const max = data.maxTokens || 200000;
+    const fmt = n => n != null ? n.toLocaleString() : '--';
+    const fpct = n => n != null ? `${(n / max * 100).toFixed(1)}%` : '';
+    const sys  = data.system;
+    const conv = data.conversation;
+    const tools= data.tools;
+    const free = (sys != null && conv != null && tools != null)
+      ? Math.max(0, max - sys - conv - tools) : null;
+
+    document.getElementById('ctxValSystem').textContent  = fmt(sys);
+    document.getElementById('ctxValConv').textContent    = fmt(conv);
+    document.getElementById('ctxValTools').textContent   = fmt(tools);
+    document.getElementById('ctxValFree').textContent    = fmt(free);
+    document.getElementById('ctxPctSystem').textContent  = fpct(sys);
+    document.getElementById('ctxPctConv').textContent    = fpct(conv);
+    document.getElementById('ctxPctTools').textContent   = fpct(tools);
+    document.getElementById('ctxPctFree').textContent    = fpct(free);
+
+    const suggestion = document.getElementById('ctxSuggestion');
+    if (suggestion) suggestion.style.display = pct >= 90 ? '' : 'none';
   },
 };
 
@@ -1943,6 +2132,9 @@ const _SSE_HANDLER_MAP = [
   // MCP
   [SSE_EVENTS.SESSION_MCP_RESTARTED, '_onSessionMcpRestarted'],
 
+  // Context usage
+  [SSE_EVENTS.SESSION_CONTEXT_USAGE, '_onSessionContextUsage'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -2221,6 +2413,7 @@ class CodemanApp {
     TranscriptView.init();
     McpPanel.init();
     PluginsPanel.init();
+    ContextBar.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
@@ -4500,6 +4693,10 @@ class CodemanApp {
     }
   }
 
+  _onSessionContextUsage(data) {
+    if (typeof ContextBar !== 'undefined') ContextBar.onContextUsage(data);
+  }
+
   _onHookElicitationDialog(data) {
     const session = this.sessions.get(data.sessionId);
     if (data.sessionId) {
@@ -5845,6 +6042,7 @@ class CodemanApp {
     if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
     if (typeof McpPanel !== 'undefined') McpPanel.showForSession(sessionId);
     PluginsPanel.showChip();
+    ContextBar.onSessionSelected(sessionId);
     this.renderElicitationPanel();
     this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
