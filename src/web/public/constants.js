@@ -298,6 +298,7 @@ const SSE_EVENTS = {
   UPDATE_PROGRESS: 'update:progress',
   UPDATE_COMPLETE: 'update:complete',
   UPDATE_FAILED: 'update:failed',
+  SESSION_MCP_RESTARTED: 'session:mcpRestarted',
 };
 
 // ═══════════════════════════════════════════════════════════════
