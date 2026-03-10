@@ -115,7 +115,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg-dark);
   color: var(--text);
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -123,7 +123,7 @@ body {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
 }
 
 /* Compact Header */
@@ -7304,6 +7304,55 @@ kbd {
   display: none;
 }
 
+/* AskUserQuestion panel — desktop base (hidden by default, shown by JS) */
+.auq-panel {
+  display: none;
+  background: #111;
+  border-top: 1px solid rgba(255,255,255,0.12);
+  padding: 8px 12px;
+  flex-shrink: 0;
+  gap: 6px;
+  flex-direction: column;
+}
+.auq-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #3b82f6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.auq-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.auq-option-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px;
+  background: #1e1e1e;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: #fff;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 120px;
+}
+.auq-option-btn:hover {
+  background: #2a2a2a;
+  border-color: rgba(255,255,255,0.3);
+}
+.auq-option-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.auq-option-desc {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+}
+
 .log-viewer-window-title .status.streaming {
   background: var(--success);
   color: white;
@@ -9283,6 +9332,54 @@ kbd {
   30% { transform: translateY(-7px); opacity: 1; }
 }
 
+/* Tool call group — collapses consecutive tool calls under a single header */
+.tv-tool-group { max-width: 860px; margin: 4px auto; }
+.tv-tool-group-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  background: rgba(147,197,253,0.06);
+  border: 1px solid rgba(147,197,253,0.15);
+  border-radius: 6px;
+  cursor: pointer; user-select: none;
+  font-size: 0.78rem; color: #93c5fd; font-family: monospace;
+}
+.tv-tool-group-header:hover { background: rgba(147,197,253,0.10); }
+.tv-tool-group-arrow { font-size: 0.65rem; transition: transform 0.15s; color: #64748b; }
+.tv-tool-group-header.open .tv-tool-group-arrow { transform: rotate(90deg); }
+.tv-tool-group-body { display: none; padding: 4px 0 0 12px; }
+.tv-tool-group-body.open { display: block; }
+.tv-tool-group-body .tv-block { margin: 0; }
+
+/* AskUserQuestion inline block — clickable option buttons that disappear when answered */
+.tv-auq-block { max-width: 860px; margin: 8px auto; padding: 12px 16px; background: #111827; border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.tv-auq-header { font-size: 11px; font-weight: 600; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.05em; }
+.tv-auq-question { font-size: 0.9rem; color: #e2e8f0; font-weight: 500; }
+.tv-auq-options { display: flex; flex-direction: column; gap: 6px; }
+.tv-auq-option { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; font-family: inherit; cursor: pointer; text-align: left; transition: background 0.1s; }
+.tv-auq-option:hover { background: #293548; border-color: rgba(59,130,246,0.4); }
+.tv-auq-option-label { font-size: 0.875rem; font-weight: 500; }
+.tv-auq-option-desc { font-size: 0.75rem; color: rgba(255,255,255,0.45); }
+.tv-auq-custom { display: flex; gap: 6px; margin-top: 2px; }
+.tv-auq-custom-input { flex: 1; padding: 7px 12px; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #e2e8f0; font-family: inherit; font-size: 0.875rem; outline: none; }
+.tv-auq-custom-input:focus { border-color: rgba(59,130,246,0.5); }
+.tv-auq-custom-send { padding: 7px 14px; background: #3b82f6; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
+.tv-auq-custom-send:hover { background: #2563eb; }
+
+/* Context-continuation compaction summary — collapsed pill with expandable markdown */
+.tv-compact-block { max-width: 860px; margin: 4px auto; border: 1px solid rgba(251,191,36,0.2); border-radius: 6px; overflow: hidden; }
+.tv-compact-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  background: rgba(251,191,36,0.08);
+  cursor: pointer; user-select: none;
+  font-size: 0.78rem; color: #fbbf24; font-family: monospace;
+}
+.tv-compact-header:hover { background: rgba(251,191,36,0.12); }
+.tv-compact-arrow { font-size: 0.65rem; transition: transform 0.15s; }
+.tv-compact-header.open .tv-compact-arrow { transform: rotate(90deg); }
+.tv-compact-body { display: none; padding: 12px; background: rgba(0,0,0,0.2); }
+.tv-compact-body.open { display: block; }
+
 .tv-placeholder {
   display: flex;
   align-items: center;
@@ -9291,6 +9388,18 @@ kbd {
   color: #475569;
   font-size: 0.85rem;
 }
+.tv-empty-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+}
+.tv-empty-cta-title { font-size: 1.25rem; font-weight: 600; color: #94a3b8; }
+.tv-empty-cta-sub { font-size: 0.85rem; color: #475569; }
 
 .tv-block {
   margin-bottom: 12px;

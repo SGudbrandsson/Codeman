@@ -26,7 +26,7 @@ import { execSync, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -919,12 +919,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           const pid = this.getPanePid(sessionName);
 
           if (pid) {
+            // Resolve the actual working dir from /proc/<pid>/cwd instead of
+            // process.cwd() — using process.cwd() would assign the server's own
+            // worktree dir to all restored sessions, corrupting worktreeBranch detection.
+            let workingDir = process.cwd();
+            try {
+              workingDir = realpathSync(`/proc/${pid}/cwd`);
+            } catch {
+              // Leave workingDir as process.cwd() fallback (e.g. on non-Linux)
+            }
             const session: MuxSession = {
               sessionId,
               muxName: sessionName,
               pid,
               createdAt: Date.now(),
-              workingDir: process.cwd(),
+              workingDir,
               mode: 'claude',
               attached: false,
               name: `Restored: ${sessionName}`,

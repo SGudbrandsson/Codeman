@@ -63,6 +63,27 @@
   z-index: 2;
 }
 
+/* Expand/collapse buttons block the photo upload button on mobile/tablet — hide them */
+.compose-expand-btn { display: none !important; }
+
+/* Ensure transcript content is not hidden behind the fixed input panel + accessory bar.
+   Use bottom (not padding-bottom) so the scroll area itself shrinks — padding-bottom is
+   unreliable in overflow containers on iOS/Android. */
+.transcript-view {
+  bottom: calc(var(--safe-area-bottom, 0px) + 44px + var(--mobile-compose-height, 52px)) !important;
+}
+/* ::after spacer ensures the last message is never flush against the scroll edge */
+.transcript-view::after {
+  content: '';
+  display: block;
+  height: 24px;
+}
+
+/* Position typing indicator above the mobile input panel + accessory bar */
+.tv-typing-overlay {
+  bottom: calc(var(--safe-area-bottom, 0px) + 44px + var(--mobile-compose-height, 52px) + 8px) !important;
+}
+
 html.mobile-init .header-font-controls,
 html.mobile-init .header-system-stats,
 html.mobile-init .header-tokens,
@@ -2253,6 +2274,72 @@ html.mobile-init .file-browser-panel {
     cursor: pointer;
     touch-action: manipulation;
   }
+
+  /* AskUserQuestion panel — structured question with labeled options + descriptions */
+  .auq-panel {
+    background: #111;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    padding: 8px 8px 6px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: relative;
+    z-index: 10;
+  }
+
+  .auq-panel[style*="display:none"] {
+    display: none !important;
+  }
+
+  .auq-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: #3b82f6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 2px 2px;
+  }
+
+  .auq-options {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .auq-option-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 10px;
+    background: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    width: 100%;
+  }
+
+  .auq-option-btn:active {
+    background: #2a2a2a;
+    border-color: rgba(255,255,255,0.3);
+  }
+
+  .auq-option-label {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .auq-option-desc {
+    font-size: 11px;
+    color: rgba(255,255,255,0.45);
+    line-height: 1.3;
+  }
 }
 
 .touch-device .btn-hamburger { display: none; }
@@ -2476,7 +2563,10 @@ html.mobile-init .file-browser-panel {
   background: transparent;
   color: #e2e8f0;
   border: none;
-  border-radius: 12px;
+  /* no border-radius — wrap has overflow:hidden which clips corners */
+  -webkit-appearance: none;
+  outline: 0;
+  -webkit-tap-highlight-color: transparent;
   /* left padding leaves room for + btn; right padding leaves room for send btn */
   padding: 10px 52px 10px 44px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -2490,7 +2580,8 @@ html.mobile-init .file-browser-panel {
   scrollbar-width: none; /* Firefox */
 }
 .compose-textarea:focus {
-  outline: none;
+  outline: 0;
+  box-shadow: none;
 }
 .compose-textarea::-webkit-scrollbar {
   display: none; /* Chrome/Safari/iOS */
