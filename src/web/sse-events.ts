@@ -328,6 +328,11 @@ export const UpdateFailed = 'update:failed' as const;
 /** MCP servers applied and Claude restarted. */
 export const SessionMcpRestarted = 'session:mcpRestarted' as const;
 
+// ─── Session: Context ─────────────────────────────────────────────────────────
+
+/** Session context window usage update */
+export const SessionContextUsage = 'session:contextUsage' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -489,4 +494,20 @@ export const SseEvent = {
 
   // MCP
   SessionMcpRestarted,
+
+  // Context
+  SessionContextUsage,
 } as const;
+
+// ─── Payload Types ────────────────────────────────────────────────────────────
+
+/** Payload for the SessionContextUsage SSE event. */
+export interface ContextUsagePayload {
+  id: string;
+  pct: number;
+  inputTokens: number;
+  maxTokens: number;
+  system?: number;
+  conversation?: number;
+  tools?: number;
+}

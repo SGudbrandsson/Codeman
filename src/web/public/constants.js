@@ -201,6 +201,7 @@ const SSE_EVENTS = {
   SESSION_WORKING: 'session:working',
   SESSION_AUTO_CLEAR: 'session:autoClear',
   SESSION_CLI_INFO: 'session:cliInfo',
+  SESSION_CONTEXT_USAGE: 'session:contextUsage',
 
   // Scheduled runs
   SCHEDULED_CREATED: 'scheduled:created',
