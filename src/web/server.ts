@@ -33,7 +33,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, chmodSync, readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -62,7 +62,7 @@ import {
   type SubagentToolResult,
 } from '../subagent-watcher.js';
 import { imageWatcher } from '../image-watcher.js';
-import { TranscriptWatcher } from '../transcript-watcher.js';
+import { TranscriptWatcher, type AskUserQuestionData } from '../transcript-watcher.js';
 import { TeamWatcher } from '../team-watcher.js';
 import { TunnelManager } from '../tunnel-manager.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -779,6 +779,14 @@ export class WebServer extends EventEmitter {
         this.broadcast(SseEvent.TranscriptClear, { sessionId });
       });
 
+      watcher.on('transcript:ask_user_question', (questions: AskUserQuestionData[]) => {
+        this.broadcast(SseEvent.TranscriptAskUserQuestion, { sessionId, questions, timestamp: Date.now() });
+      });
+
+      watcher.on('transcript:ask_user_question_resolved', () => {
+        this.broadcast(SseEvent.TranscriptAskUserQuestionResolved, { sessionId, timestamp: Date.now() });
+      });
+
       watcher.on('transcript:error', (error: Error) => {
         console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
       });
@@ -803,18 +811,51 @@ export class WebServer extends EventEmitter {
   }
 
   /** Return the transcript file path for a session.
-   * First checks the active watcher (set when a hook fires).
-   * Falls back to deriving the path from the session's working directory, which
-   * works even before the first hook event fires. */
+   * Always scans the project directory for the newest JSONL file — this ensures
+   * we pick up new conversations created by /clear without waiting for a hook. */
   private getTranscriptPath(sessionId: string): string | null {
-    const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
-    if (watcherPath) return watcherPath;
-
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
-    // Claude stores transcripts at ~/.claude/projects/{escaped-workingDir}/{sessionId}.jsonl
+
     const escapedDir = session.workingDir.replace(/\//g, '-');
-    return join(homedir(), '.claude', 'projects', escapedDir, `${sessionId}.jsonl`);
+    const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+
+    // Scan for the newest JSONL in the project dir — covers /clear creating new conversations
+    try {
+      const files = readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
+      if (files.length > 0) {
+        let newest = files[0];
+        let newestMtime = 0;
+        for (const f of files) {
+          try {
+            const mtime = statSync(join(projectDir, f)).mtimeMs;
+            if (mtime > newestMtime) {
+              newestMtime = mtime;
+              newest = f;
+            }
+          } catch {
+            /* skip */
+          }
+        }
+        const newestPath = join(projectDir, newest);
+        // If a hook already set a watcher on a specific path, prefer the newer of the two
+        const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
+        if (watcherPath) {
+          try {
+            const watcherMtime = statSync(watcherPath).mtimeMs;
+            return watcherMtime >= newestMtime ? watcherPath : newestPath;
+          } catch {
+            /* watcher path gone */
+          }
+        }
+        return newestPath;
+      }
+    } catch {
+      /* dir doesn't exist yet */
+    }
+
+    // Fallback: use the watcher path if available
+    return this.transcriptWatchers.get(sessionId)?.transcriptPath ?? null;
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
@@ -2608,11 +2649,17 @@ export class WebServer extends EventEmitter {
               }
             }
 
+            // Use the auto-detected branch as the display name for "Restored:" placeholder sessions
+            // so the sidebar shows "feat/fix-supabase" instead of "Restored: codeman-a157d657".
+            // Also replaces stale savedState names that are still "Restored:" placeholders.
+            const isRestoredPlaceholder = sessionName.startsWith('Restored: ');
+            const effectiveName = isRestoredPlaceholder && worktreeBranch ? worktreeBranch : sessionName;
+
             const session = new Session({
               id: muxSession.sessionId, // Preserve the original session ID
               workingDir: muxSession.workingDir,
               mode: muxSession.mode,
-              name: sessionName,
+              name: effectiveName,
               mux: this.mux,
               useMux: true,
               muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
@@ -2627,6 +2674,8 @@ export class WebServer extends EventEmitter {
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
             if (savedState?.name && muxSession.name !== savedState.name) {
               this.mux.updateSessionName(muxSession.sessionId, savedState.name);
+            } else if (effectiveName !== sessionName) {
+              this.mux.updateSessionName(muxSession.sessionId, effectiveName);
             }
             if (savedState) {
               // Auto-compact
@@ -2693,6 +2742,9 @@ export class WebServer extends EventEmitter {
               // Flicker filter (frontend-applied but persisted)
               if (savedState.flickerFilterEnabled !== undefined) {
                 session.flickerFilterEnabled = savedState.flickerFilterEnabled;
+              }
+              if (savedState.draft) {
+                session.draft = savedState.draft;
               }
               // Respawn controller (not supported for opencode sessions)
               if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {

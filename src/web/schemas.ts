@@ -179,7 +179,15 @@ export const QuickStartSchema = z.object({
  * Receives Claude Code hook events.
  */
 export const HookEventSchema = z.object({
-  event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
+  event: z.enum([
+    'permission_prompt',
+    'elicitation_dialog',
+    'ask_user_question',
+    'idle_prompt',
+    'stop',
+    'teammate_idle',
+    'task_completed',
+  ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
 });

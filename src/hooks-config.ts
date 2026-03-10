@@ -80,6 +80,12 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
           hooks: [{ type: 'command', command: curlCmd('task_completed'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
+      PreToolUse: [
+        {
+          matcher: 'AskUserQuestion',
+          hooks: [{ type: 'command', command: curlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
+        },
+      ],
     },
   };
 }

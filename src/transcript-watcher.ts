@@ -70,6 +70,13 @@ export interface TranscriptState {
   lastUpdateAt: string | null;
 }
 
+export interface AskUserQuestionData {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: Array<{ label: string; description?: string }>;
+}
+
 export interface TranscriptWatcherEvents {
   'transcript:update': (state: TranscriptState) => void;
   'transcript:complete': (state: TranscriptState) => void;
@@ -79,6 +86,8 @@ export interface TranscriptWatcherEvents {
   'transcript:plan_mode': () => void;
   'transcript:block': (block: TranscriptBlock) => void;
   'transcript:clear': () => void;
+  'transcript:ask_user_question': (questions: AskUserQuestionData[]) => void;
+  'transcript:ask_user_question_resolved': () => void;
 }
 
 // ========== Constants ==========
@@ -102,6 +111,8 @@ export class TranscriptWatcher extends EventEmitter {
   private _isRunning: boolean = false;
   private _isProcessing: boolean = false;
   private state: TranscriptState = this.getInitialState();
+  /** Whether an AskUserQuestion is pending (waiting for user response). */
+  private _pendingAskUserQuestion: boolean = false;
 
   constructor() {
     super();
@@ -143,6 +154,7 @@ export class TranscriptWatcher extends EventEmitter {
     this._transcriptPath = transcriptPath;
     this._isRunning = true;
     this.state = this.getInitialState();
+    this._pendingAskUserQuestion = false;
     this.filePosition = 0;
 
     // Check if file exists
@@ -265,9 +277,10 @@ export class TranscriptWatcher extends EventEmitter {
     try {
       const stat = statSync(this._transcriptPath);
       if (stat.size < this.filePosition) {
-        // File was truncated/replaced — reset and re-read from start
+        // File was truncated/replaced — tell the frontend to clear its view, then re-read from start
         this.filePosition = 0;
         this.state = this.getInitialState();
+        this.emit('transcript:clear');
       } else if (stat.size === this.filePosition) {
         return; // No new content
       }
@@ -352,6 +365,11 @@ export class TranscriptWatcher extends EventEmitter {
         this.state.isComplete = false;
         this.state.hasError = false;
         this.state.errorMessage = null;
+        // If an AskUserQuestion was pending, the user has now responded
+        if (this._pendingAskUserQuestion) {
+          this._pendingAskUserQuestion = false;
+          this.emit('transcript:ask_user_question_resolved');
+        }
         break;
       case 'system':
         // System messages are informational
@@ -385,6 +403,11 @@ export class TranscriptWatcher extends EventEmitter {
           this.state.toolExecuting = true;
           this.state.currentTool = block.name;
           this.emit('transcript:tool_start', block.name);
+          // AskUserQuestion: emit structured question data for the web UI dialog
+          if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions)) {
+            this._pendingAskUserQuestion = true;
+            this.emit('transcript:ask_user_question', block.input.questions as AskUserQuestionData[]);
+          }
         } else if (block.type === 'tool_result') {
           // Tool completed
           const wasError = block.is_error === true;
