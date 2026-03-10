@@ -54,6 +54,7 @@ export type HookEventType =
   | 'idle_prompt'
   | 'permission_prompt'
   | 'elicitation_dialog'
+  | 'ask_user_question'
   | 'stop'
   | 'teammate_idle'
   | 'task_completed';

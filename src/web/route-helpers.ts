@@ -73,6 +73,8 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
     'permission_mode',
     'stop_hook_active',
     'transcript_path',
+    'prompt', // ElicitationRequest: question text with numbered options
+    'message', // ElicitationRequest: alternative field name
   ];
 
   for (const key of allowedKeys) {
@@ -81,18 +83,23 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
     }
   }
 
-  // For tool_input, extract only summary fields (not full file content)
+  // For tool_input, extract only summary fields (not full file content).
+  // Exception: AskUserQuestion passes through its full questions array for the web UI dialog.
   if (safeFields.tool_input && typeof safeFields.tool_input === 'object') {
     const input = safeFields.tool_input as Record<string, unknown>;
-    const summary: Record<string, unknown> = {};
-    if (input.command) summary.command = String(input.command).slice(0, 500);
-    if (input.file_path) summary.file_path = String(input.file_path).slice(0, 500);
-    if (input.description) summary.description = String(input.description).slice(0, 200);
-    if (input.query) summary.query = String(input.query).slice(0, 200);
-    if (input.url) summary.url = String(input.url).slice(0, 500);
-    if (input.pattern) summary.pattern = String(input.pattern).slice(0, 200);
-    if (input.prompt) summary.prompt = String(input.prompt).slice(0, 200);
-    safeFields.tool_input = summary;
+    if (safeFields.tool_name === 'AskUserQuestion' && Array.isArray(input.questions)) {
+      safeFields.tool_input = { questions: input.questions };
+    } else {
+      const summary: Record<string, unknown> = {};
+      if (input.command) summary.command = String(input.command).slice(0, 500);
+      if (input.file_path) summary.file_path = String(input.file_path).slice(0, 500);
+      if (input.description) summary.description = String(input.description).slice(0, 200);
+      if (input.query) summary.query = String(input.query).slice(0, 200);
+      if (input.url) summary.url = String(input.url).slice(0, 500);
+      if (input.pattern) summary.pattern = String(input.pattern).slice(0, 200);
+      if (input.prompt) summary.prompt = String(input.prompt).slice(0, 200);
+      safeFields.tool_input = summary;
+    }
   }
 
   // Final size check - drop if serialized data exceeds limit

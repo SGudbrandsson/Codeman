@@ -251,6 +251,7 @@ const SSE_EVENTS = {
   HOOK_IDLE_PROMPT: 'hook:idle_prompt',
   HOOK_PERMISSION_PROMPT: 'hook:permission_prompt',
   HOOK_ELICITATION_DIALOG: 'hook:elicitation_dialog',
+  HOOK_ASK_USER_QUESTION: 'hook:ask_user_question',
   HOOK_STOP: 'hook:stop',
   HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
   HOOK_TASK_COMPLETED: 'hook:task_completed',
@@ -286,6 +287,8 @@ const SSE_EVENTS = {
   // Transcript
   TRANSCRIPT_BLOCK: 'transcript:block',
   TRANSCRIPT_CLEAR: 'transcript:clear',
+  TRANSCRIPT_ASK_USER_QUESTION: 'transcript:ask_user_question',
+  TRANSCRIPT_ASK_USER_QUESTION_RESOLVED: 'transcript:ask_user_question_resolved',
 
   // Worktree
   WORKTREE_SESSION_ENDED: 'worktree:sessionEnded',

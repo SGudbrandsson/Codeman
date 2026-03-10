@@ -27,7 +27,7 @@ export function registerHookEventRoutes(
     // Signal the respawn controller based on hook event type
     const controller = ctx.respawnControllers.get(sessionId);
     if (controller) {
-      if (event === 'elicitation_dialog') {
+      if (event === 'elicitation_dialog' || event === 'ask_user_question') {
         // Block auto-accept for question prompts
         controller.signalElicitation();
       } else if (event === 'stop') {

@@ -289,6 +289,12 @@ export const HookIdlePrompt = 'hook:idle_prompt' as const;
 export const HookPermissionPrompt = 'hook:permission_prompt' as const;
 /** Claude Code hook: elicitation dialog (Claude asking a question). */
 export const HookElicitationDialog = 'hook:elicitation_dialog' as const;
+/** Claude Code hook: AskUserQuestion tool — structured question with labeled options. */
+export const HookAskUserQuestion = 'hook:ask_user_question' as const;
+/** Transcript: AskUserQuestion tool detected — structured question with labeled options. */
+export const TranscriptAskUserQuestion = 'transcript:ask_user_question' as const;
+/** Transcript: AskUserQuestion resolved — user submitted a response. */
+export const TranscriptAskUserQuestionResolved = 'transcript:ask_user_question_resolved' as const;
 /** Claude Code hook: response complete. */
 export const HookStop = 'hook:stop' as const;
 /** Claude Code hook: teammate went idle. */
@@ -435,6 +441,8 @@ export const SseEvent = {
   TranscriptToolEnd,
   TranscriptBlock,
   TranscriptClear,
+  TranscriptAskUserQuestion,
+  TranscriptAskUserQuestionResolved,
 
   // Plan orchestration
   PlanStarted,
