@@ -2055,26 +2055,31 @@
   </div>
   <!-- Tabs -->
   <div class="mcp-tabs" id="pluginsTabs">
-    <button class="mcp-tab active" data-ptab="active">Active</button>
+    <button class="mcp-tab active" data-ptab="installed">Installed</button>
     <button class="mcp-tab" data-ptab="library">Library</button>
     <button class="mcp-tab" data-ptab="skills">Skills</button>
   </div>
 
-  <!-- Active tab -->
-  <div id="pluginsActivePane" class="mcp-pane">
+  <!-- Installed tab -->
+  <div id="pluginsInstalledPane" class="mcp-pane">
     <div id="pluginsActiveList" class="mcp-active-list">
       <div class="mcp-empty-state" id="pluginsEmptyState">No plugins installed. Browse the Library tab.</div>
     </div>
-    <div class="mcp-section-label" style="margin-top:12px">Install from name or URL</div>
-    <div class="plugins-install-row">
-      <input type="text" class="mcp-search" id="pluginsInstallInput" placeholder="superpowers or https://..." autocomplete="off">
-      <button class="mcp-btn-apply plugins-install-btn" id="pluginsInstallBtn">Install</button>
-    </div>
-    <div id="pluginsInstallStatus" class="plugins-install-status" style="display:none"></div>
   </div>
 
   <!-- Library tab -->
   <div id="pluginsLibraryPane" class="mcp-pane" style="display:none">
+    <div class="mcp-section-label">Install from name or URL</div>
+    <div class="plugins-install-row">
+      <input type="text" class="mcp-search" id="pluginsInstallInput" placeholder="superpowers or https://..." autocomplete="off">
+      <select id="pluginsInstallScope" class="plugins-scope-select" title="Installation scope">
+        <option value="user">Global</option>
+        <option value="project">Project</option>
+      </select>
+      <button class="mcp-btn-apply plugins-install-btn" id="pluginsInstallBtn">Install</button>
+    </div>
+    <div id="pluginsInstallStatus" class="plugins-install-status" style="display:none"></div>
+    <div class="mcp-section-label" style="margin-top:12px">Plugin Library</div>
     <div id="pluginsLibraryList" class="mcp-library-grid"></div>
     <div class="plugins-footer-link">
       <a href="https://claude.ai/plugins" target="_blank" rel="noopener">Browse more plugins &#x2197;</a>

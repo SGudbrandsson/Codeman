@@ -9963,6 +9963,19 @@ kbd {
 .plugins-project-select:focus {
   border-color: rgba(168, 85, 247, 0.5);
 }
+.plugins-scope-select {
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  outline: none;
+  flex-shrink: 0;
+}
+.plugins-scope-select:focus {
+  border-color: rgba(168, 85, 247, 0.5);
+}
 
 .plugins-skills-list {
   display: flex;

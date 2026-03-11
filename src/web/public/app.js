@@ -781,18 +781,20 @@ const PluginsPanel = {
   _projectPaths: [],
   _selectedProject: '__global__',
   _disabledMap: {},
+  _currentProjectPath: null,
 
   init() {
     this._panel        = document.getElementById('pluginsPanel');
     this._chip         = document.getElementById('pluginsChipBtn');
     this._tabs         = this._panel ? Array.from(this._panel.querySelectorAll('[data-ptab]')) : [];
-    this._activePane   = document.getElementById('pluginsActivePane');
+    this._activePane   = document.getElementById('pluginsInstalledPane');
     this._libraryPane  = document.getElementById('pluginsLibraryPane');
     this._skillsPane   = document.getElementById('pluginsSkillsPane');
     this._activeList   = document.getElementById('pluginsActiveList');
     this._libraryList  = document.getElementById('pluginsLibraryList');
     this._skillsList   = document.getElementById('pluginsSkillsList');
     this._installInput = document.getElementById('pluginsInstallInput');
+    this._installScope = document.getElementById('pluginsInstallScope');
     this._installBtn   = document.getElementById('pluginsInstallBtn');
     this._installStatus= document.getElementById('pluginsInstallStatus');
     this._projectSelect= document.getElementById('pluginsProjectSelect');
@@ -806,13 +808,14 @@ const PluginsPanel = {
       this._selectedProject = this._projectSelect.value;
       this._renderSkills();
     });
+    this._installScope?.addEventListener('change', () => this._renderLibrary());
 
     this._tabs.forEach(tab => {
       tab.addEventListener('click', () => {
         this._tabs.forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const pane = tab.dataset.ptab;
-        this._activePane.style.display  = pane === 'active' ? '' : 'none';
+        this._activePane.style.display  = pane === 'installed' ? '' : 'none';
         this._libraryPane.style.display = pane === 'library' ? '' : 'none';
         this._skillsPane.style.display  = pane === 'skills' ? '' : 'none';
         if (pane === 'library' && !this._library.length) this._loadLibrary();
@@ -832,6 +835,19 @@ const PluginsPanel = {
     this._chip?.classList.add('active');
     PanelBackdrop.show();
     this._loadInstalled();
+    this._updateInstallScopeDefault();
+  },
+
+  _updateInstallScopeDefault() {
+    if (!this._installScope) return;
+    const session = app.sessions?.get(this._sessionId);
+    if (session?.workingDir) {
+      this._installScope.value = 'project';
+      this._currentProjectPath = session.workingDir;
+    } else {
+      this._installScope.value = 'user';
+      this._currentProjectPath = null;
+    }
   },
 
   close() {
@@ -895,6 +911,11 @@ const PluginsPanel = {
           }
         }
       }
+      // Default scope to current session's project instead of global
+      const currentSession = app.sessions?.get(this._sessionId);
+      if (currentSession?.workingDir && this._projectPaths.includes(currentSession.workingDir)) {
+        this._selectedProject = currentSession.workingDir;
+      }
       this._populateProjectSelect();
       this._renderSkills();
     } catch (_e) { /* offline */ }
@@ -905,19 +926,33 @@ const PluginsPanel = {
     if (!name) { this._installInput?.focus(); return; }
     if (this._installBtn) { this._installBtn.disabled = true; this._installBtn.textContent = 'Installing\u2026'; }
     this._showInstallStatus('', '');
+    const scope = this._installScope?.value || 'user';
+    if (scope === 'project' && !this._currentProjectPath) {
+      this._showInstallStatus('No active session — switch scope to Global or open a session first', 'error');
+      if (this._installBtn) { this._installBtn.disabled = false; this._installBtn.textContent = 'Install'; }
+      return;
+    }
+    const body = { name, scope };
+    if (scope === 'project' && this._currentProjectPath) Object.assign(body, { projectPath: this._currentProjectPath });
     try {
       const res = await fetch('/api/plugins/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
-        this._showInstallStatus(data.message || 'Install failed', 'error');
+        this._showInstallStatus(data.error || 'Install failed', 'error');
       } else {
-        this._showInstallStatus('\u2713 Installed: ' + name, 'success');
         if (this._installInput) this._installInput.value = '';
         this._loadInstalled();
+        // Switch to Installed tab to show the newly installed plugin
+        this._tabs.forEach(t => t.classList.remove('active'));
+        const installedTab = this._tabs.find(t => t.dataset.ptab === 'installed');
+        if (installedTab) installedTab.classList.add('active');
+        this._activePane.style.display = '';
+        this._libraryPane.style.display = 'none';
+        this._skillsPane.style.display = 'none';
       }
     } catch (_e) {
       this._showInstallStatus('Network error', 'error');
@@ -926,10 +961,16 @@ const PluginsPanel = {
     }
   },
 
-  async _uninstallPlugin(pluginName) {
-    if (!confirm('Uninstall plugin "' + pluginName + '"?')) return;
+  async _uninstallPlugin(pluginKey, scope, projectPath) {
+    const displayName = pluginKey.split('@')[0];
+    const scopeLabel = scope === 'project' ? 'project scope' : 'global scope';
+    if (!confirm('Uninstall plugin "' + displayName + '" (' + scopeLabel + ')?')) return;
     try {
-      const res = await fetch('/api/plugins/' + encodeURIComponent(pluginName), { method: 'DELETE' });
+      const params = new URLSearchParams();
+      if (scope) params.set('scope', scope);
+      if (scope === 'project' && projectPath) params.set('projectPath', projectPath);
+      const qs = params.toString() ? '?' + params.toString() : '';
+      const res = await fetch('/api/plugins/' + encodeURIComponent(pluginKey) + qs, { method: 'DELETE' });
       if (res.ok) this._loadInstalled();
     } catch (_e) { /* network */ }
   },
@@ -1001,9 +1042,15 @@ const PluginsPanel = {
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mcp-server-remove';
-      removeBtn.title = 'Uninstall';
+      removeBtn.title = p.key === 'gsd@local' ? 'Managed outside Codeman' : 'Uninstall';
       removeBtn.textContent = '\u2715';
-      removeBtn.addEventListener('click', () => this._uninstallPlugin(p.pluginName));
+      if (p.key === 'gsd@local') {
+        removeBtn.disabled = true;
+        removeBtn.style.opacity = '0.3';
+        removeBtn.style.cursor = 'default';
+      } else {
+        removeBtn.addEventListener('click', () => this._uninstallPlugin(p.key, p.scope, p.projectPath));
+      }
 
       card.appendChild(avatar);
       card.appendChild(info);
@@ -1030,15 +1077,10 @@ const PluginsPanel = {
       installBtn.className = 'mcp-btn-apply plugins-install-btn';
       installBtn.style.cssText = 'padding:3px 8px;font-size:0.7rem';
       installBtn.textContent = 'Install \u2193';
+      installBtn.title = this._currentProjectPath ? 'Install (project scope)' : 'Install (global scope)';
       installBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (this._installInput) this._installInput.value = entry.installName;
-        this._tabs.forEach(t => t.classList.remove('active'));
-        const activeTab = this._tabs.find(t => t.dataset.ptab === 'active');
-        if (activeTab) activeTab.classList.add('active');
-        this._activePane.style.display = '';
-        this._libraryPane.style.display = 'none';
-        this._skillsPane.style.display = 'none';
         this._installPlugin();
       });
 
