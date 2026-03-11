@@ -4168,7 +4168,7 @@ class CodemanApp {
       title: 'Auto-Cleared',
       message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
-  },
+  }
 
   _onSessionAutoCompact(data) {
     const session = this.sessions.get(data.sessionId);
@@ -4186,7 +4186,7 @@ class CodemanApp {
     if (TranscriptView._sessionId === data.sessionId) {
       TranscriptView.showCompacting();
     }
-  },
+  }
 
   _onSessionCliInfo(data) {
     const session = this.sessions.get(data.sessionId);
