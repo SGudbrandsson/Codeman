@@ -67,6 +67,7 @@ import {
 import {
   buildInteractiveArgs,
   buildMcpArgs,
+  cleanupMcpConfig,
   buildPromptArgs,
   buildClaudeEnv,
   buildMuxAttachEnv,
@@ -1312,7 +1313,13 @@ export class Session extends EventEmitter {
       }
     }
 
-    // Capture /context output if awaiting refresh (interactive mode only)
+    // Capture /context output if awaiting refresh (interactive mode only).
+    // NOTE: Context output is parsed in two places:
+    //   1. HERE — in the raw PTY onData handler (mux-attached sessions where output
+    //      arrives as raw chunks before JSON parsing has a chance to run).
+    //   2. In processOutput() below — for non-JSON text lines in stream-json mode.
+    // Both push to _contextOutputLines and call _tryParseContextOutput. The flag
+    // _awaitingContext is cleared immediately on success so only one path resolves.
     if (this._awaitingContext) {
       const cleanData = getCleanData();
       for (const line of cleanData.split(/\r?\n/)) {
@@ -1894,7 +1901,8 @@ export class Session extends EventEmitter {
           this._textOutput.append(line + '\n');
         }
       } else if (trimmed) {
-        // Capture /context output if awaiting refresh
+        // Capture /context output if awaiting refresh (stream-json / non-JSON text path).
+        // See the companion block in the PTY onData handler for why there are two sites.
         if (this._awaitingContext) {
           this._contextOutputLines.push(cleanLine);
           const parsed = this._tryParseContextOutput(this._contextOutputLines);
@@ -2328,6 +2336,9 @@ export class Session extends EventEmitter {
     this._awaitingContext = false;
     this._contextOutputLines = [];
 
+    // Clean up MCP temp config file written by buildMcpArgs
+    cleanupMcpConfig(this.id);
+
     // Immediately cleanup Promise callbacks to prevent orphaned references
     // during the rest of stop() processing (e.g., if mux kill times out)
     if (this.rejectPromise && !this._promptResolved) {
@@ -2411,6 +2422,8 @@ export class Session extends EventEmitter {
    * Unlike `stop()`, this does NOT set `_isStopped = true`.
    */
   async prepareForRestart(): Promise<void> {
+    // Clean up the previous MCP temp config file before writing a new one on restart
+    cleanupMcpConfig(this.id);
     if (this.ptyProcess) {
       const pid = this.ptyProcess.pid;
       try {

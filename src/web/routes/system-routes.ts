@@ -824,8 +824,18 @@ export function registerSystemRoutes(
     // Only resolve when a full breakdown (system/conversation/tools) is present —
     // passive contextUpdate events (pct/inputTokens/maxTokens only) are ignored.
     return new Promise<object>((resolve) => {
-      const timeout = setTimeout(() => {
+      let settled = false;
+
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         session.off('contextUpdate', onContextUpdate);
+        session.off('exit', onExit);
+      }
+
+      const timeout = setTimeout(() => {
+        cleanup();
         resolve({ id, pct: null, inputTokens: null, maxTokens: null });
       }, 8_000);
 
@@ -838,12 +848,17 @@ export function registerSystemRoutes(
         tools?: number;
       }) {
         if (data.system === undefined) return; // passive update — wait for full breakdown
-        clearTimeout(timeout);
-        session.off('contextUpdate', onContextUpdate);
+        cleanup();
         resolve({ id, ...data });
       }
 
+      function onExit() {
+        cleanup();
+        resolve({ id, pct: null, inputTokens: null, maxTokens: null });
+      }
+
       session.on('contextUpdate', onContextUpdate);
+      session.once('exit', onExit);
       session.refreshContext();
     });
   });

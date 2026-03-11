@@ -14,10 +14,12 @@ import { findSessionOrFail } from '../route-helpers.js';
 import type { SessionPort, EventPort } from '../ports/index.js';
 import { MCP_LIBRARY } from '../../mcp-library.js';
 import { SseEvent } from '../sse-events.js';
+import { McpServerListSchema } from '../schemas.js';
 
 const SMITHERY_BASE = 'https://registry.smithery.ai';
 const marketplaceCache = new Map<string, { data: unknown; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 100;
 
 export async function registerMcpRoutes(app: FastifyInstance, ctx: SessionPort & EventPort) {
   // GET session MCP servers
@@ -31,11 +33,15 @@ export async function registerMcpRoutes(app: FastifyInstance, ctx: SessionPort &
   app.put('/api/sessions/:id/mcp', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
-    const servers = req.body as unknown[];
-    if (!Array.isArray(servers)) {
-      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Body must be array'));
+    const parsed = McpServerListSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send(
+          createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Invalid MCP server list')
+        );
     }
-    session.mcpServers = servers as typeof session.mcpServers;
+    session.mcpServers = parsed.data;
     ctx.persistSessionState(session);
     return reply.send({ ok: true });
   });
@@ -45,12 +51,20 @@ export async function registerMcpRoutes(app: FastifyInstance, ctx: SessionPort &
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
 
-    const body = req.body as { mcpServers?: unknown[] } | null;
+    const body = req.body as { mcpServers?: unknown } | null;
     if (body?.mcpServers !== undefined) {
-      if (!Array.isArray(body.mcpServers)) {
-        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'mcpServers must be array'));
+      const parsed = McpServerListSchema.safeParse(body.mcpServers);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send(
+            createErrorResponse(
+              ApiErrorCode.INVALID_INPUT,
+              parsed.error.issues[0]?.message ?? 'Invalid MCP server list'
+            )
+          );
       }
-      session.mcpServers = body.mcpServers as typeof session.mcpServers;
+      session.mcpServers = parsed.data;
       ctx.persistSessionState(session);
     }
 
@@ -86,6 +100,11 @@ export async function registerMcpRoutes(app: FastifyInstance, ctx: SessionPort &
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error('Smithery returned ' + res.status);
       const data = await res.json();
+      // Evict oldest entry when cache is full
+      if (marketplaceCache.size >= CACHE_MAX_ENTRIES) {
+        const oldestKey = marketplaceCache.keys().next().value;
+        if (oldestKey !== undefined) marketplaceCache.delete(oldestKey);
+      }
       marketplaceCache.set(cacheKey, { data, ts: Date.now() });
       return reply.send(data);
     } catch (err) {

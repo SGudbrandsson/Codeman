@@ -826,16 +826,29 @@ export class WebServer extends EventEmitter {
   }
 
   /** Return the transcript file path for a session.
-   * Always scans the project directory for the newest JSONL file — this ensures
-   * we pick up new conversations created by /clear without waiting for a hook. */
+   * Prefers the existing watcher path (already resolved by hook events) to avoid
+   * a synchronous directory scan on every request. Falls back to scanning the
+   * project directory so we pick up new conversations created by /clear. */
   private getTranscriptPath(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
 
+    // Fast path: watcher already tracks the correct file — use it directly
+    const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
+    if (watcherPath) {
+      try {
+        statSync(watcherPath); // verify it still exists
+        return watcherPath;
+      } catch {
+        /* file gone — fall through to directory scan */
+      }
+    }
+
+    // Slow path: scan for the newest JSONL in the project dir (covers /clear creating
+    // new conversations before a hook event has fired to update the watcher)
     const escapedDir = session.workingDir.replace(/\//g, '-');
     const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
 
-    // Scan for the newest JSONL in the project dir — covers /clear creating new conversations
     try {
       const files = readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
       if (files.length > 0) {
@@ -852,25 +865,13 @@ export class WebServer extends EventEmitter {
             /* skip */
           }
         }
-        const newestPath = join(projectDir, newest);
-        // If a hook already set a watcher on a specific path, prefer the newer of the two
-        const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
-        if (watcherPath) {
-          try {
-            const watcherMtime = statSync(watcherPath).mtimeMs;
-            return watcherMtime >= newestMtime ? watcherPath : newestPath;
-          } catch {
-            /* watcher path gone */
-          }
-        }
-        return newestPath;
+        return join(projectDir, newest);
       }
     } catch {
       /* dir doesn't exist yet */
     }
 
-    // Fallback: use the watcher path if available
-    return this.transcriptWatchers.get(sessionId)?.transcriptPath ?? null;
+    return null;
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */

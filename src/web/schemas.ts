@@ -569,6 +569,28 @@ export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
 export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
 export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
 
+// ========== MCP Routes ==========
+
+/** Schema for a single MCP server entry (PUT /api/sessions/:id/mcp) */
+export const McpServerEntrySchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    enabled: z.boolean(),
+    // stdio transport
+    command: z.string().max(500).optional(),
+    args: z.array(z.string().max(500)).max(50).optional(),
+    env: z.record(z.string().max(100), z.string().max(1000)).optional(),
+    // http/sse transport
+    type: z.enum(['http', 'sse']).optional(),
+    url: z.string().url().max(2000).optional(),
+    headers: z.record(z.string().max(100), z.string().max(1000)).optional(),
+  })
+  .refine((s) => s.command || (s.type && s.url), {
+    message: 'MCP server must have either a command (stdio) or type+url (http/sse)',
+  });
+
+export const McpServerListSchema = z.array(McpServerEntrySchema).max(50);
+
 export const CreateWorktreeSchema = z.object({
   branch: z.string().min(1).max(200),
   isNew: z.boolean(),

@@ -219,6 +219,11 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
     if (!name || typeof name !== 'string' || !name.trim()) {
       return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'name is required'));
     }
+    const trimmed = name.trim();
+    // Validate: npm package name characters only (scoped names like @scope/pkg allowed)
+    if (!/^(@[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9._-]+$/.test(trimmed) || trimmed.length > 214) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid plugin name format'));
+    }
     const result = await runClaudePlugin('install', name.trim());
     if (!result.ok) {
       return reply.code(500).send(createErrorResponse(ApiErrorCode.INTERNAL_ERROR, result.output || 'Install failed'));

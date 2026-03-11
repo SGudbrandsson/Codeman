@@ -8,7 +8,7 @@
  * @module session-cli-builder
  */
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClaudeMode, McpServerEntry } from './types.js';
@@ -109,6 +109,19 @@ export function buildMcpArgs(
     args.push('--resume', resumeId);
   }
   return args;
+}
+
+/**
+ * Delete the temp MCP config file written by buildMcpArgs, if it exists.
+ * Call this from session stop/restart to prevent accumulation of stale temp files.
+ */
+export function cleanupMcpConfig(sessionId: string): void {
+  const configPath = join(tmpdir(), `codeman-mcp-${sessionId}.json`);
+  try {
+    unlinkSync(configPath);
+  } catch {
+    // File may not exist if no MCP servers were configured — that's fine
+  }
 }
 
 /**
