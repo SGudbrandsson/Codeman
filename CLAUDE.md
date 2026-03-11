@@ -201,11 +201,16 @@ The worktree API is used by the `codeman-worktrees` skill to create isolated git
 - `branch` — full git branch name (string, required)
 - `isNew` — `true` = create new branch, `false` = checkout existing (boolean, required)
 - `mode` — `"claude"` | `"opencode"` | `"shell"` (optional, inherits from parent)
-- `notes` — bug description or task context, max 2000 chars (optional) — stored as `worktreeNotes` on `SessionState`
+- `notes` — bug description or task context, max 2000 chars (optional) — stored as `worktreeNotes` on `SessionState` and **sent as the initial Claude prompt** when the session starts
 
 **Response:** `{ success: true, session: SessionState, worktreePath: string }`
 
 **Finding the right parent session:** Filter `GET /api/sessions` for sessions where `worktreeBranch` is null/absent (main sessions only, not sub-worktrees), then match `workingDir` against the project name.
+
+**`POST /api/sessions/:id/worktree/merge` — merge branch back:**
+- Called on the **origin/parent** session with `{ "branch": "fix/my-branch" }` in the body
+- Returns `{ success: false, uncommittedChanges: true, message: "..." }` if the worktree has uncommitted files — **commit them first**, then retry. This is the cause of "already up to date" confusion when the Claude session hasn't committed yet.
+- Full lifecycle: commit in worktree → merge → `DELETE /api/sessions/:id/worktree` (removes disk) → `DELETE /api/sessions/:id` (removes from sidebar)
 
 ## Adding Features
 
