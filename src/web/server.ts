@@ -308,11 +308,13 @@ export class WebServer extends EventEmitter {
     this.https = https;
     this.testMode = testMode;
 
+    // maxParamLength raised to 300 so plugin registry keys up to 214 chars reach the DELETE handler
+    // rather than silently matching no route and returning a 404.
     if (https) {
       const { key, cert } = getOrCreateSelfSignedCert();
-      this.app = Fastify({ logger: false, https: { key, cert } });
+      this.app = Fastify({ logger: false, https: { key, cert }, routerOptions: { maxParamLength: 300 } });
     } else {
-      this.app = Fastify({ logger: false });
+      this.app = Fastify({ logger: false, routerOptions: { maxParamLength: 300 } });
     }
     this.mux = createMultiplexer();
 
