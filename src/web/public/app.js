@@ -1596,6 +1596,7 @@ const TranscriptView = {
       state.scrolledUp = false;
     }
     if (this._container) this._container.textContent = '';
+    this._compactingEl = null;
     if (this._sessionId) this.load(this._sessionId);
   },
 
@@ -1611,6 +1612,7 @@ const TranscriptView = {
       state._sseBuffer = null;
     }
     if (this._container) this._container.textContent = '';
+    this._compactingEl = null;
   },
 
   show(sessionId) {
