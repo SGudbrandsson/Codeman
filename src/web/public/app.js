@@ -1780,6 +1780,18 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
+      // Render task-notification blocks as a compact summary pill.
+      // The full message includes the XML plus a trailing system instruction
+      // ("Read the output file to retrieve the result: ...") — hide both.
+      if (block.text.includes('<task-notification>')) {
+        const summaryMatch = block.text.match(/<summary>([\s\S]*?)<\/summary>/);
+        const summary = summaryMatch ? summaryMatch[1].trim() : 'Background task completed';
+        const pill = document.createElement('div');
+        pill.className = 'tv-task-pill';
+        pill.textContent = '\u2713 ' + summary;
+        return pill;
+      }
+
       const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+|task-notification)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+|task-notification)>/g;
       const stripped = block.text.replace(SYSTEM_XML_RE, '').trim();
       if (!stripped) {
