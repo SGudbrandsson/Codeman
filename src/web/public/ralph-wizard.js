@@ -862,6 +862,7 @@ Object.assign(CodemanApp.prototype, {
     win.id = `plan-subagent-${agentId}`;
     win.style.left = `${x}px`;
     win.style.top = `${y}px`;
+    if (this.planSubagentWindowZIndex >= ZINDEX_PLAN_SUBAGENT_MAX) this._normalizePlanSubagentZIndexes();
     win.style.zIndex = ++this.planSubagentWindowZIndex;
 
     const typeLabels = { research: 'Research Agent', planner: 'Planner' };
@@ -910,14 +911,17 @@ Object.assign(CodemanApp.prototype, {
       startY = e.clientY;
       startLeft = parseInt(win.style.left) || 0;
       startTop = parseInt(win.style.top) || 0;
+      if (this.planSubagentWindowZIndex >= ZINDEX_PLAN_SUBAGENT_MAX) this._normalizePlanSubagentZIndexes();
       win.style.zIndex = ++this.planSubagentWindowZIndex;
       e.preventDefault();
     };
 
     const moveHandler = (e) => {
       if (!isDragging) return;
+      const headerEl = document.querySelector('.header');
+      const minTop = headerEl ? headerEl.offsetHeight + 4 : 54;
       const newLeft = Math.max(10, Math.min(startLeft + (e.clientX - startX), window.innerWidth - 290));
-      const newTop = Math.max(10, Math.min(startTop + (e.clientY - startY), window.innerHeight - 110));
+      const newTop = Math.max(minTop, Math.min(startTop + (e.clientY - startY), window.innerHeight - 110));
       win.style.left = `${newLeft}px`;
       win.style.top = `${newTop}px`;
     };
@@ -957,6 +961,20 @@ Object.assign(CodemanApp.prototype, {
       if (statusTextEl) statusTextEl.textContent = status === 'cancelled' ? 'Cancelled' : 'Failed';
       if (detailEl) detailEl.textContent = error || '';
     }
+  },
+
+  // Renumber all plan subagent window z-indexes back to the base range.
+  // Called when planSubagentWindowZIndex reaches ZINDEX_PLAN_SUBAGENT_MAX.
+  _normalizePlanSubagentZIndexes() {
+    const visible = Array.from(this.planSubagents.values())
+      .filter(w => w.element)
+      .map(w => ({ el: w.element, z: parseInt(w.element.style.zIndex) || ZINDEX_PLAN_SUBAGENT_BASE }))
+      .sort((a, b) => a.z - b.z);
+    visible.forEach((w, idx) => {
+      w.el.style.zIndex = ZINDEX_PLAN_SUBAGENT_BASE + idx;
+    });
+    // Clamp so the next ++ still lands within the valid range
+    this.planSubagentWindowZIndex = Math.min(ZINDEX_PLAN_SUBAGENT_BASE + visible.length, ZINDEX_PLAN_SUBAGENT_MAX - 2);
   },
 
   closePlanSubagentWindows() {
