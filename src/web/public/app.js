@@ -1628,6 +1628,7 @@ const TranscriptView = {
       state.scrolledUp = false;
     }
     if (this._container) this._container.textContent = '';
+    this._compactingEl = null;
     if (this._sessionId) this.load(this._sessionId);
   },
 
@@ -1643,6 +1644,7 @@ const TranscriptView = {
       state._sseBuffer = null;
     }
     if (this._container) this._container.textContent = '';
+    this._compactingEl = null;
   },
 
   show(sessionId) {
@@ -1714,6 +1716,34 @@ const TranscriptView = {
         this._workingHideTimer = null;
         overlay.style.display = 'none';
       }, 4000);
+    }
+  },
+
+  /** Insert an animated "Compacting context..." pill at the bottom of the transcript.
+   *  Stored as _compactingEl so _renderTextBlock can remove it when the compact summary arrives. */
+  showCompacting() {
+    if (!this._container || this._compactingEl) return;
+    const pill = document.createElement('div');
+    pill.className = 'tv-compacting-pill';
+    const dots = document.createElement('span');
+    dots.className = 'tv-compacting-dots';
+    for (let i = 0; i < 3; i++) {
+      dots.appendChild(document.createElement('span'));
+    }
+    const lbl = document.createElement('span');
+    lbl.textContent = 'Compacting context';
+    pill.appendChild(dots);
+    pill.appendChild(lbl);
+    this._compactingEl = pill;
+    this._container.appendChild(pill);
+    this._scrollToBottom(false);
+  },
+
+  /** Remove the compacting placeholder. Called when the compact summary text block arrives. */
+  clearCompacting() {
+    if (this._compactingEl) {
+      this._compactingEl.remove();
+      this._compactingEl = null;
     }
   },
 
@@ -1812,11 +1842,23 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
-      const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+|task-notification)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+|task-notification)>/g;
+      // Render task-notification blocks as a compact summary pill.
+      // The full message includes the XML plus a trailing system instruction
+      // ("Read the output file to retrieve the result: ...") — hide both.
+      if (block.text.includes('<task-notification>')) {
+        const summaryMatch = block.text.match(/<summary>([\s\S]*?)<\/summary>/);
+        const summary = summaryMatch ? summaryMatch[1].trim() : 'Background task completed';
+        const pill = document.createElement('div');
+        pill.className = 'tv-task-pill';
+        pill.textContent = '\u2713 ' + summary;
+        return pill;
+      }
+
+      const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+)>/g;
       const stripped = block.text.replace(SYSTEM_XML_RE, '').trim();
       if (!stripped) {
         // Completely hide caveat/task-notification — pure system metadata with no user value
-        if (/<local-command-caveat>/.test(block.text) || /<task-notification>/.test(block.text)) {
+        if (/<local-command-caveat>/.test(block.text)) {
           return null;
         }
         // Show local command stdout as a muted monospace pill (strip ANSI codes)
@@ -1841,6 +1883,7 @@ const TranscriptView = {
       // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill
       const COMPACT_MARKER = 'This session is being continued from a previous conversation that ran out of context.';
       if (block.text.startsWith(COMPACT_MARKER)) {
+        this.clearCompacting();
         const wrap = document.createElement('div');
         wrap.className = 'tv-compact-block';
 
@@ -2076,6 +2119,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_IDLE, '_onSessionIdle'],
   [SSE_EVENTS.SESSION_WORKING, '_onSessionWorking'],
   [SSE_EVENTS.SESSION_AUTO_CLEAR, '_onSessionAutoClear'],
+  [SSE_EVENTS.SESSION_AUTO_COMPACT, '_onSessionAutoCompact'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
 
   // Scheduled runs
@@ -2280,6 +2324,10 @@ class CodemanApp {
 
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
+
+    // Tab status dot debounce timers (300ms show / 4000ms hide)
+    this._tabStatusTimers = new Map();     // session id -> show-debounce timer id
+    this._tabStatusHideTimers = new Map(); // session id -> hide-debounce timer id
 
     // Pending hooks per session: Map<sessionId, Set<hookType>>
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
@@ -2609,6 +2657,25 @@ class CodemanApp {
     }
 
     this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
+
+    // OSC-based busy/idle detection — more reliable than spinner character scanning.
+    // onTitleChange fires on OSC 0/2 title-change sequences from the PTY.
+    // registerOscHandler(133) captures shell integration marks (A/B/C/D) for reliable
+    // prompt-shown / pre-execution signals if Claude Code emits them.
+    this.terminal.onTitleChange((title) => {
+      // Enable capture for investigation: run `window._oscTitleLog = []` in the browser console.
+      if (window._oscTitleLog) window._oscTitleLog.push({ title, at: Date.now() });
+      this._onTerminalTitleChange(title);
+    });
+
+    if (this.terminal.parser) {
+      // OSC 133: A=prompt-start, B=prompt-end (idle), C=pre-exec (busy), D=exec-done (idle)
+      this.terminal.parser.registerOscHandler(133, (data) => {
+        if (window._osc133Log) window._osc133Log.push({ data, at: Date.now() });
+        this._onOsc133(data);
+        return true; // handler consumed the sequence
+      });
+    }
 
     // On mobile Safari, delay initial fit() to allow layout to settle
     // This prevents 0-column terminals caused by fit() running before container is sized
@@ -3814,6 +3881,7 @@ class CodemanApp {
   }
 
   _onSessionCreated(data) {
+    data.displayStatus = data.status || 'idle';
     this.sessions.set(data.id, data);
     // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
@@ -3830,6 +3898,8 @@ class CodemanApp {
     const session = data.session || data;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
+    // Preserve displayStatus from previous session so debounce is not reset by server updates
+    session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
     this.updateCost();
@@ -3977,6 +4047,13 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'stopped';
+      // Cancel any in-flight tab status debounce timers — a 4s hide timer could otherwise
+      // fire after exit and overwrite displayStatus back to 'idle' on a stopped session.
+      const tabShowTimer = this._tabStatusTimers.get(data.id);
+      if (tabShowTimer) { clearTimeout(tabShowTimer); this._tabStatusTimers.delete(data.id); }
+      const tabHideTimer = this._tabStatusHideTimers.get(data.id);
+      if (tabHideTimer) { clearTimeout(tabHideTimer); this._tabStatusHideTimers.delete(data.id); }
+      session.displayStatus = 'stopped';
       this.renderSessionTabs();
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
@@ -4007,7 +4084,7 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'idle';
-      this.renderSessionTabs();
+      this._updateTabStatusDebounced(data.id, 'idle');
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -4042,7 +4119,7 @@ class CodemanApp {
       if (!this.pendingHooks.has(data.id)) {
         this.tabAlerts.delete(data.id);
       }
-      this.renderSessionTabs();
+      this._updateTabStatusDebounced(data.id, 'busy');
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -4058,12 +4135,63 @@ class CodemanApp {
     }
   }
 
+  /** Called when xterm receives an OSC 0/2 title-change sequence from the PTY.
+   *  Patterns are captured via window._oscTitleLog for investigation.
+   *  TODO: implement title-pattern-based idle detection once patterns are understood. */
+  _onTerminalTitleChange(_title) {
+    // No-op until title patterns are understood from _oscTitleLog investigation.
+  }
+
+  /** Called when xterm receives an OSC 133 shell-integration sequence.
+   *  Provides reliable idle/busy signals if Claude Code emits these marks.
+   *  A=prompt-start, B=prompt-end (idle), C=pre-execution (busy), D=exec-done (idle). */
+  _onOsc133(data) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    if (data === 'B' || data === 'A') {
+      // Prompt shown — reliable idle signal
+      if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(false);
+      this._updateTabStatusDebounced(sessionId, 'idle');
+    } else if (data === 'C') {
+      // Pre-execution — reliable busy signal
+      if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(true);
+      this._updateTabStatusDebounced(sessionId, 'busy');
+    }
+  }
+
   /** Toggle the send button between send (idle) and stop/ESC (working) states */
   _updateSendBtn(isWorking) {
     const btn = document.getElementById('composeSendBtn');
     if (!btn) return;
     btn.classList.toggle('is-working', isWorking);
     btn.setAttribute('aria-label', isWorking ? 'Stop (ESC)' : 'Send');
+  }
+
+  /** Debounce tab status dot updates — same 300ms show / 4000ms hide as the typing indicator.
+   *  Prevents rapid busy->idle->busy flicker from frequent SESSION_WORKING/SESSION_IDLE events. */
+  _updateTabStatusDebounced(sessionId, status) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (status === 'busy') {
+      clearTimeout(this._tabStatusHideTimers.get(sessionId));
+      this._tabStatusHideTimers.delete(sessionId);
+      if (!this._tabStatusTimers.has(sessionId)) {
+        this._tabStatusTimers.set(sessionId, setTimeout(() => {
+          this._tabStatusTimers.delete(sessionId);
+          const s = this.sessions.get(sessionId);
+          if (s) { s.displayStatus = 'busy'; this.renderSessionTabs(); }
+        }, 300));
+      }
+    } else {
+      clearTimeout(this._tabStatusTimers.get(sessionId));
+      this._tabStatusTimers.delete(sessionId);
+      clearTimeout(this._tabStatusHideTimers.get(sessionId));
+      this._tabStatusHideTimers.set(sessionId, setTimeout(() => {
+        this._tabStatusHideTimers.delete(sessionId);
+        const s = this.sessions.get(sessionId);
+        if (s) { s.displayStatus = status; this.renderSessionTabs(); }
+      }, 4000));
+    }
   }
 
   _onSessionAutoClear(data) {
@@ -4080,6 +4208,24 @@ class CodemanApp {
       title: 'Auto-Cleared',
       message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
+  }
+
+  _onSessionAutoCompact(data) {
+    const session = this.sessions.get(data.sessionId);
+    if (data.sessionId === this.activeSessionId) {
+      this.showToast('Compacting context...', 'info');
+    }
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'auto-compact',
+      sessionId: data.sessionId,
+      sessionName: session?.name || this.getShortId(data.sessionId),
+      title: 'Compacting Context',
+      message: `Compacting at ${(data.tokens || 0).toLocaleString()} tokens`,
+    });
+    if (TranscriptView._sessionId === data.sessionId) {
+      TranscriptView.showCompacting();
+    }
   }
 
   _onSessionCliInfo(data) {
@@ -5376,6 +5522,11 @@ class CodemanApp {
       clearTimeout(timer);
     }
     this.idleTimers.clear();
+    // Clear tab status debounce timers to prevent stale dot updates after reconnect
+    for (const timer of this._tabStatusTimers.values()) clearTimeout(timer);
+    this._tabStatusTimers.clear();
+    for (const timer of this._tabStatusHideTimers.values()) clearTimeout(timer);
+    this._tabStatusHideTimers.clear();
     // Clear flicker filter state
     if (this.flickerFilterTimeout) {
       clearTimeout(this.flickerFilterTimeout);
@@ -5445,6 +5596,7 @@ class CodemanApp {
       this.runSummaryAutoRefreshTimer = null;
     }
     data.sessions.forEach(s => {
+      s.displayStatus = s.status || 'idle';
       this.sessions.set(s.id, s);
       // Load ralph state from session data (only if not explicitly closed by user)
       if ((s.ralphLoop || s.ralphTodos) && !this.ralphClosedSessions.has(s.id)) {
@@ -5638,7 +5790,7 @@ class CodemanApp {
         if (!tab) continue;
 
         const isActive = id === this.activeSessionId;
-        const status = session.status || 'idle';
+        const status = session.displayStatus ?? session.status ?? 'idle';
         const name = this.getSessionName(session);
         const taskStats = session.taskStats || { running: 0, total: 0 };
         const hasRunningTasks = taskStats.running > 0;
@@ -5752,7 +5904,7 @@ class CodemanApp {
       if (!session) continue; // Skip if session was removed
 
       const isActive = id === this.activeSessionId;
-      const status = session.status || 'idle';
+      const status = session.displayStatus ?? session.status ?? 'idle';
       const name = this.getSessionName(session);
       const mode = session.mode || 'claude';
       const color = session.color || 'default';
@@ -6441,6 +6593,10 @@ class CodemanApp {
       clearTimeout(idleTimer);
       this.idleTimers.delete(sessionId);
     }
+    const tabShowTimer = this._tabStatusTimers.get(sessionId);
+    if (tabShowTimer) { clearTimeout(tabShowTimer); this._tabStatusTimers.delete(sessionId); }
+    const tabHideTimer = this._tabStatusHideTimers.get(sessionId);
+    if (tabHideTimer) { clearTimeout(tabHideTimer); this._tabStatusHideTimers.delete(sessionId); }
     // Clean up respawn state
     delete this.respawnStatus[sessionId];
     delete this.respawnTimers[sessionId];

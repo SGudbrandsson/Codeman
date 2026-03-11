@@ -202,6 +202,7 @@ const SSE_EVENTS = {
   SESSION_IDLE: 'session:idle',
   SESSION_WORKING: 'session:working',
   SESSION_AUTO_CLEAR: 'session:autoClear',
+  SESSION_AUTO_COMPACT: 'session:autoCompact',
   SESSION_CLI_INFO: 'session:cliInfo',
   SESSION_CONTEXT_USAGE: 'session:contextUsage',
 
