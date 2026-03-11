@@ -59,7 +59,9 @@ const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 
 // Z-index base values for layered floating windows
 const ZINDEX_SUBAGENT_BASE = 1000;
+const ZINDEX_SUBAGENT_MAX = 1099;       // Cap: stay below ZINDEX_NAV (1150 in CSS)
 const ZINDEX_PLAN_SUBAGENT_BASE = 1100;
+const ZINDEX_PLAN_SUBAGENT_MAX = 1149;  // Cap: stay below ZINDEX_NAV (1150 in CSS)
 const ZINDEX_LOG_VIEWER_BASE = 2000;
 const ZINDEX_IMAGE_POPUP_BASE = 3000;
 

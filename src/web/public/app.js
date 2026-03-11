@@ -13453,6 +13453,7 @@ class CodemanApp {
         existing.element.style.display = 'flex';
         existing.hidden = false;
       }
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       existing.element.style.zIndex = ++this.subagentWindowZIndex;
       if (existing.minimized) {
         this.restoreSubagentWindow(windowId);
@@ -13485,6 +13486,7 @@ class CodemanApp {
     const win = document.createElement('div');
     win.className = 'subagent-window has-terminal';
     win.id = `subagent-window-${windowId}`;
+    if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
     win.style.zIndex = ++this.subagentWindowZIndex;
     win.style.left = `${finalX}px`;
     win.style.top = `${finalY}px`;
@@ -13538,6 +13540,7 @@ class CodemanApp {
 
     // Focus on click
     win.addEventListener('mousedown', () => {
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       win.style.zIndex = ++this.subagentWindowZIndex;
     });
 
