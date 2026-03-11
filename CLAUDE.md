@@ -179,6 +179,33 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ~111 handlers across 12 route files in `src/web/routes/`: system (35), sessions (24), ralph (9), plan (8), respawn (7), cases (7), files (5), mux (5), scheduled (4), push (4), teams (2), hooks (1). Each file has `@fileoverview` with endpoint details.
 
+### Worktree API (do not break)
+
+The worktree API is used by the `codeman-worktrees` skill to create isolated git worktrees + sessions programmatically. **Do not change these endpoint paths or request/response shapes without updating the skill at `skills/codeman-worktrees/SKILL.md` and `~/.claude/skills/codeman-worktrees/SKILL.md`.**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/sessions` | List all sessions — used to find parent session by `workingDir` |
+| `POST` | `/api/sessions/:id/worktree` | Create worktree + spawn new session |
+| `POST` | `/api/sessions/:id/worktree/merge` | Merge worktree branch back |
+| `DELETE` | `/api/sessions/:id/worktree` | Remove worktree from disk |
+| `GET` | `/api/sessions/:id/worktree/branches` | List branches for a session's git root |
+| `GET` | `/api/worktrees` | List dormant (kept) worktrees |
+| `POST` | `/api/worktrees/:id/resume` | Resume a dormant worktree as new session |
+| `DELETE` | `/api/worktrees/:id` | Remove dormant entry |
+
+**`POST /api/sessions/:id/worktree` body** (`CreateWorktreeSchema`):
+```json
+{ "branch": "feat/my-feature", "isNew": true, "mode": "claude" }
+```
+- `branch` — full git branch name (string, required)
+- `isNew` — `true` = create new branch, `false` = checkout existing (boolean, required)
+- `mode` — `"claude"` | `"opencode"` | `"shell"` (optional, inherits from parent)
+
+**Response:** `{ success: true, session: SessionState, worktreePath: string }`
+
+**Finding the right parent session:** Filter `GET /api/sessions` for sessions where `worktreeBranch` is null/absent (main sessions only, not sub-worktrees), then match `workingDir` against the project name.
+
 ## Adding Features
 
 - **API endpoint**: Types in `src/types/` domain file, route in `src/web/routes/*-routes.ts`, use `createErrorResponse()`. Validate with Zod schemas in `schemas.ts`.
