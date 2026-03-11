@@ -263,6 +263,7 @@ export class Session extends EventEmitter {
   readonly worktreeBranch?: string;
   readonly worktreeOriginId?: string;
   readonly worktreeNotes?: string;
+  private _initialPromptSent: boolean = false;
   readonly createdAt: number;
   readonly mode: SessionMode;
 
@@ -1002,6 +1003,8 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
           // Create a new mux session
+          const initialPromptArgs = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
+          if (initialPromptArgs.length) this._initialPromptSent = true;
           this._muxSession = await this._mux.createSession({
             sessionId: this.id,
             workingDir: this.workingDir,
@@ -1012,6 +1015,7 @@ export class Session extends EventEmitter {
             claudeMode: this._claudeMode,
             allowedTools: this._allowedTools,
             openCodeConfig: this._openCodeConfig,
+            extraArgs: initialPromptArgs,
           });
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness
@@ -1102,9 +1106,12 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
+        const initialArg = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
+        if (initialArg.length) this._initialPromptSent = true;
         const args = [
           ...buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools),
           ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
+          ...initialArg,
         ];
         this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',

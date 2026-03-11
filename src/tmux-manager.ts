@@ -373,7 +373,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * In test mode: creates an in-memory session only (no real tmux session).
    */
   async createSession(options: CreateSessionOptions): Promise<MuxSession> {
-    const { sessionId, workingDir, mode, name, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
+    const {
+      sessionId,
+      workingDir,
+      mode,
+      name,
+      niceConfig,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+      extraArgs,
+    } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
     if (!isValidMuxName(muxName)) {
@@ -436,6 +447,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      extraArgs,
     });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
