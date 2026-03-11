@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1683">
+  <link rel="stylesheet" href="styles.css?v=0.1684">
   <link rel="stylesheet" href="mobile.css?v=0.1668" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -2039,7 +2039,7 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.19"></script>
-  <script defer src="app.js?v=0.4.95"></script>
+  <script defer src="app.js?v=0.4.96"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
@@ -2052,26 +2052,31 @@
   </div>
   <!-- Tabs -->
   <div class="mcp-tabs" id="pluginsTabs">
-    <button class="mcp-tab active" data-ptab="active">Active</button>
+    <button class="mcp-tab active" data-ptab="installed">Installed</button>
     <button class="mcp-tab" data-ptab="library">Library</button>
     <button class="mcp-tab" data-ptab="skills">Skills</button>
   </div>
 
-  <!-- Active tab -->
-  <div id="pluginsActivePane" class="mcp-pane">
+  <!-- Installed tab -->
+  <div id="pluginsInstalledPane" class="mcp-pane">
     <div id="pluginsActiveList" class="mcp-active-list">
       <div class="mcp-empty-state" id="pluginsEmptyState">No plugins installed. Browse the Library tab.</div>
     </div>
-    <div class="mcp-section-label" style="margin-top:12px">Install from name or URL</div>
-    <div class="plugins-install-row">
-      <input type="text" class="mcp-search" id="pluginsInstallInput" placeholder="superpowers or https://..." autocomplete="off">
-      <button class="mcp-btn-apply plugins-install-btn" id="pluginsInstallBtn">Install</button>
-    </div>
-    <div id="pluginsInstallStatus" class="plugins-install-status" style="display:none"></div>
   </div>
 
   <!-- Library tab -->
   <div id="pluginsLibraryPane" class="mcp-pane" style="display:none">
+    <div class="mcp-section-label">Install from name or URL</div>
+    <div class="plugins-install-row">
+      <input type="text" class="mcp-search" id="pluginsInstallInput" placeholder="superpowers or https://..." autocomplete="off">
+      <select id="pluginsInstallScope" class="plugins-scope-select" title="Installation scope">
+        <option value="user">Global</option>
+        <option value="project">Project</option>
+      </select>
+      <button class="mcp-btn-apply plugins-install-btn" id="pluginsInstallBtn">Install</button>
+    </div>
+    <div id="pluginsInstallStatus" class="plugins-install-status" style="display:none"></div>
+    <div class="mcp-section-label" style="margin-top:12px">Plugin Library</div>
     <div id="pluginsLibraryList" class="mcp-library-grid"></div>
     <div class="plugins-footer-link">
       <a href="https://claude.ai/plugins" target="_blank" rel="noopener">Browse more plugins &#x2197;</a>
