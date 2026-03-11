@@ -1900,21 +1900,15 @@
         </svg>
       </button>
 
-      <!-- Send button — bottom-right inside textarea; becomes stop (ESC) when session is working -->
+      <!-- Send button — always send (stop button removed) -->
       <button class="compose-inset-btn compose-send-btn" id="composeSendBtn"
               type="button" aria-label="Send"
               onmousedown="event.preventDefault()"
               ontouchstart="event.preventDefault()">
-        <!-- Send icon (up arrow) — shown when idle -->
         <svg class="compose-send-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2.5" aria-hidden="true">
           <line x1="12" y1="19" x2="12" y2="5"/>
           <polyline points="5 12 12 5 19 12"/>
-        </svg>
-        <!-- Stop icon (square) — shown when session is working -->
-        <svg class="compose-stop-icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"
-             aria-hidden="true">
-          <rect x="4" y="4" width="16" height="16" rx="2"/>
         </svg>
       </button>
     </div>
@@ -2039,7 +2033,7 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.20"></script>
-  <script defer src="app.js?v=0.4.99"></script>
+  <script defer src="app.js?v=0.4.100"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>

@@ -4222,6 +4222,10 @@ class CodemanApp {
    *  Provides reliable idle/busy signals if Claude Code emits these marks.
    *  A=prompt-start, B=prompt-end (idle), C=pre-execution (busy), D=exec-done (idle). */
   _onOsc133(data) {
+    // Skip during buffer loading — replayed history from a different session would
+    // fire with this.activeSessionId already set to the newly-switched session,
+    // causing that session to be falsely marked busy.
+    if (this._isLoadingBuffer) return;
     const sessionId = this.activeSessionId;
     if (!sessionId) return;
     if (data === 'B' || data === 'A') {
@@ -4235,12 +4239,9 @@ class CodemanApp {
     }
   }
 
-  /** Toggle the send button between send (idle) and stop/ESC (working) states */
-  _updateSendBtn(isWorking) {
-    const btn = document.getElementById('composeSendBtn');
-    if (!btn) return;
-    btn.classList.toggle('is-working', isWorking);
-    btn.setAttribute('aria-label', isWorking ? 'Stop (ESC)' : 'Send');
+  /** Send button stays as send — no stop toggle. */
+  _updateSendBtn(_isWorking) {
+    // Stop button removed; send button is always send.
   }
 
   /** Debounce tab status dot updates — same 300ms show / 4000ms hide as the typing indicator.
@@ -16065,14 +16066,6 @@ const InputPanel = {
 
   /** Send all queued images then the typed text */
   send() {
-    // If the active session is working, act as a stop button (send ESC to interrupt)
-    if (typeof app !== 'undefined' && app.activeSessionId) {
-      const activeSession = app.sessions?.get(app.activeSessionId);
-      if (activeSession && activeSession.status === 'busy') {
-        app.sendInput('\x1b').catch(() => {});
-        return;
-      }
-    }
     const ta = this._getTextarea();
     if (!ta) return;
     const text = ta.value.trim();
