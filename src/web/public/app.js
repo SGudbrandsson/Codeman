@@ -6510,6 +6510,10 @@ class CodemanApp {
       clearTimeout(idleTimer);
       this.idleTimers.delete(sessionId);
     }
+    const tabShowTimer = this._tabStatusTimers.get(sessionId);
+    if (tabShowTimer) { clearTimeout(tabShowTimer); this._tabStatusTimers.delete(sessionId); }
+    const tabHideTimer = this._tabStatusHideTimers.get(sessionId);
+    if (tabHideTimer) { clearTimeout(tabHideTimer); this._tabStatusHideTimers.delete(sessionId); }
     // Clean up respawn state
     delete this.respawnStatus[sessionId];
     delete this.respawnTimers[sessionId];
