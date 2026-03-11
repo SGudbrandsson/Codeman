@@ -1436,24 +1436,6 @@ body {
   }
 }
 
-/* context pill — shown in header on all screen sizes when context data is available */
-.mobile-ctx-pill {
-  --ctx-color: #22c55e;
-  display: none; /* shown only on mobile via media query */
-  align-items: center;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--ctx-color);
-  background: color-mix(in srgb, var(--ctx-color) 15%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ctx-color) 40%, transparent);
-  border-radius: 10px;
-  padding: 2px 7px;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: default;
-  transition: color 0.4s, background 0.4s, border-color 0.4s;
-}
 
 .btn-icon-header.btn-sm:hover {
   transform: none;
@@ -9014,21 +8996,6 @@ kbd {
     letter-spacing: 0.03em;
   }
   .accessory-btn-commands:hover { background: #2a3a5a; }
-
-  /* Context pill */
-  .accessory-ctx-pill {
-    display: none;   /* Hidden by default; JS shows it when context data is available */
-    align-items: center;
-    justify-content: center;
-    padding: 4px 8px;
-    background: #1e2e1e;
-    border: 1px solid rgba(74, 222, 128, 0.25);
-    border-radius: 6px;
-    color: #4ade80;
-    font-size: 0.65rem;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
 
   /* Project button — inherits .accessory-btn base styles; override specifics here */
   .accessory-btn-project {

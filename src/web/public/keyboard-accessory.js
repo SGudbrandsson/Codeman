@@ -149,15 +149,7 @@ const KeyboardAccessoryBar = {
     });
     this.element.appendChild(settingsBtn);
 
-    // 2. Context window pill (second position)
-    const ctxPill = document.createElement('span');
-    ctxPill.id = 'accessoryContextPill';
-    ctxPill.className = 'accessory-ctx-pill';
-    ctxPill.style.display = 'none';
-    ctxPill.title = 'Context window usage';
-    this.element.appendChild(ctxPill);
-
-    // 3. Scroll-up button
+    // 2. Scroll-up button
     const scrollUpBtn = document.createElement('button');
     scrollUpBtn.className = 'accessory-btn accessory-btn-arrow';
     scrollUpBtn.dataset.action = 'scroll-up';
