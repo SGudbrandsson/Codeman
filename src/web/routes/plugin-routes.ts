@@ -17,7 +17,6 @@ import { spawn } from 'node:child_process';
 import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { PLUGIN_LIBRARY } from '../../plugin-library.js';
-import { SETTINGS_PATH } from '../route-helpers.js';
 import { isValidWorkingDir } from '../schemas.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -63,16 +62,27 @@ interface SkillEntry {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const PLUGINS_FILE = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
 const PLUGIN_SPAWN_TIMEOUT_MS = 3 * 60 * 1000;
 
-function isSafeInstallPath(p: string): boolean {
-  return path.isAbsolute(p) && p.startsWith(os.homedir());
+function pluginsFile(homeDir: string): string {
+  return path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json');
 }
 
-function readPluginsJson(): InstalledPluginsJson {
+function gsdDir(homeDir: string): string {
+  return path.join(homeDir, '.claude', 'get-shit-done');
+}
+
+function settingsFile(homeDir: string): string {
+  return path.join(homeDir, '.codeman', 'settings.json');
+}
+
+function isSafeInstallPath(p: string, homeDir: string): boolean {
+  return path.isAbsolute(p) && (p === homeDir || p.startsWith(homeDir + path.sep));
+}
+
+function readPluginsJson(homeDir: string): InstalledPluginsJson {
   try {
-    return JSON.parse(fs.readFileSync(PLUGINS_FILE, 'utf-8')) as InstalledPluginsJson;
+    return JSON.parse(fs.readFileSync(pluginsFile(homeDir), 'utf-8')) as InstalledPluginsJson;
   } catch {
     return { plugins: {} };
   }
@@ -87,14 +97,14 @@ function readPluginMeta(installPath: string): PluginMeta {
   }
 }
 
-function listInstalledPlugins(): InstalledPlugin[] {
-  const data = readPluginsJson();
+export function listInstalledPlugins(homeDir = os.homedir()): InstalledPlugin[] {
+  const data = readPluginsJson(homeDir);
   const seen = new Set<string>();
   const result: InstalledPlugin[] = [];
   for (const [key, entries] of Object.entries(data.plugins ?? {})) {
     const pluginName = key.split('@')[0];
     for (const entry of entries) {
-      if (!isSafeInstallPath(entry.installPath)) continue;
+      if (!isSafeInstallPath(entry.installPath, homeDir)) continue;
       if (seen.has(entry.installPath)) continue;
       seen.add(entry.installPath);
       result.push({
@@ -109,13 +119,62 @@ function listInstalledPlugins(): InstalledPlugin[] {
       });
     }
   }
+  // Surface GSD (get-shit-done) as a virtual plugin entry if installed
+  const gsdInstallDir = gsdDir(homeDir);
+  const gsdVersionFile = path.join(gsdInstallDir, 'VERSION');
+  try {
+    const gsdVersion = fs.readFileSync(gsdVersionFile, 'utf-8').trim();
+    if (!seen.has(gsdInstallDir)) {
+      result.push({
+        key: 'gsd@local',
+        pluginName: 'gsd',
+        installPath: gsdInstallDir,
+        scope: 'user',
+        version: gsdVersion,
+        installedAt: undefined,
+        meta: { name: 'gsd', description: 'Get Stuff Done — project planning and execution workflows' },
+      });
+    }
+  } catch {
+    // GSD not installed — skip
+  }
   return result;
 }
 
-function listAllSkills(): SkillEntry[] {
-  const plugins = listInstalledPlugins();
+/** Parse description from SKILL.md frontmatter */
+function parseSkillDescription(content: string): string {
+  if (content.startsWith('---')) {
+    const end = content.indexOf('\n---', 3);
+    if (end !== -1) {
+      const fm = content.slice(3, end);
+      return (
+        fm
+          .match(/^description:\s*(.+)$/m)?.[1]
+          ?.trim()
+          .replace(/^["']|["']$/g, '') ?? ''
+      );
+    }
+  }
+  return '';
+}
+
+/** Parse description from GSD workflow `<purpose>...</purpose>` tag */
+function parseGsdPurpose(content: string): string {
+  const m = content.match(/<purpose>\s*([\s\S]*?)\s*<\/purpose>/);
+  if (!m) return '';
+  // Take only the first sentence/line to keep it brief
+  return m[1].split('\n')[0].trim();
+}
+
+export function listAllSkills(homeDir = os.homedir()): SkillEntry[] {
+  const plugins = listInstalledPlugins(homeDir);
+  const seen = new Set<string>(); // deduplicate by fullName
   const skills: SkillEntry[] = [];
+
+  // Scan plugin skills directories
   for (const plugin of plugins) {
+    // GSD workflows are handled separately below
+    if (plugin.key === 'gsd@local') continue;
     const skillsDir = path.join(plugin.installPath, 'skills');
     let entries: fs.Dirent[];
     try {
@@ -131,42 +190,74 @@ function listAllSkills(): SkillEntry[] {
       } catch {
         continue;
       }
-      // Parse description from frontmatter
-      let description = '';
-      if (content.startsWith('---')) {
-        const end = content.indexOf('\n---', 3);
-        if (end !== -1) {
-          const fm = content.slice(3, end);
-          description =
-            fm
-              .match(/^description:\s*(.+)$/m)?.[1]
-              ?.trim()
-              .replace(/^["']|["']$/g, '') ?? '';
-        }
-      }
       const skillName = entry.name;
-      skills.push({
-        pluginName: plugin.pluginName,
-        skillName,
-        fullName: `${plugin.pluginName}:${skillName}`,
-        description,
-      });
+      const fullName = `${plugin.pluginName}:${skillName}`;
+      if (seen.has(fullName)) continue;
+      seen.add(fullName);
+      skills.push({ pluginName: plugin.pluginName, skillName, fullName, description: parseSkillDescription(content) });
     }
   }
+
+  // Scan ~/.claude/skills/ for manually installed skills
+  const manualSkillsDir = path.join(homeDir, '.claude', 'skills');
+  try {
+    const manualEntries = fs.readdirSync(manualSkillsDir, { withFileTypes: true });
+    for (const entry of manualEntries) {
+      if (!entry.isDirectory()) continue;
+      let content = '';
+      try {
+        content = fs.readFileSync(path.join(manualSkillsDir, entry.name, 'SKILL.md'), 'utf-8');
+      } catch {
+        continue;
+      }
+      const skillName = entry.name;
+      const fullName = `local:${skillName}`;
+      if (seen.has(fullName)) continue;
+      seen.add(fullName);
+      skills.push({ pluginName: 'local', skillName, fullName, description: parseSkillDescription(content) });
+    }
+  } catch {
+    // ~/.claude/skills/ doesn't exist
+  }
+
+  // Scan GSD workflows. Note: this is intentionally independent of the VERSION file check in
+  // listInstalledPlugins — skills remain visible even if GSD is partially installed (no VERSION).
+  const gsdWorkflowsDir = path.join(gsdDir(homeDir), 'workflows');
+  try {
+    const gsdEntries = fs.readdirSync(gsdWorkflowsDir);
+    for (const filename of gsdEntries) {
+      if (!filename.endsWith('.md')) continue;
+      let content = '';
+      try {
+        content = fs.readFileSync(path.join(gsdWorkflowsDir, filename), 'utf-8');
+      } catch {
+        continue;
+      }
+      const skillName = filename.replace(/\.md$/, '');
+      const fullName = `gsd:${skillName}`;
+      if (seen.has(fullName)) continue;
+      seen.add(fullName);
+      skills.push({ pluginName: 'gsd', skillName, fullName, description: parseGsdPurpose(content) });
+    }
+  } catch {
+    // GSD not installed
+  }
+
   return skills;
 }
 
-function readSettings(): Record<string, unknown> {
+function readSettings(homeDir = os.homedir()): Record<string, unknown> {
   try {
-    return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8')) as Record<string, unknown>;
+    return JSON.parse(fs.readFileSync(settingsFile(homeDir), 'utf-8')) as Record<string, unknown>;
   } catch {
     return {};
   }
 }
 
-function writeSettings(settings: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-  fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n');
+function writeSettings(settings: Record<string, unknown>, homeDir = os.homedir()): void {
+  const sf = settingsFile(homeDir);
+  fs.mkdirSync(path.dirname(sf), { recursive: true });
+  fs.writeFileSync(sf, JSON.stringify(settings, null, 2) + '\n');
 }
 
 function getDisabledSkills(settings: Record<string, unknown>): Record<string, string[]> {
@@ -177,10 +268,17 @@ function getDisabledSkills(settings: Record<string, unknown>): Record<string, st
   return {};
 }
 
-/** Run `claude plugin <subcommand> <arg>` and resolve with { ok, output }. */
-function runClaudePlugin(subcommand: string, arg: string): Promise<{ ok: boolean; output: string }> {
+/** Run `claude plugin <subcommand> [args...]` and resolve with { ok, output }. */
+function runClaudePluginArgs(
+  subcommand: string,
+  args: string[],
+  opts: { cwd?: string } = {}
+): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const proc = spawn('claude', ['plugin', subcommand, arg], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn('claude', ['plugin', subcommand, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    });
     const chunks: Buffer[] = [];
     let settled = false;
     const timer = setTimeout(() => {
@@ -207,35 +305,65 @@ function runClaudePlugin(subcommand: string, arg: string): Promise<{ ok: boolean
 
 // ── Route registration ─────────────────────────────────────────────────────
 
-export async function registerPluginRoutes(app: FastifyInstance): Promise<void> {
+export async function registerPluginRoutes(app: FastifyInstance, homeDir = os.homedir()): Promise<void> {
   // GET installed plugins
   app.get('/api/plugins', async (_req, reply) => {
-    return reply.send(listInstalledPlugins());
+    return reply.send(listInstalledPlugins(homeDir));
   });
 
   // POST install a plugin
   app.post('/api/plugins/install', async (req, reply) => {
-    const { name } = req.body as { name?: string };
+    const { name, scope, projectPath } = req.body as { name?: string; scope?: string; projectPath?: string };
     if (!name || typeof name !== 'string' || !name.trim()) {
       return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'name is required'));
     }
     const trimmed = name.trim();
-    // Validate: npm package name characters only (scoped names like @scope/pkg allowed)
-    if (!/^(@[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9._-]+$/.test(trimmed) || trimmed.length > 214) {
+    // Validate: npm package name characters only (scoped names like @scope/pkg allowed).
+    // Leading dashes are rejected to prevent flag injection (e.g. "--help").
+    if (!/^(?!-)(@[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9._-]+(@[a-zA-Z0-9._-]+)?$/.test(trimmed) || trimmed.length > 214) {
       return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid plugin name format'));
     }
-    const result = await runClaudePlugin('install', name.trim());
+    const allowedScopes = ['user', 'project'];
+    const resolvedScope = scope && allowedScopes.includes(scope) ? scope : 'user';
+    const args = [trimmed, '--scope', resolvedScope];
+    const spawnOpts: { cwd?: string } = {};
+    if (resolvedScope === 'project' && projectPath && typeof projectPath === 'string') {
+      if (isValidWorkingDir(projectPath)) spawnOpts.cwd = projectPath;
+    }
+    const result = await runClaudePluginArgs('install', args, spawnOpts);
     if (!result.ok) {
       return reply.code(500).send(createErrorResponse(ApiErrorCode.INTERNAL_ERROR, result.output || 'Install failed'));
     }
     return reply.send({ ok: true, output: result.output });
   });
 
-  // DELETE uninstall a plugin
+  // DELETE uninstall a plugin (?scope=user|project&projectPath=<path>)
   app.delete('/api/plugins/:encodedName', async (req, reply) => {
     const { encodedName } = req.params as { encodedName: string };
+    const { scope, projectPath } = req.query as { scope?: string; projectPath?: string };
     const name = decodeURIComponent(encodedName);
-    const result = await runClaudePlugin('uninstall', name);
+    // Reject the GSD virtual plugin — it isn't a real Claude plugin and cannot be uninstalled this way
+    if (name === 'gsd@local') {
+      return reply
+        .code(400)
+        .send(
+          createErrorResponse(ApiErrorCode.INVALID_INPUT, 'GSD is not a Claude plugin and cannot be uninstalled here')
+        );
+    }
+    // Validate name with same rules as install (including leading-dash guard) to prevent flag injection
+    if (!/^(?!-)(@[a-zA-Z0-9_-]+\/)?[a-zA-Z0-9._-]+(@[a-zA-Z0-9._-]+)?$/.test(name) || name.length > 214) {
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid plugin name format'));
+    }
+    const allowedScopes = ['user', 'project'];
+    const args = [name];
+    const spawnOpts: { cwd?: string } = {};
+    if (scope && allowedScopes.includes(scope)) {
+      args.push('--scope', scope);
+      if (scope === 'project' && projectPath && typeof projectPath === 'string') {
+        if (isValidWorkingDir(projectPath) && isSafeInstallPath(projectPath, homeDir)) spawnOpts.cwd = projectPath;
+      }
+    }
+    const result = await runClaudePluginArgs('uninstall', args, spawnOpts);
     if (!result.ok) {
       return reply
         .code(500)
@@ -251,7 +379,7 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
 
   // GET all skills from installed plugins
   app.get('/api/plugins/skills', async (_req, reply) => {
-    return reply.send(listAllSkills());
+    return reply.send(listAllSkills(homeDir));
   });
 
   // GET disabled skills (optional ?project=<path> query param)
@@ -267,7 +395,7 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
         return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid project path'));
       }
     }
-    const settings = readSettings();
+    const settings = readSettings(homeDir);
     const disabledSkills = getDisabledSkills(settings);
     const key = project || '__global__';
     return reply.send({ project: key, disabled: disabledSkills[key] ?? [] });
@@ -290,11 +418,11 @@ export async function registerPluginRoutes(app: FastifyInstance): Promise<void> 
       }
     }
     const key = typeof project === 'string' && project ? project : '__global__';
-    const settings = readSettings();
+    const settings = readSettings(homeDir);
     const disabledSkills = getDisabledSkills(settings);
     disabledSkills[key] = disabled.filter((s): s is string => typeof s === 'string');
     settings.disabledSkills = disabledSkills;
-    writeSettings(settings);
+    writeSettings(settings, homeDir);
     return reply.send({ ok: true });
   });
 }
