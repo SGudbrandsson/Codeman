@@ -263,6 +263,7 @@ export class Session extends EventEmitter {
   readonly worktreeBranch?: string;
   readonly worktreeOriginId?: string;
   readonly worktreeNotes?: string;
+  readonly assignedPort?: number;
   private _initialPromptSent: boolean = false;
   readonly createdAt: number;
   readonly mode: SessionMode;
@@ -441,6 +442,7 @@ export class Session extends EventEmitter {
     this.worktreeBranch = config.worktreeBranch;
     this.worktreeOriginId = config.worktreeOriginId;
     this.worktreeNotes = config.worktreeNotes;
+    this.assignedPort = config.assignedPort;
     this.createdAt = config.createdAt || Date.now();
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
@@ -822,6 +824,7 @@ export class Session extends EventEmitter {
       worktreeBranch: this.worktreeBranch,
       worktreeOriginId: this.worktreeOriginId,
       worktreeNotes: this.worktreeNotes,
+      assignedPort: this.assignedPort,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,

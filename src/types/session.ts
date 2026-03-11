@@ -84,6 +84,8 @@ export interface SessionConfig {
   worktreeOriginId?: string;
   /** Description of the task or bug this worktree was created for */
   worktreeNotes?: string;
+  /** Port allocated to this worktree session for its dev server */
+  assignedPort?: number;
   /** Timestamp when session was created */
   createdAt: number;
 }
@@ -113,6 +115,8 @@ export interface SessionState {
   worktreeOriginId?: string;
   /** Description of the task or bug this worktree was created for */
   worktreeNotes?: string;
+  /** Port allocated to this worktree session for its dev server */
+  assignedPort?: number;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */
