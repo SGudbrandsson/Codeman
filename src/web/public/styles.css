@@ -898,10 +898,10 @@ body {
 
 .session-drawer {
   position: fixed;
-  top: var(--header-height);
+  top: 0;
   right: 0;
   width: 300px;
-  height: calc(100vh - var(--header-height));
+  height: 100%;
   background: #0d1117;
   border-left: 1px solid rgba(255,255,255,0.07);
   transform: translateX(100%);
