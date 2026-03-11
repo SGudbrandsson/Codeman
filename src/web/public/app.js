@@ -1685,6 +1685,34 @@ const TranscriptView = {
     }
   },
 
+  /** Insert an animated "Compacting context..." pill at the bottom of the transcript.
+   *  Stored as _compactingEl so _renderTextBlock can remove it when the compact summary arrives. */
+  showCompacting() {
+    if (!this._container || this._compactingEl) return;
+    const pill = document.createElement('div');
+    pill.className = 'tv-compacting-pill';
+    const dots = document.createElement('span');
+    dots.className = 'tv-compacting-dots';
+    for (let i = 0; i < 3; i++) {
+      dots.appendChild(document.createElement('span'));
+    }
+    const lbl = document.createElement('span');
+    lbl.textContent = 'Compacting context';
+    pill.appendChild(dots);
+    pill.appendChild(lbl);
+    this._compactingEl = pill;
+    this._container.appendChild(pill);
+    this._scrollToBottom(false);
+  },
+
+  /** Remove the compacting placeholder. Called when the compact summary text block arrives. */
+  clearCompacting() {
+    if (this._compactingEl) {
+      this._compactingEl.remove();
+      this._compactingEl = null;
+    }
+  },
+
   _appendBlock(block, scroll) {
     if (!this._container) return;
     let el = null;
@@ -1821,6 +1849,7 @@ const TranscriptView = {
       // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill
       const COMPACT_MARKER = 'This session is being continued from a previous conversation that ran out of context.';
       if (block.text.startsWith(COMPACT_MARKER)) {
+        this.clearCompacting();
         const wrap = document.createElement('div');
         wrap.className = 'tv-compact-block';
 
@@ -2056,6 +2085,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_IDLE, '_onSessionIdle'],
   [SSE_EVENTS.SESSION_WORKING, '_onSessionWorking'],
   [SSE_EVENTS.SESSION_AUTO_CLEAR, '_onSessionAutoClear'],
+  [SSE_EVENTS.SESSION_AUTO_COMPACT, '_onSessionAutoCompact'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
 
   // Scheduled runs
@@ -4058,7 +4088,25 @@ class CodemanApp {
       title: 'Auto-Cleared',
       message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
-  }
+  },
+
+  _onSessionAutoCompact(data) {
+    const session = this.sessions.get(data.sessionId);
+    if (data.sessionId === this.activeSessionId) {
+      this.showToast('Compacting context...', 'info');
+    }
+    this.notificationManager?.notify({
+      urgency: 'info',
+      category: 'auto-compact',
+      sessionId: data.sessionId,
+      sessionName: session?.name || this.getShortId(data.sessionId),
+      title: 'Compacting Context',
+      message: `Compacting at ${(data.tokens || 0).toLocaleString()} tokens`,
+    });
+    if (TranscriptView._sessionId === data.sessionId) {
+      TranscriptView.showCompacting();
+    }
+  },
 
   _onSessionCliInfo(data) {
     const session = this.sessions.get(data.sessionId);
