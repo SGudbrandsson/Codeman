@@ -1417,6 +1417,10 @@ const TranscriptView = {
   _sessionId: null,
   _pendingToolUses: {},
   _loadGen: 0,       // incremented each load(); SSE blocks check this to avoid races
+  _compactingEl: null,   // DOM ref to the animated compacting spinner pill
+  _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
+  _workingDebounce: null,
+  _workingHideTimer: null,
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1499,6 +1503,9 @@ const TranscriptView = {
         for (const block of newBlocks) this._appendBlock(block, false);
       } else {
         // First load or server has fewer blocks than cache (clear happened) — full re-render.
+        // Reset _compactingEl ref: the DOM was cleared so the element is now detached.
+        // _isCompacting is preserved so we can restore the spinner below if still pending.
+        this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
         if (!blocks.length) {
@@ -1521,6 +1528,10 @@ const TranscriptView = {
         }
       }
       state._sseBuffer = null;
+      // If compaction was in progress when load() cleared the container, restore the spinner.
+      // clearCompacting() sets _isCompacting=false when the compact summary arrives as a block,
+      // so if it's still true here, compaction is genuinely still pending.
+      if (this._isCompacting && !this._compactingEl) this.showCompacting();
       // Scan all loaded blocks for a pending AskUserQuestion (unanswered tool_use)
       if (typeof app !== 'undefined') {
         let pendingQ = null;
@@ -1671,6 +1682,7 @@ const TranscriptView = {
     }
     if (this._container) this._container.textContent = '';
     this._compactingEl = null;
+    this._isCompacting = false;
     if (this._sessionId) this.load(this._sessionId);
   },
 
@@ -1691,6 +1703,15 @@ const TranscriptView = {
 
   show(sessionId) {
     this._sessionId = sessionId;
+    // Bug fix: reset typing indicator state when switching sessions.
+    // Without this, the previous session's busy indicator stays visible for up to 4s
+    // while the new (idle) session loads, because setWorking(false) only hides after a debounce.
+    clearTimeout(this._workingDebounce);
+    this._workingDebounce = null;
+    clearTimeout(this._workingHideTimer);
+    this._workingHideTimer = null;
+    const _overlay = document.getElementById('tvTypingIndicator');
+    if (_overlay) _overlay.style.display = 'none';
     if (this._container) {
       this._container.style.opacity = '0';
       this._container.style.display = '';
@@ -1762,8 +1783,15 @@ const TranscriptView = {
   },
 
   /** Insert an animated "Compacting context..." pill at the bottom of the transcript.
-   *  Stored as _compactingEl so _renderTextBlock can remove it when the compact summary arrives. */
+   *  Stored as _compactingEl so _renderTextBlock can remove it when the compact summary arrives.
+   *  _isCompacting tracks whether compaction is in progress independently of the DOM element,
+   *  so load() can restore the spinner after a container clear without losing the pending state. */
   showCompacting() {
+    this._isCompacting = true;
+    // If _compactingEl is set but detached (cleared by load()), reset it so we can re-add.
+    if (this._compactingEl && this._container && !this._container.contains(this._compactingEl)) {
+      this._compactingEl = null;
+    }
     if (!this._container || this._compactingEl) return;
     const pill = document.createElement('div');
     pill.className = 'tv-compacting-pill';
@@ -1783,6 +1811,7 @@ const TranscriptView = {
 
   /** Remove the compacting placeholder. Called when the compact summary text block arrives. */
   clearCompacting() {
+    this._isCompacting = false;
     if (this._compactingEl) {
       this._compactingEl.remove();
       this._compactingEl = null;
@@ -1964,7 +1993,10 @@ const TranscriptView = {
       label.textContent = 'You';
       const bubble = document.createElement('div');
       bubble.className = 'tv-bubble';
-      bubble.textContent = block.text; // plain text — no HTML needed
+      // Use the XML-stripped text if any command/local-command tags were removed,
+      // so raw XML from system-injected metadata never appears in the chat bubble.
+      const _bubbleText = block.text.replace(/<(?:command-\w+|local-command-\w+)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+)>/g, '').trim();
+      bubble.textContent = _bubbleText || block.text; // fallback to original if stripping empties it
       div.appendChild(label);
       div.appendChild(bubble);
     } else {
