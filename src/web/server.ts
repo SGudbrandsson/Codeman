@@ -1469,8 +1469,18 @@ export class WebServer extends EventEmitter {
       },
 
       /** Broadcasts `session:contextUsage` — passive context window usage update */
-      contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => {
+      contextUpdate: (data: {
+        inputTokens: number;
+        maxTokens: number;
+        pct: number;
+        system?: number;
+        conversation?: number;
+      }) => {
         this.broadcast(SseEvent.SessionContextUsage, { id: session.id, ...data });
+        // Persist when we have full breakdown data from an actual /context parse
+        if (data.system !== undefined || data.conversation !== undefined) {
+          this.persistSessionState(session);
+        }
       },
     };
 
@@ -2724,6 +2734,14 @@ export class WebServer extends EventEmitter {
                   savedState.outputTokens ?? 0,
                   savedState.totalCost ?? 0
                 );
+                if (savedState.contextWindowTokens) {
+                  session.restoreContextWindow(
+                    savedState.contextWindowTokens,
+                    savedState.contextWindowMax ?? 200000,
+                    savedState.contextWindowSystem,
+                    savedState.contextWindowConversation
+                  );
+                }
                 // Initialize lastRecordedTokens to prevent re-counting restored tokens as new daily usage
                 this.lastRecordedTokens.set(session.id, {
                   input: savedState.inputTokens ?? 0,
