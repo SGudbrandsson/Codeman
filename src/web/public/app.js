@@ -2508,6 +2508,7 @@ class CodemanApp {
       };
       addKeyboardTapFix(document.querySelector('.toolbar'));
       addKeyboardTapFix(document.querySelector('.welcome-overlay'));
+      addKeyboardTapFix(document.getElementById('mobileInputPanel'));
     }
     // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection
