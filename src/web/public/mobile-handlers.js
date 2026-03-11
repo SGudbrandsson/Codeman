@@ -266,7 +266,7 @@ const KeyboardHandler = {
           if (main) {
             // With resizes-content, innerHeight is already the visible area.
             // Just reserve space for the fixed bars + safe-area-bottom.
-            const barHeight = accessoryBar?.classList.contains('visible') ? 124 : 40;
+            const barHeight = accessoryBar?.classList.contains('visible') ? 132 : 40;
             main.style.paddingBottom = `${barHeight + this.safeAreaBottom}px`;
           }
           return;
@@ -287,7 +287,7 @@ const KeyboardHandler = {
 
       // Reserve space for keyboard + translated bars + safe-area-bottom.
       if (main) {
-        const barHeight = accessoryBar?.classList.contains('visible') ? 124 : 40;
+        const barHeight = accessoryBar?.classList.contains('visible') ? 132 : 40;
         main.style.paddingBottom = `${keyboardOffset + barHeight + this.safeAreaBottom}px`;
       }
     } else {
@@ -307,7 +307,7 @@ const KeyboardHandler = {
     if (inputPanel) inputPanel.style.transform = '';
 
     if (main) {
-      const barHeight = accessoryBar?.classList.contains('visible') ? 124 : 40;
+      const barHeight = accessoryBar?.classList.contains('visible') ? 132 : 40;
       main.style.paddingBottom = `${barHeight + this.safeAreaBottom}px`;
     }
   },
