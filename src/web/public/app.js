@@ -1796,7 +1796,7 @@ const TranscriptView = {
       const stripped = block.text.replace(SYSTEM_XML_RE, '').trim();
       if (!stripped) {
         // Completely hide caveat/task-notification — pure system metadata with no user value
-        if (/<local-command-caveat>/.test(block.text) || /<task-notification>/.test(block.text)) {
+        if (/<local-command-caveat>/.test(block.text)) {
           return null;
         }
         // Show local command stdout as a muted monospace pill (strip ANSI codes)
