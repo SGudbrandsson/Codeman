@@ -1481,6 +1481,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
+  capturePaneContent(muxName: string): string | null {
+    return this.capturePaneBuffer(muxName, '0');
+  }
+
   /**
    * Start piping pane output to a file using tmux pipe-pane.
    * Only pipes output direction (-O) to avoid echoing input.

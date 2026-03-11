@@ -49,6 +49,7 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
+import { stripAnsi } from './utils/regex-patterns.js';
 import {
   ANSI_ESCAPE_PATTERN_FULL,
   TOKEN_PATTERN,
@@ -1004,6 +1005,12 @@ export class Session extends EventEmitter {
         const isRestoredSession = this._muxSession !== null && !needsNewSession;
         if (isRestoredSession) {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
+          // Seed _textOutput from tmux scrollback so text/chat view is populated on restore
+          const scrollback = this._mux.capturePaneContent(this._muxSession!.muxName);
+          if (scrollback) {
+            const stripped = stripAnsi(scrollback);
+            if (stripped.trim()) this._textOutput.append(stripped);
+          }
         } else {
           // Create a new mux session
           const initialPromptArgs = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
