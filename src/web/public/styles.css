@@ -9358,7 +9358,7 @@ kbd {
   border-radius: 12px;
   font-size: 0.78rem;
   color: #4ade80;
-  font-family: monospace;
+  font-family: inherit;
   text-align: center;
 }
 
