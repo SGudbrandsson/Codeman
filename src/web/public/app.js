@@ -3464,14 +3464,6 @@ class CodemanApp {
       strip.textContent = matched; // textContent is safe — no HTML interpretation
       strip.style.display = '';
 
-      // Sync the context pill to the % reported in the status line so both
-      // displays agree. Back-calculate tokens: updateContextPill uses
-      // pct = round((tokens / 200000) * 100), so tokens = pct * 2000.
-      const pctMatch = matched.match(/(\d+)%/);
-      if (pctMatch) {
-        const pct = parseInt(pctMatch[1], 10);
-        this.updateContextPill(pct * 2000);
-      }
     }
     // Keep last known value visible if no match found this frame
   }
@@ -5427,6 +5419,27 @@ class CodemanApp {
           todos: s.ralphTodos || []
         });
       }
+      // Seed context bar from stored token counts so chip shows immediately on load
+      // Prefer actual parsed context window data (contextWindowTokens) over cumulative inputTokens estimate
+      if (s.contextWindowTokens) {
+        const maxTokens = s.contextWindowMax || 200000;
+        ContextBar.onContextUsage({
+          id: s.id,
+          inputTokens: s.contextWindowTokens,
+          maxTokens,
+          pct: Math.min(100, Math.round((s.contextWindowTokens / maxTokens) * 100)),
+          system: s.contextWindowSystem,
+          conversation: s.contextWindowConversation,
+        });
+      } else if (s.inputTokens > 0) {
+        const maxTokens = 200000;
+        ContextBar.onContextUsage({
+          id: s.id,
+          inputTokens: s.inputTokens,
+          maxTokens,
+          pct: Math.min(100, Math.round((s.inputTokens / maxTokens) * 100)),
+        });
+      }
     });
 
     // Sync sessionOrder with current sessions (preserve order, add new, remove stale)
@@ -6063,11 +6076,6 @@ class CodemanApp {
     if (typeof KeyboardAccessoryBar !== 'undefined') {
       KeyboardAccessoryBar.updateViewModeBtn(sessionId);
     }
-    // Update context pill for newly active session
-    const _activeSess = this.sessions.get(sessionId);
-    const _activeTokens = _activeSess?.tokens;
-    const _activeTokTotal = _activeTokens && typeof _activeTokens === 'object' ? _activeTokens.total : _activeTokens;
-    this.updateContextPill(_activeTokTotal || 0);
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
@@ -7320,41 +7328,6 @@ class CodemanApp {
 
     // Also update mobile CLI info bar (shows tokens on mobile)
     this.updateCliInfoDisplay();
-    this.updateContextPill(total);
-  }
-
-  /**
-   * Updates the context-window pill next to the hamburger menu.
-   * Color transitions green → yellow → orange → red as context fills up.
-   * Uses explicit inline-flex to override the CSS display:none on desktop.
-   */
-  updateContextPill(totalTokens) {
-    const pills = [
-      document.getElementById('mobileContextPill'),
-      document.getElementById('accessoryContextPill'),
-    ];
-    const titleText = totalTokens > 0
-      ? `Context: ${Math.min(100, Math.round((totalTokens / 200000) * 100))}% full (${(totalTokens / 1000).toFixed(1)}k / 200k tokens)`
-      : 'Context window usage';
-    for (const pill of pills) {
-      if (!pill) continue;
-      if (!totalTokens || totalTokens <= 0) {
-        pill.style.display = 'none';
-        continue;
-      }
-      const MAX_CONTEXT = 200000;
-      const pct = Math.min(100, Math.round((totalTokens / MAX_CONTEXT) * 100));
-      // Color gradient: green(0%) → yellow(50%) → orange(75%) → red(90%+)
-      let color;
-      if (pct < 50)       color = '#22c55e';  // green
-      else if (pct < 75)  color = '#eab308';  // yellow
-      else if (pct < 90)  color = '#f97316';  // orange
-      else                color = '#ef4444';  // red
-      pill.style.display = 'inline-flex';
-      pill.style.setProperty('--ctx-color', color);
-      pill.textContent = `${pct}%`;
-      pill.title = titleText;
-    }
   }
 
   // Update CLI info display (tokens, version, model - shown on mobile)

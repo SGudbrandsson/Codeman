@@ -137,6 +137,14 @@ export interface SessionState {
   inputTokens?: number;
   /** Output tokens used */
   outputTokens?: number;
+  /** Last successfully parsed /context window usage (actual, not cumulative estimate) */
+  contextWindowTokens?: number;
+  /** Max context window size at last /context parse */
+  contextWindowMax?: number;
+  /** System tokens from last /context parse */
+  contextWindowSystem?: number;
+  /** Conversation tokens from last /context parse */
+  contextWindowConversation?: number;
   /** Whether respawn controller is currently enabled/running */
   respawnEnabled?: boolean;
   /** Respawn controller config (if enabled) */

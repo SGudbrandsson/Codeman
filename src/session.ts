@@ -330,6 +330,10 @@ export class Session extends EventEmitter {
   private _contextOutputLines: string[] = [];
   private _contextRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private _contextSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+  private _contextWindowTokens: number | null = null;
+  private _contextWindowMax: number | null = null;
+  private _contextWindowSystem: number | null = null;
+  private _contextWindowConversation: number | null = null;
 
   // Ralph tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _ralphTracker: RalphTracker;
@@ -732,6 +736,14 @@ export class Session extends EventEmitter {
     this._totalCost = totalCost;
   }
 
+  /** Restore last known context window usage (from persisted state). */
+  restoreContextWindow(tokens: number, max: number, system?: number, conversation?: number): void {
+    this._contextWindowTokens = tokens;
+    this._contextWindowMax = max;
+    this._contextWindowSystem = system ?? null;
+    this._contextWindowConversation = conversation ?? null;
+  }
+
   get autoClearThreshold(): number {
     return this._autoOps.autoClearThreshold;
   }
@@ -819,6 +831,10 @@ export class Session extends EventEmitter {
       totalCost: this._totalCost,
       inputTokens: this._totalInputTokens,
       outputTokens: this._totalOutputTokens,
+      contextWindowTokens: this._contextWindowTokens ?? undefined,
+      contextWindowMax: this._contextWindowMax ?? undefined,
+      contextWindowSystem: this._contextWindowSystem ?? undefined,
+      contextWindowConversation: this._contextWindowConversation ?? undefined,
       ralphEnabled: this._ralphTracker.enabled,
       ralphAutoEnableDisabled: this._ralphTracker.autoEnableDisabled || undefined,
       ralphCompletionPhrase: this._ralphTracker.loopState.completionPhrase || undefined,
@@ -1117,7 +1133,10 @@ export class Session extends EventEmitter {
       this._terminalBuffer.append(data);
       this._lastActivityAt = Date.now();
 
-      this.emit('terminal', data);
+      // Suppress terminal output while capturing /context refresh output
+      if (!this._awaitingContext) {
+        this.emit('terminal', data);
+      }
       this.emit('output', data);
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
@@ -1290,6 +1309,30 @@ export class Session extends EventEmitter {
         this.emit('working');
         this._awaitingIdleConfirmation = false;
         if (this.activityTimeout) clearTimeout(this.activityTimeout);
+      }
+    }
+
+    // Capture /context output if awaiting refresh (interactive mode only)
+    if (this._awaitingContext) {
+      const cleanData = getCleanData();
+      for (const line of cleanData.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) this._contextOutputLines.push(trimmed);
+      }
+      const parsed = this._tryParseContextOutput(this._contextOutputLines);
+      if (parsed) {
+        this._awaitingContext = false;
+        this._contextOutputLines = [];
+        if (this._contextSafetyTimer) {
+          clearTimeout(this._contextSafetyTimer);
+          this._contextSafetyTimer = null;
+        }
+        // Persist actual context window usage so page reloads show accurate values
+        this._contextWindowTokens = parsed.inputTokens;
+        this._contextWindowMax = parsed.maxTokens;
+        this._contextWindowSystem = parsed.system ?? null;
+        this._contextWindowConversation = parsed.conversation ?? null;
+        this.emit('contextUpdate', parsed);
       }
     }
   }
@@ -1622,8 +1665,12 @@ export class Session extends EventEmitter {
     });
   }
 
-  /** Parse lines of /context command output into structured data. Returns null if incomplete. */
-  private _tryParseContextOutput(lines: string[]): {
+  /**
+   * Parse lines of /context command output into structured data.
+   * Returns null if output is incomplete (more lines expected).
+   * Exposed as static for unit testing.
+   */
+  static parseContextOutput(lines: string[]): {
     inputTokens: number;
     maxTokens: number;
     pct: number;
@@ -1632,27 +1679,82 @@ export class Session extends EventEmitter {
     tools?: number;
   } | null {
     const text = lines.join('\n');
+
+    // Parse token value in either plain ("128,000") or compact ("128k", "3.7k") notation
+    const parseK = (s: string): number => {
+      const m = s.match(/([\d.]+)(k?)/i);
+      if (!m) return 0;
+      const n = parseFloat(m[1]);
+      return m[2].toLowerCase() === 'k' ? Math.round(n * 1000) : Math.round(n);
+    };
+    const parseN = (s: string) => parseInt(s.replace(/,/g, ''), 10);
+
+    const cat = (re: RegExp) => {
+      const m = text.match(re);
+      return m ? parseK(m[1]) : 0;
+    };
+
+    // New format: "128k/200k tokens (64%)" (Claude Code >= 2025)
+    const headerMatch = text.match(/([\d.]+k?)\/([\d.]+k?)\s+tokens\s*\(/i);
+    if (headerMatch) {
+      const total = parseK(headerMatch[1]);
+      const max = parseK(headerMatch[2]);
+      if (!total || !max) return null;
+
+      const sysPrompt = cat(/System prompt:\s*([\d.]+k?)\s+tokens/i);
+      const sysTools = cat(/System tools:\s*([\d.]+k?)\s+tokens/i);
+      const agents = cat(/Custom agents:\s*([\d.]+k?)\s+tokens/i);
+      const memFiles = cat(/Memory files:\s*([\d.]+k?)\s+tokens/i);
+      const skills = cat(/\bSkills:\s*([\d.]+k?)\s+tokens/i);
+      const messages = cat(/\bMessages:\s*([\d.]+k?)\s+tokens/i);
+
+      // Wait for at least one category before returning — header alone is insufficient.
+      // Also require "Free space:" (end-of-output marker) OR messages to be present to avoid
+      // returning early when only system categories have arrived (partial PTY batch).
+      if (!sysPrompt && !sysTools && !messages) return null; // No categories yet
+      const isComplete = text.includes('Free space:') || text.includes('Autocompact buffer:');
+      if (!isComplete && !messages) return null; // System found but messages not yet — wait
+
+      return {
+        inputTokens: total,
+        maxTokens: max,
+        pct: Math.min(100, Math.round((total / max) * 100)),
+        system: sysPrompt + sysTools + agents + memFiles + skills || undefined,
+        conversation: messages || undefined,
+        tools: undefined,
+      };
+    }
+
+    // Legacy format: "Total: 128,000 / 200,000" with System/Conversation/Tools lines
     const totalMatch = text.match(/Total:\s+([\d,]+)\s*\/\s*([\d,]+)/i);
     if (!totalMatch) return null;
-    const parse = (s: string) => parseInt(s.replace(/,/g, ''), 10);
-    const total = parse(totalMatch[1]);
-    const max = parse(totalMatch[2]);
-    const sysMatch = text.match(/System(?:\s+prompt)?:\s+([\d,]+)\s+tokens/i);
-    const convMatch = text.match(/Conversation:\s+([\d,]+)\s+tokens/i);
-    const toolsMatch = text.match(/Tools:\s+([\d,]+)\s+tokens/i);
+    const total = parseN(totalMatch[1]);
+    const max = parseN(totalMatch[2]);
+    if (!total || !max) return null;
+
+    const sysM = text.match(/System(?:\s+prompt)?:\s+([\d,]+)\s+tokens/i);
+    const convM = text.match(/Conversation:\s+([\d,]+)\s+tokens/i);
+    const toolM = text.match(/^Tools:\s+([\d,]+)\s+tokens/im);
+    if (!sysM && !convM && !toolM) return null; // Legacy header but no categories yet
     return {
       inputTokens: total,
       maxTokens: max,
       pct: Math.min(100, Math.round((total / max) * 100)),
-      system: sysMatch ? parse(sysMatch[1]) : undefined,
-      conversation: convMatch ? parse(convMatch[1]) : undefined,
-      tools: toolsMatch ? parse(toolsMatch[1]) : undefined,
+      system: sysM ? parseN(sysM[1]) : undefined,
+      conversation: convM ? parseN(convM[1]) : undefined,
+      tools: toolM ? parseN(toolM[1]) : undefined,
     };
+  }
+
+  private _tryParseContextOutput(lines: string[]) {
+    return Session.parseContextOutput(lines);
   }
 
   /** Send /context, parse output, emit contextUpdate with full category breakdown. */
   private _refreshContext(): void {
     if (this._isStopped || this._awaitingContext) return;
+    // Only run when PTY is attached — no PTY means no onData, so output would be lost
+    if (!this.ptyProcess) return;
     this._awaitingContext = true;
     this._contextOutputLines = [];
     void this.writeViaMux('/context\r');
