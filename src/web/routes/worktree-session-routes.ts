@@ -155,6 +155,22 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
 
+    // Check if the worktree session for this branch has uncommitted changes — if so,
+    // git merge will say "already up to date" and the user will be confused.
+    const worktreeSession = [...ctx.sessions.values()].find(
+      (s) => s.worktreeOriginId === id && s.worktreeBranch === parsed.data.branch
+    );
+    if (worktreeSession?.worktreePath) {
+      const dirty = await isWorktreeDirty(worktreeSession.worktreePath);
+      if (dirty) {
+        return {
+          success: false,
+          uncommittedChanges: true,
+          message: 'Worktree has uncommitted changes — commit them inside the worktree session first, then merge.',
+        };
+      }
+    }
+
     try {
       const output = await mergeBranch(session.workingDir, parsed.data.branch);
       return { success: true, output };
