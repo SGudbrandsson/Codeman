@@ -27,6 +27,7 @@ import {
   mergeBranch,
 } from '../../utils/git-utils.js';
 import { CASES_DIR } from '../route-helpers.js';
+import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 // Validate branch name: alphanumeric, dots, hyphens, forward slashes only
@@ -101,11 +102,20 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create worktree: ${String(err)}`);
     }
 
-    const [globalNice, modelConfig, claudeModeConfig] = await Promise.all([
-      ctx.getGlobalNiceConfig(),
-      ctx.getModelConfig(),
-      ctx.getClaudeModeConfig(),
+    const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
+      Promise.all([ctx.getGlobalNiceConfig(), ctx.getModelConfig(), ctx.getClaudeModeConfig()]),
+      detectPortsFromDir(gitRoot),
     ]);
+
+    const usedPorts = [...ctx.sessions.values()]
+      .filter((s) => s.worktreePath && s.worktreePath.startsWith(dirname(gitRoot)))
+      .map((s) => s.assignedPort)
+      .filter((p): p is number => p !== undefined);
+    const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
+
+    const finalNotes = assignedPort
+      ? `${notes ? notes + '\n\n' : ''}Assigned dev port for this worktree: ${assignedPort}. Start the dev server with --port ${assignedPort} (or set PORT=${assignedPort}).`
+      : notes;
 
     const newSession = new Session({
       workingDir: worktreePath,
@@ -120,7 +130,8 @@ export function registerWorktreeSessionRoutes(
       worktreePath,
       worktreeBranch: branch,
       worktreeOriginId: id,
-      worktreeNotes: notes,
+      worktreeNotes: finalNotes,
+      assignedPort,
     });
 
     ctx.addSession(newSession);
@@ -226,11 +237,18 @@ export function registerWorktreeSessionRoutes(
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create worktree: ${String(err)}`);
     }
-    const [globalNice, modelConfig, claudeModeConfig] = await Promise.all([
-      ctx.getGlobalNiceConfig(),
-      ctx.getModelConfig(),
-      ctx.getClaudeModeConfig(),
+    const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
+      Promise.all([ctx.getGlobalNiceConfig(), ctx.getModelConfig(), ctx.getClaudeModeConfig()]),
+      detectPortsFromDir(gitRoot),
     ]);
+    const usedPorts = [...ctx.sessions.values()]
+      .filter((s) => s.worktreePath && s.worktreePath.startsWith(dirname(gitRoot)))
+      .map((s) => s.assignedPort)
+      .filter((p): p is number => p !== undefined);
+    const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
+    const finalNotes = assignedPort
+      ? `${notes ? notes + '\n\n' : ''}Assigned dev port for this worktree: ${assignedPort}. Start the dev server with --port ${assignedPort} (or set PORT=${assignedPort}).`
+      : notes;
     const newSession = new Session({
       workingDir: worktreePath,
       mode: mode ?? 'claude',
@@ -243,7 +261,8 @@ export function registerWorktreeSessionRoutes(
       allowedTools: claudeModeConfig.allowedTools,
       worktreePath,
       worktreeBranch: branch,
-      worktreeNotes: notes,
+      worktreeNotes: finalNotes,
+      assignedPort,
     });
     ctx.addSession(newSession);
     ctx.persistSessionState(newSession);
