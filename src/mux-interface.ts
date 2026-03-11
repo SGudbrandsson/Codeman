@@ -61,6 +61,8 @@ export interface CreateSessionOptions {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  /** Extra CLI arguments appended after the base command (e.g. initial prompt) */
+  extraArgs?: string[];
 }
 
 /** Options for respawning a dead pane. */
