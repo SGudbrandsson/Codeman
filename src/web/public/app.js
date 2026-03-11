@@ -1937,6 +1937,8 @@ const TranscriptView = {
         if (stdoutMatch) {
           const cleanText = stdoutMatch[1].replace(/\x1b\[[0-9;]*m/g, '').trim();
           if (!cleanText) return null;
+          // Hide /context output — it's already shown in the context bar/chip, no need to repeat it in chat.
+          if (cleanText.startsWith('Context Usage')) return null;
           const pill = document.createElement('div');
           pill.className = 'tv-command-pill';
           pill.textContent = cleanText;
