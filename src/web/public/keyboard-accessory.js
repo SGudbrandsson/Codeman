@@ -198,8 +198,30 @@ const KeyboardAccessoryBar = {
     this.element.addEventListener('mousedown', (e) => {
       if (e.target.closest('button')) e.preventDefault();
     });
+    let _tapStartX = 0, _tapStartY = 0, _tapOnBtn = false;
     this.element.addEventListener('touchstart', (e) => {
-      if (e.target.closest('button')) e.preventDefault();
+      if (e.target.closest('button')) {
+        e.preventDefault();
+        _tapStartX = e.touches[0].clientX;
+        _tapStartY = e.touches[0].clientY;
+        _tapOnBtn = true;
+      } else {
+        _tapOnBtn = false;
+      }
+    }, { passive: false });
+    // iOS fix: touchstart.preventDefault() suppresses the browser's synthetic click event.
+    // After the terminal initialises and its hidden <textarea> gains focus the browser no
+    // longer fires click on button taps in the accessory bar.  We fire it ourselves on
+    // touchend so buttons work whether or not the soft keyboard is visible.
+    this.element.addEventListener('touchend', (e) => {
+      if (!_tapOnBtn) return;
+      _tapOnBtn = false;
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const t = e.changedTouches[0];
+      if (Math.abs(t.clientX - _tapStartX) > 10 || Math.abs(t.clientY - _tapStartY) > 10) return;
+      e.preventDefault(); // prevent browser generating a duplicate click
+      btn.click();
     }, { passive: false });
 
     // Click handler for data-action buttons
