@@ -2624,6 +2624,25 @@ class CodemanApp {
 
     this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
 
+    // OSC-based busy/idle detection — more reliable than spinner character scanning.
+    // onTitleChange fires on OSC 0/2 title-change sequences from the PTY.
+    // registerOscHandler(133) captures shell integration marks (A/B/C/D) for reliable
+    // prompt-shown / pre-execution signals if Claude Code emits them.
+    this.terminal.onTitleChange((title) => {
+      // Enable capture for investigation: run `window._oscTitleLog = []` in the browser console.
+      if (window._oscTitleLog) window._oscTitleLog.push({ title, at: Date.now() });
+      this._onTerminalTitleChange(title);
+    });
+
+    if (this.terminal.parser) {
+      // OSC 133: A=prompt-start, B=prompt-end (idle), C=pre-exec (busy), D=exec-done (idle)
+      this.terminal.parser.registerOscHandler(133, (data) => {
+        if (window._osc133Log) window._osc133Log.push({ data, at: Date.now() });
+        this._onOsc133(data);
+        return false; // allow default xterm handling to proceed
+      });
+    }
+
     // On mobile Safari, delay initial fit() to allow layout to settle
     // This prevents 0-column terminals caused by fit() running before container is sized
     const isMobileSafari = MobileDetection.getDeviceType() === 'mobile' &&
@@ -4075,6 +4094,30 @@ class CodemanApp {
       this.idleTimers.delete(data.id);
     }
   }
+
+  /** Called when xterm receives an OSC 0/2 title-change sequence from the PTY.
+   *  Patterns are captured via window._oscTitleLog for investigation.
+   *  TODO: implement title-pattern-based idle detection once patterns are understood. */
+  _onTerminalTitleChange(_title) {
+    // No-op until title patterns are understood from _oscTitleLog investigation.
+  },
+
+  /** Called when xterm receives an OSC 133 shell-integration sequence.
+   *  Provides reliable idle/busy signals if Claude Code emits these marks.
+   *  A=prompt-start, B=prompt-end (idle), C=pre-execution (busy), D=exec-done (idle). */
+  _onOsc133(data) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    if (data === 'B' || data === 'A') {
+      // Prompt shown — reliable idle signal
+      if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(false);
+      this._updateTabStatusDebounced(sessionId, 'idle');
+    } else if (data === 'C') {
+      // Pre-execution — reliable busy signal
+      if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(true);
+      this._updateTabStatusDebounced(sessionId, 'busy');
+    }
+  },
 
   /** Toggle the send button between send (idle) and stop/ESC (working) states */
   _updateSendBtn(isWorking) {
