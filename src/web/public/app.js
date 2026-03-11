@@ -2293,6 +2293,10 @@ class CodemanApp {
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
+    // Tab status dot debounce timers (300ms show / 4000ms hide)
+    this._tabStatusTimers = new Map();     // session id -> show-debounce timer id
+    this._tabStatusHideTimers = new Map(); // session id -> hide-debounce timer id
+
     // Pending hooks per session: Map<sessionId, Set<hookType>>
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
     this.pendingHooks = new Map();
@@ -3824,6 +3828,7 @@ class CodemanApp {
   }
 
   _onSessionCreated(data) {
+    data.displayStatus = data.status || 'idle';
     this.sessions.set(data.id, data);
     // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
@@ -3840,6 +3845,8 @@ class CodemanApp {
     const session = data.session || data;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
+    // Preserve displayStatus from previous session so debounce is not reset by server updates
+    session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
     this.updateCost();
@@ -3987,6 +3994,7 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'stopped';
+      session.displayStatus = 'stopped';
       this.renderSessionTabs();
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
@@ -4017,7 +4025,7 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'idle';
-      this.renderSessionTabs();
+      this._updateTabStatusDebounced(data.id, 'idle');
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -4052,7 +4060,7 @@ class CodemanApp {
       if (!this.pendingHooks.has(data.id)) {
         this.tabAlerts.delete(data.id);
       }
-      this.renderSessionTabs();
+      this._updateTabStatusDebounced(data.id, 'busy');
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -4074,6 +4082,33 @@ class CodemanApp {
     if (!btn) return;
     btn.classList.toggle('is-working', isWorking);
     btn.setAttribute('aria-label', isWorking ? 'Stop (ESC)' : 'Send');
+  }
+
+  /** Debounce tab status dot updates — same 300ms show / 4000ms hide as the typing indicator.
+   *  Prevents rapid busy->idle->busy flicker from frequent SESSION_WORKING/SESSION_IDLE events. */
+  _updateTabStatusDebounced(sessionId, status) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (status === 'busy') {
+      clearTimeout(this._tabStatusHideTimers.get(sessionId));
+      this._tabStatusHideTimers.delete(sessionId);
+      if (!this._tabStatusTimers.has(sessionId)) {
+        this._tabStatusTimers.set(sessionId, setTimeout(() => {
+          this._tabStatusTimers.delete(sessionId);
+          const s = this.sessions.get(sessionId);
+          if (s) { s.displayStatus = 'busy'; this.renderSessionTabs(); }
+        }, 300));
+      }
+    } else {
+      clearTimeout(this._tabStatusTimers.get(sessionId));
+      this._tabStatusTimers.delete(sessionId);
+      clearTimeout(this._tabStatusHideTimers.get(sessionId));
+      this._tabStatusHideTimers.set(sessionId, setTimeout(() => {
+        this._tabStatusHideTimers.delete(sessionId);
+        const s = this.sessions.get(sessionId);
+        if (s) { s.displayStatus = status; this.renderSessionTabs(); }
+      }, 4000));
+    }
   }
 
   _onSessionAutoClear(data) {
@@ -5404,6 +5439,11 @@ class CodemanApp {
       clearTimeout(timer);
     }
     this.idleTimers.clear();
+    // Clear tab status debounce timers to prevent stale dot updates after reconnect
+    for (const timer of this._tabStatusTimers.values()) clearTimeout(timer);
+    this._tabStatusTimers.clear();
+    for (const timer of this._tabStatusHideTimers.values()) clearTimeout(timer);
+    this._tabStatusHideTimers.clear();
     // Clear flicker filter state
     if (this.flickerFilterTimeout) {
       clearTimeout(this.flickerFilterTimeout);
@@ -5473,6 +5513,7 @@ class CodemanApp {
       this.runSummaryAutoRefreshTimer = null;
     }
     data.sessions.forEach(s => {
+      s.displayStatus = s.status || 'idle';
       this.sessions.set(s.id, s);
       // Load ralph state from session data (only if not explicitly closed by user)
       if ((s.ralphLoop || s.ralphTodos) && !this.ralphClosedSessions.has(s.id)) {
@@ -5666,7 +5707,7 @@ class CodemanApp {
         if (!tab) continue;
 
         const isActive = id === this.activeSessionId;
-        const status = session.status || 'idle';
+        const status = session.displayStatus ?? session.status ?? 'idle';
         const name = this.getSessionName(session);
         const taskStats = session.taskStats || { running: 0, total: 0 };
         const hasRunningTasks = taskStats.running > 0;
@@ -5780,7 +5821,7 @@ class CodemanApp {
       if (!session) continue; // Skip if session was removed
 
       const isActive = id === this.activeSessionId;
-      const status = session.status || 'idle';
+      const status = session.displayStatus ?? session.status ?? 'idle';
       const name = this.getSessionName(session);
       const mode = session.mode || 'claude';
       const color = session.color || 'default';
