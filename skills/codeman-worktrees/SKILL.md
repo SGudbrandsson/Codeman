@@ -27,6 +27,7 @@ digraph flow {
 Ask the user (in one message) for everything missing:
 - Which **project(s)** (repo name or path)
 - **Branch name(s)** for each (e.g. `feat/my-feature`)
+- **Description/notes** for each worktree — bug details, task context, etc. (pass as `notes`)
 - New branch or existing? (default: new)
 
 If user already provided these, skip asking.
@@ -51,7 +52,7 @@ For each project × branch pair:
 ```bash
 curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   -H "Content-Type: application/json" \
-  -d '{"branch": "feat/my-feature", "isNew": true}'
+  -d '{"branch": "feat/my-feature", "isNew": true, "notes": "Bug: hamburger menu blocked by overlay"}'
 ```
 
 **Body fields:**
@@ -60,6 +61,7 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
 | `branch` | string | yes | Full branch name e.g. `feat/my-feature` |
 | `isNew` | boolean | yes | `true` = create new branch, `false` = checkout existing |
 | `mode` | string | no | `claude` / `opencode` / `shell` — inherits from parent if omitted |
+| `notes` | string | no | Bug description or task context (max 2000 chars) — stored on the session |
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/path/to/worktree" }`
 

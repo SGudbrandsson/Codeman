@@ -83,7 +83,7 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew, mode } = parsed.data;
+    const { branch, isNew, mode, notes } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
@@ -120,6 +120,7 @@ export function registerWorktreeSessionRoutes(
       worktreePath,
       worktreeBranch: branch,
       worktreeOriginId: id,
+      worktreeNotes: notes,
     });
 
     ctx.addSession(newSession);
@@ -214,7 +215,7 @@ export function registerWorktreeSessionRoutes(
     if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-    const { branch, isNew, mode } = parsed.data;
+    const { branch, isNew, mode, notes } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     const gitRoot = findGitRoot(casePath);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
@@ -242,6 +243,7 @@ export function registerWorktreeSessionRoutes(
       allowedTools: claudeModeConfig.allowedTools,
       worktreePath,
       worktreeBranch: branch,
+      worktreeNotes: notes,
     });
     ctx.addSession(newSession);
     ctx.persistSessionState(newSession);

@@ -82,6 +82,8 @@ export interface SessionConfig {
   worktreeBranch?: string;
   /** Session ID that spawned this worktree session */
   worktreeOriginId?: string;
+  /** Description of the task or bug this worktree was created for */
+  worktreeNotes?: string;
   /** Timestamp when session was created */
   createdAt: number;
 }
@@ -109,6 +111,8 @@ export interface SessionState {
   worktreeBranch?: string;
   /** Session ID that spawned this worktree session */
   worktreeOriginId?: string;
+  /** Description of the task or bug this worktree was created for */
+  worktreeNotes?: string;
   /** ID of currently assigned task, null if none */
   currentTaskId: string | null;
   /** Timestamp when session was created */

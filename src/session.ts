@@ -262,6 +262,7 @@ export class Session extends EventEmitter {
   readonly worktreePath?: string;
   readonly worktreeBranch?: string;
   readonly worktreeOriginId?: string;
+  readonly worktreeNotes?: string;
   readonly createdAt: number;
   readonly mode: SessionMode;
 
@@ -438,6 +439,7 @@ export class Session extends EventEmitter {
     this.worktreePath = config.worktreePath;
     this.worktreeBranch = config.worktreeBranch;
     this.worktreeOriginId = config.worktreeOriginId;
+    this.worktreeNotes = config.worktreeNotes;
     this.createdAt = config.createdAt || Date.now();
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
@@ -818,6 +820,7 @@ export class Session extends EventEmitter {
       worktreePath: this.worktreePath,
       worktreeBranch: this.worktreeBranch,
       worktreeOriginId: this.worktreeOriginId,
+      worktreeNotes: this.worktreeNotes,
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,
