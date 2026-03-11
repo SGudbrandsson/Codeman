@@ -67,7 +67,7 @@ export async function removeWorktree(repoDir: string, worktreePath: string, forc
 
 export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   try {
-    const status = await git(['status', '--porcelain'], worktreePath);
+    const status = await git(['status', '--porcelain', '-uno'], worktreePath);
     return status.length > 0;
   } catch {
     return false;

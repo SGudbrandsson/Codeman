@@ -148,7 +148,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. Load order: `constants.js`(1) → `mobile-handlers.js`(2) → `voice-input.js`(3) → `notification-manager.js`(4) → `keyboard-accessory.js`(5) → `app.js`(6) → `ralph-wizard.js`(7) → `api-client.js`(8) → `subagent-windows.js`(9).
 
-**Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7), input panel (52).
+**Z-index layers**: local echo overlay (7), input panel (52), subagent windows (1000), plan agents (1100), accessory bar (1150), panel-backdrop (1199), mcp-panel (1200), plugins-panel (1201), ctx-panel (1202), mcp-form-overlay (1210), drawer-quick-add (1300), session-drawer-overlay (8999), session-drawer (9000), log viewers (2000), image popups (3000), notifDrawer (10001). Panels (1199–1210) must stay above the accessory bar (1150) so they are not obscured on mobile.
 
 **Respawn presets**: `solo-work` (3s/60min), `subagent-workflow` (45s/240min), `team-lead` (90s/480min), `ralph-todo` (8s/480min), `overnight-autonomous` (10s/480min).
 
