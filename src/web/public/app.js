@@ -4100,7 +4100,7 @@ class CodemanApp {
    *  TODO: implement title-pattern-based idle detection once patterns are understood. */
   _onTerminalTitleChange(_title) {
     // No-op until title patterns are understood from _oscTitleLog investigation.
-  },
+  }
 
   /** Called when xterm receives an OSC 133 shell-integration sequence.
    *  Provides reliable idle/busy signals if Claude Code emits these marks.
@@ -4117,7 +4117,7 @@ class CodemanApp {
       if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(true);
       this._updateTabStatusDebounced(sessionId, 'busy');
     }
-  },
+  }
 
   /** Toggle the send button between send (idle) and stop/ESC (working) states */
   _updateSendBtn(isWorking) {
