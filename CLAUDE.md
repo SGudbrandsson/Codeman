@@ -196,11 +196,12 @@ The worktree API is used by the `codeman-worktrees` skill to create isolated git
 
 **`POST /api/sessions/:id/worktree` body** (`CreateWorktreeSchema`):
 ```json
-{ "branch": "feat/my-feature", "isNew": true, "mode": "claude" }
+{ "branch": "feat/my-feature", "isNew": true, "mode": "claude", "notes": "Bug: ..." }
 ```
 - `branch` — full git branch name (string, required)
 - `isNew` — `true` = create new branch, `false` = checkout existing (boolean, required)
 - `mode` — `"claude"` | `"opencode"` | `"shell"` (optional, inherits from parent)
+- `notes` — bug description or task context, max 2000 chars (optional) — stored as `worktreeNotes` on `SessionState`
 
 **Response:** `{ success: true, session: SessionState, worktreePath: string }`
 
