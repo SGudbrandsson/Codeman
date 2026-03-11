@@ -1822,7 +1822,7 @@ const TranscriptView = {
         return pill;
       }
 
-      const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+|task-notification)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+|task-notification)>/g;
+      const SYSTEM_XML_RE = /<(?:command-\w+|local-command-\w+)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+)>/g;
       const stripped = block.text.replace(SYSTEM_XML_RE, '').trim();
       if (!stripped) {
         // Completely hide caveat/task-notification — pure system metadata with no user value
@@ -2639,7 +2639,7 @@ class CodemanApp {
       this.terminal.parser.registerOscHandler(133, (data) => {
         if (window._osc133Log) window._osc133Log.push({ data, at: Date.now() });
         this._onOsc133(data);
-        return false; // allow default xterm handling to proceed
+        return true; // handler consumed the sequence
       });
     }
 
@@ -4013,6 +4013,12 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'stopped';
+      // Cancel any in-flight tab status debounce timers — a 4s hide timer could otherwise
+      // fire after exit and overwrite displayStatus back to 'idle' on a stopped session.
+      const tabShowTimer = this._tabStatusTimers.get(data.id);
+      if (tabShowTimer) { clearTimeout(tabShowTimer); this._tabStatusTimers.delete(data.id); }
+      const tabHideTimer = this._tabStatusHideTimers.get(data.id);
+      if (tabHideTimer) { clearTimeout(tabHideTimer); this._tabStatusHideTimers.delete(data.id); }
       session.displayStatus = 'stopped';
       this.renderSessionTabs();
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
