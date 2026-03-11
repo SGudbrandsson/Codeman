@@ -193,15 +193,17 @@ Object.assign(CodemanApp.prototype, {
         if (position) {
           const windowData = this.subagentWindows.get(agentId);
           if (windowData && windowData.element) {
-            // Parse position values and clamp to viewport
+            // Parse position values and clamp to viewport; keep windows below the header
             let left = parseInt(position.left, 10) || 50;
             let top = parseInt(position.top, 10) || WINDOW_INITIAL_TOP_PX;
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
             const windowWidth = 420;
             const windowHeight = 350;
+            const headerEl = document.querySelector('.header');
+            const minTop = headerEl ? headerEl.offsetHeight + 4 : 54;
             left = Math.max(10, Math.min(left, viewportWidth - windowWidth - 10));
-            top = Math.max(10, Math.min(top, viewportHeight - windowHeight - 10));
+            top = Math.max(minTop, Math.min(top, viewportHeight - windowHeight - 10));
             windowData.element.style.left = `${left}px`;
             windowData.element.style.top = `${top}px`;
             windowData.position = { left: `${left}px`, top: `${top}px` };
@@ -558,6 +560,7 @@ Object.assign(CodemanApp.prototype, {
         existing.hidden = false;
       }
 
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       existing.element.style.zIndex = ++this.subagentWindowZIndex;
       if (existing.minimized) {
         this.restoreSubagentWindow(agentId);
@@ -682,6 +685,7 @@ Object.assign(CodemanApp.prototype, {
     const win = document.createElement('div');
     win.className = 'subagent-window';
     win.id = `subagent-window-${agentId}`;
+    if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
     win.style.zIndex = ++this.subagentWindowZIndex;
 
     // Build parent header if we have parent info
@@ -789,6 +793,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Focus on click
     win.addEventListener('mousedown', () => {
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       win.style.zIndex = ++this.subagentWindowZIndex;
     });
 
@@ -1048,6 +1053,7 @@ Object.assign(CodemanApp.prototype, {
 
       if (shouldShow) {
         windowData.element.style.display = 'flex';
+        if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
         windowData.element.style.zIndex = ++this.subagentWindowZIndex;
         windowData.hidden = false;
       }
@@ -1085,13 +1091,15 @@ Object.assign(CodemanApp.prototype, {
       if (!isDragging) return;
       const dx = clientX - startX;
       const dy = clientY - startY;
-      // Constrain to viewport bounds
+      // Constrain to viewport bounds; keep windows below the header so nav stays clickable
       const winWidth = win.offsetWidth || 420;
       const winHeight = win.offsetHeight || 350;
       const maxX = window.innerWidth - winWidth - 4;
       const maxY = window.innerHeight - winHeight - 4;
+      const headerEl = document.querySelector('.header');
+      const minTop = headerEl ? headerEl.offsetHeight + 4 : 54;
       const newLeft = Math.max(4, Math.min(startLeft + dx, maxX));
-      const newTop = Math.max(4, Math.min(startTop + dy, maxY));
+      const newTop = Math.max(minTop, Math.min(startTop + dy, maxY));
       win.style.left = `${newLeft}px`;
       win.style.top = `${newTop}px`;
       // Throttle connection line updates during drag
@@ -1206,6 +1214,21 @@ Object.assign(CodemanApp.prototype, {
       clearTimeout(this._subagentHideTimeout);
       this._subagentHideTimeout = null;
     }
+  },
+
+  // Renumber all visible subagent window z-indexes back to the base range.
+  // Called when subagentWindowZIndex reaches ZINDEX_SUBAGENT_MAX to prevent
+  // the counter growing past the session drawer z-index (9000 in CSS).
+  _normalizeSubagentZIndexes() {
+    const visible = Array.from(this.subagentWindows.values())
+      .filter(w => !w.minimized && !w.hidden && w.element)
+      .map(w => ({ el: w.element, z: parseInt(w.element.style.zIndex) || ZINDEX_SUBAGENT_BASE }))
+      .sort((a, b) => a.z - b.z);
+    visible.forEach((w, idx) => {
+      w.el.style.zIndex = ZINDEX_SUBAGENT_BASE + idx;
+    });
+    // Clamp so the next ++ still lands within the valid range
+    this.subagentWindowZIndex = Math.min(ZINDEX_SUBAGENT_BASE + visible.length, ZINDEX_SUBAGENT_MAX - 2);
   },
 
   // Pin dropdown open on click (stays until clicking outside)

@@ -136,7 +136,7 @@ body {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: relative;
-  z-index: 100; /* Above main content so dropdowns work */
+  z-index: 1150; /* Above all floating windows (capped at 1099/1149) so nav stays clickable */
   /* Performance: isolate header from terminal reflow — tab badge updates
      and token counter changes shouldn't trigger terminal layout recalculation */
   contain: layout style paint;
@@ -906,7 +906,7 @@ body {
   border-left: 1px solid rgba(255,255,255,0.07);
   transform: translateX(100%);
   transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 1200;
+  z-index: 9000;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -920,7 +920,7 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(2px);
-  z-index: 1199;
+  z-index: 8999;
 }
 .session-drawer-overlay.open {
   display: block;
