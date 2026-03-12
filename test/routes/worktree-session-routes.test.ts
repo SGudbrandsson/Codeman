@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 
+vi.mock('../../src/session-lifecycle-log.js', () => ({
+  getLifecycleLog: vi.fn().mockReturnValue({ log: vi.fn() }),
+}));
+
 vi.mock('../../src/utils/git-utils.js', () => ({
   findGitRoot: vi.fn().mockReturnValue('/tmp/test-repo'),
   isGitWorktreeDir: vi.fn().mockReturnValue(false),
@@ -22,6 +26,8 @@ vi.mock('../../src/session.js', () => {
       worktreeOriginId: 'origin-id',
       mode: 'claude',
       toState: () => ({ id: 'new-session-id' }),
+      startInteractive: vi.fn().mockResolvedValue(undefined),
+      startShell: vi.fn().mockResolvedValue(undefined),
     });
   }
   return { Session: MockSessionConstructor };
@@ -120,6 +126,77 @@ describe('worktree-session routes', () => {
     expect(body.success).toBe(true);
     expect(body.worktreePath).toBeTruthy();
     expect(ctx.broadcast).toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // POST /api/sessions/:id/worktree — autoStart behaviour
+  // ---------------------------------------------------------------------------
+
+  it('POST worktree — autoStart omitted → startInteractive NOT called', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree`,
+      payload: { branch: 'feature/test', isNew: true, notes: 'do something' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    // MockSessionConstructor always assigns id: 'new-session-id'
+    const newSession = ctx.sessions.get('new-session-id') as { startInteractive: ReturnType<typeof vi.fn> };
+    expect(newSession.startInteractive).not.toHaveBeenCalled();
+  });
+
+  it('POST worktree — autoStart:true, claude mode → startInteractive called', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree`,
+      payload: { branch: 'feature/test', isNew: true, notes: 'do something', autoStart: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    const newSession = ctx.sessions.get('new-session-id') as { startInteractive: ReturnType<typeof vi.fn> };
+    expect(newSession.startInteractive).toHaveBeenCalledOnce();
+  });
+
+  it('POST worktree — autoStart:true, shell mode → startShell called, not startInteractive', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree`,
+      payload: { branch: 'feature/test', isNew: true, mode: 'shell', autoStart: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    const newSession = ctx.sessions.get('new-session-id') as {
+      startShell: ReturnType<typeof vi.fn>;
+      startInteractive: ReturnType<typeof vi.fn>;
+    };
+    expect(newSession.startShell).toHaveBeenCalledOnce();
+    expect(newSession.startInteractive).not.toHaveBeenCalled();
+  });
+
+  it('POST worktree — autoStart:true, startInteractive throws → still success:true', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    // Patch addSession to override startInteractive with a rejecting mock before the route calls it.
+    const origAddSession = ctx.addSession.bind(ctx);
+    ctx.addSession = vi.fn().mockImplementation((s: unknown) => {
+      (s as { startInteractive: () => Promise<void> }).startInteractive = vi
+        .fn()
+        .mockRejectedValue(new Error('spawn failed'));
+      return origAddSession(s);
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree`,
+      payload: { branch: 'feature/test', isNew: true, autoStart: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
