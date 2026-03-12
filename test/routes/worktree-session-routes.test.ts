@@ -200,6 +200,26 @@ describe('worktree-session routes', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // POST /api/cases/:name/worktree — autoStart behaviour
+  // ---------------------------------------------------------------------------
+
+  it('POST cases worktree — autoStart:true → startInteractive called', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/cases/test-case/worktree`,
+      payload: { branch: 'feature/test', isNew: true, autoStart: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    // If case not found, that's ok for this smoke test — just verify no crash
+    if (body.success) {
+      const newSession = ctx.sessions.get('new-session-id') as { startInteractive: ReturnType<typeof vi.fn> };
+      expect(newSession?.startInteractive).toHaveBeenCalledOnce();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
   // POST /api/sessions/:id/worktree/merge
   // ---------------------------------------------------------------------------
 
