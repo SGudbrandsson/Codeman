@@ -31,7 +31,7 @@
   gap: 8px;
   align-items: center;
   justify-content: center;
-  z-index: 51;
+  z-index: 1150; /* Above all floating windows (capped at 1099/1149) so hamburger stays clickable */
   transition: transform 0.15s ease-out;
   will-change: transform;
   overflow: visible;
@@ -46,7 +46,7 @@
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--safe-area-bottom, 0px) + 44px); /* Sits directly above accessory bar */
+  bottom: calc(var(--safe-area-bottom, 0px) + 52px); /* Sits directly above accessory bar */
   z-index: 52;
   background: #0d0d0d;
   border-top: 1px solid #1a1a2e;
@@ -70,7 +70,7 @@
    Use bottom (not padding-bottom) so the scroll area itself shrinks — padding-bottom is
    unreliable in overflow containers on iOS/Android. */
 .transcript-view {
-  bottom: calc(var(--safe-area-bottom, 0px) + 44px + var(--mobile-compose-height, 52px)) !important;
+  bottom: calc(var(--safe-area-bottom, 0px) + 52px + var(--mobile-compose-height, 52px)) !important;
 }
 /* ::after spacer ensures the last message is never flush against the scroll edge */
 .transcript-view::after {
@@ -842,7 +842,7 @@ html.mobile-init .file-browser-panel {
     bottom: var(--safe-area-bottom, 0px); /* Flush with safe-area edge */
     left: 0;
     right: 0;
-    height: 44px;
+    height: 52px;
     background: #1a1a1a;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     padding: 6px 8px;
@@ -851,7 +851,7 @@ html.mobile-init .file-browser-panel {
     gap: 8px;
     align-items: center;
     justify-content: center;
-    z-index: 51;
+    z-index: 1150; /* Above all floating windows so hamburger stays clickable */
     transition: transform 0.15s ease-out;
     will-change: transform;
     overflow: visible;
@@ -974,7 +974,8 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 6px 12px;
+    padding: 8px 14px;
+    min-height: 36px; /* Apple HIG: minimum 44px total touch target via bar padding */
     background: #2a2a2a;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
@@ -993,13 +994,13 @@ html.mobile-init .file-browser-panel {
     border-radius: 6px;
     overflow: hidden;
     flex-shrink: 0;
-    height: 32px;
+    height: 36px;
   }
   .view-mode-seg {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0 9px;
+    padding: 0 12px;
     background: #2a2a2a;
     border: none;
     border-right: 1px solid rgba(255, 255, 255, 0.1);
@@ -2379,12 +2380,12 @@ html.mobile-init .file-browser-panel {
 
 .touch-device .btn-hamburger { display: none; }
 
-.session-drawer-overlay {
+.session-drawer-overlay { /* mobile */
   display: none;
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  z-index: 1499;
+  z-index: 8999;
 }
 .session-drawer-overlay.open { display: block; }
 
@@ -2398,7 +2399,7 @@ html.mobile-init .file-browser-panel {
   transform: translateX(100%);
   transition: transform 0.25s ease;
   border-radius: 0 0 0 8px;
-  z-index: 1500;
+  z-index: 9000;
   display: flex;
   flex-direction: column;
 }
@@ -2521,7 +2522,7 @@ html.mobile-init .file-browser-panel {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(var(--safe-area-bottom, 0px) + 44px); /* Sits directly above accessory bar */
+  bottom: calc(var(--safe-area-bottom, 0px) + 52px); /* Sits directly above accessory bar */
   z-index: 52;
   background: #0d0d0d;
   border-top: 1px solid #1a1a2e;

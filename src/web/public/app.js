@@ -380,12 +380,14 @@ const McpPanel = {
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
     this._chip?.classList.add('active');
+    PanelBackdrop.show();
     await this._loadServers();
   },
 
   close() {
     this._panel.classList.remove('open');
     this._chip?.classList.remove('active');
+    PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
   },
@@ -831,6 +833,7 @@ const PluginsPanel = {
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
     this._chip?.classList.add('active');
+    PanelBackdrop.show();
     this._loadInstalled();
     this._updateInstallScopeDefault();
   },
@@ -850,6 +853,7 @@ const PluginsPanel = {
   close() {
     this._panel.classList.remove('open');
     this._chip?.classList.remove('active');
+    PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
   },
@@ -1323,6 +1327,7 @@ const ContextBar = {
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
     this._chip?.classList.add('active');
+    PanelBackdrop.show();
     const sid = sessionId || app.activeSessionId;
     if (sid) {
       const cached = this._data.get(sid);
@@ -1338,6 +1343,7 @@ const ContextBar = {
     if (!this._panel) return;
     this._panel.classList.remove('open');
     this._chip?.classList.remove('active');
+    PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
   },
@@ -1377,6 +1383,32 @@ const ContextBar = {
 
     const suggestion = document.getElementById('ctxSuggestion');
     if (suggestion) suggestion.style.display = pct >= 90 ? '' : 'none';
+  },
+};
+
+/** Shared translucent backdrop for mcp-type side panels (McpPanel, PluginsPanel, ContextBar). */
+const PanelBackdrop = {
+  _el: null,
+  _get() { return this._el || (this._el = document.getElementById('panelBackdrop')); },
+  show() { this._get()?.classList.add('open'); },
+  /** Only hides if no other panel is still open.
+   *  Protects the case where close() is called in isolation while a different panel
+   *  is still visible (e.g. an external caller closes one panel without opening another).
+   *  In the A.open() → B.close() sequence the backdrop is temporarily removed then
+   *  immediately re-added by A's subsequent show() call — both within the same
+   *  synchronous frame, so no visual flicker occurs. */
+  hide() {
+    const anyOpen = [McpPanel, PluginsPanel, ContextBar].some(
+      p => p._panel?.classList.contains('open')
+    );
+    if (!anyOpen) this._get()?.classList.remove('open');
+  },
+  init() {
+    this._get()?.addEventListener('click', () => {
+      McpPanel.close();
+      PluginsPanel.close();
+      ContextBar.close();
+    });
   },
 };
 
@@ -2460,6 +2492,7 @@ class CodemanApp {
     McpPanel.init();
     PluginsPanel.init();
     ContextBar.init();
+    PanelBackdrop.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
@@ -2517,6 +2550,7 @@ class CodemanApp {
       };
       addKeyboardTapFix(document.querySelector('.toolbar'));
       addKeyboardTapFix(document.querySelector('.welcome-overlay'));
+      addKeyboardTapFix(document.getElementById('mobileInputPanel'));
     }
     // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection
@@ -13462,6 +13496,7 @@ class CodemanApp {
         existing.element.style.display = 'flex';
         existing.hidden = false;
       }
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       existing.element.style.zIndex = ++this.subagentWindowZIndex;
       if (existing.minimized) {
         this.restoreSubagentWindow(windowId);
@@ -13494,6 +13529,7 @@ class CodemanApp {
     const win = document.createElement('div');
     win.className = 'subagent-window has-terminal';
     win.id = `subagent-window-${windowId}`;
+    if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
     win.style.zIndex = ++this.subagentWindowZIndex;
     win.style.left = `${finalX}px`;
     win.style.top = `${finalY}px`;
@@ -13547,6 +13583,7 @@ class CodemanApp {
 
     // Focus on click
     win.addEventListener('mousedown', () => {
+      if (this.subagentWindowZIndex >= ZINDEX_SUBAGENT_MAX) this._normalizeSubagentZIndexes();
       win.style.zIndex = ++this.subagentWindowZIndex;
     });
 
@@ -16456,8 +16493,6 @@ const SessionDrawer = {
     sheet.appendChild(removeBtn);
     sheet.appendChild(cancelBtn);
 
-    drawer.style.position = 'relative';
-    drawer.style.overflow = 'hidden';
     drawer.appendChild(sheet);
   },
 
