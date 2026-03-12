@@ -1421,6 +1421,7 @@ const TranscriptView = {
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
   _workingDebounce: null,
   _workingHideTimer: null,
+  _clearFallbackTimer: null, // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1672,6 +1673,9 @@ const TranscriptView = {
   },
 
   clear() {
+    // Cancel the fallback timer set by clearOnly() — TRANSCRIPT_CLEAR arrived normally.
+    clearTimeout(this._clearFallbackTimer);
+    this._clearFallbackTimer = null;
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -1686,7 +1690,17 @@ const TranscriptView = {
 
   // Clears the view immediately without reloading from server.
   // Used for optimistic UI when /clear is sent — the SSE transcript:clear event
-  // will arrive later (on next hook) and trigger a proper reload then.
+  // will arrive later and trigger a proper reload via clear() → load().
+  //
+  // However, Claude Code's /clear creates a new conversation (new UUID + new .jsonl
+  // file). The existing transcript watcher only learns the new path from the next
+  // hook event, which fires only after the next user interaction. If no hook arrives,
+  // transcript:clear never fires and "Clearing…" gets stuck forever.
+  //
+  // Safety net: _clearFallbackTimer calls clear() after 1.5 s so the view always
+  // transitions. clear() cancels the timer when transcript:clear arrives normally.
+  // Bumping _loadGen here also aborts any stale in-flight load() so its fetch result
+  // can't overwrite the "Clearing…" placeholder with stale blocks.
   clearOnly() {
     this._pendingToolUses = {};
     if (this._sessionId) {
@@ -1695,6 +1709,7 @@ const TranscriptView = {
       state.scrolledUp = false;
       state._sseBuffer = null;
     }
+    ++this._loadGen; // abort any in-progress load() so its result doesn't overwrite "Clearing…"
     if (this._container) {
       this._container.textContent = '';
       // Show a placeholder while waiting for the server-side clear to complete
@@ -1702,6 +1717,36 @@ const TranscriptView = {
       this._setPlaceholder('Clearing\u2026');
     }
     this._compactingEl = null;
+
+    // Fallback: if transcript:clear SSE never arrives (e.g. /clear creates a new
+    // conversation but the server only learns the new transcript path on the next hook
+    // event, which fires only after the next user interaction), show the empty CTA
+    // directly so the view never stays stuck.
+    //
+    // We do NOT call load() here — /clear doesn't immediately create a new transcript
+    // file, so fetching from the server would return the old content. Instead we
+    // render the empty state directly. When transcript:clear eventually fires on the
+    // next hook, clear() → load() will fetch the real new transcript at that point.
+    const pendingSessionId = this._sessionId;
+    clearTimeout(this._clearFallbackTimer);
+    // 1.5 s: long enough for a prompt TRANSCRIPT_CLEAR to arrive first (~500 ms typical),
+    // short enough that the view doesn't feel broken if it never arrives.
+    this._clearFallbackTimer = setTimeout(() => {
+      this._clearFallbackTimer = null;
+      if (this._sessionId !== pendingSessionId || !pendingSessionId) return;
+      // Show empty CTA without fetching — user cleared, so empty is the correct state.
+      this._pendingToolUses = {};
+      this._compactingEl = null;
+      this._isCompacting = false;
+      const state = this._getState(pendingSessionId);
+      state.blocks = [];
+      state.scrolledUp = false;
+      if (this._container) {
+        this._container.textContent = '';
+        this._setEmptyPlaceholder();
+        this._container.style.opacity = '';
+      }
+    }, 1500);
   },
 
   show(sessionId) {
@@ -1713,6 +1758,8 @@ const TranscriptView = {
     this._workingDebounce = null;
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
+    clearTimeout(this._clearFallbackTimer);
+    this._clearFallbackTimer = null;
     const _overlay = document.getElementById('tvTypingIndicator');
     if (_overlay) _overlay.style.display = 'none';
     if (this._container) {
