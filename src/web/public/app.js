@@ -16104,6 +16104,13 @@ const InputPanel = {
       }
     }
 
+    // Optimistic busy indicator — show loading state immediately without waiting for OSC-133 or SSE.
+    // Session is processing as soon as we send; don't make the user wait for server-side signals.
+    if (typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
+      TranscriptView.setWorking(true);
+    }
+    app._updateTabStatusDebounced(app.activeSessionId, 'busy');
+
     // Clear draft for this session
     if (this._currentSessionId) {
       this._drafts.set(this._currentSessionId, { text: '', imagePaths: [] });

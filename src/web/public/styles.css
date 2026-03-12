@@ -8831,12 +8831,7 @@ kbd {
     transition: background 0.15s;
   }
   .compose-send-btn:hover { background: #2563eb; }
-  .compose-send-btn.is-working { background: #ef4444; }
-  .compose-send-btn.is-working:hover { background: #dc2626; }
   .compose-send-btn .compose-send-icon { display: flex; }
-  .compose-send-btn .compose-stop-icon { display: none; }
-  .compose-send-btn.is-working .compose-send-icon { display: none; }
-  .compose-send-btn.is-working .compose-stop-icon { display: flex; }
 
   /* Expand button: show on desktop (inline style="display:none" is overridden) */
   .compose-expand-btn {
@@ -9362,12 +9357,8 @@ kbd {
   text-align: center;
 }
 
-/* Send / stop icon toggle — global (applies to all viewport sizes) */
+/* Send button — always-send, no stop toggle (stop button removed) */
 .compose-send-btn .compose-send-icon { display: flex; }
-.compose-send-btn .compose-stop-icon { display: none; }
-.compose-send-btn.is-working { background: #ef4444; transition: background 0.15s; }
-.compose-send-btn.is-working .compose-send-icon { display: none; }
-.compose-send-btn.is-working .compose-stop-icon { display: flex; }
 
 /* Typing indicator — fixed overlay at bottom of .main, above transcript content, does NOT affect scroll */
 .tv-typing-overlay {
