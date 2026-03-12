@@ -52,7 +52,7 @@ For each project × branch pair:
 ```bash
 curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   -H "Content-Type: application/json" \
-  -d '{"branch": "feat/my-feature", "isNew": true, "notes": "Bug: hamburger menu blocked by overlay"}'
+  -d '{"branch": "feat/my-feature", "isNew": true, "notes": "Bug: hamburger menu blocked by overlay", "autoStart": true}'
 ```
 
 **Body fields:**
@@ -62,6 +62,7 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
 | `isNew` | boolean | yes | `true` = create new branch, `false` = checkout existing |
 | `mode` | string | no | `claude` / `opencode` / `shell` — inherits from parent if omitted |
 | `notes` | string | no | Bug description or task context (max 2000 chars) — stored on the session and sent as initial Claude prompt |
+| `autoStart` | boolean | no | `true` = immediately spawn Claude process after creation (default: omitted/false) |
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/path/to/worktree" }`
 
