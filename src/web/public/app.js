@@ -1913,6 +1913,16 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
+      // Hide skill content blocks — Claude Code injects the full skill markdown as a separate
+      // user text message (sibling to the tool_result block in the same JSONL entry) after
+      // the tool_result confirmation. The tool view already shows "Launching skill: ..." so
+      // the content block is redundant and clutters the chat.
+      // Pattern anchors to an absolute path + blank line + markdown heading to avoid false
+      // positives from real user messages that happen to start with a similar phrase.
+      if (/^Base directory for this skill: \/.+\n\n#/.test(block.text)) {
+        return null;
+      }
+
       // Render task-notification blocks as a compact summary pill.
       // The full message includes the XML plus a trailing system instruction
       // ("Read the output file to retrieve the result: ...") — hide both.
