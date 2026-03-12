@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.6.4
+
+### Patch Changes
+
+- Fix merge endpoint to warn on uncommitted worktree changes; add merge & close workflow to skill and CLAUDE.md
+
 ## 0.6.3
 
 ### Patch Changes

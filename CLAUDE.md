@@ -55,7 +55,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.6.3 (must match `package.json`)
+**Version**: 0.6.4 (must match `package.json`)
 
 ## Project Overview
 
@@ -158,6 +158,12 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 **Mobile compose panel** (pencil icon): native textarea overlay above the accessory bar (`z-index: 52`, `position: fixed`). Send clears textarea, closes panel, and sends a trailing `\r`. Image button uploads to `POST /api/screenshots` and sends the saved file path to the session. Panel transforms with the accessory bar when keyboard opens — updated in all three layout paths in `mobile-handlers.js` (`updateLayout`, `resetLayout`). Slash command popup merges `BUILTIN_CLAUDE_COMMANDS` (17 built-ins defined in `app.js` before `InputPanel`) with session-specific plugin commands from `app._sessionCommands`; session commands take priority and are deduplicated by cmd name. Supports substring and subsequence matching.
 
+**iOS tap handling**: Calling `touchstart.preventDefault()` on a container (used to keep keyboard open when tapping buttons) suppresses iOS Safari's synthetic `click` event. Fix: add a `touchend` handler that calls `btn.click()` programmatically after checking the touch didn't drag >10px. See `KeyboardAccessoryBar.init()` in `keyboard-accessory.js` for the pattern.
+
+**`addKeyboardTapFix`** (in `app.init()`): intercepts `touchstart` on a container when `KeyboardHandler.keyboardVisible` is true, calls `e.preventDefault()` + `btn.click()` so button taps aren't swallowed by keyboard-dismiss on iOS. Must be applied to **every interactive container**: `.toolbar`, `.welcome-overlay`, `#mobileInputPanel`. If a button in a new panel is unresponsive while keyboard is open, add that container here.
+
+**Mobile accessory bar height**: 52px (was 44px). `barHeight` constant in `mobile-handlers.js` is `132` when bar is visible (52px bar + ~80px compose panel), `40` when hidden. The compose panel `bottom` CSS is `calc(safe-area-bottom + 52px)`.
+
 ### Security
 
 | Layer | Details |
@@ -201,11 +207,16 @@ The worktree API is used by the `codeman-worktrees` skill to create isolated git
 - `branch` — full git branch name (string, required)
 - `isNew` — `true` = create new branch, `false` = checkout existing (boolean, required)
 - `mode` — `"claude"` | `"opencode"` | `"shell"` (optional, inherits from parent)
-- `notes` — bug description or task context, max 2000 chars (optional) — stored as `worktreeNotes` on `SessionState`
+- `notes` — bug description or task context, max 2000 chars (optional) — stored as `worktreeNotes` on `SessionState` and **sent as the initial Claude prompt** when the session starts
 
 **Response:** `{ success: true, session: SessionState, worktreePath: string }`
 
 **Finding the right parent session:** Filter `GET /api/sessions` for sessions where `worktreeBranch` is null/absent (main sessions only, not sub-worktrees), then match `workingDir` against the project name.
+
+**`POST /api/sessions/:id/worktree/merge` — merge branch back:**
+- Called on the **origin/parent** session with `{ "branch": "fix/my-branch" }` in the body
+- Returns `{ success: false, uncommittedChanges: true, message: "..." }` if the worktree has uncommitted files — **commit them first**, then retry. This is the cause of "already up to date" confusion when the Claude session hasn't committed yet.
+- Full lifecycle: commit in worktree → merge → `DELETE /api/sessions/:id/worktree` (removes disk) → `DELETE /api/sessions/:id` (removes from sidebar)
 
 ## Adding Features
 
