@@ -38,7 +38,7 @@ describe('hook-event-routes', () => {
       expect(body.success).toBe(true);
       expect(harness.ctx.broadcast).toHaveBeenCalledWith(
         'hook:stop',
-        expect.objectContaining({ sessionId: harness.ctx._sessionId }),
+        expect.objectContaining({ sessionId: harness.ctx._sessionId })
       );
     });
 
@@ -55,7 +55,7 @@ describe('hook-event-routes', () => {
       expect(res.statusCode).toBe(200);
       expect(harness.ctx.sendPushNotifications).toHaveBeenCalledWith(
         'hook:idle_prompt',
-        expect.objectContaining({ sessionId: harness.ctx._sessionId }),
+        expect.objectContaining({ sessionId: harness.ctx._sessionId })
       );
     });
 
@@ -180,10 +180,7 @@ describe('hook-event-routes', () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      expect(mockTracker.recordHookEvent).toHaveBeenCalledWith(
-        'stop',
-        expect.any(Object),
-      );
+      expect(mockTracker.recordHookEvent).toHaveBeenCalledWith('stop', expect.any(Object));
     });
 
     it('starts transcript watcher when transcript_path is provided', async () => {
@@ -199,8 +196,60 @@ describe('hook-event-routes', () => {
       expect(res.statusCode).toBe(200);
       expect(harness.ctx.startTranscriptWatcher).toHaveBeenCalledWith(
         harness.ctx._sessionId,
-        '/home/user/.claude/transcript.jsonl',
+        '/home/user/.claude/transcript.jsonl'
       );
+    });
+
+    it('dispatches hook to the correct session — not a different session in the same workingDir', async () => {
+      // Regression: w2 and w3 share the same workingDir.
+      // Hook for w3 must call startTranscriptWatcher with w3's session ID, not w2's.
+      const SESSION_A = harness.ctx._sessionId; // 'test-session-1' (already registered)
+      const SESSION_B = 'test-session-2';
+      const pathA = `/home/user/.claude/projects/proj/${SESSION_A}.jsonl`;
+      const pathB = `/home/user/.claude/projects/proj/${SESSION_B}.jsonl`;
+
+      // Register a second session
+      harness.ctx.sessions.set(SESSION_B, {
+        id: SESSION_B,
+        claudeResumeId: undefined,
+        toState: () => ({ id: SESSION_B }),
+      } as never);
+
+      // Fire hook for A
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId: SESSION_A, data: { transcript_path: pathA } },
+      });
+
+      // Fire hook for B
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId: SESSION_B, data: { transcript_path: pathB } },
+      });
+
+      // Each session must have gotten its OWN path — cross-contamination would be calling
+      // startTranscriptWatcher('session-A', pathB) or ('session-B', pathA).
+      const calls = (harness.ctx.startTranscriptWatcher as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toContainEqual([SESSION_A, pathA]);
+      expect(calls).toContainEqual([SESSION_B, pathB]);
+      expect(calls).not.toContainEqual([SESSION_A, pathB]); // A must NOT get B's path
+      expect(calls).not.toContainEqual([SESSION_B, pathA]); // B must NOT get A's path
+    });
+
+    it('does NOT start transcript watcher when no transcript_path in data', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: {
+          event: 'stop',
+          sessionId: harness.ctx._sessionId,
+          data: { some_other_field: 'value' },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.startTranscriptWatcher).not.toHaveBeenCalled();
     });
 
     it('accepts valid data payload with extra fields', async () => {
