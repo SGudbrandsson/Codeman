@@ -644,6 +644,76 @@ describe('SSE — transcript:clear', () => {
   });
 });
 
+describe('Skill content suppression', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await selectSession(page, sessionId);
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await page.evaluate(async (id) => {
+      await fetch('/api/sessions/' + id, { method: 'DELETE' });
+    }, sessionId);
+    await context?.close();
+  });
+
+  it('skill content block (starts with "Base directory for this skill:") is not rendered', async () => {
+    const skillContent = [
+      'Base directory for this skill: /home/user/.claude/plugins/cache/superpowers/1.0.0/skills/my-skill',
+      '',
+      '# My Skill',
+      '',
+      'This is the skill markdown content that should be hidden.',
+    ].join('\n');
+
+    const blocksBefore = await page.locator('#transcriptView .tv-block--user').count();
+
+    await page.evaluate(
+      ({ sid, text }) => {
+        const block = { type: 'text', role: 'user', text, timestamp: new Date().toISOString() };
+        (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
+          sessionId: sid,
+          block,
+        });
+      },
+      { sid: sessionId, text: skillContent }
+    );
+    await page.waitForTimeout(300);
+
+    const blocksAfter = await page.locator('#transcriptView .tv-block--user').count();
+    expect(blocksAfter).toBe(blocksBefore); // no new user block should appear
+  });
+
+  it('regular user message is still rendered normally', async () => {
+    const blocksBefore = await page.locator('#transcriptView .tv-block--user').count();
+
+    await page.evaluate((sid) => {
+      const block = {
+        type: 'text',
+        role: 'user',
+        text: 'A normal user message that should appear.',
+        timestamp: new Date().toISOString(),
+      };
+      (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
+        sessionId: sid,
+        block,
+      });
+    }, sessionId);
+    await page.waitForTimeout(300);
+
+    const blocksAfter = await page.locator('#transcriptView .tv-block--user').count();
+    expect(blocksAfter).toBe(blocksBefore + 1);
+  });
+});
+
 describe('Scroll anchor', () => {
   let context: BrowserContext;
   let page: Page;
