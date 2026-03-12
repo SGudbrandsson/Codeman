@@ -90,6 +90,7 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
 
+    const resolvedMode = mode ?? session.mode;
     const gitRoot = findGitRoot(session.workingDir);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
 
@@ -120,7 +121,7 @@ export function registerWorktreeSessionRoutes(
 
     const newSession = new Session({
       workingDir: worktreePath,
-      mode: mode ?? session.mode,
+      mode: resolvedMode,
       name: branch,
       mux: ctx.mux,
       useMux: true,
@@ -144,7 +145,7 @@ export function registerWorktreeSessionRoutes(
 
     if (autoStart) {
       try {
-        if (newSession.mode === 'shell') {
+        if (resolvedMode === 'shell') {
           await newSession.startShell();
           getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
@@ -154,9 +155,9 @@ export function registerWorktreeSessionRoutes(
             event: 'started',
             sessionId: newSession.id,
             name: newSession.name,
-            mode: newSession.mode,
+            mode: resolvedMode,
           });
-          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: newSession.mode });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
         }
         ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(newSession) });
       } catch (err) {
@@ -268,6 +269,7 @@ export function registerWorktreeSessionRoutes(
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
     const { branch, isNew, mode, notes, autoStart } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
+    const resolvedMode = mode ?? 'claude';
     const gitRoot = findGitRoot(casePath);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
     const projectName = gitRoot.split('/').pop() ?? 'project';
@@ -291,7 +293,7 @@ export function registerWorktreeSessionRoutes(
       : notes;
     const newSession = new Session({
       workingDir: worktreePath,
-      mode: mode ?? 'claude',
+      mode: resolvedMode,
       name: branch,
       mux: ctx.mux,
       useMux: true,
@@ -312,7 +314,7 @@ export function registerWorktreeSessionRoutes(
 
     if (autoStart) {
       try {
-        if (newSession.mode === 'shell') {
+        if (resolvedMode === 'shell') {
           await newSession.startShell();
           getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
@@ -322,9 +324,9 @@ export function registerWorktreeSessionRoutes(
             event: 'started',
             sessionId: newSession.id,
             name: newSession.name,
-            mode: newSession.mode,
+            mode: resolvedMode,
           });
-          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: newSession.mode });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
         }
         ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(newSession) });
       } catch (err) {
