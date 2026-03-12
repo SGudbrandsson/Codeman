@@ -85,7 +85,7 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew, mode, notes } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
@@ -141,6 +141,29 @@ export function registerWorktreeSessionRoutes(
 
     const lightState = ctx.getSessionStateWithRespawn(newSession);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
+
+    if (autoStart) {
+      try {
+        if (newSession.mode === 'shell') {
+          await newSession.startShell();
+          getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
+        } else {
+          await newSession.startInteractive();
+          getLifecycleLog().log({
+            event: 'started',
+            sessionId: newSession.id,
+            name: newSession.name,
+            mode: newSession.mode,
+          });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: newSession.mode });
+        }
+        ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(newSession) });
+      } catch (err) {
+        console.error(`[worktree] autoStart failed for session ${newSession.id}:`, err);
+      }
+    }
+
     return { success: true, session: lightState, worktreePath };
   });
 
