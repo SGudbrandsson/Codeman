@@ -199,9 +199,9 @@ describe('Toggle button visibility', () => {
     expect(visible).toBe(true);
   });
 
-  it('toggle button label is "Web" when in web mode (default)', async () => {
-    const label = await page.locator('#accessoryViewModeBtn span').textContent();
-    expect(label).toBe('Web');
+  it('toggle button shows "web" segment as active in web mode (default)', async () => {
+    const activeMode = await page.locator('#accessoryViewModeBtn .view-mode-seg.active').getAttribute('data-mode');
+    expect(activeMode).toBe('web');
   });
 
   it('toggle button does not have terminal-mode class in web mode', async () => {
@@ -244,7 +244,7 @@ describe('View mode switching', () => {
   });
 
   it('clicking toggle switches to terminal mode', async () => {
-    await page.locator('#accessoryViewModeBtn').click();
+    await page.locator('#accessoryViewModeBtn .view-mode-seg[data-mode="terminal"]').click();
     await page.waitForTimeout(400);
 
     const tvVisible = await page.locator('#transcriptView').isVisible();
@@ -256,23 +256,23 @@ describe('View mode switching', () => {
     expect(termVisibility).not.toBe('hidden');
   });
 
-  it('toggle button shows label "Terminal" in terminal mode', async () => {
-    const label = await page.locator('#accessoryViewModeBtn span').textContent();
-    expect(label).toBe('Terminal');
+  it('toggle button shows "Terminal" segment as active', async () => {
+    const activeMode = await page.locator('#accessoryViewModeBtn .view-mode-seg.active').getAttribute('data-mode');
+    expect(activeMode).toBe('terminal');
   });
 
   it('clicking toggle again switches back to web mode', async () => {
     await mockTranscript(page, sessionId, MOCK_TEXT_BLOCKS);
-    await page.locator('#accessoryViewModeBtn').click();
+    await page.locator('#accessoryViewModeBtn .view-mode-seg[data-mode="web"]').click();
     await page.waitForTimeout(600);
 
     const tvVisible = await page.locator('#transcriptView').isVisible();
     expect(tvVisible).toBe(true);
   });
 
-  it('toggle button label returns to "Web"', async () => {
-    const label = await page.locator('#accessoryViewModeBtn span').textContent();
-    expect(label).toBe('Web');
+  it('toggle button shows "Transcript/web" segment as active', async () => {
+    const activeMode = await page.locator('#accessoryViewModeBtn .view-mode-seg.active').getAttribute('data-mode');
+    expect(activeMode).toBe('web');
   });
 });
 
@@ -304,7 +304,7 @@ describe('localStorage persistence', () => {
   });
 
   it('switching to terminal stores "terminal" in localStorage', async () => {
-    await page.locator('#accessoryViewModeBtn').click();
+    await page.locator('#accessoryViewModeBtn .view-mode-seg[data-mode="terminal"]').click();
     await page.waitForTimeout(300);
     const stored = await page.evaluate((id) => localStorage.getItem('transcriptViewMode:' + id), sessionId);
     expect(stored).toBe('terminal');
@@ -312,7 +312,7 @@ describe('localStorage persistence', () => {
 
   it('switching back to web stores "web" in localStorage', async () => {
     await mockTranscript(page, sessionId, []);
-    await page.locator('#accessoryViewModeBtn').click();
+    await page.locator('#accessoryViewModeBtn .view-mode-seg[data-mode="web"]').click();
     await page.waitForTimeout(300);
     const stored = await page.evaluate((id) => localStorage.getItem('transcriptViewMode:' + id), sessionId);
     expect(stored).toBe('web');
@@ -425,7 +425,12 @@ describe('Block rendering — tool rows', () => {
   });
 
   it('clicking tool row expands the panel', async () => {
-    await page.locator('#transcriptView .tv-tool-row').first().click();
+    // Use evaluate click to bypass Playwright actionability checks — tool row may be
+    // partially obscured by the fixed compose panel in the test viewport.
+    await page
+      .locator('#transcriptView .tv-tool-row')
+      .first()
+      .evaluate((el) => (el as HTMLElement).click());
     await page.waitForTimeout(200);
     const openPanels = await page.locator('#transcriptView .tv-tool-panel.open').count();
     expect(openPanels).toBe(1);
@@ -442,7 +447,10 @@ describe('Block rendering — tool rows', () => {
   });
 
   it('clicking tool row again collapses the panel', async () => {
-    await page.locator('#transcriptView .tv-tool-row').first().click();
+    await page
+      .locator('#transcriptView .tv-tool-row')
+      .first()
+      .evaluate((el) => (el as HTMLElement).click());
     await page.waitForTimeout(200);
     const openPanels = await page.locator('#transcriptView .tv-tool-panel.open').count();
     expect(openPanels).toBe(0);
@@ -529,9 +537,11 @@ describe('Placeholder state', () => {
     await context?.close();
   });
 
-  it('shows "Waiting for Claude to start" placeholder for empty transcript', async () => {
-    const text = await page.locator('#transcriptView .tv-placeholder').textContent();
-    expect(text).toContain('Waiting for Claude to start');
+  it('shows empty-state CTA for empty transcript', async () => {
+    const cta = await page.locator('#transcriptView .tv-empty-cta').count();
+    expect(cta).toBe(1);
+    const title = await page.locator('#transcriptView .tv-empty-cta-title').textContent();
+    expect(title).toContain('on your mind');
   });
 });
 
@@ -557,9 +567,9 @@ describe('SSE — transcript:block live append', () => {
     await context?.close();
   });
 
-  it('starts with placeholder (empty)', async () => {
-    const count = await page.locator('#transcriptView .tv-placeholder').count();
-    expect(count).toBe(1);
+  it('starts with empty-state CTA (no blocks)', async () => {
+    const cta = await page.locator('#transcriptView .tv-empty-cta').count();
+    expect(cta).toBe(1);
   });
 
   it('transcript:block SSE event appends a user block', async () => {
@@ -598,6 +608,17 @@ describe('SSE — transcript:block live append', () => {
 
     const assistantBlocks = await page.locator('#transcriptView .tv-block--assistant').count();
     expect(assistantBlocks).toBe(1);
+  });
+
+  it('state.blocks count matches DOM block count — no double-push on live SSE', async () => {
+    // With the double-push guard, append() pushes to state.blocks and _onTranscriptBlock
+    // must NOT push again. After 2 SSE blocks (user + assistant), both counts must be 2.
+    const stateLength = await page.evaluate((sid) => {
+      const a = (window as unknown as { app: { _transcriptState: Record<string, { blocks: unknown[] }> } }).app;
+      return a._transcriptState?.[sid]?.blocks?.length ?? -1;
+    }, sessionId);
+    const domCount = await page.locator('#transcriptView .tv-block').count();
+    expect(stateLength).toBe(domCount); // diverges (state > dom) if double-push bug is present
   });
 });
 
@@ -639,8 +660,23 @@ describe('SSE — transcript:clear', () => {
     }, sessionId);
     await page.waitForTimeout(600);
 
-    const placeholder = await page.locator('#transcriptView .tv-placeholder').count();
-    expect(placeholder).toBe(1);
+    // After clear + empty transcript fetch, blocks are gone and empty-state CTA is shown
+    const blocks = await page.locator('#transcriptView .tv-block').count();
+    expect(blocks).toBe(0);
+    const cta = await page.locator('#transcriptView .tv-empty-cta').count();
+    expect(cta).toBe(1);
+  });
+
+  it('clearOnly() shows "Clearing…" placeholder immediately before reload', async () => {
+    // clearOnly() gives instant feedback ("Clearing…") while the server-side /clear completes.
+    // The transcript:clear SSE event will arrive later and trigger the actual reload.
+    await page.evaluate(() => {
+      (window as unknown as { TranscriptView: { clearOnly: () => void } }).TranscriptView.clearOnly();
+    });
+    await page.waitForTimeout(50); // no async needed — clearOnly() is synchronous
+
+    const placeholder = await page.locator('#transcriptView .tv-placeholder').textContent();
+    expect(placeholder).toContain('Clearing');
   });
 });
 
