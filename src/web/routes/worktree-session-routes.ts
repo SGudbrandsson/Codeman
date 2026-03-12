@@ -27,6 +27,7 @@ import {
   mergeBranch,
 } from '../../utils/git-utils.js';
 import { CASES_DIR } from '../route-helpers.js';
+import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
