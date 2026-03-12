@@ -33,7 +33,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, chmodSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -91,6 +91,7 @@ import {
 import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
 import { SseEvent } from './sse-events.js';
+import { resolveTranscriptPath } from './transcript-path-resolver.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders } from './middleware/auth.js';
 import {
@@ -801,11 +802,14 @@ export class WebServer extends EventEmitter {
       this.transcriptWatchers.set(sessionId, watcher);
     }
 
-    // Extract Claude resume ID from transcript filename (UUID without .jsonl extension)
+    // Extract Claude resume ID from transcript filename (UUID without .jsonl extension).
+    // Always update — not just on first set — so claudeResumeId tracks the current
+    // conversation even after /clear creates a new JSONL file with a different UUID.
+    // This ensures getTranscriptPath() finds the right file after a server restart.
     const resumeId = basename(transcriptPath, '.jsonl');
     if (resumeId && resumeId.length === 36) {
       const session = this.sessions.get(sessionId);
-      if (session && !session.claudeResumeId) {
+      if (session && session.claudeResumeId !== resumeId) {
         session.claudeResumeId = resumeId;
         this.persistSessionState(session);
       }
@@ -834,46 +838,11 @@ export class WebServer extends EventEmitter {
   private getTranscriptPath(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
-
-    // Fast path: watcher already tracks the correct file — use it directly
-    const watcherPath = this.transcriptWatchers.get(sessionId)?.transcriptPath;
-    if (watcherPath) {
-      try {
-        statSync(watcherPath); // verify it still exists
-        return watcherPath;
-      } catch {
-        /* file gone — fall through to directory scan */
-      }
-    }
-
-    // Slow path: scan for the newest JSONL in the project dir (covers /clear creating
-    // new conversations before a hook event has fired to update the watcher)
-    const escapedDir = session.workingDir.replace(/\//g, '-');
-    const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
-
-    try {
-      const files = readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
-      if (files.length > 0) {
-        let newest = files[0];
-        let newestMtime = 0;
-        for (const f of files) {
-          try {
-            const mtime = statSync(join(projectDir, f)).mtimeMs;
-            if (mtime > newestMtime) {
-              newestMtime = mtime;
-              newest = f;
-            }
-          } catch {
-            /* skip */
-          }
-        }
-        return join(projectDir, newest);
-      }
-    } catch {
-      /* dir doesn't exist yet */
-    }
-
-    return null;
+    return resolveTranscriptPath(
+      session.workingDir,
+      this.transcriptWatchers.get(sessionId),
+      session.claudeResumeId ?? undefined
+    );
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
