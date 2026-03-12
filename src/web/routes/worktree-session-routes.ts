@@ -140,7 +140,7 @@ export function registerWorktreeSessionRoutes(
     ctx.persistSessionState(newSession);
     await ctx.setupSessionListeners(newSession);
 
-    const lightState = ctx.getSessionStateWithRespawn(newSession);
+    let lightState = ctx.getSessionStateWithRespawn(newSession);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
 
     if (autoStart) {
@@ -159,9 +159,10 @@ export function registerWorktreeSessionRoutes(
           });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
         }
-        ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(newSession) });
+        lightState = ctx.getSessionStateWithRespawn(newSession);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
       } catch (err) {
-        console.error(`[worktree] autoStart failed for session ${newSession.id}:`, err);
+        req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
       }
     }
 
@@ -309,7 +310,7 @@ export function registerWorktreeSessionRoutes(
     ctx.addSession(newSession);
     ctx.persistSessionState(newSession);
     await ctx.setupSessionListeners(newSession);
-    const lightState = ctx.getSessionStateWithRespawn(newSession);
+    let lightState = ctx.getSessionStateWithRespawn(newSession);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
 
     if (autoStart) {
@@ -328,9 +329,10 @@ export function registerWorktreeSessionRoutes(
           });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
         }
-        ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(newSession) });
+        lightState = ctx.getSessionStateWithRespawn(newSession);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
       } catch (err) {
-        console.error(`[worktree] autoStart failed for session ${newSession.id}:`, err);
+        req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
       }
     }
 
