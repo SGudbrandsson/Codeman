@@ -1535,11 +1535,9 @@ const TranscriptView = {
         app.pendingAskUserQuestion = pendingQ;
         app.renderAskUserQuestionPanel();
       }
-      // Fresh load: scroll while still invisible, then reveal (same as cache path)
-      if (!hadCache) {
-        this._container.scrollTop = this._container.scrollHeight;
-        this._container.style.opacity = '';
-      }
+      // Scroll to bottom unless the user explicitly scrolled up during the fetch.
+      if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
+      if (!hadCache) this._container.style.opacity = '';
     } catch {
       this._container.style.opacity = '';
       this._setPlaceholder('Could not load session history.');
@@ -1685,7 +1683,12 @@ const TranscriptView = {
       state.scrolledUp = false;
       state._sseBuffer = null;
     }
-    if (this._container) this._container.textContent = '';
+    if (this._container) {
+      this._container.textContent = '';
+      // Show a placeholder while waiting for the server-side clear to complete
+      // and the transcript:clear SSE event to trigger a proper reload.
+      this._setPlaceholder('Clearing\u2026');
+    }
     this._compactingEl = null;
   },
 
@@ -8502,18 +8505,23 @@ class CodemanApp {
   _onTranscriptBlock(data) {
     const { sessionId, block } = data;
     const state = app._transcriptState?.[sessionId];
+    let handledByView = false;
     if (TranscriptView._sessionId === sessionId) {
       const transcriptEl = document.getElementById('transcriptView');
       if (transcriptEl?.style.display !== 'none') {
         // If load() is in progress, buffer the block; it will be replayed after HTTP snapshot
         if (state && state._sseBuffer !== null && state._sseBuffer !== undefined) {
           state._sseBuffer.push(block);
+          handledByView = true;
         } else {
           TranscriptView.append(block);
+          handledByView = true;
         }
       }
     }
-    if (state) state.blocks.push(block);
+    // Only push to state.blocks when not handled above — append() already does it,
+    // and _sseBuffer blocks are added to state.blocks after the load() fetch completes.
+    if (state && !handledByView) state.blocks.push(block);
 
     // Detect pending AskUserQuestion from the block stream (works for both HTTP replay and live SSE)
     if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
