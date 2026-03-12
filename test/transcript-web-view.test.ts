@@ -677,6 +677,53 @@ describe('SSE — transcript:clear', () => {
 
     const placeholder = await page.locator('#transcriptView .tv-placeholder').textContent();
     expect(placeholder).toContain('Clearing');
+
+    // Clean up: cancel the fallback timer so it doesn't fire into subsequent tests.
+    await page.evaluate(() => {
+      const tv = (
+        window as unknown as {
+          TranscriptView: { _clearFallbackTimer: ReturnType<typeof setTimeout> | null; clear: () => void };
+        }
+      ).TranscriptView;
+      clearTimeout(tv._clearFallbackTimer ?? undefined);
+      tv._clearFallbackTimer = null;
+    });
+  });
+
+  it('clearOnly() fallback timer shows empty CTA when transcript:clear never arrives', async () => {
+    // Regression test for "Clearing… stuck forever":
+    // After clearOnly(), if transcript:clear SSE never fires (e.g. /clear created a new
+    // conversation but no hook event yet), the 1.5 s fallback renders the empty CTA
+    // directly — without fetching from the server — so the view always transitions.
+
+    // Prime the view with at least one block so there's content to clear
+    await page.evaluate((sid) => {
+      (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
+        sessionId: sid,
+        block: { type: 'text', role: 'user', text: 'hello', timestamp: new Date().toISOString() },
+      });
+    }, sessionId);
+    await page.waitForTimeout(100);
+
+    // Call clearOnly() — starts the fallback timer at 1.5 s
+    await page.evaluate(() => {
+      (window as unknown as { TranscriptView: { clearOnly: () => void } }).TranscriptView.clearOnly();
+    });
+
+    // Immediately after clearOnly(), the "Clearing…" placeholder should be visible
+    const placeholderText = await page.locator('#transcriptView .tv-placeholder').textContent();
+    expect(placeholderText).toContain('Clearing');
+
+    // Wait for the fallback timer to fire (1.5 s) + render time
+    await page.waitForTimeout(2000);
+
+    // The fallback clear() → load() should have replaced "Clearing…" with the empty CTA
+    const blocks = await page.locator('#transcriptView .tv-block').count();
+    expect(blocks).toBe(0);
+    const cta = await page.locator('#transcriptView .tv-empty-cta').count();
+    expect(cta).toBe(1);
+    const stuckPlaceholder = await page.locator('#transcriptView .tv-placeholder').count();
+    expect(stuckPlaceholder).toBe(0);
   });
 });
 
