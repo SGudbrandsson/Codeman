@@ -16861,3 +16861,4 @@ const app = new CodemanApp();
 // Expose for debugging/testing
 window.app = app;
 window.MobileDetection = MobileDetection;
+window.TranscriptView = TranscriptView;
