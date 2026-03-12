@@ -27,6 +27,7 @@ import {
   mergeBranch,
 } from '../../utils/git-utils.js';
 import { CASES_DIR } from '../route-helpers.js';
+import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
@@ -84,11 +85,12 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew, mode, notes } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
 
+    const resolvedMode = mode ?? session.mode;
     const gitRoot = findGitRoot(session.workingDir);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
 
@@ -119,7 +121,7 @@ export function registerWorktreeSessionRoutes(
 
     const newSession = new Session({
       workingDir: worktreePath,
-      mode: mode ?? session.mode,
+      mode: resolvedMode,
       name: branch,
       mux: ctx.mux,
       useMux: true,
@@ -138,8 +140,32 @@ export function registerWorktreeSessionRoutes(
     ctx.persistSessionState(newSession);
     await ctx.setupSessionListeners(newSession);
 
-    const lightState = ctx.getSessionStateWithRespawn(newSession);
+    let lightState = ctx.getSessionStateWithRespawn(newSession);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
+
+    if (autoStart) {
+      try {
+        if (resolvedMode === 'shell') {
+          await newSession.startShell();
+          getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
+        } else {
+          await newSession.startInteractive();
+          getLifecycleLog().log({
+            event: 'started',
+            sessionId: newSession.id,
+            name: newSession.name,
+            mode: resolvedMode,
+          });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
+        }
+        lightState = ctx.getSessionStateWithRespawn(newSession);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
+      } catch (err) {
+        req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
+      }
+    }
+
     return { success: true, session: lightState, worktreePath };
   });
 
@@ -242,8 +268,9 @@ export function registerWorktreeSessionRoutes(
     if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-    const { branch, isNew, mode, notes } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
+    const resolvedMode = mode ?? 'claude';
     const gitRoot = findGitRoot(casePath);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
     const projectName = gitRoot.split('/').pop() ?? 'project';
@@ -267,7 +294,7 @@ export function registerWorktreeSessionRoutes(
       : notes;
     const newSession = new Session({
       workingDir: worktreePath,
-      mode: mode ?? 'claude',
+      mode: resolvedMode,
       name: branch,
       mux: ctx.mux,
       useMux: true,
@@ -283,8 +310,32 @@ export function registerWorktreeSessionRoutes(
     ctx.addSession(newSession);
     ctx.persistSessionState(newSession);
     await ctx.setupSessionListeners(newSession);
-    const lightState = ctx.getSessionStateWithRespawn(newSession);
+    let lightState = ctx.getSessionStateWithRespawn(newSession);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
+
+    if (autoStart) {
+      try {
+        if (resolvedMode === 'shell') {
+          await newSession.startShell();
+          getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
+        } else {
+          await newSession.startInteractive();
+          getLifecycleLog().log({
+            event: 'started',
+            sessionId: newSession.id,
+            name: newSession.name,
+            mode: resolvedMode,
+          });
+          ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: resolvedMode });
+        }
+        lightState = ctx.getSessionStateWithRespawn(newSession);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
+      } catch (err) {
+        req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
+      }
+    }
+
     return { success: true, session: lightState, worktreePath };
   });
 }
