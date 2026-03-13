@@ -208,7 +208,11 @@ function buildSpawnCommand(options: {
     const modelFlag = safeModel ? ` --model ${safeModel}` : '';
     const extra = (options.extraArgs ?? []).map((a) => JSON.stringify(a)).join(' ');
     const extraStr = extra ? ` ${extra}` : '';
-    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}${extraStr}`;
+    // --session-id is only valid for fresh sessions; Claude CLI rejects --session-id + --resume
+    // without --fork-session (which creates a branch — not what we want for a plain resume).
+    const isResuming = (options.extraArgs ?? []).includes('--resume');
+    const sessionIdFlag = isResuming ? '' : ` --session-id "${options.sessionId}"`;
+    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)}${sessionIdFlag}${modelFlag}${extraStr}`;
   }
   if (options.mode === 'opencode') {
     return buildOpenCodeCommand(options.openCodeConfig);

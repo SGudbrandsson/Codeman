@@ -1124,7 +1124,7 @@ export class Session extends EventEmitter {
         const initialArg = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
         if (initialArg.length) this._initialPromptSent = true;
         const args = [
-          ...buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools),
+          ...buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this.claudeResumeId),
           ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
           ...initialArg,
         ];
