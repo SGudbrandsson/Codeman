@@ -283,6 +283,7 @@ export class Session extends EventEmitter {
   private _errorBuffer: string = '';
   private _lastActivityAt: number;
   private _claudeSessionId: string | null = null;
+  private _conversationId: string | null = null;
   private _totalCost: number = 0;
   private _messages: ClaudeMessage[] = [];
   private _lineBuffer: string = '';
@@ -572,6 +573,10 @@ export class Session extends EventEmitter {
 
   get claudeSessionId(): string | null {
     return this._claudeSessionId;
+  }
+
+  get conversationId(): string | null {
+    return this._conversationId;
   }
 
   get totalCost(): number {
@@ -1852,6 +1857,13 @@ export class Session extends EventEmitter {
             ((msg as unknown as Record<string, unknown>).sessionId as string | undefined) ?? msg.session_id;
           if (msgSessionId && !this._claudeSessionId) {
             this._claudeSessionId = msgSessionId;
+          }
+
+          // Track conversation UUID (= JSONL filename) separately. When it changes, a new
+          // conversation has started and the transcript watcher may be watching the wrong file.
+          if (msgSessionId && msgSessionId !== this._conversationId) {
+            this._conversationId = msgSessionId;
+            this.emit('conversationId', msgSessionId);
           }
 
           // Process message for task tracking
