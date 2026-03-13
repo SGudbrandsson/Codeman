@@ -37,19 +37,24 @@ export function buildPermissionArgs(claudeMode: ClaudeMode, allowedTools?: strin
 /**
  * Build args for an interactive Claude CLI session (direct PTY, non-mux fallback).
  *
- * @param sessionId - The Codeman session ID (passed as --session-id to Claude)
+ * @param sessionId - The Codeman session ID (passed as --session-id to Claude for fresh sessions)
  * @param claudeMode - Permission mode for the CLI
  * @param model - Optional model override (e.g., 'opus', 'sonnet')
  * @param allowedTools - Optional comma-separated allowed tools list
+ * @param resumeId - If set, --session-id is omitted (Claude CLI rejects --session-id + --resume without --fork-session)
  * @returns Array of CLI arguments
  */
 export function buildInteractiveArgs(
   sessionId: string,
   claudeMode: ClaudeMode,
   model?: string,
-  allowedTools?: string
+  allowedTools?: string,
+  resumeId?: string
 ): string[] {
-  const args = [...buildPermissionArgs(claudeMode, allowedTools), '--session-id', sessionId];
+  const args = [...buildPermissionArgs(claudeMode, allowedTools)];
+  // --session-id is only valid for fresh sessions; combining it with --resume requires
+  // --fork-session (which creates a branch) — not what we want for a plain resume.
+  if (!resumeId) args.push('--session-id', sessionId);
   if (model) args.push('--model', model);
   return args;
 }
