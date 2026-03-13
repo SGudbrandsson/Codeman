@@ -3,9 +3,10 @@
  *
  * Scenarios covered:
  *  1. Fast path — watcher has a valid file
- *  2. Own-file path — session's ${claudeResumeId}.jsonl exists (server restart, multi-session same dir)
- *  3. Scan path — hasHadActivity but own file gone (post-/clear race)
+ *  2. Stale claudeResumeId — newer JSONL exists (main bug fix: transcript/terminal mismatch)
+ *  3. Scan path — claudeResumeId file gone (post-/clear race)
  *  4. New session — no claudeResumeId, return null
+ *  5. Server restart — claudeResumeId file is still the newest → return it
  *
  * The filesystem is isolated to a temp directory so tests never touch real ~/.claude data.
  */
@@ -64,38 +65,36 @@ describe('resolveTranscriptPath', () => {
     fs.unlinkSync(old);
   });
 
-  // ── Own-file path: server restart ─────────────────────────────────────────
+  // ── Server restart: own file is newest ────────────────────────────────────
 
-  it("returns the session's own JSONL after server restart (no watcher)", () => {
-    const own = path.join(projectDir, `${SESSION_A}.jsonl`);
+  it("returns the session's own JSONL after server restart when it is the newest", async () => {
     const unrelated = path.join(projectDir, 'other.jsonl');
-    fs.writeFileSync(own, '');
     fs.writeFileSync(unrelated, '');
+    await new Promise((r) => setTimeout(r, 10));
+    const own = path.join(projectDir, `${SESSION_A}.jsonl`);
+    fs.writeFileSync(own, ''); // own is newer → wins
     expect(resolveTranscriptPath(workingDir, undefined, SESSION_A, tmpHome)).toBe(own);
     fs.unlinkSync(own);
     fs.unlinkSync(unrelated);
   });
 
-  // ── Two sessions sharing the same workingDir (w2/w3 regression) ──────────
+  // ── Stale claudeResumeId: newer JSONL exists (the main bug fix) ───────────
 
-  it('returns distinct files for two sessions in the same project directory', async () => {
-    const fileA = path.join(projectDir, `${SESSION_A}.jsonl`);
-    const fileB = path.join(projectDir, `${SESSION_B}.jsonl`);
-    fs.writeFileSync(fileA, '');
+  it('returns the newer JSONL when claudeResumeId points to a stale file', async () => {
+    // Simulates: Codeman was down while Claude ran /clear → newer JSONL not tracked
+    const staleFile = path.join(projectDir, `${SESSION_A}.jsonl`);
+    fs.writeFileSync(staleFile, '');
     await new Promise((r) => setTimeout(r, 10));
-    fs.writeFileSync(fileB, ''); // B is newer
-
-    // Each session must get its OWN file, not the other's (even though B is the newest)
-    expect(resolveTranscriptPath(workingDir, undefined, SESSION_A, tmpHome)).toBe(fileA);
-    expect(resolveTranscriptPath(workingDir, undefined, SESSION_B, tmpHome)).toBe(fileB);
-
-    fs.unlinkSync(fileA);
-    fs.unlinkSync(fileB);
+    const currentFile = path.join(projectDir, 'new-uuid-after-clear.jsonl');
+    fs.writeFileSync(currentFile, ''); // newer — what Claude is actually writing to
+    expect(resolveTranscriptPath(workingDir, undefined, SESSION_A, tmpHome)).toBe(currentFile);
+    fs.unlinkSync(staleFile);
+    fs.unlinkSync(currentFile);
   });
 
-  // ── Scan path: post-/clear, own file gone ─────────────────────────────────
+  // ── Scan path: own file gone (post-/clear race) ───────────────────────────
 
-  it('scans for newest JSONL when own file is gone (post-/clear race)', async () => {
+  it('scans for newest JSONL when own file is gone (post-/clear race)', () => {
     // Own file doesn't exist; a post-clear file is the newest
     const postClear = path.join(projectDir, 'new-uuid-after-clear.jsonl');
     fs.writeFileSync(postClear, '');
@@ -118,20 +117,5 @@ describe('resolveTranscriptPath', () => {
     expect(resolveTranscriptPath(workingDir, undefined, SESSION_A, tmpHome)).toBe(newer);
     fs.unlinkSync(older);
     fs.unlinkSync(newer);
-  });
-
-  // ── w1-bugfixer regression ────────────────────────────────────────────────
-
-  it('returns own file even when a newer unrelated file exists (own file is current)', async () => {
-    // Session has its own file; an unrelated newer file should NOT override it
-    const own = path.join(projectDir, `${SESSION_A}.jsonl`);
-    fs.writeFileSync(own, '');
-    await new Promise((r) => setTimeout(r, 10));
-    const unrelated = path.join(projectDir, 'other-session-newer.jsonl');
-    fs.writeFileSync(unrelated, '');
-    // Own file takes priority — the other session's newer file is irrelevant
-    expect(resolveTranscriptPath(workingDir, undefined, SESSION_A, tmpHome)).toBe(own);
-    fs.unlinkSync(own);
-    fs.unlinkSync(unrelated);
   });
 });
