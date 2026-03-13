@@ -148,8 +148,10 @@ export class TranscriptWatcher extends EventEmitter {
       return; // Already watching this file
     }
 
-    // Stop any existing watcher
-    this.stop();
+    // Stop any existing watcher without emitting transcript:clear — updatePath() already
+    // emitted it before calling start(). Calling stop() here would fire a redundant second
+    // clear, causing an extra load() round-trip on the frontend.
+    this._cleanup();
 
     this._transcriptPath = transcriptPath;
     this._isRunning = true;
@@ -181,6 +183,14 @@ export class TranscriptWatcher extends EventEmitter {
    * Stop watching
    */
   stop(): void {
+    this._cleanup();
+    this.emit('transcript:clear');
+  }
+
+  /** Internal cleanup: tears down watchers/timers without emitting transcript:clear.
+   * Called from start() which is invoked by updatePath() — updatePath already emits
+   * the clear, so calling stop() inside start() would fire a redundant second clear. */
+  private _cleanup(): void {
     this._isRunning = false;
 
     if (this.fileWatcher) {
@@ -193,7 +203,6 @@ export class TranscriptWatcher extends EventEmitter {
       this.pollInterval = null;
     }
 
-    this.emit('transcript:clear');
     this._transcriptPath = null;
     this.state = this.getInitialState();
   }
