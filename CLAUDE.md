@@ -105,7 +105,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 | **Mux** | `src/mux-interface.ts`, `src/mux-factory.ts`, `src/tmux-manager.ts` | |
 | **Respawn** | `src/respawn-controller.ts` ★ + 4 helpers (`-adaptive-timing`, `-health`, `-metrics`, `-patterns`) | Read `docs/respawn-state-machine.md` first |
 | **Ralph** | `src/ralph-tracker.ts` ★, `src/ralph-loop.ts` + 5 helpers (`-config`, `-fix-plan-watcher`, `-plan-tracker`, `-stall-detector`, `-status-parser`) | Read `docs/ralph-wiggum-guide.md` first |
-| **Agents** | `src/subagent-watcher.ts` ★, `src/team-watcher.ts`, `src/bash-tool-parser.ts`, `src/transcript-watcher.ts` | |
+| **Agents** | `src/subagent-watcher.ts` ★, `src/team-watcher.ts`, `src/bash-tool-parser.ts`, `src/transcript-watcher.ts`, `src/web/transcript-path-resolver.ts` | |
 | **AI** | `src/ai-checker-base.ts`, `src/ai-idle-checker.ts`, `src/ai-plan-checker.ts` | |
 | **Tasks** | `src/task.ts`, `src/task-queue.ts`, `src/task-tracker.ts` | |
 | **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | |
@@ -137,6 +137,17 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 **Idle detection**: Multi-layer (completion message → AI check → output silence → token stability). See `docs/respawn-state-machine.md`.
 
 **Hook events**: Claude Code hooks trigger via `/api/hook-event`. Key events: `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `stop`, `teammate_idle`, `task_completed`. See `src/hooks-config.ts`.
+
+**Transcript sync**: `TranscriptWatcher` tracks the active JSONL file for a session. Three sync mechanisms in priority order:
+1. **PTY stream** (`conversationId` event) — `session.ts` emits `conversationId` whenever the `sessionId` field in a parsed PTY JSON message differs from the last known value. `server.ts` listens and immediately switches the watcher to `~/.claude/projects/<escaped-dir>/<uuid>.jsonl`. Fires before any hook event — catches `/clear` and fresh-respawn cases in real time.
+2. **Hook events** — `stop`/`idle_prompt` hooks include `transcript_path`; `hook-event-routes.ts` calls `startTranscriptWatcher` with it.
+3. **Cold path** (`resolveTranscriptPath`) — on server restart or page load, seeds from `claudeResumeId` then scans the project dir for any newer JSONL and returns the freshest file.
+
+The watcher has a **fast path**: if it already tracks a file that still exists on disk it returns that path without scanning. This means mechanism 1 (PTY stream) is critical — without it, a stale watcher is never updated while the server is running.
+
+`claudeResumeId` on `SessionState` = the conversation UUID of the last known JSONL (persisted to `state.json`). Updated by `startTranscriptWatcher` whenever a new path is set. Used as `--resume` arg on respawn so Claude continues the same conversation.
+
+To manually fix a stuck watcher: `POST /api/hook-event` with `{ "event": "stop", "sessionId": "<id>", "data": { "transcript_path": "<path>" } }`.
 
 **Agent Teams**: `TeamWatcher` polls `~/.claude/teams/`, matches to sessions via `leadSessionId`. Teammates are in-process threads appearing as subagents. Enable: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. See `agent-teams/`.
 
