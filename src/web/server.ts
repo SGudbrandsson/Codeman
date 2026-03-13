@@ -210,6 +210,7 @@ interface SessionListenerRefs {
   bashToolEnd: (tool: ActiveBashTool) => void;
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
   contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
+  conversationId: (uuid: string) => void;
 }
 
 export class WebServer extends EventEmitter {
@@ -841,7 +842,7 @@ export class WebServer extends EventEmitter {
     return resolveTranscriptPath(
       session.workingDir,
       this.transcriptWatchers.get(sessionId),
-      session.claudeResumeId ?? undefined
+      session.claudeResumeId ?? session.claudeSessionId ?? undefined
     );
   }
 
@@ -1083,6 +1084,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolEnd', listeners.bashToolEnd);
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
         session.off('contextUpdate', listeners.contextUpdate);
+        session.off('conversationId', listeners.conversationId);
         this.sessionListenerRefs.delete(sessionId);
       }
 
@@ -1277,6 +1279,7 @@ export class WebServer extends EventEmitter {
             session.off('bashToolEnd', listenerRefs.bashToolEnd);
             session.off('bashToolsUpdate', listenerRefs.bashToolsUpdate);
             session.off('contextUpdate', listenerRefs.contextUpdate);
+            session.off('conversationId', listenerRefs.conversationId);
             this.sessionListenerRefs.delete(session.id);
           }
         } catch (err) {
@@ -1454,6 +1457,18 @@ export class WebServer extends EventEmitter {
           this.persistSessionState(session);
         }
       },
+
+      /** Syncs transcript watcher when Claude starts a new conversation (PTY stream reported
+       *  a conversation UUID that doesn't match the file the watcher is currently tracking).
+       *  This catches /clear and fresh-spawn cases before any hook event fires. */
+      conversationId: (uuid: string) => {
+        const watcher = this.transcriptWatchers.get(session.id);
+        if (watcher?.transcriptPath && basename(watcher.transcriptPath, '.jsonl') === uuid) return;
+        if (!session.workingDir) return;
+        const escapedDir = session.workingDir.replace(/\//g, '-');
+        const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+        this.startTranscriptWatcher(session.id, join(projectDir, `${uuid}.jsonl`));
+      },
     };
 
     // Store listener refs for cleanup
@@ -1486,6 +1501,7 @@ export class WebServer extends EventEmitter {
     session.on('bashToolEnd', listeners.bashToolEnd);
     session.on('bashToolsUpdate', listeners.bashToolsUpdate);
     session.on('contextUpdate', listeners.contextUpdate);
+    session.on('conversationId', listeners.conversationId);
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -2953,6 +2969,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolEnd', listeners.bashToolEnd);
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
         session.off('contextUpdate', listeners.contextUpdate);
+        session.off('conversationId', listeners.conversationId);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();
