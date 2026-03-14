@@ -33,6 +33,7 @@ import {
   QuickStartSchema,
   SafeModeSchema,
   MuxOverrideSchema,
+  MuxRebindSchema,
 } from '../schemas.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -1032,5 +1033,66 @@ export function registerSessionRoutes(
         createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to rebind mux session: ${getErrorMessage(err)}`)
       );
     }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Mux Rebind
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== POST /api/sessions/:id/mux-rebind ==========
+
+  /**
+   * Rebind a Codeman session to a different live tmux session.
+   * The current PTY viewer is killed and re-spawned against the new tmux session.
+   * Neither the old nor the new tmux session is killed.
+   *
+   * Request: { muxSessionName: string, force?: boolean }
+   * Response: { success: true } or { success: false, conflict: true, ownerSessionId, ownerSessionName }
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/mux-rebind', async (req, reply) => {
+    const { id } = req.params;
+
+    const parseResult = MuxRebindSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.send(
+        createErrorResponse(ApiErrorCode.INVALID_INPUT, parseResult.error.issues[0]?.message ?? 'Validation failed')
+      );
+    }
+    const { muxSessionName, force } = parseResult.data;
+
+    const session = ctx.sessions.get(id);
+    if (!session) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session not found: ${id}`));
+    }
+
+    // Check the target tmux session actually exists
+    if (!ctx.mux.muxSessionExists(muxSessionName)) {
+      return reply.send(
+        createErrorResponse(ApiErrorCode.OPERATION_FAILED, `tmux session not found: ${muxSessionName}`)
+      );
+    }
+
+    // Conflict detection: is another Codeman session already bound to this mux session?
+    const ownerMux = ctx.mux.getSessions().find((s) => s.muxName === muxSessionName && s.sessionId !== id);
+    if (ownerMux && !force) {
+      const ownerSession = ctx.sessions.get(ownerMux.sessionId);
+      return reply.send({
+        success: false,
+        conflict: true,
+        ownerSessionId: ownerMux.sessionId,
+        ownerSessionName: ownerSession?.name || ownerMux.sessionId,
+      });
+    }
+
+    try {
+      await session.rebindMuxSession(muxSessionName, ctx.mux);
+    } catch (err) {
+      return reply.send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
+    }
+
+    ctx.persistSessionState(session);
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
+
+    return reply.send({ success: true });
   });
 }

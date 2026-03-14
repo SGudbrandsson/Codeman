@@ -1550,6 +1550,55 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
+  /**
+   * List ALL live tmux sessions by running `tmux list-sessions`.
+   * Returns every session on the system, not just Codeman-tracked ones.
+   * Returns an empty array if tmux is unavailable or no sessions exist.
+   */
+  listAllTmuxSessions(): { name: string; windows: number; createdAt: number; attached: boolean }[] {
+    if (IS_TEST_MODE) return [];
+    try {
+      // Use tab as delimiter so session names containing colons (e.g. "myproject:1") are
+      // parsed correctly. Tabs are not allowed in tmux session names, making them a safe separator.
+      // Use a real tab in the JS string — execSync uses /bin/sh which does NOT support $'...' quoting.
+      const fmt = '#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}';
+      const output = execSync(`tmux list-sessions -F '${fmt}' 2>/dev/null || true`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
+      if (!output) return [];
+      return output
+        .split('\n')
+        .map((line) => {
+          const parts = line.trim().split('\t');
+          if (parts.length < 4) return null;
+          const [name, windowsStr, createdStr, attachedStr] = parts;
+          const windows = parseInt(windowsStr, 10);
+          const createdAt = parseInt(createdStr, 10) * 1000; // tmux epoch → ms
+          const attached = attachedStr === '1';
+          if (!name || Number.isNaN(windows) || Number.isNaN(createdAt)) return null;
+          return { name, windows, createdAt, attached };
+        })
+        .filter((s): s is { name: string; windows: number; createdAt: number; attached: boolean } => s !== null);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Update the muxName stored for a tracked Codeman session (rebind).
+   * Does NOT start/stop any PTY — caller (Session.rebindMuxSession) handles that.
+   */
+  rebindSession(sessionId: string, newMuxName: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.muxName = newMuxName;
+    // Update PID to reflect new session's pane
+    const pid = this.getPanePid(newMuxName);
+    if (pid) session.pid = pid;
+    this.saveSessions();
+  }
+
   getAttachCommand(): string {
     return 'tmux';
   }

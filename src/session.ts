@@ -2517,6 +2517,226 @@ export class Session extends EventEmitter {
     this._muxSession = null;
   }
 
+  /**
+   * Rebind this Codeman session to a different tmux session without killing either.
+   *
+   * Steps:
+   * 1. Kill the current PTY (the `tmux attach-session` viewer — NOT the underlying tmux session).
+   * 2. Update `_muxSession` to point at `newMuxName`.
+   * 3. Tell the mux manager to persist the new mapping.
+   * 4. Re-spawn a new PTY attaching to the new tmux session.
+   * 5. Emit `clearTerminal` so the frontend refreshes.
+   */
+  async rebindMuxSession(newMuxName: string, mux: TerminalMultiplexer): Promise<void> {
+    if (this._isStopped) return;
+    if (!this._useMux || !mux) {
+      throw new Error('Session is not using mux — cannot rebind');
+    }
+
+    console.log(`[Session] Rebinding mux session: ${this._muxSession?.muxName ?? 'none'} → ${newMuxName}`);
+
+    // Step 1: Kill the current PTY process (the attach viewer, not the tmux session)
+    if (this.ptyProcess) {
+      const pid = this.ptyProcess.pid;
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        /* already gone */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        if (pid) process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      this.ptyProcess = null;
+    }
+
+    // Clear timers that reference the old PTY
+    if (this.activityTimeout) {
+      clearTimeout(this.activityTimeout);
+      this.activityTimeout = null;
+    }
+    if (this._promptCheckInterval) {
+      clearInterval(this._promptCheckInterval);
+      this._promptCheckInterval = null;
+    }
+    if (this._promptCheckTimeout) {
+      clearTimeout(this._promptCheckTimeout);
+      this._promptCheckTimeout = null;
+    }
+    if (this._expensiveProcessTimer) {
+      clearTimeout(this._expensiveProcessTimer);
+      this._expensiveProcessTimer = null;
+    }
+    this._pendingCleanData = '';
+    this._awaitingIdleConfirmation = false;
+
+    // Step 2: Update the mux session object
+    if (this._muxSession) {
+      mux.setAttached(this.id, false);
+    }
+
+    // Build the new MuxSession object (reuse existing metadata, override muxName)
+    // pid will be updated by rebindSession() in the mux manager
+    const newMuxSession: MuxSession = {
+      sessionId: this.id,
+      muxName: newMuxName,
+      pid: 0, // updated by rebindSession() below
+      createdAt: this._muxSession?.createdAt ?? Date.now(),
+      workingDir: this.workingDir,
+      mode: this.mode,
+      attached: false,
+      name: this._name || undefined,
+    };
+    this._muxSession = newMuxSession;
+    this._mux = mux;
+
+    // Step 3: Persist updated mux name in TmuxManager
+    mux.rebindSession(this.id, newMuxName);
+
+    // Step 4: Clear buffers so the frontend shows fresh content
+    this._terminalBuffer.clear();
+    this._textOutput.clear();
+    this._errorBuffer = '';
+    this._pid = null;
+
+    // Seed from new tmux session scrollback
+    const scrollback = mux.capturePaneContent(newMuxName);
+    if (scrollback) {
+      const stripped = stripAnsi(scrollback);
+      if (stripped.trim()) this._textOutput.append(stripped);
+    }
+
+    // Step 5: Re-spawn PTY attached to new tmux session
+    try {
+      this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(newMuxName), {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 40,
+        cwd: this.workingDir,
+        env: buildMuxAttachEnv(),
+      });
+    } catch (spawnErr) {
+      console.error('[Session] Failed to spawn PTY for rebind:', spawnErr);
+      throw spawnErr;
+    }
+
+    this._pid = this.ptyProcess.pid;
+    this._status = 'idle';
+    this._isWorking = false;
+    console.log('[Session] Rebind PTY spawned with PID:', this._pid);
+
+    // Re-hook PTY data handler (same as startInteractive)
+    this.ptyProcess.onData((rawData: string) => {
+      const data = rawData.replace(FOCUS_ESCAPE_FILTER, '').replace(CTRL_L_PATTERN, '');
+      if (!data) return;
+
+      this._terminalBuffer.append(data);
+      this._lastActivityAt = Date.now();
+
+      if (!this._awaitingContext) {
+        this.emit('terminal', data);
+      }
+      this.emit('output', data);
+
+      if (data.includes('❯') || data.includes('\u276f')) {
+        if (!this._awaitingIdleConfirmation) {
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          this._awaitingIdleConfirmation = true;
+          this.activityTimeout = setTimeout(() => {
+            this._awaitingIdleConfirmation = false;
+            const wasWorking = this._isWorking;
+            const isInitialReady = this._status === 'busy' && !this._isWorking;
+            if (wasWorking || isInitialReady) {
+              this._isWorking = false;
+              this._status = 'idle';
+              this._lastPromptTime = Date.now();
+              this.emit('idle');
+            }
+          }, IDLE_DETECTION_DELAY_MS);
+        }
+      }
+
+      const hasSpinner = SPINNER_PATTERN.test(data);
+      if (hasSpinner) {
+        if (!this._isWorking) {
+          this._isWorking = true;
+          this._status = 'busy';
+          this.emit('working');
+        }
+        this._awaitingIdleConfirmation = false;
+        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+      }
+
+      const now = Date.now();
+      const elapsed = now - this._lastExpensiveProcessTime;
+      if (elapsed >= Session.EXPENSIVE_PROCESS_INTERVAL_MS) {
+        this._lastExpensiveProcessTime = now;
+        const accumulated = this._pendingCleanData ? this._pendingCleanData + data : data;
+        this._pendingCleanData = '';
+        if (this._expensiveProcessTimer) {
+          clearTimeout(this._expensiveProcessTimer);
+          this._expensiveProcessTimer = null;
+        }
+        this._processExpensiveParsers(accumulated);
+      } else {
+        this._pendingCleanData += data;
+        if (this._pendingCleanData.length > 64 * 1024) {
+          this._pendingCleanData = this._pendingCleanData.slice(-32 * 1024);
+        }
+        if (!this._expensiveProcessTimer) {
+          this._expensiveProcessTimer = setTimeout(() => {
+            this._expensiveProcessTimer = null;
+            this._lastExpensiveProcessTime = Date.now();
+            const pending = this._pendingCleanData;
+            this._pendingCleanData = '';
+            if (pending) {
+              this._processExpensiveParsers(pending);
+            }
+          }, Session.EXPENSIVE_PROCESS_INTERVAL_MS - elapsed);
+        }
+      }
+    });
+
+    this.ptyProcess.onExit(({ exitCode }) => {
+      console.log('[Session] Rebind PTY exited with code:', exitCode);
+      this.ptyProcess = null;
+      this._pid = null;
+      this._status = 'idle';
+      this._awaitingIdleConfirmation = false;
+      if (this.activityTimeout) {
+        clearTimeout(this.activityTimeout);
+        this.activityTimeout = null;
+      }
+      if (this._promptCheckInterval) {
+        clearInterval(this._promptCheckInterval);
+        this._promptCheckInterval = null;
+      }
+      if (this._promptCheckTimeout) {
+        clearTimeout(this._promptCheckTimeout);
+        this._promptCheckTimeout = null;
+      }
+      if (this._expensiveProcessTimer) {
+        clearTimeout(this._expensiveProcessTimer);
+        this._expensiveProcessTimer = null;
+      }
+      this._pendingCleanData = '';
+      if (this._muxSession && this._mux) {
+        this._mux.setAttached(this.id, false);
+      }
+      // Intentionally emit 'exit' so RespawnController treats this the same as a normal
+      // session exit. If the underlying tmux session disappears after a rebind, the respawn
+      // logic will fire (same as it would for any PTY exit). This is the desired behavior:
+      // if the user rebound to a tmux session that then vanishes, Codeman should attempt to
+      // recover via its normal respawn path rather than leaving the session in a zombie state.
+      this.emit('exit', exitCode);
+    });
+
+    // Step 6: Signal frontend to refresh terminal display
+    this.emit('clearTerminal');
+  }
+
   assignTask(taskId: string): void {
     this._currentTaskId = taskId;
     this._status = 'busy';

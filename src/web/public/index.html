@@ -590,6 +590,7 @@
           <button class="modal-tab-btn" data-tab="context" onclick="app.switchOptionsTab('context')">Context</button>
           <button class="modal-tab-btn" data-tab="ralph" data-claude-only onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
           <button class="modal-tab-btn" data-tab="summary" onclick="app.switchOptionsTab('summary')">Summary</button>
+          <button class="modal-tab-btn" data-tab="terminal" onclick="app.switchOptionsTab('terminal')">Terminal</button>
         </div>
         <div class="modal-body">
           <!-- Respawn Tab Content -->
@@ -851,6 +852,21 @@
               </div>
             </div>
           </div><!-- End summary-tab -->
+
+          <!-- Terminal Tab Content -->
+          <div class="modal-tab-content hidden" id="terminal-tab">
+            <div class="form-section-header">Rebind tmux Session</div>
+            <p class="form-hint" style="margin-bottom: 10px;">Assign a different tmux session to this Codeman session. The current terminal pane will be replaced with the selected session. Neither session is killed.</p>
+            <div class="form-row" style="margin-bottom: 8px;">
+              <input type="text" id="muxRebindSearch" placeholder="Search tmux sessions by name..." oninput="app.filterMuxSessionList()" style="width: 100%; box-sizing: border-box;">
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+              <button class="btn btn-sm" onclick="app.loadMuxSessionList()">&#x21BB; Refresh</button>
+            </div>
+            <div id="muxSessionList" class="mux-session-list">
+              <p class="empty-message">Click Refresh to load tmux sessions</p>
+            </div>
+          </div><!-- End terminal-tab -->
         </div>
       </div>
     </div>

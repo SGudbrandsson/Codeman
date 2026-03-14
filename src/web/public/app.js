@@ -10013,11 +10013,141 @@ class CodemanApp {
     document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
     document.getElementById('summary-tab').classList.toggle('hidden', tabName !== 'summary');
+    document.getElementById('terminal-tab').classList.toggle('hidden', tabName !== 'terminal');
 
     // Load run summary data when switching to summary tab
     if (tabName === 'summary' && this.editingSessionId) {
       this.loadRunSummary(this.editingSessionId);
     }
+    // Load mux session list when switching to terminal tab
+    if (tabName === 'terminal') {
+      this.loadMuxSessionList();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Mux Rebind (Terminal Tab)
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Cached mux session data for the terminal tab */
+  _muxAllSessions = [];
+
+  /**
+   * Fetch all live tmux sessions and render the rebind list.
+   */
+  async loadMuxSessionList() {
+    const listEl = document.getElementById('muxSessionList');
+    if (!listEl) return;
+    listEl.innerHTML = '<p class="empty-message">Loading...</p>';
+    try {
+      const data = await this._apiGet('/api/mux/all-sessions');
+      this._muxAllSessions = data.sessions || [];
+      this._renderMuxSessionList();
+    } catch (err) {
+      listEl.innerHTML = `<p class="empty-message" style="color: var(--danger-color, #e74c3c)">Failed to load: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  /**
+   * Re-render the mux session list, applying the current search filter.
+   */
+  _renderMuxSessionList() {
+    const listEl = document.getElementById('muxSessionList');
+    if (!listEl) return;
+    const query = (document.getElementById('muxRebindSearch')?.value || '').toLowerCase().trim();
+    const sessions = this._muxAllSessions.filter(s => !query || s.name.toLowerCase().includes(query));
+
+    if (sessions.length === 0) {
+      listEl.innerHTML = '<p class="empty-message">No tmux sessions found</p>';
+      return;
+    }
+
+    const currentSessionId = this.editingSessionId;
+
+    const rows = sessions.map(s => {
+      const isCurrent = s.ownerSessionId === currentSessionId;
+      const hasOtherOwner = s.ownerSessionId && s.ownerSessionId !== currentSessionId;
+      const ownerSession = hasOtherOwner ? this.sessions.get(s.ownerSessionId) : null;
+      const ownerName = ownerSession?.name || s.ownerSessionId || '';
+      const ago = s.createdAt ? this._formatRelativeTime(Date.now() - s.createdAt) : '';
+      const attachedBadge = s.attached ? '<span class="mux-session-badge mux-session-attached-badge">attached</span>' : '';
+
+      let actionHtml;
+      if (isCurrent) {
+        actionHtml = '<span class="mux-session-badge mux-session-current-badge">Current</span>';
+      } else if (hasOtherOwner) {
+        actionHtml = `<span class="mux-session-badge mux-session-owner-badge" title="Owned by: ${escapeHtml(ownerName)}">&#x26A0; ${escapeHtml(ownerName)}</span>
+          <button class="btn btn-sm btn-danger mux-assign-btn" onclick="app.confirmMuxRebind('${escapeHtml(s.name)}', '${escapeHtml(ownerName)}')">Assign</button>`;
+      } else {
+        actionHtml = `<button class="btn btn-sm mux-assign-btn" onclick="app.rebindMuxSession('${escapeHtml(s.name)}', false)">Assign</button>`;
+      }
+
+      return `<div class="mux-session-row">
+        <div class="mux-session-info">
+          <span class="mux-session-name">${escapeHtml(s.name)}</span>
+          <span class="mux-session-meta">${s.windows} window${s.windows !== 1 ? 's' : ''} · ${ago}${attachedBadge ? ' · ' : ''}${attachedBadge}</span>
+        </div>
+        <div class="mux-session-actions">${actionHtml}</div>
+      </div>`;
+    });
+
+    listEl.innerHTML = rows.join('');
+  }
+
+  /**
+   * Filter the displayed mux session list by the search input.
+   */
+  filterMuxSessionList() {
+    this._renderMuxSessionList();
+  }
+
+  /**
+   * Show a confirm dialog before reassigning a session that is owned by another Codeman session.
+   */
+  confirmMuxRebind(muxName, ownerName) {
+    if (confirm(`This tmux session is currently bound to "${ownerName}". Reassign it to this session anyway?`)) {
+      this.rebindMuxSession(muxName, true);
+    }
+  }
+
+  /**
+   * POST /api/sessions/:id/mux-rebind to rebind the current Codeman session.
+   */
+  async rebindMuxSession(muxName, force) {
+    if (!this.editingSessionId) return;
+    try {
+      const result = await this._apiPost(`/api/sessions/${this.editingSessionId}/mux-rebind`, {
+        muxSessionName: muxName,
+        force: force || false,
+      });
+      if (result.conflict) {
+        const ownerName = result.ownerSessionName || result.ownerSessionId || 'another session';
+        this.confirmMuxRebind(muxName, ownerName);
+        return;
+      }
+      if (result.success) {
+        this.showToast('Terminal pane reassigned to ' + muxName, 'success');
+        this.closeSessionOptions();
+      } else {
+        this.showToast('Rebind failed: ' + (result.error || 'Unknown error'), 'error');
+      }
+    } catch (err) {
+      this.showToast('Rebind failed: ' + err.message, 'error');
+    }
+  }
+
+  /**
+   * Format a duration in ms as a relative time string (e.g. "3h ago", "5m ago").
+   */
+  _formatRelativeTime(ms) {
+    if (ms < 0) ms = 0;
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
   }
 
   getRalphConfig() {
