@@ -191,6 +191,8 @@ export interface SessionState {
   mcpServers?: McpServerEntry[];
   /** Claude session UUID for --resume (set from transcript filename) */
   claudeResumeId?: string;
+  /** When true, session launches with stripped CLI args: no --resume, no MCP config */
+  safeMode?: boolean;
 }
 
 /**

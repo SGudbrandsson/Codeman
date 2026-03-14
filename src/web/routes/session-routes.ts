@@ -31,6 +31,7 @@ import {
   FlickerFilterSchema,
   QuickRunSchema,
   QuickStartSchema,
+  SafeModeSchema,
 } from '../schemas.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -145,6 +146,7 @@ export function registerSessionRoutes(
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
+      safeMode: body.safeMode,
     });
 
     ctx.addSession(session);
@@ -695,6 +697,28 @@ export function registerSessionRoutes(
         flickerFilterEnabled: body.enabled,
       },
     };
+  });
+
+  // ========== Safe Mode Toggle ==========
+
+  app.post('/api/sessions/:id/safe-mode', async (req) => {
+    const { id } = req.params as { id: string };
+    const smResult = SafeModeSchema.safeParse(req.body);
+    if (!smResult.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+    }
+    const body = smResult.data;
+    const session = ctx.sessions.get(id);
+
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    session.setSafeMode(body.enabled);
+    ctx.persistSessionState(session);
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
+
+    return { success: true, data: { safeMode: body.enabled } };
   });
 
   // ═══════════════════════════════════════════════════════════════

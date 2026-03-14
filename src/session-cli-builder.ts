@@ -42,6 +42,7 @@ export function buildPermissionArgs(claudeMode: ClaudeMode, allowedTools?: strin
  * @param model - Optional model override (e.g., 'opus', 'sonnet')
  * @param allowedTools - Optional comma-separated allowed tools list
  * @param resumeId - If set, --session-id is omitted (Claude CLI rejects --session-id + --resume without --fork-session)
+ * @param safeMode - When true, returns only ['--dangerously-skip-permissions'] (no session-id, model, etc.)
  * @returns Array of CLI arguments
  */
 export function buildInteractiveArgs(
@@ -49,8 +50,12 @@ export function buildInteractiveArgs(
   claudeMode: ClaudeMode,
   model?: string,
   allowedTools?: string,
-  resumeId?: string
+  resumeId?: string,
+  safeMode?: boolean
 ): string[] {
+  if (safeMode) {
+    return ['--dangerously-skip-permissions'];
+  }
   const args = [...buildPermissionArgs(claudeMode, allowedTools)];
   // --session-id is only valid for fresh sessions; combining it with --resume requires
   // --fork-session (which creates a branch) — not what we want for a plain resume.
@@ -82,13 +87,18 @@ export function buildPromptArgs(prompt: string, model?: string): string[] {
  * @param sessionId - Session ID used in the temp file name
  * @param mcpServers - MCP server entries for the session
  * @param resumeId - Optional Claude session UUID for --resume
+ * @param safeMode - When true, returns [] immediately (no MCP config, no --resume)
  * @returns Extra args to append to the Claude CLI command
  */
 export function buildMcpArgs(
   sessionId: string,
   mcpServers: McpServerEntry[] | undefined,
-  resumeId: string | undefined
+  resumeId: string | undefined,
+  safeMode?: boolean
 ): string[] {
+  if (safeMode) {
+    return [];
+  }
   const args: string[] = [];
   const enabled = (mcpServers ?? []).filter((s) => s.enabled);
   if (enabled.length > 0) {

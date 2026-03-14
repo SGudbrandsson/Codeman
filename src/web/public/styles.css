@@ -5509,6 +5509,94 @@ kbd {
   flex-shrink: 0;
 }
 
+/* Safe Mode Badge on Tabs */
+.tab-safe-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  border-radius: 3px;
+  padding: 1px 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Health Analyzer Modal */
+.health-summary {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.health-session-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--bg-secondary);
+}
+
+.health-session-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.health-session-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.health-issue-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-weight: 500;
+}
+
+.health-issue-badge.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.health-issue-badge.warning {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+}
+
+.health-issue-badge.info {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.health-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.health-all-healthy {
+  text-align: center;
+  padding: 32px 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
 /* Subagent Badge on Tabs - Compact hover-triggered */
 .session-tab .tab-subagent-badge {
   position: relative;

@@ -358,6 +358,9 @@ export class Session extends EventEmitter {
   private _claudeMode: ClaudeMode = 'dangerously-skip-permissions';
   private _allowedTools: string | undefined;
 
+  // Safe mode flag — when true, strips --resume and MCP config from CLI args
+  private _safeMode: boolean = false;
+
   // OpenCode configuration (only for mode === 'opencode')
   private _openCodeConfig: OpenCodeConfig | undefined;
 
@@ -427,6 +430,8 @@ export class Session extends EventEmitter {
       allowedTools?: string;
       /** OpenCode configuration (only for mode === 'opencode') */
       openCodeConfig?: OpenCodeConfig;
+      /** When true, strips --resume and MCP config flags from CLI args */
+      safeMode?: boolean;
     }
   ) {
     super();
@@ -479,6 +484,11 @@ export class Session extends EventEmitter {
     // Apply OpenCode configuration
     if (config.openCodeConfig) {
       this._openCodeConfig = config.openCodeConfig;
+    }
+
+    // Apply safe mode flag
+    if (config.safeMode) {
+      this._safeMode = config.safeMode;
     }
 
     // Initialize task tracker and forward events (store handlers for cleanup)
@@ -703,6 +713,16 @@ export class Session extends EventEmitter {
     }
   }
 
+  /** Safe mode getter — when true, strips --resume and MCP config from CLI args */
+  get safeMode(): boolean {
+    return this._safeMode;
+  }
+
+  /** Enable or disable safe mode. Takes effect on next startInteractive() call. */
+  setSafeMode(enabled: boolean): void {
+    this._safeMode = enabled;
+  }
+
   // Token tracking getters and setters
   get totalTokens(): number {
     return this._totalInputTokens + this._totalOutputTokens;
@@ -866,6 +886,7 @@ export class Session extends EventEmitter {
       draft: this.draft,
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
+      safeMode: this._safeMode || undefined,
     };
   }
 
@@ -991,11 +1012,11 @@ export class Session extends EventEmitter {
             workingDir: this.workingDir,
             mode: this.mode,
             niceConfig: this._niceConfig,
-            model: this._model,
-            claudeMode: this._claudeMode,
-            allowedTools: this._allowedTools,
+            model: this._safeMode ? undefined : this._model,
+            claudeMode: this._safeMode ? 'dangerously-skip-permissions' : this._claudeMode,
+            allowedTools: this._safeMode ? undefined : this._allowedTools,
             openCodeConfig: this._openCodeConfig,
-            extraArgs: buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
+            extraArgs: buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
           });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
@@ -1026,9 +1047,9 @@ export class Session extends EventEmitter {
             mode: this.mode,
             name: this._name,
             niceConfig: this._niceConfig,
-            model: this._model,
-            claudeMode: this._claudeMode,
-            allowedTools: this._allowedTools,
+            model: this._safeMode ? undefined : this._model,
+            claudeMode: this._safeMode ? 'dangerously-skip-permissions' : this._claudeMode,
+            allowedTools: this._safeMode ? undefined : this._allowedTools,
             openCodeConfig: this._openCodeConfig,
             extraArgs: initialPromptArgs,
           });
@@ -1124,8 +1145,15 @@ export class Session extends EventEmitter {
         const initialArg = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
         if (initialArg.length) this._initialPromptSent = true;
         const args = [
-          ...buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools, this.claudeResumeId),
-          ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId),
+          ...buildInteractiveArgs(
+            this.id,
+            this._claudeMode,
+            this._model,
+            this._allowedTools,
+            this.claudeResumeId,
+            this._safeMode
+          ),
+          ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
           ...initialArg,
         ];
         this.ptyProcess = pty.spawn('claude', args, {

@@ -125,7 +125,11 @@ export const CreateSessionSchema = z.object({
   name: z.string().max(100).optional(),
   envOverrides: safeEnvOverridesSchema,
   openCodeConfig: OpenCodeConfigSchema,
+  safeMode: z.boolean().optional(),
 });
+
+/** POST /api/sessions/:id/safe-mode */
+export const SafeModeSchema = z.object({ enabled: z.boolean() });
 
 /**
  * Schema for POST /api/sessions/:id/run
@@ -568,6 +572,7 @@ export type RespawnEnableInput = z.infer<typeof RespawnEnableSchema>;
 export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
 export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
 export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
+export type SafeModeInput = z.infer<typeof SafeModeSchema>;
 
 // ========== MCP Routes ==========
 
