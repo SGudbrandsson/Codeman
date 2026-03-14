@@ -1226,8 +1226,14 @@ const SessionIndicatorBar = {
     const name = app.getSessionName(session);
     if (this._nameEl) this._nameEl.textContent = name;
 
-    // Project folder (last segment of workingDir)
-    const project = session.workingDir ? (session.workingDir.split('/').pop() || session.workingDir) : '';
+    // Project name — strip worktree branch slug suffix from directory name
+    let project = session.workingDir ? (session.workingDir.split('/').pop() || session.workingDir) : '';
+    if (project && session.worktreeBranch) {
+      const slug = session.worktreeBranch.replace(/\//g, '-');
+      if (project.endsWith('-' + slug)) {
+        project = project.slice(0, -(slug.length + 1));
+      }
+    }
     if (this._projectEl) this._projectEl.textContent = project;
 
     // Branch pill — show only when worktreeBranch is set and differs from session.name (raw)

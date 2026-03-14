@@ -146,7 +146,7 @@ body {
 .session-indicator-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
   padding: 0 12px;
   height: 28px;
   background: var(--bg-card);
@@ -155,6 +155,20 @@ body {
   color: var(--text-dim);
   flex-shrink: 0;
   contain: layout style;
+}
+
+.sib-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sib-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .sib-status-dot {
@@ -182,10 +196,13 @@ body {
   white-space: nowrap;
 }
 
-.sib-sep { color: var(--text-dim); opacity: 0.5; }
-
 .sib-project {
   color: var(--text-dim);
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -195,7 +212,7 @@ body {
 .sib-branch {
   color: var(--accent);
   font-size: 0.7rem;
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 3px;
   background: rgba(96,165,250,0.12);
   border: 1px solid rgba(96,165,250,0.25);
@@ -205,14 +222,6 @@ body {
   white-space: nowrap;
 }
 
-@media (max-width: 600px) {
-  .session-indicator-bar {
-    height: 24px;
-    font-size: 0.7rem;
-  }
-  .sib-project { display: none; }
-  .sib-sep { display: none; }
-}
 /* ======================================== */
 
 .header-brand {
