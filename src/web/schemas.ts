@@ -617,3 +617,7 @@ export const SaveDormantWorktreeSchema = z.object({
   originSessionId: z.string(),
   projectName: z.string(),
 });
+
+export const MuxOverrideSchema = z.object({
+  muxSession: z.string().min(1).max(200),
+});

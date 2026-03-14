@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=0.1688">
+  <link rel="stylesheet" href="styles.css?v=0.1689">
   <link rel="stylesheet" href="mobile.css?v=0.1671" media="(max-width: 1023px)">
   <!-- xterm.css loaded async — terminal won't display until xterm.js runs anyway -->
   <link rel="preload" href="vendor/xterm.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
@@ -20,6 +20,7 @@
   <script defer src="vendor/xterm-addon-fit.min.js"></script>
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
+  <script defer src="vendor/xterm-addon-search.min.js?v=1"></script>
   <script defer src="vendor/xterm-zerolag-input.js?v=0.4.0"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
@@ -2033,7 +2034,7 @@
   <script defer src="voice-input.js?v=0.4.0"></script>
   <script defer src="notification-manager.js?v=0.4.0"></script>
   <script defer src="keyboard-accessory.js?v=0.4.20"></script>
-  <script defer src="app.js?v=0.4.104"></script>
+  <script defer src="app.js?v=0.4.105"></script>
   <script defer src="ralph-wizard.js?v=0.4.0"></script>
   <script defer src="api-client.js?v=0.4.0"></script>
   <script defer src="subagent-windows.js?v=0.4.0"></script>
@@ -2142,6 +2143,32 @@
   <div id="mcpLibraryPane" class="mcp-pane mcp-library-grid"></div>
   <div id="mcpMarketplacePane" class="mcp-pane" style="display:none">
     <div id="mcpMarketplaceResults" class="mcp-library-grid"></div>
+  </div>
+</div>
+
+<!-- Terminal Search Bar -->
+<div id="terminalSearchBar" class="terminal-search-bar" style="display:none"
+     role="search" aria-label="Terminal search">
+  <input id="terminalSearchInput" type="text" placeholder="Search terminal..."
+         autocomplete="off" spellcheck="false" aria-label="Search terminal">
+  <span class="ts-count" id="terminalSearchCount" aria-live="polite"></span>
+  <button class="ts-btn" id="terminalSearchPrev" title="Previous (Shift+Enter)">&#x2191;</button>
+  <button class="ts-btn" id="terminalSearchNext" title="Next (Enter)">&#x2193;</button>
+  <button class="ts-btn ts-close" id="terminalSearchClose" title="Close (Escape)">&#x00d7;</button>
+</div>
+
+<!-- Session Switcher Modal -->
+<div id="sessionSwitcherModal" class="session-switcher-modal" style="display:none"
+     role="dialog" aria-modal="true" aria-label="Switch session">
+  <div class="ssm-backdrop" id="sessionSwitcherBackdrop"></div>
+  <div class="ssm-box">
+    <div class="ssm-header">
+      <input id="sessionSwitcherInput" class="ssm-input" type="text"
+             placeholder="Search sessions..." autocomplete="off" spellcheck="false"
+             aria-label="Filter sessions">
+      <kbd class="ssm-hint">Esc to close</kbd>
+    </div>
+    <ul id="sessionSwitcherList" class="ssm-list" role="listbox" aria-label="Sessions"></ul>
   </div>
 </div>
 
