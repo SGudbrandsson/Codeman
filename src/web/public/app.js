@@ -16470,6 +16470,16 @@ const SessionDrawer = {
     badge.setAttribute('data-mode', modeLabel);
     badge.textContent = modeLabel;
 
+    const gearBtn = document.createElement('button');
+    gearBtn.className = 'drawer-session-gear';
+    gearBtn.setAttribute('aria-label', 'Session options');
+    gearBtn.textContent = '⚙';
+    gearBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      SessionDrawer.close();
+      app.openSessionOptions(s.id);
+    });
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'drawer-session-close';
     closeBtn.setAttribute('aria-label', 'Close session');
@@ -16482,6 +16492,7 @@ const SessionDrawer = {
     row.appendChild(dot);
     row.appendChild(name);
     row.appendChild(badge);
+    row.appendChild(gearBtn);
     row.appendChild(closeBtn);
 
     row.addEventListener('click', () => {
