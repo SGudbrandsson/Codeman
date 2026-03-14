@@ -32,7 +32,7 @@ If no match found, list sessions and ask the user which session to use.
 
 ## Step 3 — Generate Branch Name
 
-Slug the title: lowercase, replace spaces/special chars with hyphens, max 40 chars.
+Slug the title: lowercase, replace spaces/special chars with hyphens, max 37 chars (leave room for -2 or -3 suffixes if branch exists).
 
 Branch name: `fix/<slug>`
 
@@ -53,7 +53,7 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   }'
 ```
 
-The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`.
+The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. The `autoStart: true` flag immediately spawns the Claude process after worktree creation so the session starts automatically.
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/absolute/path/to/worktree" }`
 
