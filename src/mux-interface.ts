@@ -180,6 +180,20 @@ export interface TerminalMultiplexer extends EventEmitter {
    */
   getAttachArgs(muxName: string): string[];
 
+  // ========== Rebind ==========
+
+  /**
+   * List ALL live tmux sessions (not just Codeman-tracked ones).
+   * Returns raw session metadata from `tmux list-sessions`.
+   */
+  listAllTmuxSessions(): { name: string; windows: number; createdAt: number; attached: boolean }[];
+
+  /**
+   * Update the muxName for a tracked session (rebind).
+   * Does NOT touch the PTY — call Session.rebindMuxSession() for that.
+   */
+  rebindSession(sessionId: string, newMuxName: string): void;
+
   // ========== Availability ==========
 
   /** Check if the multiplexer binary is available on the system */

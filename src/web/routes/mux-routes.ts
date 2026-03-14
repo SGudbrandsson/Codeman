@@ -16,6 +16,25 @@ export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort): void {
     };
   });
 
+  /**
+   * GET /api/mux/all-sessions
+   * Lists ALL live tmux sessions (not just Codeman-tracked ones).
+   * Also annotates each entry with which Codeman session currently owns it.
+   */
+  app.get('/api/mux/all-sessions', async () => {
+    const rawSessions = ctx.mux.listAllTmuxSessions();
+    // Build a map: muxName → Codeman sessionId
+    const ownerMap = new Map<string, string>();
+    for (const muxSess of ctx.mux.getSessions()) {
+      ownerMap.set(muxSess.muxName, muxSess.sessionId);
+    }
+    const sessions = rawSessions.map((s) => ({
+      ...s,
+      ownerSessionId: ownerMap.get(s.name) ?? null,
+    }));
+    return { sessions, muxAvailable: ctx.mux.isAvailable() };
+  });
+
   app.delete('/api/mux-sessions/:sessionId', async (req) => {
     const { sessionId } = req.params as { sessionId: string };
     const success = await ctx.mux.killSession(sessionId);

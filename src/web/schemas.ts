@@ -617,3 +617,20 @@ export const SaveDormantWorktreeSchema = z.object({
   originSessionId: z.string(),
   projectName: z.string(),
 });
+
+// ========== Mux Rebind ==========
+
+/**
+ * Schema for POST /api/sessions/:id/mux-rebind
+ * Rebinds a Codeman session to a different tmux session.
+ */
+export const MuxRebindSchema = z.object({
+  muxSessionName: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[a-zA-Z0-9_\-:.@]+$/, 'Invalid tmux session name'),
+  force: z.boolean().optional(),
+});
+
+export type MuxRebindInput = z.infer<typeof MuxRebindSchema>;
