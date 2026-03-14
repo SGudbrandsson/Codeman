@@ -50,11 +50,11 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
     "branch": "feat/<slug>",
     "isNew": true,
     "notes": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
-    "autoStart": true
+    "autoStart": false
   }'
 ```
 
-The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. The `autoStart: true` flag immediately spawns the Claude process after worktree creation so the session starts automatically.
+The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. **Do NOT set `autoStart: true`** — that races against the TASK.md write. Write the files first, then start the session in Step 5b.
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/absolute/path/to/worktree" }`
 
@@ -66,7 +66,7 @@ The `notes` field is just this short trigger sentence — the full task descript
 
 ## Step 5 — Write TASK.md and CLAUDE.md
 
-**Immediately** after the API call returns, write both files to `worktreePath` from the response. Do this before anything else — the session is already starting.
+Write both files to `worktreePath` from the response.
 
 **Write `<worktreePath>/TASK.md`:**
 
@@ -107,6 +107,16 @@ Do not rely on conversation history.
 Then invoke the codeman-task-runner skill.
 ```
 
+## Step 5b — Start the Session
+
+After writing both files, start the Claude process:
+
+```bash
+curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/interactive
+```
+
+This fires Claude only after TASK.md is safely on disk, eliminating the race condition.
+
 ## Step 6 — Report
 
 Summarize what was created:
@@ -122,7 +132,8 @@ Summarize what was created:
 | Mistake | Fix |
 |---------|-----|
 | Putting full description in `notes` | `notes` is just the short trigger sentence; full description goes in TASK.md |
-| Delaying TASK.md write | Write immediately after API returns — the session is already starting |
+| Using `autoStart: true` | **Never use autoStart: true** — it races against the TASK.md write. Use `autoStart: false`, write files, then call `/interactive` |
 | Using a worktree session as parent | Filter for `worktreeBranch: null` sessions only |
 | Wrong port | Codeman runs on **3001**, not 3000 |
 | Branch name with spaces | Use hyphens only, max 37 chars |
+| Forgetting to call `/interactive` after writing files | After `autoStart: false` creation + file writes, always POST to `/api/sessions/:id/interactive` to start Claude |
