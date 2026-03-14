@@ -4238,6 +4238,7 @@ body {
 /* ── Session Drawer Footer ───────────────────────────────────── */
 .drawer-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   padding: 10px 14px;
   border-top: 1px solid #1a1a2e;

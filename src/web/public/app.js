@@ -16677,7 +16677,7 @@ const SessionDrawer = {
 
     const historyBtn = document.createElement('button');
     historyBtn.className = 'drawer-footer-btn';
-    historyBtn.textContent = '⏱ Resume Closed';
+    historyBtn.textContent = '⏱ Resume';
     historyBtn.addEventListener('click', () => {
       SessionDrawer.close();
       HistoryModal.open();
