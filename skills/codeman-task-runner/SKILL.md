@@ -87,10 +87,11 @@ Dispatch a fresh subagent with this prompt:
 >
 > **Your job:**
 > 1. Read the task description and analysis findings in TASK.md.
-> 2. Implement the minimal fix or feature. Stay focused — no unrelated cleanup or refactoring.
-> 3. Document key decisions in the '## Decisions & Context' section of TASK.md (append, never overwrite).
-> 4. Update the '## Fix / Implementation Notes' section with what you changed and why.
-> 5. Change `status` from `fixing` to `reviewing`.
+> 2. If `## Review History` has rejection entries, read each rejection carefully and address every issue listed before implementing. Do not repeat mistakes from prior attempts.
+> 3. Implement the minimal fix or feature. Stay focused — no unrelated cleanup or refactoring.
+> 4. Document key decisions in the '## Decisions & Context' section of TASK.md (append, never overwrite).
+> 5. Update the '## Fix / Implementation Notes' section with what you changed and why.
+> 6. Change `status` from `fixing` to `reviewing`.
 >
 > Keep changes minimal and focused on what TASK.md describes."
 
@@ -186,14 +187,20 @@ Summary: <one paragraph from Fix/Implementation Notes>
 **`[NEEDS REVIEW]` path (fix_cycles >= 3):**
 
 ```bash
-git add -A
-git commit -m "[NEEDS REVIEW]: fix(<affected_area>): <title>
+# Write commit message to temp file
+cat > /tmp/task-commit-msg.txt << 'ENDOFMSG'
+[NEEDS REVIEW]: fix(<affected_area>): <title>
 
 Review history:
 <paste Review History section from TASK.md>
 
 QA results:
-<paste QA Results section from TASK.md>"
+<paste QA Results section from TASK.md>
+ENDOFMSG
+
+git add -A
+git commit -F /tmp/task-commit-msg.txt
+rm /tmp/task-commit-msg.txt
 ```
 
 Update TASK.md `status` → `failed`.
