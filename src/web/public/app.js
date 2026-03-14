@@ -5694,8 +5694,10 @@ class CodemanApp {
     // Clean up mobile/keyboard handlers and re-init (prevents listener accumulation on reconnect)
     MobileDetection.cleanup();
     KeyboardHandler.cleanup();
+    SwipeHandler.cleanup();
     MobileDetection.init();
     KeyboardHandler.init();
+    SwipeHandler.init();
     // Clear tab alerts
     this.tabAlerts.clear();
     // Clear shown completions (used for duplicate notification prevention)
