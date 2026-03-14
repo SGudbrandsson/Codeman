@@ -16675,8 +16675,17 @@ const SessionDrawer = {
     cloneBtn.textContent = 'Clone from Git';
     cloneBtn.addEventListener('click', () => app.openCloneModal?.());
 
+    const historyBtn = document.createElement('button');
+    historyBtn.className = 'drawer-footer-btn';
+    historyBtn.textContent = '⏱ Resume Closed';
+    historyBtn.addEventListener('click', () => {
+      SessionDrawer.close();
+      HistoryModal.open();
+    });
+
     footer.appendChild(newBtn);
     footer.appendChild(cloneBtn);
+    footer.appendChild(historyBtn);
     list.appendChild(footer);
   },
 
@@ -16943,6 +16952,175 @@ const SessionDrawer = {
     popover.appendChild(createBtn);
 
     branchInput.focus();
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// HistoryModal — resume previously closed sessions
+// ═══════════════════════════════════════════════════════════════
+const HistoryModal = {
+  _el: null,
+
+  open() {
+    this._el = document.getElementById('historyModal');
+    if (!this._el) return;
+    this._el.classList.add('active');
+    this._load();
+  },
+
+  close() {
+    if (this._el) this._el.classList.remove('active');
+    this._el = null;
+  },
+
+  _formatTimeAgo(ts) {
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  },
+
+  async _load() {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    list.textContent = '';
+
+    const loading = document.createElement('div');
+    loading.className = 'history-loading';
+    loading.textContent = 'Loading…';
+    list.appendChild(loading);
+
+    let sessions;
+    try {
+      const res = await fetch('/api/sessions/history');
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load');
+      sessions = data.sessions;
+    } catch (err) {
+      list.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'history-empty';
+      errEl.textContent = 'Failed to load history: ' + err.message;
+      list.appendChild(errEl);
+      return;
+    }
+
+    list.textContent = '';
+    this._sessions = sessions;
+    this._renderList(sessions);
+  },
+
+  _renderList(sessions) {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    list.textContent = '';
+
+    if (!sessions || sessions.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'history-empty';
+      empty.textContent = 'No closed sessions found.';
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const s of sessions) {
+      const entry = document.createElement('div');
+      entry.className = 'history-entry';
+
+      const info = document.createElement('div');
+      info.className = 'history-entry-info';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'history-entry-name';
+      nameEl.textContent = s.displayName || s.workingDir.split('/').pop() || s.workingDir;
+      info.appendChild(nameEl);
+
+      const pathEl = document.createElement('div');
+      pathEl.className = 'history-entry-path';
+      pathEl.textContent = s.workingDir;
+      info.appendChild(pathEl);
+
+      const meta = document.createElement('div');
+      meta.className = 'history-entry-meta';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'history-entry-time';
+      timeEl.textContent = this._formatTimeAgo(s.lastActiveAt);
+      meta.appendChild(timeEl);
+
+      const uuidEl = document.createElement('span');
+      uuidEl.className = 'history-entry-uuid';
+      uuidEl.textContent = s.resumeId.slice(0, 8);
+      meta.appendChild(uuidEl);
+
+      if (s.worktreeBranch) {
+        const branchEl = document.createElement('span');
+        branchEl.className = 'history-entry-branch';
+        branchEl.textContent = s.worktreeBranch;
+        meta.appendChild(branchEl);
+      }
+
+      info.appendChild(meta);
+      entry.appendChild(info);
+
+      const btn = document.createElement('button');
+      btn.className = 'history-resume-btn';
+      btn.textContent = 'Resume';
+      btn.addEventListener('click', () => this._resume(s, btn));
+      entry.appendChild(btn);
+
+      list.appendChild(entry);
+    }
+  },
+
+  _filterList(query) {
+    const sessions = this._sessions || [];
+    if (!query) {
+      this._renderList(sessions);
+      return;
+    }
+    const q = query.toLowerCase();
+    const filtered = sessions.filter(s =>
+      s.displayName.toLowerCase().includes(q) ||
+      s.workingDir.toLowerCase().includes(q)
+    );
+    this._renderList(filtered);
+  },
+
+  async _resume(s, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Resuming…';
+    try {
+      const res = await fetch('/api/sessions/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workingDir: s.workingDir,
+          resumeId: s.resumeId,
+          name: s.displayName,
+          mode: 'claude',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.close();
+        if (data.session && data.session.id && typeof app !== 'undefined') {
+          app.selectSession(data.session.id);
+        }
+        if (typeof app !== 'undefined') app.showToast('Session resumed', 'success');
+      } else {
+        if (typeof app !== 'undefined') app.showToast(data.error || 'Failed to resume', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Resume';
+      }
+    } catch (err) {
+      if (typeof app !== 'undefined') app.showToast('Error: ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Resume';
+    }
   },
 };
 

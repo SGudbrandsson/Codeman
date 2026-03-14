@@ -617,3 +617,15 @@ export const SaveDormantWorktreeSchema = z.object({
   originSessionId: z.string(),
   projectName: z.string(),
 });
+
+// ========== History / Resume Closed Sessions ==========
+
+/** POST /api/sessions/resume — resume a previously closed session */
+export const ResumeClosedSessionSchema = z.object({
+  workingDir: safePathSchema,
+  resumeId: z.string().uuid(),
+  name: z.string().max(128).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+});
+
+export type ResumeClosedSessionInput = z.infer<typeof ResumeClosedSessionSchema>;
