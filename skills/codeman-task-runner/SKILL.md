@@ -281,3 +281,4 @@ The `CLAUDE.md` in this directory will have already triggered this rule before y
 | Starting from scratch after a restart | Check TASK.md status — resume from current phase |
 | Re-running a completed task | If status is `done` or `failed`, output a message and stop |
 | Skipping TASK.md update after a phase | Update TASK.md before dispatching next subagent — it's the only persistent state |
+| Sending input to a session without `useMux: true` | `POST /api/sessions/:id/input` without `"useMux": true` writes text but never sends Enter — Claude never receives it. Always include `"useMux": true` |

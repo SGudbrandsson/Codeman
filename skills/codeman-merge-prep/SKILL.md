@@ -11,7 +11,17 @@ Run a full pre-merge quality gate on the current worktree. Fix what can be fixed
 Output a clear verdict: **READY TO MERGE** or **NEEDS ATTENTION** with actionable details.
 
 This skill runs in the worktree directory. If invoked remotely (from the orchestrator session),
-dispatch a subagent into the worktree path to do the work.
+send a prompt to the worktree session via the input API — **always include `"useMux": true`**
+so the Enter keypress is sent and Claude actually receives the message:
+
+```bash
+curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/input \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Invoke the codeman-merge-prep skill.", "useMux": true}'
+```
+
+Without `useMux: true` the text is written to the PTY but Enter is never pressed, so Claude
+never receives the prompt.
 
 ---
 

@@ -137,3 +137,4 @@ Summarize what was created:
 | Wrong port | Codeman runs on **3001**, not 3000 |
 | Branch name with spaces | Use hyphens only, max 37 chars |
 | Forgetting to call `/interactive` after writing files | After `autoStart: false` creation + file writes, always POST to `/api/sessions/:id/interactive` to start Claude |
+| Sending input without `useMux: true` | `POST /api/sessions/:id/input` without `useMux: true` writes text but never sends Enter — Claude never receives the message. Always include `"useMux": true` |
