@@ -57,13 +57,13 @@ digraph task_workflow {
     claude_md [label="CLAUDE.md\n(compact guard)", shape=cylinder];
     worktree  [label="Git Worktree\n(isolated branch)", shape=folder];
 
-    // Intake → worktree setup (files written BEFORE API call)
-    fix_intake  -> task_md   [label="1. writes (type: bug)"];
-    feat_intake -> task_md   [label="1. writes (type: feature)"];
-    fix_intake  -> claude_md [label="2. writes compact guard\n(see Context Rot section)"];
-    feat_intake -> claude_md [label="2. writes compact guard\n(see Context Rot section)"];
-    fix_intake  -> worktree  [label="3. creates via API\n(autoStart after files written)"];
-    feat_intake -> worktree  [label="3. creates via API\n(autoStart after files written)"];
+    // Intake → worktree setup (API first, then immediately write files to worktreePath)
+    fix_intake  -> worktree  [label="1. creates via API\n(autoStart: true)"];
+    feat_intake -> worktree  [label="1. creates via API\n(autoStart: true)"];
+    fix_intake  -> task_md   [label="2. writes immediately\nafter API returns"];
+    feat_intake -> task_md   [label="2. writes immediately\nafter API returns"];
+    fix_intake  -> claude_md [label="3. writes compact guard\n(see Context Rot section)"];
+    feat_intake -> claude_md [label="3. writes compact guard\n(see Context Rot section)"];
 
     // Session startup
     worktree  -> runner   [label="notes prompt:\nread TASK.md → invoke runner"];
@@ -250,8 +250,7 @@ fix_cycles: 0
 4. Generate branch name: `fix/<kebab-slug-from-title>`
 5. Compose `TASK.md` content (type: bug, status: analysis, fix_cycles: 0)
 6. Compose `CLAUDE.md` content — use the exact text from the Context Rot Protection section above
-7. **Write `TASK.md` and `CLAUDE.md` into the worktree directory FIRST** (before the API call, so files exist before Claude starts)
-8. Create worktree via `POST http://localhost:3001/api/sessions/:id/worktree`:
+7. Create worktree via `POST http://localhost:3001/api/sessions/:id/worktree`:
    ```json
    {
      "branch": "fix/<slug>",
@@ -260,6 +259,7 @@ fix_cycles: 0
    }
    ```
    The `notes` field is kept to this short trigger sentence only (well within the 2000-char limit). The full task description lives in `TASK.md`.
+8. **Immediately write `TASK.md` and `CLAUDE.md` to `worktreePath`** from the API response. Do this before anything else — the session is already starting. Note: files cannot be written before the API call because `git worktree add` requires the target directory to not exist.
 9. **Error handling:**
    - `NOT_FOUND` (session not found) → ask user to confirm the project name and retry
    - `INVALID_INPUT` (branch already exists) → suggest `fix/<slug>-2` or ask user for a different branch name
