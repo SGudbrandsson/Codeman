@@ -15100,6 +15100,7 @@ class CodemanApp {
           this.sessions.clear();
           this.muxSessions = [];
           this.activeSessionId = null;
+          SessionIndicatorBar.update(null);
           try { localStorage.removeItem('codeman-active-session'); } catch {}
           this.renderSessionTabs();
           this.renderMuxSessions();
@@ -15111,6 +15112,7 @@ class CodemanApp {
         // Just remove tabs, keep mux sessions running
         this.sessions.clear();
         this.activeSessionId = null;
+        SessionIndicatorBar.update(null);
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         this.renderSessionTabs();
         this.terminal.clear();
