@@ -452,76 +452,308 @@ const KeyboardHandler = {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * SwipeHandler - Detects horizontal swipes on terminal to switch sessions.
- * Only active on mobile/touch devices.
+ * SwipeHandler - Animated horizontal swipe gesture to switch sessions on mobile.
+ *
+ * Uses a CSS-transform slide animation on .main plus a skeleton overlay for the
+ * incoming session. The actual selectSession() call happens after the transition
+ * completes, so the UI never shows a blank screen mid-animation.
+ *
+ * Gesture logic:
+ * - Tracks touchstart/touchmove/touchend on .main
+ * - Disambiguates horizontal vs vertical after LOCK_THRESHOLD px of movement
+ * - Commits to switch if swipe > 30% of screen width OR velocity > 0.4px/ms (fling)
+ * - Cancels (springs back) if threshold not met
+ * - All disable conditions checked at touchstart
+ *
+ * Only active on touch devices. Guards with MobileDetection.isTouchDevice() and
+ * MobileDetection.getDeviceType() === 'mobile'.
  */
 const SwipeHandler = {
+  // Touch tracking state
   startX: 0,
   startY: 0,
   startTime: 0,
-  minSwipeDistance: 80,  // Minimum pixels for a valid swipe
-  maxSwipeTime: 300,     // Maximum ms for a swipe gesture
-  maxVerticalDrift: 100, // Max vertical movement allowed
+  _deltaX: 0,
 
+  // Gesture state
+  _locked: false,       // true once gesture is locked as horizontal
+  _cancelled: false,    // true once gesture is locked as vertical (cancel)
+  _animating: false,    // true during commit/cancel transition
+  _targetId: null,      // session ID we are swiping toward
+  _direction: 0,        // +1 = swiping right (prev), -1 = swiping left (next)
+  _skeleton: null,      // skeleton DOM element
+
+  // Config
+  COMMIT_RATIO: 0.30,   // 30% of screen width
+  FLING_VELOCITY: 0.4,  // px/ms — fling threshold
+  LOCK_THRESHOLD: 10,   // px before locking gesture direction
+  TRANSITION_MS: 250,   // animation duration
+
+  // Listener refs
   _touchStartHandler: null,
+  _touchMoveHandler: null,
   _touchEndHandler: null,
   _element: null,
 
   /** Initialize swipe handling */
   init() {
-    // Only on touch devices
     if (!MobileDetection.isTouchDevice()) return;
 
-    const terminal = document.querySelector('.main');
-    if (!terminal) return;
+    const el = document.querySelector('.main');
+    if (!el) return;
 
-    this._element = terminal;
-    this._touchStartHandler = (e) => this.onTouchStart(e);
-    this._touchEndHandler = (e) => this.onTouchEnd(e);
-    terminal.addEventListener('touchstart', this._touchStartHandler, { passive: true });
-    terminal.addEventListener('touchend', this._touchEndHandler, { passive: true });
+    this._element = el;
+    this._touchStartHandler = (e) => this._onTouchStart(e);
+    this._touchMoveHandler  = (e) => this._onTouchMove(e);
+    this._touchEndHandler   = (e) => this._onTouchEnd(e);
+
+    el.addEventListener('touchstart',  this._touchStartHandler, { passive: true });
+    // touchmove must be non-passive so we can preventDefault for horizontal lock
+    el.addEventListener('touchmove',   this._touchMoveHandler,  { passive: false });
+    el.addEventListener('touchend',    this._touchEndHandler,   { passive: true });
+    el.addEventListener('touchcancel', this._touchEndHandler,   { passive: true });
   },
 
   /** Remove swipe listeners */
   cleanup() {
-    if (this._element && this._touchStartHandler) {
-      this._element.removeEventListener('touchstart', this._touchStartHandler);
-      this._element.removeEventListener('touchend', this._touchEndHandler);
+    if (this._element) {
+      if (this._touchStartHandler) this._element.removeEventListener('touchstart',  this._touchStartHandler);
+      if (this._touchMoveHandler)  this._element.removeEventListener('touchmove',   this._touchMoveHandler);
+      if (this._touchEndHandler) {
+        this._element.removeEventListener('touchend',   this._touchEndHandler);
+        this._element.removeEventListener('touchcancel',this._touchEndHandler);
+      }
     }
     this._touchStartHandler = null;
-    this._touchEndHandler = null;
-    this._element = null;
+    this._touchMoveHandler  = null;
+    this._touchEndHandler   = null;
+    this._element           = null;
+    this._skeleton          = null;
+    this._animating         = false;
+    this._locked            = false;
+    this._cancelled         = false;
+    this._targetId          = null;
   },
 
-  onTouchStart(e) {
+  /** Check whether swipe gestures are currently permitted */
+  _isDisabled() {
+    if (MobileDetection.getDeviceType() !== 'mobile') return true;
+    if (this._animating) return true;
+    if (typeof app === 'undefined') return true;
+    if (!app.sessionOrder || app.sessionOrder.length <= 1) return true;
+    if (app._isLoadingBuffer) return true;
+    if (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) return true;
+    if (document.getElementById('sessionDrawer') && document.getElementById('sessionDrawer').classList.contains('open')) return true;
+    if (document.querySelector('.modal.active')) return true;
+    if (typeof McpPanel !== 'undefined' && McpPanel._panel?.classList.contains('open')) return true;
+    if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) return true;
+    if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) return true;
+    if (typeof InputPanel !== 'undefined' && InputPanel._open) return true;
+    return false;
+  },
+
+  _onTouchStart(e) {
+    if (this._isDisabled()) return;
     if (!e.touches || e.touches.length !== 1) return;
-    this.startX = e.touches[0].clientX;
-    this.startY = e.touches[0].clientY;
+
+    this.startX    = e.touches[0].clientX;
+    this.startY    = e.touches[0].clientY;
     this.startTime = Date.now();
+    this._deltaX   = 0;
+    this._locked   = false;
+    this._cancelled= false;
+    this._targetId = null;
+    this._direction= 0;
   },
 
-  onTouchEnd(e) {
-    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+  _onTouchMove(e) {
+    if (this._animating || this._cancelled) return;
+    if (!e.touches || e.touches.length !== 1) return;
+    if (!this._locked && this._isDisabled()) return;
 
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-    const elapsed = Date.now() - this.startTime;
+    const x = e.touches[0].clientX;
+    const y = e.touches[0].clientY;
+    const dx = x - this.startX;
+    const dy = y - this.startY;
+    this._deltaX = dx;
 
-    // Check if it's a valid swipe
-    const deltaX = endX - this.startX;
-    const deltaY = Math.abs(endY - this.startY);
+    if (!this._locked) {
+      // Wait for enough movement before locking direction
+      if (Math.abs(dx) < this.LOCK_THRESHOLD && Math.abs(dy) < this.LOCK_THRESHOLD) return;
 
-    if (elapsed > this.maxSwipeTime) return;  // Too slow
-    if (deltaY > this.maxVerticalDrift) return;  // Too much vertical movement
-    if (Math.abs(deltaX) < this.minSwipeDistance) return;  // Too short
+      if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical gesture — let browser handle scrolling
+        this._cancelled = true;
+        return;
+      }
 
-    // Valid swipe detected
-    if (deltaX > 0) {
-      // Swipe right -> previous session
-      if (typeof app !== 'undefined') app.prevSession();
-    } else {
-      // Swipe left -> next session
-      if (typeof app !== 'undefined') app.nextSession();
+      // Horizontal gesture — lock in
+      this._locked    = true;
+      this._direction = dx > 0 ? 1 : -1;  // +1 = prev, -1 = next
+
+      // Resolve target session
+      this._targetId = this._resolveTarget(this._direction);
+      if (!this._targetId) {
+        this._cancelled = true;
+        return;
+      }
+
+      // Create skeleton overlay
+      this._skeleton = this._createSkeleton(this._targetId, this._direction);
+      if (this._element) this._element.appendChild(this._skeleton);
     }
-  }
+
+    // Prevent page scroll while handling horizontal swipe
+    e.preventDefault();
+
+    // Move .main; skeleton position follows as it is a child with its own constant offset
+    if (this._element) {
+      this._element.style.transform = 'translateX(' + dx + 'px)';
+    }
+  },
+
+  _onTouchEnd(e) {
+    if (this._animating) return;
+    if (this._cancelled || !this._locked) {
+      // Nothing was locked — clean up any stale transform
+      if (this._element) this._element.style.transform = '';
+      this._cleanup();
+      return;
+    }
+
+    const elapsed = Date.now() - this.startTime;
+    const dx = this._deltaX;
+    const velocity = elapsed > 0 ? Math.abs(dx) / elapsed : 0;
+    const threshold = window.innerWidth * this.COMMIT_RATIO;
+    const shouldCommit = Math.abs(dx) >= threshold || velocity >= this.FLING_VELOCITY;
+
+    // Ensure direction still matches final delta (user may have reversed)
+    const finalDirection = dx > 0 ? 1 : -1;
+    if (finalDirection !== this._direction) {
+      this._springBack();
+      return;
+    }
+
+    if (shouldCommit) {
+      this._commitSwipe();
+    } else {
+      this._springBack();
+    }
+  },
+
+  /** Resolve the session ID in the given direction (+1 = prev, -1 = next) */
+  _resolveTarget(direction) {
+    if (typeof app === 'undefined' || !app.sessionOrder) return null;
+    const order = app.sessionOrder;
+    const idx = order.indexOf(app.activeSessionId);
+    if (idx < 0) return null;
+    if (direction === 1) {
+      const prevIdx = (idx - 1 + order.length) % order.length;
+      return prevIdx !== idx ? order[prevIdx] : null;
+    } else {
+      const nextIdx = (idx + 1) % order.length;
+      return nextIdx !== idx ? order[nextIdx] : null;
+    }
+  },
+
+  /** Build a skeleton overlay for the incoming session using safe DOM methods */
+  _createSkeleton(sessionId, direction) {
+    const vw = window.innerWidth;
+    // Start position: off-screen left (-vw) for prev (swipe right), off-screen right (+vw) for next (swipe left)
+    const offsetX = direction === 1 ? -vw : vw;
+
+    // Get session name for the pill label (textContent is XSS-safe)
+    let label = sessionId ? sessionId.slice(0, 6) : '...';
+    if (typeof app !== 'undefined' && app.sessions) {
+      const s = app.sessions.get(sessionId);
+      if (s && s.name) label = s.name;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'swipe-session-skeleton';
+    // The skeleton is a child of .main which is being translated.
+    // Its own translateX is a constant offset so it stays one viewport-width away.
+    el.style.transform = 'translateX(' + offsetX + 'px)';
+
+    const pill = document.createElement('div');
+    pill.className = 'skeleton-session-pill';
+    pill.textContent = label;
+    el.appendChild(pill);
+
+    const lines = document.createElement('div');
+    lines.className = 'skeleton-lines';
+    ['', 'short', '', 'short'].forEach(function(cls) {
+      const line = document.createElement('div');
+      line.className = cls ? 'skeleton-line ' + cls : 'skeleton-line';
+      lines.appendChild(line);
+    });
+    el.appendChild(lines);
+
+    return el;
+  },
+
+  /** Animate commit: slide .main off-screen, then call selectSession */
+  _commitSwipe() {
+    if (!this._element || !this._targetId) { this._springBack(); return; }
+    this._animating = true;
+
+    const targetX = this._direction === 1 ? window.innerWidth : -window.innerWidth;
+    const self = this;
+
+    this._element.classList.add('swipe-transitioning');
+    this._element.style.transform = 'translateX(' + targetX + 'px)';
+
+    const onDone = function() {
+      self._element.removeEventListener('transitionend', onDone);
+      self._element.classList.remove('swipe-transitioning');
+      self._element.style.transform = '';
+      const targetId = self._targetId;
+      self._cleanup();
+      // Switch session after animation frame so transform reset renders first
+      requestAnimationFrame(function() {
+        if (typeof app !== 'undefined' && targetId) app.selectSession(targetId);
+      });
+    };
+    this._element.addEventListener('transitionend', onDone, { once: true });
+
+    // Safety timeout in case transitionend does not fire
+    setTimeout(function() {
+      if (self._animating) onDone();
+    }, this.TRANSITION_MS + 100);
+  },
+
+  /** Animate cancel: spring .main back to origin */
+  _springBack() {
+    if (!this._element) { this._cleanup(); return; }
+    this._animating = true;
+    const self = this;
+
+    this._element.classList.add('swipe-transitioning');
+    this._element.style.transform = '';
+
+    const onDone = function() {
+      self._element.removeEventListener('transitionend', onDone);
+      self._element.classList.remove('swipe-transitioning');
+      self._cleanup();
+    };
+    this._element.addEventListener('transitionend', onDone, { once: true });
+
+    setTimeout(function() {
+      if (self._animating) onDone();
+    }, this.TRANSITION_MS + 100);
+  },
+
+  /** Remove skeleton and reset gesture state */
+  _cleanup() {
+    if (this._skeleton && this._skeleton.parentNode) {
+      this._skeleton.parentNode.removeChild(this._skeleton);
+    }
+    this._skeleton  = null;
+    this._locked    = false;
+    this._cancelled = false;
+    this._animating = false;
+    this._targetId  = null;
+    this._direction = 0;
+    this._deltaX    = 0;
+  },
 };
