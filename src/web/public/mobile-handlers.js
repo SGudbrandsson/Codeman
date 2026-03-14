@@ -537,7 +537,7 @@ const SwipeHandler = {
 
   /** Check whether swipe gestures are currently permitted */
   _isDisabled() {
-    if (MobileDetection.getDeviceType() !== 'mobile') return true;
+    if (!MobileDetection.isTouchDevice()) return true;
     if (this._animating) return true;
     if (typeof app === 'undefined') return true;
     if (!app.sessionOrder || app.sessionOrder.length <= 1) return true;
@@ -548,7 +548,7 @@ const SwipeHandler = {
     if (typeof McpPanel !== 'undefined' && McpPanel._panel?.classList.contains('open')) return true;
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) return true;
     if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) return true;
-    if (typeof InputPanel !== 'undefined' && InputPanel._open) return true;
+    if (typeof InputPanel !== 'undefined' && InputPanel._open && KeyboardHandler.keyboardVisible) return true;
     return false;
   },
 
