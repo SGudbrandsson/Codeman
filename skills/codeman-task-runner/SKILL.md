@@ -188,6 +188,8 @@ Commit: <hash>
 Summary: <one paragraph from Fix/Implementation Notes>
 ```
 
+Then output **user testing instructions** (see Phase 6 below).
+
 **`[NEEDS REVIEW]` path (fix_cycles >= 3):**
 
 ```bash
@@ -216,6 +218,47 @@ Branch: <branch-name>
 Commit: <hash> (committed with warnings)
 See TASK.md Review History for details.
 ```
+
+Then output **user testing instructions** (see Phase 6 below) — even on the NEEDS REVIEW path, the user should know how to verify what was built.
+
+## Phase 6 — User Testing Instructions
+
+After every commit (clean or NEEDS REVIEW), output a human-readable testing guide so the user can manually verify the feature. This is always the final output of the workflow.
+
+**Format:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🧪 HOW TO TEST: <title>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Dev server (if not already running):
+  nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
+  sleep 6 && curl -s http://localhost:<assignedPort>/api/status | jq .status
+
+Steps to test:
+  1. <concrete action the user takes, e.g. "Open http://localhost:<port> in your browser">
+  2. <next action, e.g. "Click the session tab for 'feat/my-feature'">
+  3. <what to verify, e.g. "Confirm the session indicator bar appears above the MCP bar showing the session name and project folder">
+  4. <edge case or negative test, e.g. "Switch to a different session — confirm the bar updates">
+  ... (as many steps as needed)
+
+Expected result:
+  <one or two sentences describing what success looks like>
+
+To merge when satisfied:
+  Use the Codeman UI merge button, or ask: "merge the worktree for feat/<branch>"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Rules for writing the steps:**
+- Steps must be concrete and actionable — "open X", "click Y", "swipe left", "press Ctrl+F"
+- Cover the happy path AND at least one edge case or negative test
+- If the feature is frontend: include the URL to open and what element to look for
+- If the feature is backend: include the `curl` command to run and what response to expect
+- If the feature involves mobile: note to test on a narrow viewport or mobile device
+- Use the `assignedPort` from the worktree session's `worktreeNotes` (visible in TASK.md or the session's notes) — default to `3099` if unknown
+- Keep it brief — a user should be able to read this in 30 seconds and know exactly what to do
 
 ## Context Safety Rule
 
