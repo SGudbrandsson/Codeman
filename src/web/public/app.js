@@ -1193,6 +1193,62 @@ const PluginsPanel = {
   },
 };
 
+// ===================================================================
+// Session Indicator Bar
+// ===================================================================
+const SessionIndicatorBar = {
+  _bar: null,
+  _dot: null,
+  _nameEl: null,
+  _projectEl: null,
+  _branchEl: null,
+
+  init() {
+    this._bar       = document.getElementById('sessionIndicatorBar');
+    this._dot       = document.getElementById('sibStatusDot');
+    this._nameEl    = document.getElementById('sibSessionName');
+    this._projectEl = document.getElementById('sibProject');
+    this._branchEl  = document.getElementById('sibBranch');
+  },
+
+  update(sessionId) {
+    if (!this._bar) return;
+    if (!sessionId) {
+      this._bar.style.display = 'none';
+      return;
+    }
+    const session = app.sessions.get(sessionId);
+    if (!session) {
+      this._bar.style.display = 'none';
+      return;
+    }
+    // Session name
+    const name = app.getSessionName(session);
+    if (this._nameEl) this._nameEl.textContent = name;
+
+    // Project folder (last segment of workingDir)
+    const project = session.workingDir ? (session.workingDir.split('/').pop() || session.workingDir) : '';
+    if (this._projectEl) this._projectEl.textContent = project;
+
+    // Branch pill — show only when worktreeBranch is set and differs from session.name (raw)
+    const branch = session.worktreeBranch || '';
+    const showBranch = branch && branch !== session.name;
+    if (this._branchEl) {
+      this._branchEl.textContent = branch;
+      this._branchEl.style.display = showBranch ? '' : 'none';
+    }
+
+    // Status dot
+    const status = session.displayStatus ?? session.status ?? 'idle';
+    if (this._dot) {
+      this._dot.classList.toggle('busy', status === 'busy');
+      this._dot.classList.toggle('idle', status !== 'busy');
+    }
+
+    this._bar.style.display = 'flex';
+  },
+};
+
 // Context Bar / Chip / Banner / Panel
 // ===================================================================
 const ContextBar = {
@@ -2634,6 +2690,7 @@ class CodemanApp {
     McpPanel.init();
     PluginsPanel.init();
     ContextBar.init();
+    SessionIndicatorBar.init();
     PanelBackdrop.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
@@ -3298,6 +3355,7 @@ class CodemanApp {
   }
 
   showWelcome() {
+    SessionIndicatorBar.update(null);
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.add('visible');
@@ -4043,6 +4101,10 @@ class CodemanApp {
     if (session.id === this.activeSessionId && session.tokens) {
       this.updateRespawnTokens(session.tokens);
     }
+    // Refresh session indicator bar if this is the active session
+    if (session.id === this.activeSessionId) {
+      SessionIndicatorBar.update(session.id);
+    }
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
@@ -4061,6 +4123,7 @@ class CodemanApp {
     this._cleanupSessionData(data.id);
     if (this.activeSessionId === data.id) {
       this.activeSessionId = null;
+      SessionIndicatorBar.update(null);
       try { localStorage.removeItem('codeman-active-session'); } catch {}
       this.terminal.clear();
       this.showWelcome();
@@ -4317,6 +4380,7 @@ class CodemanApp {
           this._tabStatusTimers.delete(sessionId);
           const s = this.sessions.get(sessionId);
           if (s) { s.displayStatus = 'busy'; this.renderSessionTabs(); }
+          if (sessionId === this.activeSessionId) SessionIndicatorBar.update(sessionId);
         }, 300));
       }
     } else {
@@ -4327,6 +4391,7 @@ class CodemanApp {
         this._tabStatusHideTimers.delete(sessionId);
         const s = this.sessions.get(sessionId);
         if (s) { s.displayStatus = status; this.renderSessionTabs(); }
+        if (sessionId === this.activeSessionId) SessionIndicatorBar.update(sessionId);
       }, 4000));
     }
   }
@@ -6378,6 +6443,7 @@ class CodemanApp {
     }
     const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
+    SessionIndicatorBar.update(sessionId);
     // Save draft for old session, load draft for new session
     if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
     if (typeof McpPanel !== 'undefined') McpPanel.showForSession(sessionId);
