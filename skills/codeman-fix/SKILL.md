@@ -126,4 +126,4 @@ Summarize what was created:
 | Delaying TASK.md write | Write immediately after API returns — the session is already starting |
 | Using a worktree session as parent | Filter for `worktreeBranch: null` sessions only |
 | Wrong port | Codeman runs on **3001**, not 3000 |
-| Branch name with spaces | Use hyphens only, max 40 chars |
+| Branch name with spaces | Use hyphens only, max 37 chars |

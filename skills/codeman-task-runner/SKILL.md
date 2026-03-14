@@ -67,7 +67,7 @@ Dispatch a fresh subagent with this prompt (substitute TASK.md content):
 >    For features: gather implicit constraints from existing code. Draft a minimal implementation spec.
 > 3. Determine `affected_area`: `backend` | `frontend` | `logic`. Use `unknown` only if genuinely ambiguous.
 > 4. Update `TASK.md`:
->    - Fill in the `## Reproduction` section (bugs only) with your reproduction steps.
+>    - Fill in the `## Reproduction` section with your reproduction steps (bugs only — skip if the section is absent from TASK.md, as feature tasks don't have it).
 >    - Fill in the `## Root Cause / Spec` section with your root cause hypothesis (bugs) or implementation spec (features).
 >    - Update the `affected_area` field.
 >    - Change `status` from `analysis` to `fixing`.
