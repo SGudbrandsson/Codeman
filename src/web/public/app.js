@@ -1447,6 +1447,326 @@ const ContextBar = {
     if (suggestion) suggestion.style.display = pct >= 90 ? '' : 'none';
   },
 };
+/** In-session terminal search using xterm.js SearchAddon. Ctrl+F to open. */
+const TerminalSearch = {
+  _bar: null,
+  _input: null,
+  _count: null,
+  _addon: null,
+  _debounceTimer: null,
+
+  init() {
+    this._bar = document.getElementById('terminalSearchBar');
+    this._input = document.getElementById('terminalSearchInput');
+    this._count = document.getElementById('terminalSearchCount');
+    const prevBtn = document.getElementById('terminalSearchPrev');
+    const nextBtn = document.getElementById('terminalSearchNext');
+    const closeBtn = document.getElementById('terminalSearchClose');
+    if (!this._bar || !this._input) return;
+
+    this._input.addEventListener('input', () => {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = setTimeout(() => this._doSearch(true), 150);
+    });
+    this._input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); this.close(); }
+      else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); this.prev(); }
+      else if (e.key === 'Enter') { e.preventDefault(); this.next(); }
+    });
+    if (prevBtn) prevBtn.addEventListener('click', () => this.prev());
+    if (nextBtn) nextBtn.addEventListener('click', () => this.next());
+    if (closeBtn) closeBtn.addEventListener('click', () => this.close());
+  },
+
+  attachToTerminal(terminal) {
+    if (typeof SearchAddon === 'undefined') return;
+    try {
+      this._addon = new SearchAddon.SearchAddon();
+      terminal.loadAddon(this._addon);
+    } catch (_e) { this._addon = null; }
+  },
+
+  open() {
+    if (!this._bar) return;
+    this._bar.style.display = 'flex';
+    this._input.focus();
+    if (this._input.value) this._doSearch(true);
+  },
+
+  close() {
+    if (!this._bar) return;
+    this._bar.style.display = 'none';
+    if (this._addon && this._addon.clearDecorations) this._addon.clearDecorations();
+    if (window.app && app.terminal) app.terminal.focus();
+  },
+
+  toggle() {
+    if (!this._bar) return;
+    if (this._bar.style.display === 'none' || this._bar.style.display === '') {
+      this.open();
+    } else {
+      this.close();
+    }
+  },
+
+  next() { this._doSearch(false); },
+
+  prev() {
+    if (!this._addon) return;
+    const q = this._input ? this._input.value : '';
+    if (!q) return;
+    const found = this._addon.findPrevious(q, { caseSensitive: false, regex: false });
+    if (this._count) this._count.textContent = found ? '' : 'no match';
+  },
+
+  _doSearch(incremental) {
+    if (!this._addon) return;
+    const q = this._input ? this._input.value : '';
+    if (!q) { if (this._count) this._count.textContent = ''; return; }
+    const found = this._addon.findNext(q, { caseSensitive: false, regex: false, incremental });
+    if (this._count) this._count.textContent = found ? '' : 'no match';
+  },
+};
+
+/** Cross-session fuzzy switcher. Ctrl+Shift+F to open. */
+const SessionSwitcher = {
+  _modal: null,
+  _input: null,
+  _list: null,
+  _items: [],
+  _activeIdx: 0,
+  _debounceTimer: null,
+  _subpicker: null,
+  _subpickerSession: null,
+
+  init() {
+    this._modal = document.getElementById('sessionSwitcherModal');
+    this._input = document.getElementById('sessionSwitcherInput');
+    this._list = document.getElementById('sessionSwitcherList');
+    const backdrop = document.getElementById('sessionSwitcherBackdrop');
+    if (!this._modal || !this._input || !this._list) return;
+
+    this._input.addEventListener('input', () => {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = setTimeout(() => {
+        this._filter(this._input.value);
+        this._render();
+      }, 150);
+    });
+    this._input.addEventListener('keydown', (e) => this._onKey(e));
+    if (backdrop) backdrop.addEventListener('click', () => this.close());
+  },
+
+  open() {
+    if (!this._modal) return;
+    this._modal.style.display = 'flex';
+    this._modal.classList.add('open');
+    if (this._input) { this._input.value = ''; this._input.focus(); }
+    this._filter('');
+    this._render();
+  },
+
+  close() {
+    if (!this._modal) return;
+    this._modal.classList.remove('open');
+    this._modal.style.display = 'none';
+    this._closeSubpicker();
+  },
+
+  toggle() {
+    if (!this._modal) return;
+    if (this._modal.classList.contains('open')) { this.close(); } else { this.open(); }
+  },
+
+  _scoreSession(s, query) {
+    if (!query) return 1;
+    const name = (window.app ? app.getSessionName(s) : (s.name || s.id)).toLowerCase();
+    const dir = (s.workingDir || '').toLowerCase();
+    const q = query.toLowerCase();
+    if (name.includes(q)) return 2;
+    if (dir.includes(q)) return 1;
+    let ni = 0;
+    for (let ci = 0; ci < dir.length && ni < q.length; ci++) { if (dir[ci] === q[ni]) ni++; }
+    if (ni === q.length) return 0.5;
+    return 0;
+  },
+
+  _filter(query) {
+    const sessions = window.app ? Array.from(app.sessions.values()) : [];
+    this._items = sessions
+      .map(s => ({ s, score: this._scoreSession(s, query) }))
+      .filter(x => !query || x.score > 0)
+      .sort((a, b) => b.score - a.score || (b.s.lastActivityAt || 0) - (a.s.lastActivityAt || 0))
+      .map(x => x.s);
+    this._activeIdx = 0;
+  },
+
+  _shortDir(workingDir) {
+    if (!workingDir) return '';
+    const parts = workingDir.replace(/\/$/, '').split('/');
+    return parts.slice(-2).join('/');
+  },
+
+  _render() {
+    if (!this._list) return;
+    while (this._list.firstChild) this._list.removeChild(this._list.firstChild);
+    const currentId = window.app ? app.activeSessionId : null;
+    this._items.forEach((s, idx) => {
+      const li = document.createElement('li');
+      li.className = 'ssm-item' + (idx === this._activeIdx ? ' ssm-active' : '') + (s.id === currentId ? ' ssm-current' : '');
+      li.setAttribute('role', 'option');
+      li.dataset.idx = String(idx);
+
+      const dot = document.createElement('span');
+      dot.className = 'ssm-dot' + (s.status === 'busy' ? ' busy' : '');
+      li.appendChild(dot);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'ssm-item-name';
+      nameSpan.textContent = window.app ? app.getSessionName(s) : (s.name || s.id);
+      li.appendChild(nameSpan);
+
+      const dirSpan = document.createElement('span');
+      dirSpan.className = 'ssm-item-dir';
+      dirSpan.textContent = this._shortDir(s.workingDir);
+      li.appendChild(dirSpan);
+
+      const meta = document.createElement('span');
+      meta.className = 'ssm-item-meta';
+
+      if (s.contextWindowTokens && s.contextWindowMax) {
+        const ctxPct = Math.round((s.contextWindowTokens / s.contextWindowMax) * 100);
+        const ctxSpan = document.createElement('span');
+        ctxSpan.className = 'ssm-item-ctx';
+        ctxSpan.textContent = ctxPct + '%';
+        meta.appendChild(ctxSpan);
+      }
+
+      if (s.lastActivityAt && window.app && app._formatTimeAgo) {
+        const timeSpan = document.createElement('span');
+        timeSpan.textContent = app._formatTimeAgo(s.lastActivityAt);
+        meta.appendChild(timeSpan);
+      }
+
+      li.appendChild(meta);
+
+      const actionRow = document.createElement('div');
+      actionRow.className = 'ssm-action-row';
+      const reassignBtn = document.createElement('button');
+      reassignBtn.className = 'ssm-action-btn';
+      reassignBtn.textContent = 'Reassign pane\u2026';
+      reassignBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._subpickerSession = s;
+        this._openMuxSubpicker(reassignBtn, s);
+      });
+      actionRow.appendChild(reassignBtn);
+      li.appendChild(actionRow);
+
+      li.addEventListener('click', () => { this._select(idx); });
+      this._list.appendChild(li);
+    });
+    if (this._items.length === 0) {
+      const empty = document.createElement('li');
+      empty.style.cssText = 'padding:12px 14px;color:var(--text-muted);font-size:0.85rem;';
+      empty.textContent = 'No sessions found';
+      this._list.appendChild(empty);
+    }
+  },
+
+  _highlightActive() {
+    if (!this._list) return;
+    const items = this._list.querySelectorAll('.ssm-item');
+    items.forEach((el, i) => {
+      el.classList.toggle('ssm-active', i === this._activeIdx);
+      if (i === this._activeIdx) el.scrollIntoView({ block: 'nearest' });
+    });
+  },
+
+  _select(idx) {
+    const s = this._items[idx];
+    if (!s) return;
+    this.close();
+    if (window.app && app.switchToSession) app.switchToSession(s.id);
+  },
+
+  _onKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); this.close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); this._activeIdx = Math.min(this._activeIdx + 1, this._items.length - 1); this._highlightActive(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this._activeIdx = Math.max(this._activeIdx - 1, 0); this._highlightActive(); }
+    else if (e.key === 'Enter') { e.preventDefault(); this._select(this._activeIdx); }
+  },
+
+  _closeSubpicker() {
+    if (this._subpicker) {
+      this._subpicker.remove();
+      this._subpicker = null;
+    }
+    this._subpickerSession = null;
+  },
+
+  async _openMuxSubpicker(anchorBtn, targetSession) {
+    this._closeSubpicker();
+    const picker = document.createElement('div');
+    picker.className = 'ssm-subpicker open';
+
+    const header = document.createElement('div');
+    header.className = 'ssm-subpicker-header';
+    header.textContent = 'Choose tmux session to bind:';
+    picker.appendChild(header);
+
+    anchorBtn.style.position = 'relative';
+    anchorBtn.appendChild(picker);
+    this._subpicker = picker;
+
+    try {
+      const resp = await fetch('/api/mux-sessions');
+      const data = await resp.json();
+      const muxSessions = data.sessions || [];
+      if (muxSessions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'ssm-subpicker-item';
+        empty.textContent = 'No tmux sessions available';
+        picker.appendChild(empty);
+        return;
+      }
+      muxSessions.forEach(mx => {
+        const item = document.createElement('div');
+        item.className = 'ssm-subpicker-item';
+        item.textContent = mx.muxName + (mx.name ? ' (' + mx.name + ')' : '');
+        item.addEventListener('click', () => {
+          this._closeSubpicker();
+          this._applyMuxOverride(targetSession.id, mx.muxName);
+        });
+        picker.appendChild(item);
+      });
+    } catch (_e) {
+      const err = document.createElement('div');
+      err.className = 'ssm-subpicker-item';
+      err.textContent = 'Failed to load tmux sessions';
+      picker.appendChild(err);
+    }
+  },
+
+  async _applyMuxOverride(sessionId, muxName) {
+    try {
+      const resp = await fetch('/api/sessions/' + sessionId + '/mux-override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ muxSession: muxName }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        if (window.app && app.showToast) app.showToast('Pane reassigned to ' + muxName);
+      } else {
+        if (window.app && app.showToast) app.showToast('Failed: ' + (data.error || 'unknown error'), 'error');
+      }
+    } catch (_e) {
+      if (window.app && app.showToast) app.showToast('Network error reassigning pane', 'error');
+    }
+  },
+};
+
 
 /** Shared translucent backdrop for mcp-type side panels (McpPanel, PluginsPanel, ContextBar). */
 const PanelBackdrop = {
@@ -2698,6 +3018,8 @@ class CodemanApp {
     ContextBar.init();
     SessionIndicatorBar.init();
     PanelBackdrop.init();
+    TerminalSearch.init();
+    SessionSwitcher.init();
     // Always-visible compose bar on mobile and desktop
     InputPanel.open();
     // Restore desktop sidebar pin state
@@ -2823,6 +3145,7 @@ class CodemanApp {
 
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
+    TerminalSearch.attachToTerminal(this.terminal);
 
     if (typeof Unicode11Addon !== 'undefined') {
       try {
@@ -3930,6 +4253,18 @@ class CodemanApp {
             }
           });
         }
+      }
+
+      // Ctrl/Cmd + F - terminal search
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'f') {
+        e.preventDefault();
+        TerminalSearch.toggle();
+      }
+
+      // Ctrl/Cmd + Shift + F - cross-session switcher
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+        e.preventDefault();
+        SessionSwitcher.toggle();
       }
 
       // Ctrl/Cmd + X - copy selected terminal text
@@ -11547,6 +11882,8 @@ class CodemanApp {
       subagentsPanel.classList.remove('open');
     }
     this.subagentPanelVisible = false;
+    if (typeof TerminalSearch !== 'undefined') TerminalSearch.close();
+    if (typeof SessionSwitcher !== 'undefined') SessionSwitcher.close();
   }
 
   // ═══════════════════════════════════════════════════════════════

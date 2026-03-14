@@ -634,3 +634,7 @@ export const ResumeClosedSessionSchema = z.object({
 });
 
 export type ResumeClosedSessionInput = z.infer<typeof ResumeClosedSessionSchema>;
+
+export const MuxOverrideSchema = z.object({
+  muxSession: z.string().min(1).max(200),
+});

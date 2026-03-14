@@ -20,6 +20,7 @@
   <script defer src="vendor/xterm-addon-fit.min.js"></script>
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
+  <script defer src="vendor/xterm-addon-search.min.js?v=1"></script>
   <script defer src="vendor/xterm-zerolag-input.js?v=0.4.0"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
@@ -460,7 +461,10 @@
       </div>
 
       <div class="toolbar-right">
-<span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
+        <button class="btn-toolbar btn-session-search" onclick="SessionSwitcher.open()" title="Search sessions (Ctrl+Shift+F)" aria-label="Search and switch sessions">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+        <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
 
@@ -486,6 +490,8 @@
             <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></div><div>Voice Input</div>
             <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></div><div>Paste from Clipboard</div>
             <div><kbd>Escape</kbd></div><div>Close Panels</div>
+            <div><kbd>Ctrl</kbd>+<kbd>F</kbd></div><div>Search Terminal</div>
+            <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></div><div>Switch Session</div>
           </div>
         </div>
       </div>
@@ -2195,6 +2201,32 @@
   <div id="mcpLibraryPane" class="mcp-pane mcp-library-grid"></div>
   <div id="mcpMarketplacePane" class="mcp-pane" style="display:none">
     <div id="mcpMarketplaceResults" class="mcp-library-grid"></div>
+  </div>
+</div>
+
+<!-- Terminal Search Bar -->
+<div id="terminalSearchBar" class="terminal-search-bar" style="display:none"
+     role="search" aria-label="Terminal search">
+  <input id="terminalSearchInput" type="text" placeholder="Search terminal..."
+         autocomplete="off" spellcheck="false" aria-label="Search terminal">
+  <span class="ts-count" id="terminalSearchCount" aria-live="polite"></span>
+  <button class="ts-btn" id="terminalSearchPrev" title="Previous (Shift+Enter)">&#x2191;</button>
+  <button class="ts-btn" id="terminalSearchNext" title="Next (Enter)">&#x2193;</button>
+  <button class="ts-btn ts-close" id="terminalSearchClose" title="Close (Escape)">&#x00d7;</button>
+</div>
+
+<!-- Session Switcher Modal -->
+<div id="sessionSwitcherModal" class="session-switcher-modal" style="display:none"
+     role="dialog" aria-modal="true" aria-label="Switch session">
+  <div class="ssm-backdrop" id="sessionSwitcherBackdrop"></div>
+  <div class="ssm-box">
+    <div class="ssm-header">
+      <input id="sessionSwitcherInput" class="ssm-input" type="text"
+             placeholder="Search sessions..." autocomplete="off" spellcheck="false"
+             aria-label="Filter sessions">
+      <kbd class="ssm-hint">Esc to close</kbd>
+    </div>
+    <ul id="sessionSwitcherList" class="ssm-list" role="listbox" aria-label="Sessions"></ul>
   </div>
 </div>
 

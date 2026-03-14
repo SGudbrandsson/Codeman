@@ -2554,4 +2554,26 @@ export class Session extends EventEmitter {
     this._ralphTracker.clear();
     this._taskCache.clear();
   }
+
+  /**
+   * Returns the mux session name (tmux session name) bound to this session, or null if unset.
+   */
+  getMuxSessionName(): string | null {
+    return this._muxSession?.muxName ?? null;
+  }
+
+  /**
+   * Rebinds this session to a different tmux/mux session without killing the old one.
+   * Stops the current PTY attachment (keep-mux=false kills neither), resets stopped flag,
+   * sets the new mux session, then restarts the interactive process attached to it.
+   */
+  async rebindMux(newMuxSession: MuxSession): Promise<void> {
+    // stop(false) detaches PTY, preserves mux session, sets _isStopped = true
+    await this.stop(false);
+    // Reset stopped so the session can be restarted
+    this._isStopped = false;
+    this._status = 'idle';
+    this._muxSession = newMuxSession;
+    await this.startInteractive();
+  }
 }

@@ -38,6 +38,7 @@ run('xterm js', 'npx esbuild node_modules/xterm/lib/xterm.js --minify --outfile=
 run('xterm-addon-fit', 'npx esbuild node_modules/xterm-addon-fit/lib/xterm-addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js');
 run('xterm-addon-webgl', 'cp node_modules/xterm-addon-webgl/lib/xterm-addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
 run('xterm-addon-unicode11', 'npx esbuild node_modules/xterm-addon-unicode11/lib/xterm-addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
+run('xterm-addon-search', 'npx esbuild node_modules/xterm-addon-search/lib/xterm-addon-search.js --minify --outfile=dist/web/public/vendor/xterm-addon-search.min.js');
 run('xterm-zerolag-input', 'npx esbuild packages/xterm-zerolag-input/src/zerolag-input-addon.ts --bundle --minify --format=iife --global-name=XtermZerolagInput --outfile=dist/web/public/vendor/xterm-zerolag-input.js');
 
 // Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`

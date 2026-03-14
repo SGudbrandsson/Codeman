@@ -32,6 +32,7 @@ import {
   QuickRunSchema,
   QuickStartSchema,
   SafeModeSchema,
+  MuxOverrideSchema,
 } from '../schemas.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -997,5 +998,39 @@ export function registerSessionRoutes(
     session.draft = { text, imagePaths, updatedAt: Date.now() };
     ctx.persistSessionState(session);
     return reply.send({ success: true });
+  });
+
+  // ========== POST /api/sessions/:id/mux-override ==========
+
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/mux-override', async (req, reply) => {
+    const { id } = req.params;
+    const session = ctx.sessions.get(id);
+    if (!session) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
+    }
+
+    const result = MuxOverrideSchema.safeParse(req.body);
+    if (!result.success) {
+      return reply.send(
+        createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed')
+      );
+    }
+
+    const { muxSession: muxName } = result.data;
+    const allMuxSessions = ctx.mux.getSessions();
+    const targetMux = allMuxSessions.find((s) => s.muxName === muxName);
+    if (!targetMux) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Mux session '${muxName}' not found`));
+    }
+
+    try {
+      await session.rebindMux(targetMux);
+      ctx.persistSessionState(session);
+      return reply.send({ success: true });
+    } catch (err) {
+      return reply.send(
+        createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to rebind mux session: ${getErrorMessage(err)}`)
+      );
+    }
   });
 }
