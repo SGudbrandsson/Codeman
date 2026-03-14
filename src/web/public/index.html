@@ -101,6 +101,7 @@
           <span class="mcp-chip-label">CTX</span>
           <span class="mcp-chip-badge" id="ctxChipBadge" style="display:none"></span>
         </button>
+        <button class="btn-icon-header btn-health-analyzer" id="healthAnalyzerBtn" onclick="app.openHealthAnalyzer()" title="Analyze session health" aria-label="Analyze session health"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></button>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
@@ -459,7 +460,7 @@
       </div>
 
       <div class="toolbar-right">
-        <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
+<span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
 
@@ -758,6 +759,16 @@
                 <span class="slider"></span>
               </label>
               <span class="form-hint">Buffers output after screen clears to reduce Ink UI flickering (adds ~50ms latency)</span>
+            </div>
+
+            <div class="form-section-header">Compatibility</div>
+            <div class="form-row form-row-switch">
+              <label>Safe Mode</label>
+              <label class="switch">
+                <input type="checkbox" id="modalSafeMode" onchange="app.toggleSafeMode()">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Strips --resume and MCP config flags. Use when a new Claude version breaks backwards compatibility. Takes effect on next start.</span>
             </div>
           </div><!-- End context-tab -->
 
@@ -2007,6 +2018,20 @@
         <button class="modal-close" onclick="app.closeWorktreeCreator()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body" id="worktreeCreatorBody"></div>
+    </div>
+  </div>
+
+  <!-- Session Health Analyzer -->
+  <div class="modal" id="healthAnalyzerModal">
+    <div class="modal-backdrop" onclick="app.closeHealthAnalyzer()"></div>
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3>&#x2665; Session Health</h3>
+        <button class="modal-close" onclick="app.closeHealthAnalyzer()" aria-label="Close health analyzer">&times;</button>
+      </div>
+      <div class="modal-body" id="healthAnalyzerBody">
+        <!-- populated by app.js -->
+      </div>
     </div>
   </div>
 

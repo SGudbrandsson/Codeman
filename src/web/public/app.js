@@ -6130,6 +6130,7 @@ class CodemanApp {
       const worktreeBadge = session.worktreeBranch
         ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">${BRANCH_SVG} ${escapeHtml(session.worktreeBranch)}</span>`
         : '';
+      const safeModeBadge = session.safeMode ? '<span class="tab-safe-mode-badge" title="Safe mode: stripped CLI args">SAFE</span>' : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
       const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
@@ -6148,6 +6149,7 @@ class CodemanApp {
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
           ${worktreeBadge}
+          ${safeModeBadge}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
         </div>`);
@@ -8298,6 +8300,7 @@ class CodemanApp {
     document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
+    document.getElementById('modalSafeMode').checked = session.safeMode ?? false;
 
     // Populate session name input
     document.getElementById('modalSessionName').value = session.name || '';
@@ -8857,6 +8860,151 @@ class CodemanApp {
       this.showToast(`Flicker filter ${enabled ? 'enabled' : 'disabled'}`, 'success');
     } catch (err) {
       this.showToast('Failed to toggle flicker filter', 'error');
+    }
+  }
+
+  async toggleSafeMode() {
+    if (!this.editingSessionId) return;
+    const enabled = document.getElementById('modalSafeMode').checked;
+    try {
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/safe-mode`, { enabled });
+      const session = this.sessions.get(this.editingSessionId);
+      if (session) session.safeMode = enabled;
+      this.renderSessionTabs();
+      this.showToast(`Safe mode ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to toggle safe mode', 'error');
+    }
+  }
+
+  // ========== Session Health Analyzer ==========
+
+  _classifySession(session, ralphState) {
+    const issues = [];
+    const now = Date.now();
+    const FIVE_MIN = 5 * 60 * 1000;
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    if (session.pid === null && session.status === 'busy' && (now - session.lastActivityAt) > FIVE_MIN) {
+      issues.push({ type: 'dead', label: 'Appears dead (no process)', severity: 'error' });
+    }
+    const cb = ralphState && ralphState.circuitBreaker;
+    if (cb && cb.state === 'OPEN') {
+      issues.push({ type: 'circuit_open', label: 'Circuit breaker OPEN', severity: 'error' });
+    } else if (cb && cb.state === 'HALF_OPEN') {
+      issues.push({ type: 'circuit_half', label: 'Circuit breaker warning (HALF_OPEN)', severity: 'warning' });
+    }
+    if ((now - session.lastActivityAt) > TWO_HOURS && session.status !== 'stopped') {
+      issues.push({ type: 'idle_long', label: 'Idle >2 hours', severity: 'info' });
+    }
+    return issues;
+  }
+
+  openHealthAnalyzer() {
+    this._healthIgnored = this._healthIgnored || new Set();
+    const body = document.getElementById('healthAnalyzerBody');
+    if (!body) return;
+    const sessions = Array.from(this.sessions.values());
+    const problematic = [];
+    let healthyCount = 0;
+    for (const session of sessions) {
+      if (this._healthIgnored.has(session.id)) continue;
+      const ralphState = this.ralphStates ? this.ralphStates.get(session.id) : null;
+      const issues = this._classifySession(session, ralphState);
+      if (issues.length === 0) {
+        healthyCount++;
+      } else {
+        problematic.push({ session, issues });
+      }
+    }
+    const totalSessions = sessions.length - this._healthIgnored.size;
+    const parts = [];
+    if (problematic.length === 0) {
+      parts.push('<div class="health-summary">' + totalSessions + ' session' + (totalSessions !== 1 ? 's' : '') + ' analyzed</div>');
+      parts.push('<div class="health-all-healthy">&#x2665; All sessions look healthy</div>');
+    } else {
+      parts.push('<div class="health-summary">' + healthyCount + ' healthy &bull; ' + problematic.length + ' need attention</div>');
+      for (const { session, issues } of problematic) {
+        const name = escapeHtml(session.name || (session.workingDir && session.workingDir.split('/').pop()) || session.id.slice(0, 8));
+        const statusClass = escapeHtml(session.status);
+        const dir = escapeHtml(session.workingDir || '');
+        const issueHtml = issues.map(i => '<span class="health-issue-badge ' + escapeHtml(i.severity) + '">' + escapeHtml(i.label) + '</span>').join('');
+        const hasDead = issues.some(i => i.type === 'dead');
+        const hasCBOpen = issues.some(i => i.type === 'circuit_open');
+        const sid = escapeHtml(session.id);
+        const actionBtns = [];
+        if (hasDead || hasCBOpen) {
+          actionBtns.push('<button class="btn-toolbar btn-sm btn-warning" onclick="app._healthRestartSafeMode(\x27' + sid + '\x27)">Restart Safe Mode</button>');
+        }
+        if (hasDead) {
+          actionBtns.push('<button class="btn-toolbar btn-sm" onclick="app._healthForceRespawn(\x27' + sid + '\x27)">Force Respawn</button>');
+        }
+        if (hasDead) {
+          actionBtns.push('<button class="btn-toolbar btn-sm btn-danger" onclick="app._healthKill(\x27' + sid + '\x27)">Kill Session</button>');
+        }
+        if (hasCBOpen) {
+          actionBtns.push('<button class="btn-toolbar btn-sm" onclick="app._healthResetCB(\x27' + sid + '\x27)">Reset Circuit Breaker</button>');
+        }
+        actionBtns.push('<button class="btn-toolbar btn-sm" onclick="app._healthIgnore(\x27' + sid + '\x27)">Ignore</button>');
+        parts.push('<div class="health-session-card"><div class="health-session-card-header"><span class="tab-status ' + statusClass + '" style="display:inline-block;margin-right:2px;"></span> ' + name + ' <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">' + dir + '</span></div><div class="health-session-issues">' + issueHtml + '</div><div class="health-session-actions">' + actionBtns.join('') + '</div></div>');
+      }
+    }
+    body.innerHTML = parts.join('');
+    document.getElementById('healthAnalyzerModal').classList.add('active');
+  }
+
+  closeHealthAnalyzer() {
+    document.getElementById('healthAnalyzerModal').classList.remove('active');
+  }
+
+  _healthIgnore(sessionId) {
+    this._healthIgnored = this._healthIgnored || new Set();
+    this._healthIgnored.add(sessionId);
+    this.openHealthAnalyzer();
+  }
+
+  async _healthRestartSafeMode(sessionId) {
+    try {
+      await this._apiPost(`/api/sessions/${sessionId}/safe-mode`, { enabled: true });
+      const session = this.sessions.get(sessionId);
+      if (session) session.safeMode = true;
+      if (!session || session.pid === null) {
+        await this._apiPost(`/api/sessions/${sessionId}/interactive`, {});
+      }
+      this.showToast('Safe mode enabled. Session will use stripped CLI args on next start.', 'success');
+      this.renderSessionTabs();
+      this.openHealthAnalyzer();
+    } catch (err) {
+      this.showToast('Failed to restart in safe mode', 'error');
+    }
+  }
+
+  async _healthForceRespawn(sessionId) {
+    try {
+      await this._apiPost(`/api/sessions/${sessionId}/interactive`, {});
+      this.showToast('Respawn requested', 'success');
+      this.openHealthAnalyzer();
+    } catch (err) {
+      this.showToast('Failed to force respawn', 'error');
+    }
+  }
+
+  async _healthKill(sessionId) {
+    try {
+      await this._apiDelete(`/api/sessions/${sessionId}`);
+      this.showToast('Session killed', 'success');
+      this.openHealthAnalyzer();
+    } catch (err) {
+      this.showToast('Failed to kill session', 'error');
+    }
+  }
+
+  async _healthResetCB(sessionId) {
+    try {
+      await this._apiPost(`/api/sessions/${sessionId}/ralph-circuit-breaker/reset`, {});
+      this.showToast('Circuit breaker reset', 'success');
+      this.openHealthAnalyzer();
+    } catch (err) {
+      this.showToast('Failed to reset circuit breaker', 'error');
     }
   }
 

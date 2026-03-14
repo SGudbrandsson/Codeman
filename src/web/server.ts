@@ -2788,6 +2788,9 @@ export class WebServer extends EventEmitter {
               if (savedState.claudeResumeId !== undefined) {
                 session.claudeResumeId = savedState.claudeResumeId;
               }
+              if (savedState.safeMode) {
+                session.setSafeMode(true);
+              }
               // Respawn controller (not supported for opencode sessions)
               if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
