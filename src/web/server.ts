@@ -103,6 +103,7 @@ import {
   registerHookEventRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
+  registerHistoryRoutes,
   registerSessionRoutes,
   registerRespawnRoutes,
   registerRalphRoutes,
@@ -725,6 +726,7 @@ export class WebServer extends EventEmitter {
     registerHookEventRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
+    registerHistoryRoutes(this.app, ctx);
     registerSessionRoutes(this.app, ctx);
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
@@ -936,6 +938,11 @@ export class WebServer extends EventEmitter {
       name: session?.name,
       mode: session?.mode,
       reason: reason || 'unknown',
+      extra: {
+        workingDir: session?.workingDir,
+        claudeResumeId: session?.claudeResumeId,
+        worktreeBranch: session?.worktreeBranch,
+      },
     });
 
     // Stop watching @fix_plan.md for this session
