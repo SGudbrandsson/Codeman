@@ -616,6 +616,10 @@ export const MergeWorktreeSchema = z.object({
   branch: z.string().min(1).max(200),
 });
 
+export const CleanupOrphansSchema = z.object({
+  repoDir: z.string().min(1),
+});
+
 export const SaveDormantWorktreeSchema = z.object({
   path: z.string().min(1),
   branch: z.string().min(1),
