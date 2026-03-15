@@ -10040,7 +10040,7 @@ class CodemanApp {
     if (!listEl) return;
     listEl.innerHTML = '<p class="empty-message">Loading...</p>';
     try {
-      const data = await this._apiGet('/api/mux/all-sessions');
+      const data = await this._apiJson('/api/mux/all-sessions');
       this._muxAllSessions = data.sessions || [];
       this._renderMuxSessionList();
     } catch (err) {
