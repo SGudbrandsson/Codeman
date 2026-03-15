@@ -16901,15 +16901,24 @@ const InputPanel = {
   _openActionSheet() {
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
-    if (sheet) sheet.style.display = '';
-    if (backdrop) backdrop.style.display = '';
+    if (sheet) sheet.classList.add('open');
+    if (backdrop) backdrop.classList.add('open');
+    // Suppress typing indicator while drawer is open — avoids z-index compositing conflict
+    const indicator = document.getElementById('tvTypingIndicator');
+    if (indicator) indicator.style.display = 'none';
   },
 
   _closeActionSheet() {
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
-    if (sheet) sheet.style.display = 'none';
-    if (backdrop) backdrop.style.display = 'none';
+    if (sheet) sheet.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('open');
+    // Restore typing indicator if session is still working
+    const sessionWorking = typeof app !== 'undefined' && app.activeSessionId
+      ? app.sessions?.get(app.activeSessionId)?.status === 'busy'
+      : false;
+    const indicator = document.getElementById('tvTypingIndicator');
+    if (indicator && sessionWorking) indicator.style.display = '';
   },
 
   _actionSheetPick(type) {

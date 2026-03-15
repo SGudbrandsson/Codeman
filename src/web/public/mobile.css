@@ -2716,15 +2716,22 @@ html.mobile-init .file-browser-panel {
 .compose-action-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 54;
+  z-index: 10002;          /* above everything including session drawer (9000) */
   background: rgba(0,0,0,0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.compose-action-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
 }
 .compose-action-sheet {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 55;
+  z-index: 10003;          /* above backdrop */
   background: #1a1a2e;
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
@@ -2732,6 +2739,11 @@ html.mobile-init .file-browser-panel {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  transform: translateY(100%);
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.compose-action-sheet.open {
+  transform: translateY(0);
 }
 .compose-action-item {
   background: #252540;

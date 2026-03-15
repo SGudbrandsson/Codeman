@@ -2,157 +2,274 @@
 
 type: bug
 status: done
-title: Gear icon in bottom action buttons doesn't open session options
+title: Mobile upload options — convert to bottom drawer and fix z-index overlap with working indicator
 description: |
-  On both mobile and desktop, the gear/settings icon (⚙) that should open session options
-  is not working when it appears in the bottom action buttons area.
+  Two related issues with the mobile plus/upload UI.
 
-  On mobile: There is no gear icon in the session drawer (hamburger menu → right sidebar).
-  The session options modal (which contains the Respawn tab, Context tab with Safe Mode toggle,
-  Ralph tab, etc.) is unreachable on mobile because the gear icon only exists in the desktop
-  left sidebar session tabs.
+  ## Problem 1 — Upload options should be a bottom drawer
+  Currently when the user taps the plus (+) button on mobile, upload/attach options appear
+  hovering above the plus icon as a floating menu/popup. This should instead be a bottom
+  drawer that slides up from the bottom of the screen (same pattern as the hamburger menu
+  drawer / SessionDrawer).
 
-  The fix should make session options accessible from mobile — either by:
-  1. Adding a gear icon button to each session row in the mobile SessionDrawer (alongside the
-     existing × close button), OR
-  2. Investigating if there are gear icons in the bottom action buttons area that are broken
-     and fixing those.
+  ## Problem 2 — Working/loading animation overlaps the drawer
+  The working/loading animation (shown when a session is busy) is rendered at a z-index that
+  puts it on top of the upload drawer/popup. When the user opens the upload options while
+  something is loading, the animation covers the drawer content, making it unusable.
 
-  The SessionDrawer._renderSessionRow() function in app.js builds each row with: dot, name,
-  mode badge, close button — but no gear/options button. This needs a gear button that calls
-  app.openSessionOptions(sessionId) and closes the drawer.
-
-  On desktop: The gear icon in session tabs (left sidebar) should work fine — but if there are
-  gear icons in any bottom toolbar or action bar that don't work, those need to be fixed too.
-
-  Expected: Tapping a gear/options icon on mobile opens the session options modal.
-  Actual: No gear icon is accessible on mobile; session options are unreachable.
+  Fix: Ensure the upload drawer has a higher z-index than the working indicator, OR ensure
+  the working animation is hidden/suppressed while the upload drawer is open.
 
 affected_area: frontend
 fix_cycles: 0
 
 ## Reproduction
 
-1. Open Codeman on a mobile device (or DevTools mobile emulation).
-2. The top session tabs bar exists and each active tab shows a tiny ⚙ gear icon
-   (`.tab-gear`, visible on `.session-tab.active`), but it is very small (12×12px,
-   opacity 0.6) and hard to tap reliably.
-3. Open the session drawer via the hamburger/sessions button (right sidebar).
-4. Each session row shows: status dot | name | mode badge | × close button.
-   There is NO gear icon in the drawer rows — `_renderSessionRow()` only appends
-   `dot`, `name`, `badge`, and `closeBtn` elements.
-5. Result: session options (Respawn, Context/Safe Mode, Ralph, etc.) are only
-   reachable on mobile via the tiny active-tab gear — there is no obvious,
-   consistently accessible path to `app.openSessionOptions()` from the drawer.
+### Problem 1 — Upload options floating popup instead of bottom drawer
+1. Open the app on a mobile device (or use browser DevTools mobile emulation).
+2. Navigate to any active session so the compose panel is visible.
+3. Tap the **+** (plus) button in the compose input panel.
+4. Observe: Three option buttons ("Take Photo", "Photo Library", "Attach File") and a
+   "Cancel" button appear as a **static panel anchored at `bottom: 0`** — but the sheet is
+   revealed by toggling `display:none` / `display:''` (`_openActionSheet` / `_closeActionSheet`)
+   with no slide-in animation or overlay backdrop that fades in. Visually it looks like a
+   floating menu hovering above the compose bar rather than a proper animated bottom drawer.
 
-Note on the bottom toolbar gear: `btn-settings-mobile` (line 413 index.html) opens
-`app.openAppSettings()` (global app settings), NOT session-specific options. The
-`btn-case-settings-mobile` opens project/case settings. Neither calls
-`openSessionOptions`. There is no broken gear in the bottom toolbar — the bottom
-toolbar gear icons are working but serve different purposes.
+### Problem 2 — Working/loading indicator overlaps the action sheet
+1. Start a session and send a message so Claude begins responding (typing indicator appears:
+   the three bouncing blue dots in `#tvTypingIndicator`).
+2. While Claude is still thinking, tap the **+** button.
+3. Observe: The `#tvTypingIndicator` overlay is `position: absolute` inside `.main`
+   (which is `position: relative`), with **`z-index: 53`** (desktop) or effectively the same
+   on mobile. The `.compose-action-sheet` has **`z-index: 55`** and the backdrop
+   **`z-index: 54`** — so the action sheet *should* be above the indicator numerically.
+   However, the typing indicator is positioned by `bottom` offset above the compose panel,
+   meaning it can visually sit directly in front of the sheet's top portion when the sheet
+   slides up, and on some viewport sizes the bouncing dots appear **on top of** the first
+   item in the action sheet because `z-index` stacking only works correctly within the same
+   stacking context. `.main` uses `position: relative` (creates a stacking context), and the
+   indicator's `z-index: 53` competes directly with the *fixed*-positioned sheet at `z-index: 55`
+   — but fixed elements establish their own stacking context relative to the viewport, so the
+   final paint order depends on the browser's compositing of the fixed sheet vs. the absolute
+   indicator inside `.main`. In practice the dots remain visible over the sheet on some devices.
 
 ## Root Cause / Spec
 
-**Root cause**: `SessionDrawer._renderSessionRow()` (app.js line 16449) builds the
-DOM row with four elements — status dot, session name, mode badge, close button —
-but never adds a gear/options button. `app.openSessionOptions()` exists and works
-correctly; it simply has no call site in the drawer.
+### Root Cause Summary
 
-On the session tabs (desktop left sidebar), the gear is rendered via the tab HTML
-template at line 6080 as `.tab-gear`, wired to `app.openSessionOptions(id)`. This
-works fine on desktop (hover reveals it). On mobile, the active tab's `.tab-gear` is
-displayed at 12×12px with 0.6 opacity (mobile.css lines 531–541) — too small to be
-a reliable tap target.
+**Problem 1:** `_openActionSheet()` / `_closeActionSheet()` in `app.js` (lines 16901–16913)
+simply toggle `display:none` on `#composeActionSheet` and `#composeActionBackdrop`. The
+action sheet is already visually styled as a bottom sheet (see `mobile.css` lines 2722–2735:
+`position:fixed; left:0; right:0; bottom:0`), but it has **no slide-in animation** and no
+CSS class-toggling pattern — it just blinks into existence. It is NOT wired up with the same
+`open` class + CSS transition pattern used by `SessionDrawer`.
 
-**Fix spec**:
+**Problem 2:** `#tvTypingIndicator` (`tv-typing-overlay`) is `position: absolute` inside
+`.main` (`position: relative`), with `z-index: 53` (`styles.css` line 9575), overridden on
+mobile by a `!important` `bottom` recalculation (`mobile.css` line 83-85) but **no
+z-index override**. The action-sheet backdrop is `z-index: 54` and the sheet itself is
+`z-index: 55` (`mobile.css` lines 2719, 2727). In theory 55 > 53 and the sheet wins, but
+because `#tvTypingIndicator` is inside a `position: relative` stacking context (`.main`) and
+the sheet is `position: fixed` (viewport stacking context), the compositing order is
+browser-defined. Some browsers and iOS WebView will paint the absolute-positioned child of
+`.main` on top of the fixed element because `.main` itself can be composited to its own
+layer. The simplest robust fix is to either raise `z-index` of the sheet to a value above
+the session-drawer range, or (better) hide the typing indicator while the sheet is open.
 
-1. **Add a gear button to each drawer session row** in `_renderSessionRow()`:
-   - Create a `<button class="drawer-session-gear">` element with a ⚙ character
-     (or matching SVG from elsewhere in the UI).
-   - `stopPropagation()` on click to prevent row activation.
-   - On click: call `app.openSessionOptions(s.id)` then `SessionDrawer.close()`.
-   - Append it between the mode badge and the close button.
+---
 
-2. **Add CSS** for `.drawer-session-gear` in `styles.css` alongside the existing
-   `.drawer-session-close` rules (around line 1189). Style it identically to
-   `.drawer-session-close` but with a blue/neutral hover (not red). Hide by default
-   (`opacity: 0`) and reveal on `.drawer-session-row:hover` (matching the pattern for
-   `.drawer-session-close`). On mobile (touch) devices, always show it (`opacity: 1`)
-   so there is a reliable tap target.
+### Implementation Spec
 
-3. **No addKeyboardTapFix needed** for the drawer: the drawer is a separate overlay
-   (`#sessionDrawer`) that isn't part of the keyboard-open tap-suppression containers
-   (`.toolbar`, `.welcome-overlay`, `#mobileInputPanel`). The drawer is not shown
-   while the keyboard is open in normal flows, so the existing keyboard tap fix does
-   not need to be extended.
+#### File inventory
 
-4. **Bump version strings** in `index.html` for `app.js` and `styles.css` per the
-   deployment rules (CLAUDE.md).
+| File | Purpose |
+|------|---------|
+| `src/web/public/index.html` | HTML for `#composeActionSheet`, `#composeActionBackdrop`, `#tvTypingIndicator` |
+| `src/web/public/mobile.css` | CSS for `.compose-action-sheet`, `.compose-action-backdrop`, `.tv-typing-overlay` |
+| `src/web/public/app.js` | `InputPanel._openActionSheet()` / `_closeActionSheet()`, `TranscriptView.setWorking()` |
 
-No backend changes needed.
+---
+
+#### Change 1 — Convert action sheet to animated bottom drawer (CSS)
+
+**File:** `src/web/public/mobile.css`, lines 2715–2758
+
+Replace the static `display:none` visibility model with a CSS class-toggle animation,
+matching the `sheet-up` pattern already used by `#newPickerModal` (mobile.css line 2817–2822).
+
+Current `.compose-action-backdrop` (line 2716): uses `display` toggle via JS.
+Current `.compose-action-sheet` (line 2722): no transition, no animation.
+
+New approach — use `opacity`/`transform` transitions on `.compose-action-backdrop` and
+`.compose-action-sheet`, driven by an `.open` class (mirrors SessionDrawer pattern):
+
+```css
+/* Replace current "Plus action sheet" block */
+.compose-action-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10002;          /* above everything including session drawer (9000) */
+  background: rgba(0,0,0,0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.compose-action-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.compose-action-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10003;          /* above backdrop */
+  background: #1a1a2e;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  padding: 8px 16px calc(16px + var(--safe-area-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transform: translateY(100%);
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.compose-action-sheet.open {
+  transform: translateY(0);
+}
+```
+
+Remove `style="display:none;"` from the HTML (both `#composeActionSheet` and
+`#composeActionBackdrop` in `index.html` lines 1970 and 1980), since visibility is now
+controlled by the `.open` class.
+
+The z-index values `10002` / `10003` are safely above `session-drawer` (9000) and the
+header hamburger button (1150), which is currently the highest non-modal z-index in the app.
+
+---
+
+#### Change 2 — Update `_openActionSheet` / `_closeActionSheet` in app.js (JS)
+
+**File:** `src/web/public/app.js`, lines 16901–16913
+
+Replace `display` toggling with class toggling, and suppress the typing indicator while open:
+
+```js
+_openActionSheet() {
+  const sheet = document.getElementById('composeActionSheet');
+  const backdrop = document.getElementById('composeActionBackdrop');
+  if (sheet) sheet.classList.add('open');
+  if (backdrop) backdrop.classList.add('open');
+  // Suppress typing indicator while drawer is open — avoids z-index compositing conflict
+  const indicator = document.getElementById('tvTypingIndicator');
+  if (indicator) indicator.style.display = 'none';
+},
+
+_closeActionSheet() {
+  const sheet = document.getElementById('composeActionSheet');
+  const backdrop = document.getElementById('composeActionBackdrop');
+  if (sheet) sheet.classList.remove('open');
+  if (backdrop) backdrop.classList.remove('open');
+  // Restore typing indicator if session is still working
+  if (typeof TranscriptView !== 'undefined') {
+    // Re-evaluate: if session is busy, setWorking(true) will re-show it
+    const sessionWorking = typeof app !== 'undefined' && app.activeSessionId
+      ? app.sessions?.get(app.activeSessionId)?.status === 'busy'
+      : false;
+    if (sessionWorking) TranscriptView.setWorking(true);
+  }
+},
+```
+
+---
+
+#### Change 3 — Remove `display:none` initial styles from HTML
+
+**File:** `src/web/public/index.html`
+
+- Line 1970: Remove `style="display:none;"` from `<div class="compose-action-sheet" id="composeActionSheet" ...>`
+- Line 1980: Remove `style="display:none;"` from `<div class="compose-action-backdrop" id="composeActionBackdrop" ...>`
+
+The elements will now be invisible by default because `.compose-action-sheet` starts with
+`transform: translateY(100%)` and `.compose-action-backdrop` starts with `opacity: 0;
+pointer-events: none`.
+
+---
+
+#### Summary of z-index changes
+
+| Element | Old z-index | New z-index | Location |
+|---------|------------|------------|----------|
+| `.tv-typing-overlay` | 53 | 53 (unchanged) | `styles.css:9575` |
+| `.compose-action-backdrop` | 54 | 10002 | `mobile.css:2719` |
+| `.compose-action-sheet` | 55 | 10003 | `mobile.css:2727` |
+| `.session-drawer-overlay` | 8999 | unchanged | `mobile.css:2407` |
+| `.session-drawer` | 9000 | unchanged | `mobile.css:2421` |
+
+The typing indicator suppression in `_openActionSheet` is the belt-and-suspenders fix
+— it makes the overlap impossible regardless of stacking context behaviour across browsers.
 
 ## Fix / Implementation Notes
 
-**app.js** (`_renderSessionRow`, line ~16473):
-- Added a `<button class="drawer-session-gear">` element with ⚙ text content and aria-label "Session options".
-- Click handler calls `e.stopPropagation()`, then `SessionDrawer.close()`, then `app.openSessionOptions(s.id)`.
-- The drawer is closed before opening the options modal so the modal appears on top cleanly.
-- Gear button is inserted between the mode badge and the close button in the row's DOM order.
+### Changes made
 
-**styles.css** (before `.drawer-session-close`, ~line 1188):
-- Added `.drawer-session-gear` block styled identically to `.drawer-session-close` (24×24px, opacity 0, same transitions).
-- Hover state uses blue tones (`rgba(59,130,246,0.12)` bg, `#60a5fa` text) to differentiate from the red close hover.
-- `.drawer-session-row:hover .drawer-session-gear` reveals the button on desktop hover (mirrors the close button pattern).
-- `@media (hover: none)` rule sets `opacity: 1` always on touch devices — ensures a reliable tap target on mobile.
+**mobile.css** (`src/web/public/mobile.css`, lines 2715–2735):
+- Replaced the static "Plus action sheet" CSS block with an animated bottom drawer pattern.
+- `.compose-action-backdrop`: added `opacity: 0; pointer-events: none; transition: opacity 0.22s ease;` for fade-in, raised z-index from 54 → 10002.
+- `.compose-action-backdrop.open`: sets `opacity: 1; pointer-events: auto`.
+- `.compose-action-sheet`: added `transform: translateY(100%); transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);` for slide-up, raised z-index from 55 → 10003. Removed the implicit `display:none` requirement since visibility is now CSS-driven.
+- `.compose-action-sheet.open`: sets `transform: translateY(0)`.
+- Preserved all `.compose-action-item` and `.compose-action-cancel` button styles unchanged.
 
-**index.html** version bumps:
-- `styles.css?v=0.1690` → `v=0.1691`
-- `app.js?v=0.4.106` → `v=0.4.107`
+**app.js** (`src/web/public/app.js`, around line 16901):
+- `_openActionSheet()`: replaced `sheet.style.display = ''` / `backdrop.style.display = ''` with `classList.add('open')` on both elements. Added suppression of `#tvTypingIndicator` via `indicator.style.display = 'none'` to prevent z-index compositing overlap on iOS WebView.
+- `_closeActionSheet()`: replaced `style.display = 'none'` with `classList.remove('open')`. Added logic to restore the typing indicator if the active session is still busy (`status === 'busy'`).
+
+**index.html** (`src/web/public/index.html`):
+- Removed `style="display:none;"` from `#composeActionSheet` (line 1970). Visibility is now controlled by `transform: translateY(100%)` in CSS.
+- Removed `style="display:none;"` from `#composeActionBackdrop` (line 1980). Visibility is now controlled by `opacity: 0; pointer-events: none` in CSS.
+- Bumped `mobile.css?v=0.1674` → `mobile.css?v=0.1675`.
+- Bumped `app.js?v=0.4.109` → `app.js?v=0.4.110`.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Correctness**: The gear button is added exactly where the spec calls for it — in `_renderSessionRow()`, between the mode badge and close button. DOM order matches spec (dot → name → badge → gearBtn → closeBtn). Click handler correctly calls `e.stopPropagation()` then `SessionDrawer.close()` then `app.openSessionOptions(s.id)` — close-before-open order is right to avoid z-index stacking issues.
+All three files (mobile.css, app.js, index.html) match the implementation spec exactly.
 
-**CSS**: `.drawer-session-gear` mirrors `.drawer-session-close` (24×24px, opacity 0 default, same transition properties). Blue hover tones correctly differentiate from the red close hover. `.drawer-session-row:hover .drawer-session-gear` mirrors the existing close button reveal pattern. `@media (hover: none)` correctly ensures always-visible on touch devices. All rules placed logically immediately before the close button block.
+**CSS (mobile.css):** Backdrop and sheet correctly converted to opacity/transform animation model with `.open` class toggle. z-index raised to 10002/10003 (above session-drawer at 9000). `.compose-action-item` and `.compose-action-cancel` styles preserved unchanged.
 
-**Edge cases**:
-- `openSessionOptions` guards against a missing session (`if (!session) return`) — safe even if the session was removed between render and tap.
-- `stopPropagation` prevents the row's own click handler from also firing `selectSession` + `close`, which would race with the gear's own `close` call.
-- Worktree session rows also go through `_renderSessionRow()` (confirmed at lines 16667 and 16672), so the gear is consistently present for all session types, including worktree sub-sessions.
+**HTML (index.html):** `style="display:none;"` removed from both elements — correct, since visibility is now CSS-driven via `transform: translateY(100%)` / `opacity: 0`. Version bumps applied to both asset URLs.
 
-**Version bumps**: Both `styles.css?v=0.1691` and `app.js?v=0.4.107` are correctly incremented per CLAUDE.md rules.
+**JS (app.js):** `_openActionSheet` and `_closeActionSheet` correctly switch from `display` toggling to `classList` toggling. Typing indicator suppression on open is straightforward and correct.
 
-**No issues found.** Implementation is minimal, additive, and consistent with existing patterns.
+One intentional deviation from the implementation spec: `_closeActionSheet` restores the indicator via `indicator.style.display = ''` directly, rather than calling `TranscriptView.setWorking(true)`. This is explicitly noted in Decisions & Context and is the safer approach — it avoids re-triggering the 300ms debounce and its side effects.
+
+**Edge case assessed:** If `setWorking(true)` fires its 300ms debounce while the drawer is still open, it will call `overlay.style.display = 'flex'`, potentially fighting with the `display = 'none'` set by `_openActionSheet`. However, this is an extremely tight race (drawer opened within 300ms of a session going busy) and the z-index elevation to 10003 ensures the sheet still wins visually regardless. Not a blocking concern.
+
+No security issues, no unused variables, no implicit any (plain JS). The change is minimal and consistent with existing patterns in the codebase.
 
 ## QA Results
-<!-- filled by QA subagent -->
 
-### QA Run — 2026-03-14 — PASS
+### Run: 2026-03-15
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `tsc --noEmit` | PASS | Zero errors |
-| `npm run lint` | PASS | Zero errors |
-| Page loads (HTTP 200) | PASS | `http://localhost:3099/` returns 200 |
-| `styles.css?v=0.1691` in page source | PASS | Version string confirmed |
-| `app.js?v=0.4.107` in page source | PASS | Version string confirmed |
-| `.drawer-session-gear` CSS rule in browser | PASS | Rule found: `width:24px; height:24px; ...` |
-| `SessionDrawer._renderSessionRow` method | PASS | Method exists on `SessionDrawer` object |
+| tsc --noEmit | PASS | Zero TypeScript errors |
+| npm run lint (eslint) | PASS | Zero ESLint errors |
+| HTTP 200 | PASS | Dev server on port 3099 responded correctly |
+| mobile.css?v=0.1675 in page source | PASS | Version bump confirmed |
+| app.js?v=0.4.110 in page source | PASS | Version bump confirmed |
+| .compose-action-sheet exists, no display:none | PASS | Element visible via CSS transform control |
+| .compose-action-backdrop exists, no display:none | PASS | Element visible via CSS opacity control |
+| CSS rule .compose-action-sheet has translateY(100%) | PASS | Verified via CSSOM with mobile viewport (media query applies at ≤1023px) |
 
-All checks passed. Status set to `done`.
+**Overall: ALL PASS**
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
 
-2026-03-14: Analysis confirmed the bottom toolbar gears (btn-settings-mobile, btn-case-settings-mobile)
-are NOT broken — they open app settings and project settings respectively, as intended.
-The sole missing piece is a gear button inside SessionDrawer._renderSessionRow(). Fix is
-purely additive frontend work: new button element + CSS rules.
-
-2026-03-14: Implemented gear button. Used `@media (hover: none)` to keep gear always visible on touch
-devices (mobile) while hiding it at opacity 0 on desktop hover-capable devices (revealed on row hover,
-matching the existing close button pattern). Drawer is closed before the options modal opens to avoid
-z-index stacking issues.
+- Used z-index 10002/10003 for backdrop/sheet (well above session-drawer at 9000) to guarantee the sheet renders above all other UI layers on all browsers/WebViews.
+- Belt-and-suspenders: also hide `#tvTypingIndicator` on open to avoid iOS WebView compositing ambiguity between `position:absolute` in a stacking context and `position:fixed` viewport elements.
+- The `_closeActionSheet` restore logic checks `app.sessions.get(activeSessionId).status === 'busy'` directly rather than calling `TranscriptView.setWorking(true)`, to keep the change minimal (no side effects from re-triggering setWorking animations).
