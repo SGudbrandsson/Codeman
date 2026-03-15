@@ -17097,13 +17097,37 @@ const SessionDrawer = {
   _el: null,
   _overlay: null,
   _list: null,
+  _searchQuery: '',
+  _searchInputListener: null,
+  _swipeStartY: 0,
+  _swipeStartTime: 0,
+  _swiping: false,
   _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
   _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
   _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
   open() {
     this._getOverlay()?.classList.add('open');
     const drawer = this._getEl();
-    if (drawer) { drawer.classList.add('open'); this._render(); }
+    if (drawer) {
+      drawer.classList.add('open');
+      this._searchQuery = '';
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      if (searchEl) {
+        searchEl.value = '';
+        if (this._searchInputListener) {
+          searchEl.removeEventListener('input', this._searchInputListener);
+        }
+        this._searchInputListener = (e) => this._filterSessions(e.target.value);
+        searchEl.addEventListener('input', this._searchInputListener);
+        // Focus after animation completes; iOS needs ~350ms delay
+        setTimeout(() => { try { searchEl.focus(); } catch(e) {} }, 350);
+      }
+      this._render();
+      // Attach swipe-down-to-dismiss on touch devices
+      if (MobileDetection.isTouchDevice()) {
+        this._attachSwipeHandlers(drawer);
+      }
+    }
     // Add pin toggle button on desktop (≥1024px)
     if (MobileDetection.getDeviceType() !== 'mobile' && window.innerWidth >= 1024) {
       const titleEl = document.querySelector('.session-drawer-title');
@@ -17126,10 +17150,66 @@ const SessionDrawer = {
   },
   close() {
     this._getOverlay()?.classList.remove('open');
-    this._getEl()?.classList.remove('open');
+    const drawer = this._getEl();
+    if (drawer) {
+      drawer.classList.remove('open');
+      drawer.style.transform = '';
+      drawer.style.transition = '';
+      this._detachSwipeHandlers(drawer);
+    }
+    this._searchQuery = '';
+    const searchEl = document.getElementById('sessionDrawerSearch');
+    if (searchEl && this._searchInputListener) {
+      searchEl.removeEventListener('input', this._searchInputListener);
+      this._searchInputListener = null;
+    }
   },
   toggle() {
     if (this._getEl()?.classList.contains('open')) this.close(); else this.open();
+  },
+  _filterSessions(query) {
+    this._searchQuery = (query || '').trim().toLowerCase();
+    this._render();
+  },
+  _attachSwipeHandlers(drawer) {
+    this._detachSwipeHandlers(drawer); // clean up any prior handlers
+    this._onTouchStart = (e) => {
+      this._swipeStartY = e.touches[0].clientY;
+      this._swipeStartTime = Date.now();
+      this._swiping = false;
+    };
+    this._onTouchMove = (e) => {
+      const list = this._getList();
+      const deltaY = e.touches[0].clientY - this._swipeStartY;
+      if (deltaY > 10 && (!list || list.scrollTop === 0)) {
+        this._swiping = true;
+        drawer.style.transition = 'none';
+        drawer.style.transform = 'translateY(' + deltaY + 'px)';
+        e.preventDefault();
+      }
+    };
+    this._onTouchEnd = (e) => {
+      if (!this._swiping) return;
+      this._swiping = false;
+      const deltaY = e.changedTouches[0].clientY - this._swipeStartY;
+      const elapsed = Date.now() - this._swipeStartTime;
+      const velocity = elapsed > 0 ? deltaY / elapsed : 0;
+      if (deltaY > 120 || velocity > 0.4) {
+        this.close();
+      } else {
+        // Spring back
+        drawer.style.transition = 'transform 0.32s cubic-bezier(0.32, 0.72, 0, 1)';
+        drawer.style.transform = 'translateY(0)';
+      }
+    };
+    drawer.addEventListener('touchstart', this._onTouchStart, { passive: true });
+    drawer.addEventListener('touchmove', this._onTouchMove, { passive: false });
+    drawer.addEventListener('touchend', this._onTouchEnd, { passive: true });
+  },
+  _detachSwipeHandlers(drawer) {
+    if (this._onTouchStart) { drawer.removeEventListener('touchstart', this._onTouchStart); this._onTouchStart = null; }
+    if (this._onTouchMove) { drawer.removeEventListener('touchmove', this._onTouchMove); this._onTouchMove = null; }
+    if (this._onTouchEnd) { drawer.removeEventListener('touchend', this._onTouchEnd); this._onTouchEnd = null; }
   },
   _esc(str) {
     return String(str ?? '');
@@ -17267,9 +17347,16 @@ const SessionDrawer = {
       return byPath;
     };
 
+    const searchQ = this._searchQuery;
     for (const id of (app.sessionOrder || [])) {
       const s = app.sessions.get(id);
       if (!s) continue;
+      // Filter by search query — skip non-matching sessions
+      if (searchQ) {
+        const name = (app.getSessionName(s) || '').toLowerCase();
+        const dir  = (s.workingDir || '').toLowerCase();
+        if (!name.includes(searchQ) && !dir.includes(searchQ)) continue;
+      }
       const caseObj = resolveCase(s);
       const groupKey = caseObj ? caseObj.name : '__ungrouped__';
       if (!groups.has(groupKey)) {
@@ -17286,6 +17373,11 @@ const SessionDrawer = {
 
     for (const [groupKey, group] of groups) {
       const projectName = group.caseObj?.name || groupKey;
+      // When filtering, skip empty groups (no sessions and no worktrees)
+      if (searchQ) {
+        const hasWorktreeSessions = [...group.worktrees.values()].some(arr => arr.length > 0);
+        if (group.sessions.length === 0 && !hasWorktreeSessions) continue;
+      }
 
       const groupEl = document.createElement('div');
       groupEl.className = 'drawer-project-group';
