@@ -163,7 +163,10 @@ HTMLCanvasElement.prototype.getContext = function(type, ...args) {
 
 window._copyCode = function (btn) {
   const pre = btn.nextElementSibling;
-  const text = pre ? (pre.textContent || '') : '';
+  const lineSpans = pre ? pre.querySelectorAll('.tv-code-line') : [];
+  const text = lineSpans.length > 0
+    ? Array.from(lineSpans).map(function (s) { return s.textContent; }).join('\n')
+    : (pre ? pre.textContent || '' : '');
   navigator.clipboard.writeText(text).then(() => {
     btn.textContent = '✓ Copied';
     btn.classList.add('copied');
@@ -216,8 +219,8 @@ function renderMarkdown(text) {
         codeLines.push(lines[i]);
         i++;
       }
-      const code = esc(codeLines.join('\n'));
-      out.push('<div class="tv-code-block"><button class="tv-code-copy" onclick="window._copyCode(this)" title="Copy code">Copy</button><pre><code class="tv-code' + (lang ? ' language-' + esc(lang) : '') + '">' + code + '</code></pre></div>');
+      const numberedLines = codeLines.map(l => '<span class="tv-code-line">' + esc(l) + '</span>').join('');
+      out.push('<div class="tv-code-block"><button class="tv-code-copy" onclick="window._copyCode(this)" title="Copy code">Copy</button><pre><code class="tv-code' + (lang ? ' language-' + esc(lang) : '') + '">' + numberedLines + '</code></pre></div>');
       i++;
       continue;
     }
@@ -2552,6 +2555,18 @@ const TranscriptView = {
   },
 
   _wrapPreWithCopy(pre) {
+    // Rebuild pre content with line-number spans using safe DOM methods
+    const rawText = pre.textContent || '';
+    const rawLines = rawText.split('\n');
+    const codeEl = pre.querySelector('code') || pre;
+    // Clear existing content
+    while (codeEl.firstChild) codeEl.removeChild(codeEl.firstChild);
+    rawLines.forEach((lineText, idx) => {
+      const span = document.createElement('span');
+      span.className = 'tv-code-line';
+      span.textContent = lineText;
+      codeEl.appendChild(span);
+    });
     const wrap = document.createElement('div');
     wrap.className = 'tv-code-block';
     const btn = document.createElement('button');
@@ -2560,7 +2575,7 @@ const TranscriptView = {
     btn.textContent = 'Copy';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(pre.textContent || '').then(() => {
+      navigator.clipboard.writeText(rawText).then(() => {
         btn.textContent = '✓ Copied';
         btn.classList.add('copied');
         setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
