@@ -3073,7 +3073,7 @@ class CodemanApp {
           // but skip refocus for the plus button — it opens the action sheet / file
           // picker and re-focusing the terminal would dismiss it immediately.
           const isPlusBtn = btn.id === 'composePlusBtn';
-          if (!isPlusBtn && typeof app !== 'undefined' && app.terminal) {
+          if (!isPlusBtn && KeyboardHandler.keyboardVisible && typeof app !== 'undefined' && app.terminal) {
             app.terminal.focus();
           }
         }, { passive: false });
@@ -16883,9 +16883,6 @@ const InputPanel = {
     this._images = [];
     this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
     this._autoGrow(ta);
-    // Desktop: keep panel open (always-visible); mobile: close after send
-    const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
-    if (!isDesktop) this.close();
   },
 
   clear() {
