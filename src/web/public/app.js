@@ -2108,11 +2108,14 @@ const TranscriptView = {
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
 
-    // If the fallback timer already fired and the user has sent a message, save their
-    // optimistic bubble so we can restore it after load() runs. We cannot skip load()
-    // entirely — it must run to attach the frontend to the new conversation's transcript
-    // file (uuid2.jsonl) and initialize _sseBuffer for incoming blocks.
-    const savedOptimistic = (this._fallbackFired && this._container)
+    // Save any optimistic bubble unconditionally. clearOnly() already wiped the container,
+    // so the only way an optimistic element exists when clear() runs is if the user typed
+    // into the new session after the CTA appeared. Always preserve it through the load()
+    // cycle so the user's message stays visible while Claude is processing.
+    // NOTE: _fallbackFired guard was removed — the fallback now calls this.clear() directly,
+    // which resets the flag before the real transcript:clear SSE arrives, making the
+    // conditional guard always false at the moment it matters.
+    const savedOptimistic = this._container
       ? this._container.querySelector('[data-optimistic="true"]')
       : null;
     this._fallbackFired = false;
