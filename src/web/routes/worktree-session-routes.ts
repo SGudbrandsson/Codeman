@@ -2,12 +2,13 @@
  * @fileoverview Session-scoped worktree routes.
  *
  * GET    /api/sessions/:id/worktree/branches  — list branches
+ * POST   /api/sessions/cleanup-orphans        — detect and remove orphaned worktrees
  * POST   /api/sessions/:id/worktree           — create worktree + new session
  * POST   /api/sessions/:id/worktree/merge     — merge branch into session's dir
  * DELETE /api/sessions/:id/worktree           — remove worktree from disk
  */
 
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyBaseLogger } from 'fastify';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -15,7 +16,7 @@ import { homedir } from 'node:os';
 import { Session } from '../../session.js';
 import { SseEvent } from '../sse-events.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
-import { CreateWorktreeSchema, RemoveWorktreeSchema, MergeWorktreeSchema } from '../schemas.js';
+import { CreateWorktreeSchema, RemoveWorktreeSchema, MergeWorktreeSchema, CleanupOrphansSchema } from '../schemas.js';
 import {
   findGitRoot,
   isGitWorktreeDir,
@@ -26,11 +27,17 @@ import {
   removeWorktree,
   isWorktreeDirty,
   mergeBranch,
+  checkBranchExists,
+  isBranchMerged,
+  deleteBranch,
+  listGitWorktrees,
+  pruneWorktrees,
 } from '../../utils/git-utils.js';
 import { CASES_DIR } from '../route-helpers.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
+import { getWorktreeStore } from '../../worktree-store.js';
 
 // Validate branch name: alphanumeric, dots, hyphens, forward slashes only
 const BRANCH_PATTERN = /^[a-zA-Z0-9._\-/]+$/;
@@ -56,6 +63,122 @@ async function resolveCasePath(name: string): Promise<string | null> {
   return linkedPath;
 }
 
+/**
+ * Check for branch collision before addWorktree().
+ * Returns { collision: false } if safe to proceed.
+ * Returns { collision: true, response } with a structured error if blocked.
+ * If the branch exists but is merged, auto-cleans it and returns { collision: false }.
+ */
+async function handleBranchCollision(
+  gitRoot: string,
+  branch: string,
+  worktreePath: string,
+  log: FastifyBaseLogger
+): Promise<{ collision: true; response: object } | { collision: false }> {
+  const exists = await checkBranchExists(gitRoot, branch);
+  if (!exists) return { collision: false };
+
+  const merged = await isBranchMerged(gitRoot, branch);
+  if (merged) {
+    log.info({ gitRoot, branch, worktreePath }, '[worktree-collision] branch is merged — auto-cleaning stale branch');
+    try {
+      await removeWorktree(gitRoot, worktreePath, true);
+    } catch {
+      // Ignore errors if directory doesn't exist or is already gone
+    }
+    try {
+      await deleteBranch(gitRoot, branch, false);
+    } catch (err) {
+      log.warn({ err, branch }, '[worktree-collision] failed to delete merged branch, continuing');
+    }
+    return { collision: false };
+  }
+
+  // Branch exists and is NOT merged — block creation
+  log.info({ gitRoot, branch }, '[worktree-collision] branch exists unmerged — blocking creation');
+  return {
+    collision: true,
+    response: {
+      success: false,
+      errorCode: ApiErrorCode.ALREADY_EXISTS,
+      error: `BRANCH_EXISTS_UNMERGED: branch ${branch} already exists and has unmerged commits`,
+      branch,
+    },
+  };
+}
+
+export interface OrphanResult {
+  removed: Array<{ path: string; branch: string; reason: string }>;
+  warnings: Array<{ path: string; branch: string | null; reason: string }>;
+  errors: Array<{ path: string; error: string }>;
+}
+
+/**
+ * Scan git worktrees for orphans (no active session and no dormant store entry).
+ * Merged orphans are removed; unmerged orphans generate warnings.
+ */
+export async function runOrphanCleanup(
+  gitRoot: string,
+  activeSessions: ReadonlyMap<string, Session>,
+  log: {
+    info: (msg: string, ctx?: object) => void;
+    warn: (msg: string, ctx?: object) => void;
+    error: (msg: string, ctx?: object) => void;
+  }
+): Promise<OrphanResult> {
+  const result: OrphanResult = { removed: [], warnings: [], errors: [] };
+
+  let worktrees;
+  try {
+    worktrees = await listGitWorktrees(gitRoot);
+  } catch (err) {
+    result.errors.push({ path: gitRoot, error: `Failed to list worktrees: ${String(err)}` });
+    return result;
+  }
+
+  const dormantStore = getWorktreeStore();
+  const dormantPaths = new Set(dormantStore.getAll().map((w) => w.path));
+  const activePaths = new Set([...activeSessions.values()].map((s) => s.worktreePath).filter(Boolean) as string[]);
+
+  for (const wt of worktrees) {
+    if (wt.isMain) continue;
+
+    if (activePaths.has(wt.path)) continue; // tracked by active session
+    if (dormantPaths.has(wt.path)) continue; // tracked by dormant store
+
+    // Orphan found
+    if (wt.branch == null) {
+      result.warnings.push({ path: wt.path, branch: null, reason: 'orphan worktree with detached HEAD (no branch)' });
+      continue;
+    }
+
+    let merged = false;
+    try {
+      merged = await isBranchMerged(gitRoot, wt.branch);
+    } catch (err) {
+      result.errors.push({ path: wt.path, error: `Failed to check merge status: ${String(err)}` });
+      continue;
+    }
+
+    if (merged) {
+      try {
+        await removeWorktree(gitRoot, wt.path, true);
+        await deleteBranch(gitRoot, wt.branch, false);
+        await pruneWorktrees(gitRoot);
+        log.info(`[orphan-cleanup] removed merged orphan: ${wt.path} (${wt.branch})`);
+        result.removed.push({ path: wt.path, branch: wt.branch, reason: 'orphan worktree with merged branch' });
+      } catch (err) {
+        result.errors.push({ path: wt.path, error: `Failed to remove orphan: ${String(err)}` });
+      }
+    } else {
+      log.warn(`[orphan-cleanup] unmerged orphan found: ${wt.path} (${wt.branch})`);
+      result.warnings.push({ path: wt.path, branch: wt.branch, reason: 'orphan worktree with unmerged branch' });
+    }
+  }
+
+  return result;
+}
+
 export function registerWorktreeSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort
@@ -74,6 +197,24 @@ export function registerWorktreeSessionRoutes(
       return { success: true, branches, current, isWorktree: isGitWorktreeDir(session.workingDir) };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `git error: ${String(err)}`);
+    }
+  });
+
+  // POST /api/sessions/cleanup-orphans — MUST be before /:id routes
+  app.post('/api/sessions/cleanup-orphans', async (req) => {
+    const parsed = CleanupOrphansSchema.safeParse(req.body);
+    if (!parsed.success)
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body: repoDir required');
+
+    const { repoDir } = parsed.data;
+    const gitRoot = findGitRoot(repoDir);
+    if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
+
+    try {
+      const result = await runOrphanCleanup(gitRoot, ctx.sessions, req.log);
+      return { success: true, ...result };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Orphan cleanup failed: ${String(err)}`);
     }
   });
 
@@ -98,6 +239,19 @@ export function registerWorktreeSessionRoutes(
     const projectName = gitRoot.split('/').pop() ?? 'project';
     const safeBranch = branch.replace(/\//g, '-');
     const worktreePath = join(dirname(gitRoot), `${projectName}-${safeBranch}`);
+
+    // Fire-and-forget orphan cleanup pre-flight
+    runOrphanCleanup(gitRoot, ctx.sessions, req.log).catch(() => {});
+
+    // Collision detection (only for new branches)
+    if (isNew) {
+      try {
+        const collision = await handleBranchCollision(gitRoot, branch, worktreePath, req.log);
+        if (collision.collision) return collision.response;
+      } catch (err) {
+        req.log.warn({ err, branch }, '[worktree] collision check failed, proceeding');
+      }
+    }
 
     try {
       await addWorktree(gitRoot, worktreePath, branch, isNew);
@@ -188,10 +342,12 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
 
+    const { branch } = parsed.data;
+
     // Check if the worktree session for this branch has uncommitted changes — if so,
     // git merge will say "already up to date" and the user will be confused.
     const worktreeSession = [...ctx.sessions.values()].find(
-      (s) => s.worktreeOriginId === id && s.worktreeBranch === parsed.data.branch
+      (s) => s.worktreeOriginId === id && s.worktreeBranch === branch
     );
     if (worktreeSession?.worktreePath) {
       const dirty = await isWorktreeDirty(worktreeSession.worktreePath);
@@ -204,12 +360,56 @@ export function registerWorktreeSessionRoutes(
       }
     }
 
+    let output: string;
     try {
-      const output = await mergeBranch(session.workingDir, parsed.data.branch);
-      return { success: true, output };
+      output = await mergeBranch(session.workingDir, branch);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Merge failed: ${String(err)}`);
     }
+
+    // Post-merge auto-cleanup (fire-and-forget wrapped in try/catch)
+    const gitRoot = findGitRoot(session.workingDir);
+    const worktreePath = worktreeSession?.worktreePath;
+    (async () => {
+      try {
+        if (worktreeSession) {
+          req.log.info({ sessionId: worktreeSession.id }, '[worktree-merge-cleanup] cleaning up worktree session');
+          await ctx.cleanupSession(worktreeSession.id, true, 'merged');
+        }
+        if (gitRoot && worktreePath) {
+          try {
+            await removeWorktree(gitRoot, worktreePath, false);
+            req.log.info({ worktreePath }, '[worktree-merge-cleanup] removed worktree directory');
+          } catch {
+            // May already be gone — not an error
+          }
+        }
+        if (gitRoot) {
+          try {
+            await deleteBranch(gitRoot, branch, false);
+            req.log.info({ branch }, '[worktree-merge-cleanup] deleted branch');
+          } catch (err) {
+            req.log.warn(
+              { err, branch },
+              '[worktree-merge-cleanup] failed to delete branch (may be checked out elsewhere)'
+            );
+          }
+        }
+        // Remove from dormant store if present
+        const store = getWorktreeStore();
+        const dormant = store
+          .getAll()
+          .find((w) => w.branch === branch && (worktreePath ? w.path === worktreePath : true));
+        if (dormant) {
+          store.remove(dormant.id);
+          req.log.info({ dormantId: dormant.id, branch }, '[worktree-merge-cleanup] removed dormant store entry');
+        }
+      } catch (err) {
+        req.log.error({ err, branch }, '[worktree-merge-cleanup] unexpected error during post-merge cleanup');
+      }
+    })();
+
+    return { success: true, output, cleaned: !!(worktreeSession || gitRoot) };
   });
 
   // DELETE /api/sessions/:id/worktree
@@ -282,6 +482,20 @@ export function registerWorktreeSessionRoutes(
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
     const projectName = gitRoot.split('/').pop() ?? 'project';
     const worktreePath = join(dirname(gitRoot), `${projectName}-${branch.replace(/\//g, '-')}`);
+
+    // Fire-and-forget orphan cleanup pre-flight
+    runOrphanCleanup(gitRoot, ctx.sessions, req.log).catch(() => {});
+
+    // Collision detection (only for new branches)
+    if (isNew) {
+      try {
+        const collision = await handleBranchCollision(gitRoot, branch, worktreePath, req.log);
+        if (collision.collision) return collision.response;
+      } catch (err) {
+        req.log.warn({ err, branch }, '[worktree] collision check failed, proceeding');
+      }
+    }
+
     try {
       await addWorktree(gitRoot, worktreePath, branch, isNew);
     } catch (err) {

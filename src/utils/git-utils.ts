@@ -106,3 +106,62 @@ export async function gitClone(url: string, targetPath: string): Promise<void> {
   const execFileP = promisify(execFile);
   await execFileP('git', ['clone', '--', url, targetPath], { timeout: 120_000 });
 }
+
+export async function checkBranchExists(repoDir: string, branch: string): Promise<boolean> {
+  const output = await git(['branch', '--list', branch], repoDir);
+  return output.trim().length > 0;
+}
+
+export async function isBranchMerged(repoDir: string, branch: string, base = 'master'): Promise<boolean> {
+  try {
+    const output = await git(['branch', '--merged', base, '--list', branch], repoDir);
+    if (output.trim().length > 0) return true;
+  } catch {
+    // base branch not found — try 'main'
+    if (base === 'master') {
+      try {
+        const output = await git(['branch', '--merged', 'main', '--list', branch], repoDir);
+        if (output.trim().length > 0) return true;
+      } catch {
+        // neither master nor main — be conservative
+      }
+    }
+  }
+  return false;
+}
+
+export async function deleteBranch(repoDir: string, branch: string, force = false): Promise<void> {
+  await git(['branch', force ? '-D' : '-d', branch], repoDir);
+}
+
+export interface GitWorktreeEntry {
+  path: string;
+  branch: string | null;
+  isMain: boolean;
+}
+
+export async function listGitWorktrees(repoDir: string): Promise<GitWorktreeEntry[]> {
+  const output = await git(['worktree', 'list', '--porcelain'], repoDir);
+  const entries: GitWorktreeEntry[] = [];
+  const blocks = output.split(/\n\n+/);
+  let isFirst = true;
+  for (const block of blocks) {
+    const lines = block.trim().split('\n');
+    if (lines.length === 0 || !lines[0]) continue;
+    let path: string | null = null;
+    let branch: string | null = null;
+    for (const line of lines) {
+      if (line.startsWith('worktree ')) path = line.slice('worktree '.length).trim();
+      else if (line.startsWith('branch refs/heads/')) branch = line.slice('branch refs/heads/'.length).trim();
+    }
+    if (path) {
+      entries.push({ path, branch, isMain: isFirst });
+      isFirst = false;
+    }
+  }
+  return entries;
+}
+
+export async function pruneWorktrees(repoDir: string): Promise<void> {
+  await git(['worktree', 'prune'], repoDir);
+}

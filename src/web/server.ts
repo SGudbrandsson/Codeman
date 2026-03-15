@@ -70,7 +70,8 @@ import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
-import { isGitWorktreeDir, getCurrentBranch } from '../utils/git-utils.js';
+import { isGitWorktreeDir, getCurrentBranch, findGitRoot } from '../utils/git-utils.js';
+import { runOrphanCleanup } from './routes/worktree-session-routes.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { UpdateChecker } from '../update-checker.js';
@@ -2045,6 +2046,37 @@ export class WebServer extends EventEmitter {
   }
 
   /**
+   * Run orphan cleanup at startup for all unique git roots from active sessions.
+   * Fire-and-forget — does not block startup.
+   */
+  private async _runStartupOrphanCleanup(): Promise<void> {
+    const gitRoots = new Set<string>();
+    for (const session of this.sessions.values()) {
+      const root = findGitRoot(session.workingDir);
+      if (root) gitRoots.add(root);
+    }
+    if (gitRoots.size === 0) return;
+
+    const log = {
+      info: (msg: string, ctx?: object) => this.app.log.info(ctx ?? {}, msg),
+      warn: (msg: string, ctx?: object) => this.app.log.warn(ctx ?? {}, msg),
+      error: (msg: string, ctx?: object) => this.app.log.error(ctx ?? {}, msg),
+    };
+
+    for (const gitRoot of gitRoots) {
+      try {
+        const result = await runOrphanCleanup(gitRoot, this.sessions, log);
+        this.app.log.info(
+          { gitRoot, removed: result.removed.length, warned: result.warnings.length },
+          `[startup-orphan-cleanup] removed ${result.removed.length}, warned ${result.warnings.length}`
+        );
+      } catch (err) {
+        this.app.log.warn({ err, gitRoot }, '[startup-orphan-cleanup] failed for git root');
+      }
+    }
+  }
+
+  /**
    * Get lightweight state for SSE init - excludes full terminal buffers
    * to prevent browser freezes. Terminal buffers are fetched on-demand.
    */
@@ -2503,6 +2535,9 @@ export class WebServer extends EventEmitter {
 
     // Clean up stale sessions from state file that don't have active mux sessions
     this.cleanupStaleSessions();
+
+    // Startup orphan cleanup — scan all unique git roots from active sessions
+    this._runStartupOrphanCleanup().catch(() => {});
 
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';
