@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, statSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 const execFileP = promisify(execFile);
@@ -48,6 +49,27 @@ export async function listBranches(repoDir: string): Promise<string[]> {
 
 export async function getCurrentBranch(repoDir: string): Promise<string> {
   return git(['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
+}
+
+const WORKTREE_ARTIFACTS = ['node_modules', 'dist'] as const;
+
+/**
+ * Symlinks gitignored runtime artifacts (node_modules, dist) from the git root
+ * into a newly-created worktree directory. Each artifact is symlinked independently —
+ * a failure on one does not block the others or abort worktree creation.
+ */
+export async function setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void> {
+  for (const artifact of WORKTREE_ARTIFACTS) {
+    const src = join(gitRoot, artifact);
+    const dest = join(worktreePath, artifact);
+    try {
+      if (!existsSync(src)) continue;
+      if (existsSync(dest)) continue;
+      await fs.symlink(src, dest, 'dir');
+    } catch (err) {
+      console.warn(`[setupWorktreeArtifacts] Failed to symlink ${artifact}: ${String(err)}`);
+    }
+  }
 }
 
 export async function addWorktree(

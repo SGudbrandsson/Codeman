@@ -1,158 +1,176 @@
 # Task
 
-type: bug
+type: feature
 status: done
-title: Gear icon in bottom action buttons doesn't open session options
+title: Worktree post-creation setup — symlink node_modules and auto-start dev server
 description: |
-  On both mobile and desktop, the gear/settings icon (⚙) that should open session options
-  is not working when it appears in the bottom action buttons area.
+  Two improvements to the worktree lifecycle to reduce manual setup steps.
 
-  On mobile: There is no gear icon in the session drawer (hamburger menu → right sidebar).
-  The session options modal (which contains the Respawn tab, Context tab with Safe Mode toggle,
-  Ralph tab, etc.) is unreachable on mobile because the gear icon only exists in the desktop
-  left sidebar session tabs.
+  ## Problem 1 — No node_modules after worktree creation
+  When a new git worktree is created, node_modules is not present (not tracked by git).
+  This means the worktree cannot run until dependencies are installed. The QA stage hits
+  missing module errors or the user has to manually run npm install.
 
-  The fix should make session options accessible from mobile — either by:
-  1. Adding a gear icon button to each session row in the mobile SessionDrawer (alongside the
-     existing × close button), OR
-  2. Investigating if there are gear icons in the bottom action buttons area that are broken
-     and fixing those.
+  Fix: After worktree creation, add a post-creation step that symlinks node_modules (and any
+  other necessary runtime artifacts like .env, dist/ references, etc.) from the parent repo
+  directory into the new worktree directory. Symlink is preferred over copy — fast, low disk
+  usage, and keeps them in sync.
 
-  The SessionDrawer._renderSessionRow() function in app.js builds each row with: dot, name,
-  mode badge, close button — but no gear/options button. This needs a gear button that calls
-  app.openSessionOptions(sessionId) and closes the drawer.
+  Look at where worktrees are created in the backend (session/worktree creation code) and add
+  the symlink step there.
 
-  On desktop: The gear icon in session tabs (left sidebar) should work fine — but if there are
-  gear icons in any bottom toolbar or action bar that don't work, those need to be fixed too.
+  ## Problem 2 — Dev server not auto-started at QA phase
+  At the end of the task runner workflow, the "How to test" / Phase 6 output tells the user
+  how to start the dev server manually, but never actually starts it. The user always has to
+  explicitly ask.
 
-  Expected: Tapping a gear/options icon on mobile opens the session options modal.
-  Actual: No gear icon is accessible on mobile; session options are unreachable.
+  Fix: After the task runner completes its final commit, automatically start the dev server on
+  the worktree's assigned port (the session already has an assignedPort field). Print the URL
+  so the user knows where to access it. Use the same nohup + tsx startup pattern documented in
+  the codebase (nohup npx tsx src/index.ts web --port PORT > /tmp/codeman-PORT.log 2>&1 &).
 
-affected_area: frontend
+  This applies to the codeman-task-runner skill and potentially the server startup logic.
+
+affected_area: backend
 fix_cycles: 0
-
-## Reproduction
-
-1. Open Codeman on a mobile device (or DevTools mobile emulation).
-2. The top session tabs bar exists and each active tab shows a tiny ⚙ gear icon
-   (`.tab-gear`, visible on `.session-tab.active`), but it is very small (12×12px,
-   opacity 0.6) and hard to tap reliably.
-3. Open the session drawer via the hamburger/sessions button (right sidebar).
-4. Each session row shows: status dot | name | mode badge | × close button.
-   There is NO gear icon in the drawer rows — `_renderSessionRow()` only appends
-   `dot`, `name`, `badge`, and `closeBtn` elements.
-5. Result: session options (Respawn, Context/Safe Mode, Ralph, etc.) are only
-   reachable on mobile via the tiny active-tab gear — there is no obvious,
-   consistently accessible path to `app.openSessionOptions()` from the drawer.
-
-Note on the bottom toolbar gear: `btn-settings-mobile` (line 413 index.html) opens
-`app.openAppSettings()` (global app settings), NOT session-specific options. The
-`btn-case-settings-mobile` opens project/case settings. Neither calls
-`openSessionOptions`. There is no broken gear in the bottom toolbar — the bottom
-toolbar gear icons are working but serve different purposes.
 
 ## Root Cause / Spec
 
-**Root cause**: `SessionDrawer._renderSessionRow()` (app.js line 16449) builds the
-DOM row with four elements — status dot, session name, mode badge, close button —
-but never adds a gear/options button. `app.openSessionOptions()` exists and works
-correctly; it simply has no call site in the drawer.
+### Problem 1 — Missing node_modules in worktrees
 
-On the session tabs (desktop left sidebar), the gear is rendered via the tab HTML
-template at line 6080 as `.tab-gear`, wired to `app.openSessionOptions(id)`. This
-works fine on desktop (hover reveals it). On mobile, the active tab's `.tab-gear` is
-displayed at 12×12px with 0.6 opacity (mobile.css lines 531–541) — too small to be
-a reliable tap target.
+**Root cause:** `git worktree add` creates a clean checkout of the branch's tracked files. `node_modules/` is gitignored (not tracked), so it is never copied into the new worktree directory. Same applies to `dist/` (build output, also gitignored).
 
-**Fix spec**:
+**Code location:** Worktree creation happens in two route handlers in
+`src/web/routes/worktree-session-routes.ts`:
+- `POST /api/sessions/:id/worktree` (line 80)
+- `POST /api/cases/:name/worktree` (line 264)
 
-1. **Add a gear button to each drawer session row** in `_renderSessionRow()`:
-   - Create a `<button class="drawer-session-gear">` element with a ⚙ character
-     (or matching SVG from elsewhere in the UI).
-   - `stopPropagation()` on click to prevent row activation.
-   - On click: call `app.openSessionOptions(s.id)` then `SessionDrawer.close()`.
-   - Append it between the mode badge and the close button.
+Both handlers call `addWorktree(gitRoot, worktreePath, branch, isNew)` from
+`src/utils/git-utils.ts` (line 53). The actual `git worktree add` exec is on line 59.
 
-2. **Add CSS** for `.drawer-session-gear` in `styles.css` alongside the existing
-   `.drawer-session-close` rules (around line 1189). Style it identically to
-   `.drawer-session-close` but with a blue/neutral hover (not red). Hide by default
-   (`opacity: 0`) and reveal on `.drawer-session-row:hover` (matching the pattern for
-   `.drawer-session-close`). On mobile (touch) devices, always show it (`opacity: 1`)
-   so there is a reliable tap target.
+**Implementation spec:**
 
-3. **No addKeyboardTapFix needed** for the drawer: the drawer is a separate overlay
-   (`#sessionDrawer`) that isn't part of the keyboard-open tap-suppression containers
-   (`.toolbar`, `.welcome-overlay`, `#mobileInputPanel`). The drawer is not shown
-   while the keyboard is open in normal flows, so the existing keyboard tap fix does
-   not need to be extended.
+Add a new exported async function `setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void>` in `src/utils/git-utils.ts`.
 
-4. **Bump version strings** in `index.html` for `app.js` and `styles.css` per the
-   deployment rules (CLAUDE.md).
+This function symlinks the following artifacts from `gitRoot` into `worktreePath`, but only if the source exists and the destination does not already exist:
+- `node_modules` (always needed to run tsx/npm scripts)
+- `dist` (optional — only if it exists in gitRoot; avoids build step)
 
-No backend changes needed.
+Use `fs.symlink(src, dest, 'dir')` from `node:fs/promises`.
+
+Catch and swallow errors per-artifact (e.g. symlink already exists, no permission) — a failed symlink should be logged but must not abort worktree creation.
+
+Call `setupWorktreeArtifacts(gitRoot, worktreePath)` in both POST handlers, after `addWorktree()` succeeds and before `new Session(...)` is constructed. Since it's async, `await` it. Wrap in try/catch so a failure logs a warning but does not prevent the session from being created.
+
+**Rationale for symlink over copy:** Fast (O(1)), zero additional disk usage, stays in sync with parent if deps are updated (npm install in main repo benefits all worktrees).
+
+---
+
+### Problem 2 — Dev server not auto-started after task runner commit
+
+**Root cause:** The `codeman-task-runner` skill (`~/.claude/skills/codeman-task-runner/SKILL.md`) Phase 6 only **prints** the nohup command for the user to run manually. It never executes it.
+
+**Code location:** Phase 6 template in `~/.claude/skills/codeman-task-runner/SKILL.md` lines 229–252.
+
+**Implementation spec:**
+
+Modify Phase 5 of the skill (after the commit completes on either the clean or NEEDS REVIEW path) to add a **"Auto-start dev server"** step before the Phase 6 output. The runner should:
+
+1. Check if `assignedPort` is known (from `worktreeNotes` in TASK.md or via the session API).
+2. If known, run the following bash commands in the worktree directory:
+   ```bash
+   nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
+   sleep 6 && curl -s http://localhost:<assignedPort>/api/status
+   ```
+3. Print the result — either a success confirmation with the URL, or a warning if the server failed to start.
+4. If `assignedPort` is unknown, skip and note it in the Phase 6 output (the existing manual command format).
+
+The Phase 6 template's "Dev server (if not already running):" section should be updated to say "Dev server (started automatically — verify with):" followed by the curl health-check command, rather than the full nohup command (since it was already started).
+
+**Affected file:** `~/.claude/skills/codeman-task-runner/SKILL.md`
+
+---
+
+### Affected area
+
+`backend` for Problem 1 (TypeScript source changes to `git-utils.ts` and `worktree-session-routes.ts`).
+`logic` / skill change for Problem 2 (markdown skill file edit only, no TypeScript).
+
+Both changes are minimal and isolated. No schema changes, no new dependencies.
 
 ## Fix / Implementation Notes
 
-**app.js** (`_renderSessionRow`, line ~16473):
-- Added a `<button class="drawer-session-gear">` element with ⚙ text content and aria-label "Session options".
-- Click handler calls `e.stopPropagation()`, then `SessionDrawer.close()`, then `app.openSessionOptions(s.id)`.
-- The drawer is closed before opening the options modal so the modal appears on top cleanly.
-- Gear button is inserted between the mode badge and the close button in the row's DOM order.
+### Problem 1 — `setupWorktreeArtifacts` in `git-utils.ts`
 
-**styles.css** (before `.drawer-session-close`, ~line 1188):
-- Added `.drawer-session-gear` block styled identically to `.drawer-session-close` (24×24px, opacity 0, same transitions).
-- Hover state uses blue tones (`rgba(59,130,246,0.12)` bg, `#60a5fa` text) to differentiate from the red close hover.
-- `.drawer-session-row:hover .drawer-session-gear` reveals the button on desktop hover (mirrors the close button pattern).
-- `@media (hover: none)` rule sets `opacity: 1` always on touch devices — ensures a reliable tap target on mobile.
+Added `import fs from 'node:fs/promises'` to `src/utils/git-utils.ts` (the file previously only used the sync `fs` exports via named imports, so the default import is new but non-conflicting).
 
-**index.html** version bumps:
-- `styles.css?v=0.1690` → `v=0.1691`
-- `app.js?v=0.4.106` → `v=0.4.107`
+Added `setupWorktreeArtifacts(gitRoot, worktreePath)` as a new exported async function. It iterates over `['node_modules', 'dist']`, checks existence of the source in `gitRoot` and absence of the destination in `worktreePath`, and calls `fs.symlink(src, dest, 'dir')`. Each artifact is wrapped in its own try/catch so one failure cannot affect the others or abort worktree creation. Failures are logged via `console.warn`.
+
+In `src/web/routes/worktree-session-routes.ts`:
+- Added `setupWorktreeArtifacts` to the named imports from `../../utils/git-utils.js`.
+- In `POST /api/sessions/:id/worktree` (line ~102): added a try/catch block calling `await setupWorktreeArtifacts(gitRoot, worktreePath)` immediately after the `addWorktree()` success block and before port allocation / `new Session(...)`. Failures are logged with `req.log.warn` and do not return an error response.
+- In `POST /api/cases/:name/worktree` (line ~279): same pattern applied.
+
+### Problem 2 — Auto-start dev server in `codeman-task-runner` SKILL.md
+
+Modified Phase 5 in `~/.claude/skills/codeman-task-runner/SKILL.md` to add an **"Auto-start dev server"** step that runs after the git commit on both the clean and NEEDS REVIEW paths. The step:
+1. Extracts `assignedPort` from TASK.md's worktreeNotes by matching `Assigned dev port for this worktree: <N>`.
+2. If found, runs `nohup npx tsx src/index.ts web --port <port> > /tmp/codeman-<port>.log 2>&1 &` followed by `sleep 6 && curl -s http://localhost:<port>/api/status`.
+3. Reports success or a warning based on the curl response.
+4. Gracefully skips if no port is found (falls back to manual instructions in Phase 6).
+
+Updated the Phase 6 template's "Dev server" section from "if not already running" (nohup command) to "started automatically — verify with" (curl health-check only), with a fallback block for the case where auto-start was skipped.
+
+Updated the Phase 6 rules bullet to clarify the auto-start behaviour and the fallback to port 3099.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Correctness**: The gear button is added exactly where the spec calls for it — in `_renderSessionRow()`, between the mode badge and close button. DOM order matches spec (dot → name → badge → gearBtn → closeBtn). Click handler correctly calls `e.stopPropagation()` then `SessionDrawer.close()` then `app.openSessionOptions(s.id)` — close-before-open order is right to avoid z-index stacking issues.
+**git-utils.ts — `setupWorktreeArtifacts`**
+- Import `fs from 'node:fs/promises'` is non-conflicting with the existing named sync imports from `node:fs`. Correct.
+- `WORKTREE_ARTIFACTS as const` — prevents mutation, gives literal tuple type. Good.
+- `existsSync(src)` guard before `fs.symlink`: correct. There is a theoretical TOCTOU window, but this is a non-security-sensitive one-shot path and the inner `catch` handles any race outcome acceptably.
+- `existsSync(dest)` guard: correctly prevents re-symlinking if the destination already exists (e.g., re-used worktree path or prior run).
+- `fs.symlink(src, dest, 'dir')`: correct API. Absolute source path (via `join(gitRoot, artifact)`) — correct; relative symlinks would break if worktrees are moved.
+- Per-artifact `try/catch` with `console.warn`: appropriate since the function has no access to `req.log`. Outer handler adds a second safety layer with `req.log.warn`.
+- No implicit `any`, no unused variables. TypeScript-clean.
 
-**CSS**: `.drawer-session-gear` mirrors `.drawer-session-close` (24×24px, opacity 0 default, same transition properties). Blue hover tones correctly differentiate from the red close hover. `.drawer-session-row:hover .drawer-session-gear` mirrors the existing close button reveal pattern. `@media (hover: none)` correctly ensures always-visible on touch devices. All rules placed logically immediately before the close button block.
+**worktree-session-routes.ts**
+- `setupWorktreeArtifacts` correctly added to named imports from `git-utils.js`.
+- Both POST handlers call it immediately after `addWorktree()` succeeds and before port allocation / `new Session()` — matches spec exactly.
+- Outer `try/catch` uses `req.log.warn` and does NOT return an error — correct non-blocking pattern.
+- Minor style inconsistency (missing blank line before `const [[globalNice...` in the cases handler vs. the sessions handler), but not a defect.
 
-**Edge cases**:
-- `openSessionOptions` guards against a missing session (`if (!session) return`) — safe even if the session was removed between render and tap.
-- `stopPropagation` prevents the row's own click handler from also firing `selectSession` + `close`, which would race with the gear's own `close` call.
-- Worktree session rows also go through `_renderSessionRow()` (confirmed at lines 16667 and 16672), so the gear is consistently present for all session types, including worktree sub-sessions.
+**SKILL.md — Phase 5 auto-start**
+- Auto-start step added to Phase 5 for both clean and NEEDS REVIEW paths.
+- Port extraction from `worktreeNotes` is clearly documented with graceful skip if not found.
+- Phase 6 template correctly updated to "started automatically — verify with:" with a fallback block for unknown-port case.
+- No `--host` flag used in the nohup command — consistent with the documented gotcha in MEMORY.md.
+- Fallback port 3099 aligns with the QA subagent's existing default.
 
-**Version bumps**: Both `styles.css?v=0.1691` and `app.js?v=0.4.107` are correctly incremented per CLAUDE.md rules.
-
-**No issues found.** Implementation is minimal, additive, and consistent with existing patterns.
+No issues found. Implementation is correct, minimal, well-guarded, and consistent with existing patterns.
 
 ## QA Results
 <!-- filled by QA subagent -->
 
-### QA Run — 2026-03-14 — PASS
+**Date:** 2026-03-15
 
 | Check | Result | Notes |
-|-------|--------|-------|
-| `tsc --noEmit` | PASS | Zero errors |
-| `npm run lint` | PASS | Zero errors |
-| Page loads (HTTP 200) | PASS | `http://localhost:3099/` returns 200 |
-| `styles.css?v=0.1691` in page source | PASS | Version string confirmed |
-| `app.js?v=0.4.107` in page source | PASS | Version string confirmed |
-| `.drawer-session-gear` CSS rule in browser | PASS | Rule found: `width:24px; height:24px; ...` |
-| `SessionDrawer._renderSessionRow` method | PASS | Method exists on `SessionDrawer` object |
+|---|---|---|
+| `tsc --noEmit` | PASS | Zero type errors |
+| `npm run lint` | PASS | Zero ESLint warnings/errors |
+| Dev server startup (port 3099) | PASS | Server responded with valid JSON from `/api/status` |
+| `setupWorktreeArtifacts` exported | PASS | Exported from `src/utils/git-utils.ts` and imported+called in both POST handlers in `worktree-session-routes.ts` |
 
 All checks passed. Status set to `done`.
 
 ## Decisions & Context
-<!-- append-only log of key decisions made during the workflow -->
 
-2026-03-14: Analysis confirmed the bottom toolbar gears (btn-settings-mobile, btn-case-settings-mobile)
-are NOT broken — they open app settings and project settings respectively, as intended.
-The sole missing piece is a gear button inside SessionDrawer._renderSessionRow(). Fix is
-purely additive frontend work: new button element + CSS rules.
-
-2026-03-14: Implemented gear button. Used `@media (hover: none)` to keep gear always visible on touch
-devices (mobile) while hiding it at opacity 0 on desktop hover-capable devices (revealed on row hover,
-matching the existing close button pattern). Drawer is closed before the options modal opens to avoid
-z-index stacking issues.
+- **Symlink vs copy:** Chose symlink (O(1), zero disk) as specified. The `'dir'` type argument to `fs.symlink` is required on Windows but ignored on Linux/macOS; kept for cross-platform correctness.
+- **Per-artifact try/catch inside `setupWorktreeArtifacts`:** A missing `dist/` or a pre-existing `node_modules` symlink must not kill the whole function. Outer try/catch in the route handlers adds a second safety layer but inner catches carry the real per-artifact resilience.
+- **`existsSync` for destination check:** Using sync existence check before `fs.symlink` is fine since this is a one-shot setup path, not a hot loop. This matches the existing pattern in `git-utils.ts`.
+- **`console.warn` inside `setupWorktreeArtifacts`:** The function has no access to the Fastify request logger (`req.log`), so `console.warn` is the appropriate choice. The route handler re-logs via `req.log.warn` for the outer error.
+- **Skill auto-start placement:** The auto-start step is placed in Phase 5 (after commit, before Phase 6 output) rather than in Phase 6 itself, so that the Phase 6 output can reference an already-running server. This matches the spec.
+- **Graceful fallback when port unknown:** If `assignedPort` is not extractable from TASK.md, the skill skips auto-start and shows the full nohup command in the Phase 6 template. This satisfies the "must not break Phase 6 when no port is available" constraint.
