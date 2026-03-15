@@ -2257,6 +2257,11 @@ const TranscriptView = {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
       if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
+        // Fix C: don't render a card for a question the user already answered.
+        if (app._dismissedAskUserQuestionIds?.has(block.id)) {
+          if (scroll) this._scrollToBottom(false);
+          return;
+        }
         el = this._renderAskUserQuestionBlock(block);
         el.dataset.toolId = block.id;
         this._container.appendChild(el);
@@ -2273,6 +2278,8 @@ const TranscriptView = {
       if (pendingEl) {
         if (pendingEl.classList.contains('tv-auq-block')) {
           pendingEl.remove();
+          // Fix D: clean up dismissed-set entry now that the lifecycle is complete.
+          if (block.toolUseId) app._dismissedAskUserQuestionIds?.delete(block.toolUseId);
           if (scroll) this._scrollToBottom(false);
           return;
         }
@@ -2856,6 +2863,14 @@ class CodemanApp {
 
     // AskUserQuestion state: { sessionId, header, question, options: [{label, description}] } | null
     this.pendingAskUserQuestion = null;
+
+    // Track dismissed AskUserQuestion toolUseIds so stale cards / panel re-shows are suppressed.
+    // Set<toolUseId> — populated when the user answers; cleared when tool_result arrives.
+    this._dismissedAskUserQuestionIds = new Set();
+    // Transient flag for the hook-first race: hook fires before transcript:block, so when the
+    // user answers via the panel (no toolUseId yet) we record the sessionId here.  The next
+    // transcript:block handler for AskUserQuestion will transfer it into the Set.
+    this._dismissedAskUserQuestionSession = null;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -5270,7 +5285,26 @@ class CodemanApp {
   /** Sends an AskUserQuestion response (option number) and clears the panel. */
   sendAskUserQuestionResponse(sessionId, value) {
     if (!value) return;
+    // Capture FIRST before clearPendingHooks nulls pendingAskUserQuestion.
+    const auq = this.pendingAskUserQuestion;
     this.clearPendingHooks(sessionId, 'ask_user_question');
+
+    // Record the answered question so stale transcript:block / card renders are suppressed.
+    if (auq) {
+      if (auq.toolUseId) {
+        // We know the toolUseId — add to dismissed set and immediately remove the inline card.
+        this._dismissedAskUserQuestionIds.add(auq.toolUseId);
+        if (TranscriptView._sessionId === sessionId && TranscriptView._container) {
+          const cardEl = TranscriptView._container.querySelector('[data-tool-id="' + CSS.escape(auq.toolUseId) + '"]');
+          if (cardEl) cardEl.remove();
+        }
+      } else {
+        // Hook-first path: toolUseId not yet known — record the session so that when the
+        // transcript:block for this tool_use arrives we can suppress it.
+        this._dismissedAskUserQuestionSession = sessionId;
+      }
+    }
+
     this.pendingAskUserQuestion = null;
     this.renderAskUserQuestionPanel();
     fetch(`/api/sessions/${sessionId}/input`, {
@@ -9036,15 +9070,24 @@ class CodemanApp {
     if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
       const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
       if (questions.length > 0) {
-        const q = questions[0];
-        this.pendingAskUserQuestion = {
-          sessionId,
-          header: q.header || '',
-          question: q.question || '',
-          options: Array.isArray(q.options) ? q.options : [],
-          toolUseId: block.id,
-        };
-        if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
+        // Fix B: suppress re-show when the question was already answered via the panel.
+        if (this._dismissedAskUserQuestionIds.has(block.id)) {
+          // Already answered (toolUseId known at answer time) — do nothing.
+        } else if (this._dismissedAskUserQuestionSession === sessionId) {
+          // Hook-first race: user answered before toolUseId was known — record it now and clear flag.
+          this._dismissedAskUserQuestionIds.add(block.id);
+          this._dismissedAskUserQuestionSession = null;
+        } else {
+          const q = questions[0];
+          this.pendingAskUserQuestion = {
+            sessionId,
+            header: q.header || '',
+            question: q.question || '',
+            options: Array.isArray(q.options) ? q.options : [],
+            toolUseId: block.id,
+          };
+          if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
+        }
       }
     } else if (block.type === 'tool_result' &&
                this.pendingAskUserQuestion?.sessionId === sessionId &&
@@ -9067,6 +9110,11 @@ class CodemanApp {
       this.pendingAskUserQuestion = null;
       this.renderAskUserQuestionPanel();
     }
+    // Clear dismissed-question tracking for this session so stale suppression doesn't persist.
+    if (this._dismissedAskUserQuestionSession === sessionId) {
+      this._dismissedAskUserQuestionSession = null;
+    }
+    this._dismissedAskUserQuestionIds.clear();
   }
 
   _closeWorktreeCleanupModal() {

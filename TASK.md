@@ -1,176 +1,173 @@
 # Task
 
-type: feature
+type: fix
 status: done
-title: Worktree post-creation setup — symlink node_modules and auto-start dev server
+title: AskUserQuestion card in transcript view gets stuck on stale question
 description: |
-  Two improvements to the worktree lifecycle to reduce manual setup steps.
+  When a multi-step AskUserQuestion wizard runs (e.g. GSD new-project), the inline card
+  in the chat/transcript view shows the FIRST question even after the terminal has advanced
+  to later steps. The user sees the stale question and answers it again, sending duplicate
+  input to the terminal.
 
-  ## Problem 1 — No node_modules after worktree creation
-  When a new git worktree is created, node_modules is not present (not tracked by git).
-  This means the worktree cannot run until dependencies are installed. The QA stage hits
-  missing module errors or the user has to manually run npm install.
+affected_area: frontend (app.js)
+fix_cycles: 1
 
-  Fix: After worktree creation, add a post-creation step that symlinks node_modules (and any
-  other necessary runtime artifacts like .env, dist/ references, etc.) from the parent repo
-  directory into the new worktree directory. Symlink is preferred over copy — fast, low disk
-  usage, and keeps them in sync.
+## Root Cause
 
-  Look at where worktrees are created in the backend (session/worktree creation code) and add
-  the symlink step there.
+The bug arises from a timing race between the hook-based AskUserQuestion path and the
+transcript:block path:
 
-  ## Problem 2 — Dev server not auto-started at QA phase
-  At the end of the task runner workflow, the "How to test" / Phase 6 output tells the user
-  how to start the dev server manually, but never actually starts it. The user always has to
-  explicitly ask.
+1. **Hook fires FIRST** (pre-tool-use hook fires before tool execution):
+   - `_onHookAskUserQuestion` sets `pendingAskUserQuestion` (no toolUseId) → panel shown
+2. **User answers quickly via panel**:
+   - `sendAskUserQuestionResponse` → `pendingAskUserQuestion = null`, panel hidden
+3. **transcript:block for tool_use arrives LATER** (transcript is written after hook fires):
+   - `_onTranscriptBlock` unconditionally sets `pendingAskUserQuestion` again (with toolUseId)
+   - `_appendBlock` unconditionally renders a new inline card
+   - Panel is RE-SHOWN with the stale/already-answered question
+4. **User sees stale question** → answers again → duplicate input sent to terminal
 
-  Fix: After the task runner completes its final commit, automatically start the dev server on
-  the worktree's assigned port (the session already has an assignedPort field). Print the URL
-  so the user knows where to access it. Use the same nohup + tsx startup pattern documented in
-  the codebase (nohup npx tsx src/index.ts web --port PORT > /tmp/codeman-PORT.log 2>&1 &).
+Additionally, when user answers via the PANEL (not the inline card buttons):
+- The inline card is NOT removed immediately (it stays until tool_result arrives)
+- In a fast multi-step wizard, the tool_result for Q1 may arrive after Q2's hook fires,
+  creating a window where stale Q1 card and Q2 panel are both showing
 
-  This applies to the codeman-task-runner skill and potentially the server startup logic.
+## Implementation Plan
 
-affected_area: backend
-fix_cycles: 0
+### Fix A: Track answered questions by toolUseId
+Add `_dismissedAskUserQuestionIds = new Set()` to app state. When an answer is submitted:
+- If `pendingAskUserQuestion.toolUseId` is known: add it to the dismissed set AND immediately
+  remove the inline card from the DOM (don't wait for tool_result)
+- If no toolUseId (hook path): set `_dismissedAskUserQuestionSession = sessionId` as a flag
 
-## Root Cause / Spec
+### Fix B: Prevent stale re-show in transcript handlers
+In `_onTranscriptBlock` for tool_use AskUserQuestion:
+- If `block.id` is in dismissed set: skip panel update
+- If `_dismissedAskUserQuestionSession === sessionId`: record block.id in dismissed set,
+  clear session flag, skip panel update (this is the hook-first race condition case)
+- Otherwise: normal behavior
 
-### Problem 1 — Missing node_modules in worktrees
+In `_onTranscriptAskUserQuestion`:
+- If `_dismissedAskUserQuestionSession === sessionId`: skip (transcript:block will handle it)
 
-**Root cause:** `git worktree add` creates a clean checkout of the branch's tracked files. `node_modules/` is gitignored (not tracked), so it is never copied into the new worktree directory. Same applies to `dist/` (build output, also gitignored).
+### Fix C: Prevent stale card re-render in _appendBlock
+In `_appendBlock` for tool_use AskUserQuestion:
+- If `app._dismissedAskUserQuestionIds?.has(block.id)`: skip rendering the card
 
-**Code location:** Worktree creation happens in two route handlers in
-`src/web/routes/worktree-session-routes.ts`:
-- `POST /api/sessions/:id/worktree` (line 80)
-- `POST /api/cases/:name/worktree` (line 264)
+### Fix D: Cleanup
+In `_appendBlock` for tool_result that removes a tv-auq-block card:
+- Also clean up `app._dismissedAskUserQuestionIds` (delete the toolUseId)
 
-Both handlers call `addWorktree(gitRoot, worktreePath, branch, isNew)` from
-`src/utils/git-utils.ts` (line 53). The actual `git worktree add` exec is on line 59.
-
-**Implementation spec:**
-
-Add a new exported async function `setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void>` in `src/utils/git-utils.ts`.
-
-This function symlinks the following artifacts from `gitRoot` into `worktreePath`, but only if the source exists and the destination does not already exist:
-- `node_modules` (always needed to run tsx/npm scripts)
-- `dist` (optional — only if it exists in gitRoot; avoids build step)
-
-Use `fs.symlink(src, dest, 'dir')` from `node:fs/promises`.
-
-Catch and swallow errors per-artifact (e.g. symlink already exists, no permission) — a failed symlink should be logged but must not abort worktree creation.
-
-Call `setupWorktreeArtifacts(gitRoot, worktreePath)` in both POST handlers, after `addWorktree()` succeeds and before `new Session(...)` is constructed. Since it's async, `await` it. Wrap in try/catch so a failure logs a warning but does not prevent the session from being created.
-
-**Rationale for symlink over copy:** Fast (O(1)), zero additional disk usage, stays in sync with parent if deps are updated (npm install in main repo benefits all worktrees).
-
----
-
-### Problem 2 — Dev server not auto-started after task runner commit
-
-**Root cause:** The `codeman-task-runner` skill (`~/.claude/skills/codeman-task-runner/SKILL.md`) Phase 6 only **prints** the nohup command for the user to run manually. It never executes it.
-
-**Code location:** Phase 6 template in `~/.claude/skills/codeman-task-runner/SKILL.md` lines 229–252.
-
-**Implementation spec:**
-
-Modify Phase 5 of the skill (after the commit completes on either the clean or NEEDS REVIEW path) to add a **"Auto-start dev server"** step before the Phase 6 output. The runner should:
-
-1. Check if `assignedPort` is known (from `worktreeNotes` in TASK.md or via the session API).
-2. If known, run the following bash commands in the worktree directory:
-   ```bash
-   nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
-   sleep 6 && curl -s http://localhost:<assignedPort>/api/status
-   ```
-3. Print the result — either a success confirmation with the URL, or a warning if the server failed to start.
-4. If `assignedPort` is unknown, skip and note it in the Phase 6 output (the existing manual command format).
-
-The Phase 6 template's "Dev server (if not already running):" section should be updated to say "Dev server (started automatically — verify with):" followed by the curl health-check command, rather than the full nohup command (since it was already started).
-
-**Affected file:** `~/.claude/skills/codeman-task-runner/SKILL.md`
-
----
-
-### Affected area
-
-`backend` for Problem 1 (TypeScript source changes to `git-utils.ts` and `worktree-session-routes.ts`).
-`logic` / skill change for Problem 2 (markdown skill file edit only, no TypeScript).
-
-Both changes are minimal and isolated. No schema changes, no new dependencies.
+## Files to change
+- `src/web/public/app.js`: all changes are frontend-only, no backend changes needed
 
 ## Fix / Implementation Notes
 
-### Problem 1 — `setupWorktreeArtifacts` in `git-utils.ts`
+All changes are in `src/web/public/app.js`. No backend changes required.
 
-Added `import fs from 'node:fs/promises'` to `src/utils/git-utils.ts` (the file previously only used the sync `fs` exports via named imports, so the default import is new but non-conflicting).
+### Fix A — State tracking (init + `sendAskUserQuestionResponse`)
+- Added `this._dismissedAskUserQuestionIds = new Set()` and `this._dismissedAskUserQuestionSession = null`
+  to the `CodemanApp` constructor (~line 2867).
+- In `sendAskUserQuestionResponse`: before clearing `pendingAskUserQuestion`, check whether we know
+  the `toolUseId` for the question:
+  - If yes: add to `_dismissedAskUserQuestionIds` and immediately remove the inline DOM card via
+    `TranscriptView._container.querySelector('[data-tool-id=...]')`.
+  - If no (hook-first path, no toolUseId yet): set `_dismissedAskUserQuestionSession = sessionId`.
 
-Added `setupWorktreeArtifacts(gitRoot, worktreePath)` as a new exported async function. It iterates over `['node_modules', 'dist']`, checks existence of the source in `gitRoot` and absence of the destination in `worktreePath`, and calls `fs.symlink(src, dest, 'dir')`. Each artifact is wrapped in its own try/catch so one failure cannot affect the others or abort worktree creation. Failures are logged via `console.warn`.
+### Fix B — Suppress stale re-show in `_onTranscriptBlock`
+- When a `tool_use` block for `AskUserQuestion` arrives:
+  - If `block.id` is already in `_dismissedAskUserQuestionIds`: skip entirely.
+  - If `_dismissedAskUserQuestionSession === sessionId` (hook-first race): record `block.id` in
+    the dismissed set, clear the session flag, and skip. This is the core race-condition fix.
+  - Otherwise: normal path (set `pendingAskUserQuestion` and render panel).
 
-In `src/web/routes/worktree-session-routes.ts`:
-- Added `setupWorktreeArtifacts` to the named imports from `../../utils/git-utils.js`.
-- In `POST /api/sessions/:id/worktree` (line ~102): added a try/catch block calling `await setupWorktreeArtifacts(gitRoot, worktreePath)` immediately after the `addWorktree()` success block and before port allocation / `new Session(...)`. Failures are logged with `req.log.warn` and do not return an error response.
-- In `POST /api/cases/:name/worktree` (line ~279): same pattern applied.
+### Fix C — Suppress stale card render in `_appendBlock`
+- In `TranscriptView._appendBlock`, before rendering an `AskUserQuestion` inline card, check
+  `app._dismissedAskUserQuestionIds?.has(block.id)`. If dismissed, return early without rendering.
 
-### Problem 2 — Auto-start dev server in `codeman-task-runner` SKILL.md
+### Fix D — Cleanup in `_appendBlock` tool_result handler
+- When a `tool_result` removes a `tv-auq-block` card, also call
+  `app._dismissedAskUserQuestionIds?.delete(block.toolUseId)` to keep the set from growing.
 
-Modified Phase 5 in `~/.claude/skills/codeman-task-runner/SKILL.md` to add an **"Auto-start dev server"** step that runs after the git commit on both the clean and NEEDS REVIEW paths. The step:
-1. Extracts `assignedPort` from TASK.md's worktreeNotes by matching `Assigned dev port for this worktree: <N>`.
-2. If found, runs `nohup npx tsx src/index.ts web --port <port> > /tmp/codeman-<port>.log 2>&1 &` followed by `sleep 6 && curl -s http://localhost:<port>/api/status`.
-3. Reports success or a warning based on the curl response.
-4. Gracefully skips if no port is found (falls back to manual instructions in Phase 6).
+### Design decision: `_onTranscriptAskUserQuestion` not guarded
+The TASK.md plan mentioned optionally guarding `_onTranscriptAskUserQuestion` with the session flag,
+but this handler fires BEFORE the user can answer (it's the hook that shows the panel in the first
+place). The dismiss flag is only set AFTER answering. Therefore no guard is needed here; the existing
+flow is correct and the fix in Fix B covers the subsequent transcript:block race.
 
-Updated the Phase 6 template's "Dev server" section from "if not already running" (nohup command) to "started automatically — verify with" (curl health-check only), with a fallback block for the case where auto-start was skipped.
+### TranscriptView is a singleton
+`TranscriptView` is a module-level singleton (not a per-session object). Card DOM access in Fix A
+is guarded with `TranscriptView._sessionId === sessionId` to avoid touching the wrong session's DOM.
 
-Updated the Phase 6 rules bullet to clarify the auto-start behaviour and the fallback to port 3099.
+## Decisions & Context
+
+- Kept all changes minimal and scoped to the four fix points described in TASK.md.
+- Used optional chaining (`?.`) for defensive access to `_dismissedAskUserQuestionIds` in
+  `_appendBlock` context where `app` is accessed as a global — guards against any future init-order
+  edge cases.
+- The dismissed set is per-toolUseId (not per-session) to correctly handle simultaneous multi-session
+  wizards without cross-contamination.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
-### Review attempt 1 — APPROVED
+### Review attempt 2 — APPROVED
 
-**git-utils.ts — `setupWorktreeArtifacts`**
-- Import `fs from 'node:fs/promises'` is non-conflicting with the existing named sync imports from `node:fs`. Correct.
-- `WORKTREE_ARTIFACTS as const` — prevents mutation, gives literal tuple type. Good.
-- `existsSync(src)` guard before `fs.symlink`: correct. There is a theoretical TOCTOU window, but this is a non-security-sensitive one-shot path and the inner `catch` handles any race outcome acceptably.
-- `existsSync(dest)` guard: correctly prevents re-symlinking if the destination already exists (e.g., re-used worktree path or prior run).
-- `fs.symlink(src, dest, 'dir')`: correct API. Absolute source path (via `join(gitRoot, artifact)`) — correct; relative symlinks would break if worktrees are moved.
-- Per-artifact `try/catch` with `console.warn`: appropriate since the function has no access to `req.log`. Outer handler adds a second safety layer with `req.log.warn`.
-- No implicit `any`, no unused variables. TypeScript-clean.
+**Critical fix verified:** `const auq = this.pendingAskUserQuestion` is captured at line 5289, before `clearPendingHooks` is called at line 5290. The cycle 1 dead-code defect is resolved.
 
-**worktree-session-routes.ts**
-- `setupWorktreeArtifacts` correctly added to named imports from `git-utils.js`.
-- Both POST handlers call it immediately after `addWorktree()` succeeds and before port allocation / `new Session()` — matches spec exactly.
-- Outer `try/catch` uses `req.log.warn` and does NOT return an error — correct non-blocking pattern.
-- Minor style inconsistency (missing blank line before `const [[globalNice...` in the cases handler vs. the sessions handler), but not a defect.
+**Fix C scroll-to-bottom on dismissed skip:** The early-return path at lines 2261–2263 calls `this._scrollToBottom(false)` when skipping a dismissed card. This mirrors the non-dismissed path's behaviour and is functionally correct, if slightly redundant. Non-blocking.
 
-**SKILL.md — Phase 5 auto-start**
-- Auto-start step added to Phase 5 for both clean and NEEDS REVIEW paths.
-- Port extraction from `worktreeNotes` is clearly documented with graceful skip if not found.
-- Phase 6 template correctly updated to "started automatically — verify with:" with a fallback block for unknown-port case.
-- No `--host` flag used in the nohup command — consistent with the documented gotcha in MEMORY.md.
-- Fallback port 3099 aligns with the QA subagent's existing default.
+**`_onTranscriptClear` clears ALL dismissed IDs:** `this._dismissedAskUserQuestionIds.clear()` at line 9117 clears IDs for all sessions, not just the one being compacted. In a multi-session app this could momentarily allow a stale card to re-appear in another session's open wizard if that session's transcript happened to compact at exactly the wrong moment. The window is narrow and the worst case is cosmetic. The TASK.md correction notes acknowledge this trade-off; it is acceptable for the scope of this targeted fix.
 
-No issues found. Implementation is correct, minimal, well-guarded, and consistent with existing patterns.
+**Wrong-session `pendingAskUserQuestion` edge case:** If `pendingAskUserQuestion` belongs to session B but an answer arrives for session A, `clearPendingHooks` (which checks `sessionId`) would not null it, so `auq` would contain B's object and `_dismissedAskUserQuestionSession` would be set to A. This is a pre-existing cross-session edge case not introduced by this fix and not a regression.
+
+**`_dismissedAskUserQuestionSession` single-value limitation:** Pre-existing concern from cycle 1; acceptable for the stated use case.
+
+**Fix D redundant guard:** `if (block.toolUseId)` at line 2282 is always true at that branch. Harmless.
+
+**Overall:** All four fix points are implemented correctly, coherently, and the root race condition is addressed. No blocking issues.
+
+### Review attempt 1 — REJECTED
+
+**Critical defect: Fix A is dead code — dismiss tracking never fires**
+
+In `sendAskUserQuestionResponse`, the code calls `this.clearPendingHooks(sessionId, 'ask_user_question')` BEFORE capturing `this.pendingAskUserQuestion` into `auq`. `clearPendingHooks` contains this logic (lines 2998–3001):
+
+```js
+if (this.pendingAskUserQuestion?.sessionId === sessionId &&
+    (!hookType || hookType === 'ask_user_question')) {
+  this.pendingAskUserQuestion = null;
+  this.renderAskUserQuestionPanel();
+}
+```
+
+Since `hookType` is `'ask_user_question'` and `pendingAskUserQuestion.sessionId` matches the sessionId being answered, `clearPendingHooks` nulls out `this.pendingAskUserQuestion` before control reaches line 5291. Therefore `const auq = this.pendingAskUserQuestion` is always `null`, `if (auq)` is always false, and:
+
+- `_dismissedAskUserQuestionIds` is never populated (Fix A no-ops)
+- `_dismissedAskUserQuestionSession` is never set (Fix A no-ops)
+- Fix B check in `_onTranscriptBlock` always falls through to the `else` branch (stale re-show still happens)
+- Fix C check in `_appendBlock` always finds the set empty (stale card still renders)
+
+The entire fix is inoperative. The root race condition is not addressed.
+
+**Required fix:** Capture `this.pendingAskUserQuestion` into `auq` BEFORE calling `clearPendingHooks`, i.e. move `const auq = this.pendingAskUserQuestion;` to be the very first line of `sendAskUserQuestionResponse` (before the `clearPendingHooks` call).
+
+**Minor observations (non-blocking, but note for next cycle):**
+- The `if (block.toolUseId)` guard in Fix D (line 2282) is always true at that branch because `pendingEl` was found via `block.toolUseId` — harmless but redundant.
+- `_onTranscriptClear` does not reset `_dismissedAskUserQuestionSession` or clear `_dismissedAskUserQuestionIds`. Minor state leak on compact/reset, not a correctness regression.
+- `_dismissedAskUserQuestionSession` is a single string, so simultaneous rapid answers from two different sessions could clobber each other. Acceptable for the stated use case but worth noting.
+
+## Fix / Correction Notes (cycle 2)
+
+**Critical ordering fix applied:** In `sendAskUserQuestionResponse`, `const auq = this.pendingAskUserQuestion` was moved to be the very first line of the function body, before the `this.clearPendingHooks(...)` call. Previously `clearPendingHooks` nulled out `pendingAskUserQuestion` before `auq` was captured, making all dismiss-tracking logic dead code.
+
+**`_onTranscriptClear` fix applied:** Added reset of `_dismissedAskUserQuestionSession` (guarded to only clear when it matches the cleared session) and a full `_dismissedAskUserQuestionIds.clear()` so stale suppression state does not persist across transcript compacts/resets.
 
 ## QA Results
 <!-- filled by QA subagent -->
 
-**Date:** 2026-03-15
+- **tsc --noEmit**: PASS (zero errors)
+- **npm run lint**: PASS (zero warnings/errors)
+- **Playwright JS error check**: PASS — "Terminal is not defined" error confirmed pre-existing on master (present without this fix); not introduced by this change. No new JS errors detected.
 
-| Check | Result | Notes |
-|---|---|---|
-| `tsc --noEmit` | PASS | Zero type errors |
-| `npm run lint` | PASS | Zero ESLint warnings/errors |
-| Dev server startup (port 3099) | PASS | Server responded with valid JSON from `/api/status` |
-| `setupWorktreeArtifacts` exported | PASS | Exported from `src/utils/git-utils.ts` and imported+called in both POST handlers in `worktree-session-routes.ts` |
-
-All checks passed. Status set to `done`.
-
-## Decisions & Context
-
-- **Symlink vs copy:** Chose symlink (O(1), zero disk) as specified. The `'dir'` type argument to `fs.symlink` is required on Windows but ignored on Linux/macOS; kept for cross-platform correctness.
-- **Per-artifact try/catch inside `setupWorktreeArtifacts`:** A missing `dist/` or a pre-existing `node_modules` symlink must not kill the whole function. Outer try/catch in the route handlers adds a second safety layer but inner catches carry the real per-artifact resilience.
-- **`existsSync` for destination check:** Using sync existence check before `fs.symlink` is fine since this is a one-shot setup path, not a hot loop. This matches the existing pattern in `git-utils.ts`.
-- **`console.warn` inside `setupWorktreeArtifacts`:** The function has no access to the Fastify request logger (`req.log`), so `console.warn` is the appropriate choice. The route handler re-logs via `req.log.warn` for the outer error.
-- **Skill auto-start placement:** The auto-start step is placed in Phase 5 (after commit, before Phase 6 output) rather than in Phase 6 itself, so that the Phase 6 output can reference an already-running server. This matches the spec.
-- **Graceful fallback when port unknown:** If `assignedPort` is not extractable from TASK.md, the skill skips auto-start and shows the full nohup command in the Phase 6 template. This satisfies the "must not break Phase 6 when no port is available" constraint.
+**Overall: PASS — status set to done**
