@@ -145,7 +145,7 @@ const KeyboardAccessoryBar = {
       settingsBtn.appendChild(gSvg);
     }
     settingsBtn.addEventListener('click', () => {
-      document.getElementById('settingsModal')?.classList.add('active');
+      if (typeof app !== 'undefined' && app.openAppSettings) app.openAppSettings();
     });
     this.element.appendChild(settingsBtn);
 
