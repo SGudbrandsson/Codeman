@@ -1823,6 +1823,44 @@ const TranscriptView = {
       const el = this._container;
       state.scrolledUp = el.scrollTop < el.scrollHeight - el.clientHeight - 100;
     }, { passive: true });
+    // Periodic sync: every 30s, check for missed transcript blocks
+    setInterval(() => this._periodicSync(), 30000);
+  },
+
+  // Periodic sync: catches missed SSE blocks by comparing against the backend transcript.
+  // Runs every 30s. Only active when transcript view is visible and not mid-load.
+  _periodicSync() {
+    if (!this._sessionId || !this._container) return;
+    const sessionId = this._sessionId;
+    const state = this._getState(sessionId);
+    // Skip if load() is in progress (sseBuffer is []) or transcript mode is inactive
+    if (state._sseBuffer !== null && state._sseBuffer !== undefined) return;
+    if (state.viewMode !== 'web') return;
+
+    // Case 1: showing empty CTA but session may have content — trigger a full reload
+    const showingEmptyCTA = !!this._container.querySelector('.tv-empty-cta');
+    if (showingEmptyCTA && state.blocks.length === 0) {
+      this.load(sessionId);
+      return;
+    }
+
+    // Case 2: have content — do an incremental check for missed trailing blocks
+    if (state.blocks.length > 0) {
+      const currentCount = state.blocks.length;
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript')
+        .then(r => r.ok ? r.json() : null)
+        .then(blocks => {
+          if (!Array.isArray(blocks) || this._sessionId !== sessionId) return;
+          if (blocks.length <= currentCount) return;
+          const newBlocks = blocks.slice(currentCount);
+          for (const b of newBlocks) {
+            state.blocks.push(b);
+            this._appendBlock(b, false);
+          }
+          if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
+        })
+        .catch(() => {});
+    }
   },
 
   _getState(sessionId) {
@@ -1896,13 +1934,19 @@ const TranscriptView = {
           if (opts.preserveOptimistic) {
             // Transcript is empty but user already sent a message — re-inject their
             // optimistic bubble so it stays visible while Claude is processing.
-            // Any SSE blocks that arrive after this will append directly (sseBuffer=null).
             this._container.appendChild(opts.preserveOptimistic);
             this._container.scrollTop = this._container.scrollHeight;
           } else {
             this._setEmptyPlaceholder();
           }
           this._container.style.opacity = '';
+          // Replay any SSE blocks that arrived during the HTTP fetch.
+          // The non-empty path does this too (httpLastTs replay loop below), but
+          // that path isn't reached when blocks.length === 0, so we do it here.
+          for (const b of (state._sseBuffer ?? [])) {
+            state.blocks.push(b);
+            this._appendBlock(b, false);
+          }
           state._sseBuffer = null;
           return;
         }

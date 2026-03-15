@@ -21,7 +21,7 @@ description: |
   initialized so typed input is handled as a new session.
 
 affected_area: frontend
-fix_cycles: 1
+fix_cycles: 2
 
 ## Reproduction
 
@@ -63,6 +63,16 @@ This shows the empty CTA again, making it appear the session "reset" and the inp
 - A simpler fix: in `TranscriptView.clear()`, check if there's an optimistic/user message in the DOM (`.tv-empty-cta` vs actual content) and skip the `textContent = ''` wipe if user content is already visible.
 
 ## Fix / Implementation Notes
+
+**Fix attempt 3 — SSE buffer replay in empty-transcript path + periodic sync**
+
+Two additional changes in `src/web/public/app.js`:
+
+1. **Empty-transcript `_sseBuffer` replay (Change 1)**: In `load()`, the early-return branch for `blocks.length === 0` now replays any SSE blocks buffered in `state._sseBuffer` before discarding the buffer. Previously these were silently dropped; now if Claude responds quickly (before the HTTP fetch completes), those first response blocks are appended correctly.
+
+2. **`_periodicSync()` method (Changes 2 & 3)**: Added a new method to `TranscriptView` that runs on a 30-second `setInterval` (started from `init()`). It checks for two recovery cases: (a) if the empty CTA is showing while `state.blocks` is empty, it triggers a full `load()` to check for missed content; (b) if `state.blocks` has content, it fetches the transcript incrementally and appends any new trailing blocks. It skips when a `load()` is in progress (`state._sseBuffer !== null`) or when transcript view mode is not `web`.
+
+Version bumped: `app.js?v=0.4.110` → `app.js?v=0.4.111` in `src/web/public/index.html`.
 
 **Fix attempt 2 — save-and-pass-through approach (correct)**
 
@@ -109,6 +119,20 @@ Version bumped: `app.js?v=0.4.109` → `app.js?v=0.4.110` in `src/web/public/ind
 
 The fix is correct, minimal, and well-targeted. No issues found.
 
+### Review attempt 3 — APPROVED
+
+1. **Case 1 (empty CTA for new session)**: Firing `load()` on a legitimately new empty session every 30s is a wasted network round-trip but non-destructive. `load()` returns empty, re-shows CTA, no UX disruption.
+
+2. **Case 2 (`blocks.slice(currentCount)` safety)**: Safe. After `/clear`, `clear()` resets `state.blocks = []` before calling `load()`. By the time `_periodicSync` fires (30s later), `state.blocks` reflects only the post-`/clear` transcript. The incremental slice cannot pick up pre-`/clear` blocks at a stale offset.
+
+3. **Guard logic**: `_getState` initializes without `_sseBuffer` (so it starts `undefined`). The guard `state._sseBuffer !== null && state._sseBuffer !== undefined` correctly skips when `_sseBuffer` is `[]` (load in progress) or `undefined` (never initialized), and proceeds only when `_sseBuffer === null` (load complete). Correct.
+
+4. **`setInterval` cleanup**: No `clearInterval`, but `_periodicSync` guards on `this._sessionId`, `this._container`, and `state.viewMode !== 'web'` — safely no-ops when inapplicable. `TranscriptView` is a singleton; one persistent interval is acceptable.
+
+5. **SSE buffer replay order**: Optimistic bubble re-injected first (line 1937), then buffered SSE blocks appended (lines 1946-1949). Correct: user message → Claude response in DOM order.
+
+6. **Version bump**: `app.js?v=0.4.111` confirmed in `index.html`.
+
 ## QA Results
 <!-- filled by QA subagent -->
 
@@ -138,6 +162,20 @@ All checks passed. Status set to `done`.
 
 All checks passed. Status set to `done`.
 
+### QA run 3 — 2026-03-15 — PASS (fix attempt 3, v=0.4.111)
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (typecheck) | PASS — zero errors |
+| `npm run lint` (ESLint) | PASS — zero errors |
+| Dev server start on port 3099 | PASS — responds on `/api/status` |
+| `app.js?v=0.4.111` in page source | PASS |
+| `TranscriptView._periodicSync` is a function | PASS |
+| `load()` includes `opts = {}` parameter | PASS |
+| `load()` references `_sseBuffer` replay | PASS |
+
+All 4 Playwright checks passed. Status set to `done`.
+
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
 
@@ -146,3 +184,5 @@ All checks passed. Status set to `done`.
 **2026-03-15 — Correct fix approach**: Save the optimistic bubble element before `clear()` wipes the DOM. Let `clear()` proceed normally (wipe + `load()`). In `load()`, when the HTTP fetch returns an empty transcript AND a saved optimistic element is available, re-inject the optimistic bubble instead of showing the empty CTA. This way `load()` runs, `_sseBuffer = []` properly buffers incoming blocks, the state attaches to the new conversation file, and the user's in-flight message stays visible while Claude is processing.
 
 **2026-03-15 — Fix attempt 2 implemented**: `clear()` now saves the optimistic DOM element (instead of returning early), then passes it via `opts.preserveOptimistic` to `load()`. `load()` signature updated to `async load(sessionId, opts = {})`. In the empty-transcript branch, `opts.preserveOptimistic` causes re-injection of the bubble rather than showing the empty CTA. Version bumped to 0.4.110.
+
+**2026-03-15 — Fix attempt 3 implemented**: Two remaining issues addressed. (A) In `load()`, the empty-transcript early-return path discarded `state._sseBuffer` without replaying buffered SSE blocks; fixed by replaying them before nulling the buffer (matching the non-empty path's replay logic). (B) Added `_periodicSync()` method on a 30-second interval as a recovery net for any missed SSE blocks — triggers a full reload if showing empty CTA with no blocks, or an incremental fetch to append new trailing blocks if content exists. Version bumped to 0.4.111.
