@@ -1844,7 +1844,7 @@ const TranscriptView = {
     this._getState(sessionId).viewMode = mode;
   },
 
-  async load(sessionId) {
+  async load(sessionId, opts = {}) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
@@ -1893,7 +1893,15 @@ const TranscriptView = {
         this._container.textContent = '';
         this._pendingToolUses = {};
         if (!blocks.length) {
-          this._setEmptyPlaceholder();
+          if (opts.preserveOptimistic) {
+            // Transcript is empty but user already sent a message — re-inject their
+            // optimistic bubble so it stays visible while Claude is processing.
+            // Any SSE blocks that arrive after this will append directly (sseBuffer=null).
+            this._container.appendChild(opts.preserveOptimistic);
+            this._container.scrollTop = this._container.scrollHeight;
+          } else {
+            this._setEmptyPlaceholder();
+          }
           this._container.style.opacity = '';
           state._sseBuffer = null;
           return;
@@ -2060,19 +2068,13 @@ const TranscriptView = {
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
 
-    // Guard: if the fallback timer already fired and the user has already started
-    // interacting (optimistic message or real content visible in the DOM), do NOT
-    // wipe the container and reload. The late-arriving transcript:clear SSE would
-    // erase the user's optimistic bubble and re-show the empty CTA, making it appear
-    // as if the input was lost. The user's message IS being processed by Claude; we
-    // just need to leave the DOM alone and let transcript:block SSE blocks arrive.
-    if (this._fallbackFired && this._container) {
-      const hasUserContent = !!this._container.querySelector('[data-optimistic="true"], .tv-block');
-      if (hasUserContent) {
-        this._fallbackFired = false;
-        return;
-      }
-    }
+    // If the fallback timer already fired and the user has sent a message, save their
+    // optimistic bubble so we can restore it after load() runs. We cannot skip load()
+    // entirely — it must run to attach the frontend to the new conversation's transcript
+    // file (uuid2.jsonl) and initialize _sseBuffer for incoming blocks.
+    const savedOptimistic = (this._fallbackFired && this._container)
+      ? this._container.querySelector('[data-optimistic="true"]')
+      : null;
     this._fallbackFired = false;
 
     this._pendingToolUses = {};
@@ -2084,7 +2086,7 @@ const TranscriptView = {
     if (this._container) this._container.textContent = '';
     this._compactingEl = null;
     this._isCompacting = false;
-    if (this._sessionId) this.load(this._sessionId);
+    if (this._sessionId) this.load(this._sessionId, { preserveOptimistic: savedOptimistic });
   },
 
   // Clears the view immediately without reloading from server.
