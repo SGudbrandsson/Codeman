@@ -22,6 +22,7 @@ import {
   listBranches,
   getCurrentBranch,
   addWorktree,
+  setupWorktreeArtifacts,
   removeWorktree,
   isWorktreeDirty,
   mergeBranch,
@@ -102,6 +103,12 @@ export function registerWorktreeSessionRoutes(
       await addWorktree(gitRoot, worktreePath, branch, isNew);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create worktree: ${String(err)}`);
+    }
+
+    try {
+      await setupWorktreeArtifacts(gitRoot, worktreePath);
+    } catch (err) {
+      req.log.warn({ err, worktreePath }, '[worktree] setupWorktreeArtifacts failed — continuing');
     }
 
     const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
@@ -279,6 +286,11 @@ export function registerWorktreeSessionRoutes(
       await addWorktree(gitRoot, worktreePath, branch, isNew);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create worktree: ${String(err)}`);
+    }
+    try {
+      await setupWorktreeArtifacts(gitRoot, worktreePath);
+    } catch (err) {
+      req.log.warn({ err, worktreePath }, '[worktree] setupWorktreeArtifacts failed — continuing');
     }
     const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
       Promise.all([ctx.getGlobalNiceConfig(), ctx.getModelConfig(), ctx.getClaudeModeConfig()]),

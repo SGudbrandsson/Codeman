@@ -2,279 +2,175 @@
 
 type: feature
 status: done
-title: Mobile hamburger menu redesign — slide-up drawer with session search
+title: Worktree post-creation setup — symlink node_modules and auto-start dev server
 description: |
-  Redesign the mobile hamburger menu to open as a large bottom drawer (sheet) that slides up
-  from the bottom of the screen.
+  Two improvements to the worktree lifecycle to reduce manual setup steps.
 
-  Current behavior:
-  - Hamburger menu on mobile opens a small menu/overlay
+  ## Problem 1 — No node_modules after worktree creation
+  When a new git worktree is created, node_modules is not present (not tracked by git).
+  This means the worktree cannot run until dependencies are installed. The QA stage hits
+  missing module errors or the user has to manually run npm install.
 
-  Desired behavior:
-  - Tapping hamburger opens a large bottom drawer (sheet) that slides up
-  - Drawer should take up most of the screen height
-  - Drawer includes a search field at the top to filter/search sessions
-  - Sessions list displayed below the search field
-  - Smooth animation sliding up from bottom
-  - Tap outside or swipe down to dismiss
+  Fix: After worktree creation, add a post-creation step that symlinks node_modules (and any
+  other necessary runtime artifacts like .env, dist/ references, etc.) from the parent repo
+  directory into the new worktree directory. Symlink is preferred over copy — fast, low disk
+  usage, and keeps them in sync.
 
-constraints: |
-  - Feel native on mobile (large tap targets, drawer pattern common on iOS/Android)
-  - Search should filter sessions in real-time as user types
-  - Should be consistent with existing mobile design language in the codebase
-  - Smooth slide-up animation, swipe down or tap outside to dismiss
-affected_area: frontend
+  Look at where worktrees are created in the backend (session/worktree creation code) and add
+  the symlink step there.
+
+  ## Problem 2 — Dev server not auto-started at QA phase
+  At the end of the task runner workflow, the "How to test" / Phase 6 output tells the user
+  how to start the dev server manually, but never actually starts it. The user always has to
+  explicitly ask.
+
+  Fix: After the task runner completes its final commit, automatically start the dev server on
+  the worktree's assigned port (the session already has an assignedPort field). Print the URL
+  so the user knows where to access it. Use the same nohup + tsx startup pattern documented in
+  the codebase (nohup npx tsx src/index.ts web --port PORT > /tmp/codeman-PORT.log 2>&1 &).
+
+  This applies to the codeman-task-runner skill and potentially the server startup logic.
+
+affected_area: backend
 fix_cycles: 0
 
 ## Root Cause / Spec
 
-### Current state
+### Problem 1 — Missing node_modules in worktrees
 
-The hamburger button lives in `keyboard-accessory.js` (the bottom accessory bar, always visible
-on mobile). Its click handler calls `SessionDrawer.toggle()`.
+**Root cause:** `git worktree add` creates a clean checkout of the branch's tracked files. `node_modules/` is gitignored (not tracked), so it is never copied into the new worktree directory. Same applies to `dist/` (build output, also gitignored).
 
-`SessionDrawer` is a singleton defined in `app.js` (~line 17096). On mobile (`mobile.css`,
-~line 2411) the drawer is currently:
-- `position: fixed; top: var(--header-height, 48px); right: 0; width: 260px; max-height: 60vh`
-- Slides in from the **right** with `translateX(100%)` → `translateX(0)` on `.open`
-- A small right-anchored side-panel, not a bottom sheet
+**Code location:** Worktree creation happens in two route handlers in
+`src/web/routes/worktree-session-routes.ts`:
+- `POST /api/sessions/:id/worktree` (line 80)
+- `POST /api/cases/:name/worktree` (line 264)
 
-The `session-drawer-handle` element exists in `index.html` but is `display: none` on mobile
-(never shown). No swipe-down-to-dismiss logic exists.
+Both handlers call `addWorktree(gitRoot, worktreePath, branch, isNew)` from
+`src/utils/git-utils.ts` (line 53). The actual `git worktree add` exec is on line 59.
 
-Desktop uses the same element with a wider right-panel style (`styles.css` ~line 980).
+**Implementation spec:**
 
-### Implementation spec
+Add a new exported async function `setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void>` in `src/utils/git-utils.ts`.
 
-#### 1. Mobile CSS (`mobile.css`) — override `.session-drawer` to a bottom sheet
+This function symlinks the following artifacts from `gitRoot` into `worktreePath`, but only if the source exists and the destination does not already exist:
+- `node_modules` (always needed to run tsx/npm scripts)
+- `dist` (optional — only if it exists in gitRoot; avoids build step)
 
-Within the existing `touch-device`-scoped block or a dedicated `@media (max-width: 768px)`
-block (consistent with existing breakpoints), replace the mobile overrides for `.session-drawer`:
+Use `fs.symlink(src, dest, 'dir')` from `node:fs/promises`.
 
-```
-/* Bottom sheet — slides up from bottom of viewport */
-.session-drawer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: auto;
-  width: 100%;
-  max-width: none;
-  height: 88vh;                         /* most of screen height */
-  max-height: 88vh;
-  border-radius: 16px 16px 0 0;
-  transform: translateY(100%);
-  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);  /* iOS sheet spring */
-  border-left: none;
-  border-top: 1px solid rgba(255,255,255,0.1);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;                     /* clip children; list scrolls internally */
-  padding-bottom: var(--safe-area-bottom, 0px);
-}
-.session-drawer.open {
-  transform: translateY(0);
-}
-```
+Catch and swallow errors per-artifact (e.g. symlink already exists, no permission) — a failed symlink should be logged but must not abort worktree creation.
 
-Show the drag handle:
-```
-.session-drawer-handle {
-  display: block;
-  width: 36px; height: 4px;
-  background: rgba(255,255,255,0.2);
-  border-radius: 2px;
-  margin: 10px auto 6px;
-  flex-shrink: 0;
-}
-```
+Call `setupWorktreeArtifacts(gitRoot, worktreePath)` in both POST handlers, after `addWorktree()` succeeds and before `new Session(...)` is constructed. Since it's async, `await` it. Wrap in try/catch so a failure logs a warning but does not prevent the session from being created.
 
-The overlay gets a fade-in animation (already has `.open` display toggle — keep as-is, but
-optionally add `transition: opacity 0.2s`).
+**Rationale for symlink over copy:** Fast (O(1)), zero additional disk usage, stays in sync with parent if deps are updated (npm install in main repo benefits all worktrees).
 
-#### 2. Search field — add to DOM in `index.html`
+---
 
-Inside `<div class="session-drawer" id="sessionDrawer">`, insert a search input immediately
-after the title row:
+### Problem 2 — Dev server not auto-started after task runner commit
 
-```html
-<div class="session-drawer-search-wrap">
-  <input
-    type="search"
-    id="sessionDrawerSearch"
-    class="session-drawer-search"
-    placeholder="Search sessions…"
-    autocomplete="off"
-    autocorrect="off"
-    autocapitalize="off"
-    spellcheck="false"
-  />
-</div>
-```
+**Root cause:** The `codeman-task-runner` skill (`~/.claude/skills/codeman-task-runner/SKILL.md`) Phase 6 only **prints** the nohup command for the user to run manually. It never executes it.
 
-Style in `mobile.css` (`font-size: 16px` mandatory to prevent iOS auto-zoom):
-```css
-.session-drawer-search-wrap {
-  padding: 8px 14px 6px;
-  flex-shrink: 0;
-}
-.session-drawer-search {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 10px;
-  color: #e2e8f0;
-  font-size: 16px;            /* iOS: prevent auto-zoom */
-  font-family: inherit;
-  outline: none;
-  box-sizing: border-box;
-}
-.session-drawer-search::placeholder { color: #4b5563; }
-.session-drawer-search:focus { background: rgba(255,255,255,0.09); border-color: rgba(96,165,250,0.4); }
-```
+**Code location:** Phase 6 template in `~/.claude/skills/codeman-task-runner/SKILL.md` lines 229–252.
 
-#### 3. Session filtering logic — in `SessionDrawer._render()` / `open()` (app.js)
+**Implementation spec:**
 
-In `SessionDrawer.open()`:
-- Grab the search input, clear its value, attach an `input` event listener that calls
-  `SessionDrawer._filterSessions(query)` then re-renders only the list rows (not the whole
-  drawer). Focus the input after a short delay (iOS needs ~50ms after sheet animation).
-- On `close()`, remove the event listener and clear the filter state.
+Modify Phase 5 of the skill (after the commit completes on either the clean or NEEDS REVIEW path) to add a **"Auto-start dev server"** step before the Phase 6 output. The runner should:
 
-Add `_searchQuery: ''` to the SessionDrawer object.
+1. Check if `assignedPort` is known (from `worktreeNotes` in TASK.md or via the session API).
+2. If known, run the following bash commands in the worktree directory:
+   ```bash
+   nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
+   sleep 6 && curl -s http://localhost:<assignedPort>/api/status
+   ```
+3. Print the result — either a success confirmation with the URL, or a warning if the server failed to start.
+4. If `assignedPort` is unknown, skip and note it in the Phase 6 output (the existing manual command format).
 
-In `SessionDrawer._render()`, filter the sessions before building groups:
-- When `_searchQuery` is non-empty, perform a case-insensitive substring match on
-  `app.getSessionName(s)` and `s.workingDir`. Sessions that don't match are excluded from
-  the list. Project groups that become empty are hidden (don't render the group header).
-- Keep the footer (New Project / Clone / Resume) always visible regardless of filter.
+The Phase 6 template's "Dev server (if not already running):" section should be updated to say "Dev server (started automatically — verify with):" followed by the curl health-check command, rather than the full nohup command (since it was already started).
 
-Add a helper:
-```js
-_filterSessions(query) {
-  this._searchQuery = query.trim().toLowerCase();
-  this._render();
-},
-```
+**Affected file:** `~/.claude/skills/codeman-task-runner/SKILL.md`
 
-#### 4. Swipe-down-to-dismiss gesture (app.js, SessionDrawer)
+---
 
-Add touch handlers directly on the `.session-drawer` element (not on `.main` to avoid
-conflict with `SwipeHandler`):
+### Affected area
 
-- On `touchstart`: record `_swipeStartY`
-- On `touchmove`: if delta Y > 10px and list is scrolled to top (`sessionDrawerList.scrollTop === 0`),
-  visually drag the sheet with `transform: translateY(Xpx)` (without transition, for responsiveness).
-  Prevent default only when dragging.
-- On `touchend`: if dragged > 120px or velocity > 0.4px/ms, call `SessionDrawer.close()` and
-  reset transform. Otherwise spring back (re-add transition, set `translateY(0)`).
+`backend` for Problem 1 (TypeScript source changes to `git-utils.ts` and `worktree-session-routes.ts`).
+`logic` / skill change for Problem 2 (markdown skill file edit only, no TypeScript).
 
-Guard: only attach these handlers on `MobileDetection.isTouchDevice()`. Clean up in `close()`.
-
-This is consistent with how `SwipeHandler` disambiguates horizontal vs vertical (same
-`LOCK_THRESHOLD` / `FLING_VELOCITY` pattern).
-
-#### 5. Disable swipe-session-switch when drawer is open
-
-Already handled: `SwipeHandler._isDisabled()` already checks
-`document.getElementById('sessionDrawer').classList.contains('open')` (line 546).
-
-#### 6. Desktop: no change
-
-The existing right-panel styles in `styles.css` are unaffected. The new mobile CSS overrides
-only apply inside `mobile.css` (loaded only on touch devices via JS class `touch-device` or
-media query — confirm the scoping matches existing patterns).
-
-The mobile.css session-drawer block at line 2411 is **not** inside a media query — it applies
-globally and overrides the desktop `styles.css` rules. The existing approach relies on the
-mobile.css loading order. Keep the same approach: the block at ~line 2411 replaces the
-right-anchored panel with the bottom sheet for all screens where mobile.css rules apply. Since
-the accessory bar (and hamburger) is only shown on touch devices, desktop users always use the
-right-panel triggered by a different path.
-
-#### Files to change
-
-| File | Change |
-|------|--------|
-| `src/web/public/index.html` | Add `<input id="sessionDrawerSearch">` inside `#sessionDrawer` after `.session-drawer-title` |
-| `src/web/public/mobile.css` | Replace mobile session-drawer CSS with bottom-sheet layout; add search input styles; show handle |
-| `src/web/public/app.js` | `SessionDrawer`: add `_searchQuery`, filter logic in `_render()`, focus search on `open()`, swipe-down gesture handlers |
+Both changes are minimal and isolated. No schema changes, no new dependencies.
 
 ## Fix / Implementation Notes
 
-### Changes made
+### Problem 1 — `setupWorktreeArtifacts` in `git-utils.ts`
 
-**`src/web/public/index.html`**
-- Added `<div class="session-drawer-search-wrap"><input id="sessionDrawerSearch" ...></div>` after `.session-drawer-title`, before `#sessionDrawerList`
-- Bumped `mobile.css` version query string to `?v=0.1675`
-- Bumped `app.js` version query string to `?v=0.4.109`
+Added `import fs from 'node:fs/promises'` to `src/utils/git-utils.ts` (the file previously only used the sync `fs` exports via named imports, so the default import is new but non-conflicting).
 
-**`src/web/public/mobile.css`**
-- Replaced `.session-drawer` block: changed from `position: fixed; top: ...; right: 0; width: 260px; transform: translateX(100%)` (right-anchored side panel) to a full-width bottom sheet with `bottom: 0; height: 88vh; border-radius: 16px 16px 0 0; transform: translateY(100%); transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1)`.
-- Changed `.session-drawer.open` from `translateX(0)` to `translateY(0)`.
-- Changed `.session-drawer-handle` from `display: none` to `display: block` with pill style (36×4px, rgba white).
-- Added `.session-drawer-search-wrap` and `.session-drawer-search` styles including `font-size: 16px` to prevent iOS auto-zoom.
+Added `setupWorktreeArtifacts(gitRoot, worktreePath)` as a new exported async function. It iterates over `['node_modules', 'dist']`, checks existence of the source in `gitRoot` and absence of the destination in `worktreePath`, and calls `fs.symlink(src, dest, 'dir')`. Each artifact is wrapped in its own try/catch so one failure cannot affect the others or abort worktree creation. Failures are logged via `console.warn`.
 
-**`src/web/public/app.js`** (SessionDrawer singleton)
-- Added properties: `_searchQuery: ''`, `_searchInputListener: null`, `_swipeStartY: 0`, `_swipeStartTime: 0`, `_swiping: false`.
-- `open()`: clears search value, attaches `input` event listener to `#sessionDrawerSearch`, focuses input after 350ms delay (post-animation), calls `_attachSwipeHandlers()` on touch devices.
-- `close()`: resets drawer `transform`/`transition` style (for swipe state), detaches swipe handlers, clears `_searchQuery`, removes `input` event listener.
-- Added `_filterSessions(query)`: sets `_searchQuery` and calls `_render()`.
-- Added `_attachSwipeHandlers(drawer)` / `_detachSwipeHandlers(drawer)`: touchstart/move/end handlers for swipe-down-to-dismiss. Guards list scroll position so scroll-up inside the list isn't intercepted. Closes on delta > 120px or velocity > 0.4px/ms; otherwise springs back.
-- `_render()`: reads `this._searchQuery`; when non-empty, skips sessions whose name and workingDir don't contain the query (case-insensitive substring). Also skips empty project groups when filtering is active.
+In `src/web/routes/worktree-session-routes.ts`:
+- Added `setupWorktreeArtifacts` to the named imports from `../../utils/git-utils.js`.
+- In `POST /api/sessions/:id/worktree` (line ~102): added a try/catch block calling `await setupWorktreeArtifacts(gitRoot, worktreePath)` immediately after the `addWorktree()` success block and before port allocation / `new Session(...)`. Failures are logged with `req.log.warn` and do not return an error response.
+- In `POST /api/cases/:name/worktree` (line ~279): same pattern applied.
+
+### Problem 2 — Auto-start dev server in `codeman-task-runner` SKILL.md
+
+Modified Phase 5 in `~/.claude/skills/codeman-task-runner/SKILL.md` to add an **"Auto-start dev server"** step that runs after the git commit on both the clean and NEEDS REVIEW paths. The step:
+1. Extracts `assignedPort` from TASK.md's worktreeNotes by matching `Assigned dev port for this worktree: <N>`.
+2. If found, runs `nohup npx tsx src/index.ts web --port <port> > /tmp/codeman-<port>.log 2>&1 &` followed by `sleep 6 && curl -s http://localhost:<port>/api/status`.
+3. Reports success or a warning based on the curl response.
+4. Gracefully skips if no port is found (falls back to manual instructions in Phase 6).
+
+Updated the Phase 6 template's "Dev server" section from "if not already running" (nohup command) to "started automatically — verify with" (curl health-check only), with a fallback block for the case where auto-start was skipped.
+
+Updated the Phase 6 rules bullet to clarify the auto-start behaviour and the fallback to port 3099.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Task coverage — all requirements met:**
-- Bottom sheet slides up from bottom: `.session-drawer` changed from `translateX(100%)` right-panel to `translateY(100%)` full-width bottom sheet (88vh). Confirmed in mobile.css.
-- Takes up most of screen height: `height: 88vh`. Correct.
-- Search field at top: `#sessionDrawerSearch` input added to `index.html` immediately after `.session-drawer-title`. Real-time filtering wired via `input` event listener in `open()`.
-- Sessions list below search: DOM order is handle → title → search-wrap → list → footer. Correct.
-- Smooth slide-up animation: `transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1)`. Native iOS sheet spring curve. Correct.
-- Swipe-down to dismiss: touchstart/move/end handlers attached only on `isTouchDevice()`. Dismiss thresholds (120px delta or 0.4px/ms velocity) are reasonable and consistent with spec.
-- Tap outside to dismiss: overlay `onclick="SessionDrawer.close()"` already existed and is unchanged.
+**git-utils.ts — `setupWorktreeArtifacts`**
+- Import `fs from 'node:fs/promises'` is non-conflicting with the existing named sync imports from `node:fs`. Correct.
+- `WORKTREE_ARTIFACTS as const` — prevents mutation, gives literal tuple type. Good.
+- `existsSync(src)` guard before `fs.symlink`: correct. There is a theoretical TOCTOU window, but this is a non-security-sensitive one-shot path and the inner `catch` handles any race outcome acceptably.
+- `existsSync(dest)` guard: correctly prevents re-symlinking if the destination already exists (e.g., re-used worktree path or prior run).
+- `fs.symlink(src, dest, 'dir')`: correct API. Absolute source path (via `join(gitRoot, artifact)`) — correct; relative symlinks would break if worktrees are moved.
+- Per-artifact `try/catch` with `console.warn`: appropriate since the function has no access to `req.log`. Outer handler adds a second safety layer with `req.log.warn`.
+- No implicit `any`, no unused variables. TypeScript-clean.
 
-**Desktop leak question (search input in index.html, styled only in mobile.css):**
-`mobile.css` is loaded via `media="(max-width: 1023px)"`, so `.session-drawer-search-wrap` and `.session-drawer-search` rules do not apply on desktop (≥1024px). The raw unstyled `<input>` element exists in the DOM for all viewport sizes, but on desktop the `.session-drawer` itself renders as the existing right-panel (300px wide, translateX). The search input will appear with its browser-default styling inside the desktop drawer. This is a minor cosmetic imperfection on desktop — the unstyled input renders with white background, default font, inside the dark drawer — but it is consistent with the spec note ("Desktop: no change") and does not break desktop functionality. The spec explicitly calls out this approach (mobile.css overrides without a media query inside the file, matching existing patterns). Acceptable.
+**worktree-session-routes.ts**
+- `setupWorktreeArtifacts` correctly added to named imports from `git-utils.js`.
+- Both POST handlers call it immediately after `addWorktree()` succeeds and before port allocation / `new Session()` — matches spec exactly.
+- Outer `try/catch` uses `req.log.warn` and does NOT return an error — correct non-blocking pattern.
+- Minor style inconsistency (missing blank line before `const [[globalNice...` in the cases handler vs. the sessions handler), but not a defect.
 
-**Correctness checks:**
+**SKILL.md — Phase 5 auto-start**
+- Auto-start step added to Phase 5 for both clean and NEEDS REVIEW paths.
+- Port extraction from `worktreeNotes` is clearly documented with graceful skip if not found.
+- Phase 6 template correctly updated to "started automatically — verify with:" with a fallback block for unknown-port case.
+- No `--host` flag used in the nohup command — consistent with the documented gotcha in MEMORY.md.
+- Fallback port 3099 aligns with the QA subagent's existing default.
 
-1. `_searchInputListener` double-registration: `open()` removes any prior listener before adding a new one (`removeEventListener` then `addEventListener`). No leak path.
-2. `_detachSwipeHandlers` called at start of `_attachSwipeHandlers` — safe guard against double-open.
-3. Swipe: `_onTouchMove` checks `list.scrollTop === 0` before intercepting, so in-list scrolling is unaffected. `e.preventDefault()` only called when dragging confirmed (deltaY > 10 and at top of list). `passive: false` on touchmove correctly required for `preventDefault` to work; touchstart/end correctly marked `passive: true`.
-4. `touchend` reads `e.changedTouches[0].clientY` (correct for touchend, not `e.touches[0]`). Correct.
-5. Spring-back: restores `transition` before setting `translateY(0)` — correct sequence, will animate back.
-6. `close()` clears `drawer.style.transform` and `drawer.style.transition` — ensures CSS class transition resumes cleanly on next open.
-7. `_filterSessions` guards `(query || '').trim()` — no crash if called with null/undefined.
-8. Empty-group skip only when `searchQ` is truthy — no regression in normal (non-filtered) rendering.
-9. `setTimeout(() => { try { searchEl.focus(); } catch(e) {} }, 350)` — 350ms matches the 0.32s animation duration. Silent try/catch is acceptable for focus (permission errors on some browsers). This auto-focuses search on open, which on desktop (if drawer is opened via the rare non-hamburger path) would pull keyboard focus unexpectedly; however the search input is only wired in `open()` unconditionally, not gated on mobile. Given desktop uses a different trigger path and the focus call is speculative (try/catch), this is acceptable.
-10. CSS `font-size: 16px` on `.session-drawer-search` prevents iOS auto-zoom. Correct.
-11. Version bumps: `mobile.css?v=0.1675`, `app.js?v=0.4.109`. Both bumped. Correct.
-
-**No issues found requiring a fix cycle.** Implementation faithfully follows the spec. Code quality is clean, no implicit any, no unused variables, event listener lifecycle is correct.
+No issues found. Implementation is correct, minimal, well-guarded, and consistent with existing patterns.
 
 ## QA Results
 <!-- filled by QA subagent -->
 
-### QA run — 2026-03-15 PASS
+**Date:** 2026-03-15
 
-| Check | Result |
-|-------|--------|
-| `tsc --noEmit` | PASS — zero errors |
-| `npm run lint` | PASS — zero ESLint errors |
-| `#sessionDrawerSearch` exists in DOM | PASS |
-| `mobile.css?v=0.1675` referenced in page | PASS |
-| `app.js?v=0.4.109` referenced in page | PASS |
+| Check | Result | Notes |
+|---|---|---|
+| `tsc --noEmit` | PASS | Zero type errors |
+| `npm run lint` | PASS | Zero ESLint warnings/errors |
+| Dev server startup (port 3099) | PASS | Server responded with valid JSON from `/api/status` |
+| `setupWorktreeArtifacts` exported | PASS | Exported from `src/utils/git-utils.ts` and imported+called in both POST handlers in `worktree-session-routes.ts` |
 
 All checks passed. Status set to `done`.
 
 ## Decisions & Context
-<!-- append-only log of key decisions made during the workflow -->
 
-2026-03-15: Followed spec exactly. Focus delay set to 350ms (spec said 50ms but noted iOS needs time after animation completes; used 350ms to match the 0.32s animation duration). Swipe handlers attached/detached per open/close to avoid leaking listeners. Footer remains in the scrollable list (existing pattern) so it's always accessible. Desktop `styles.css` `.session-drawer` block left untouched — `mobile.css` overrides it for touch devices. `_searchInputListener` stored as a property so the exact function reference can be removed in `close()`.
+- **Symlink vs copy:** Chose symlink (O(1), zero disk) as specified. The `'dir'` type argument to `fs.symlink` is required on Windows but ignored on Linux/macOS; kept for cross-platform correctness.
+- **Per-artifact try/catch inside `setupWorktreeArtifacts`:** A missing `dist/` or a pre-existing `node_modules` symlink must not kill the whole function. Outer try/catch in the route handlers adds a second safety layer but inner catches carry the real per-artifact resilience.
+- **`existsSync` for destination check:** Using sync existence check before `fs.symlink` is fine since this is a one-shot setup path, not a hot loop. This matches the existing pattern in `git-utils.ts`.
+- **`console.warn` inside `setupWorktreeArtifacts`:** The function has no access to the Fastify request logger (`req.log`), so `console.warn` is the appropriate choice. The route handler re-logs via `req.log.warn` for the outer error.
+- **Skill auto-start placement:** The auto-start step is placed in Phase 5 (after commit, before Phase 6 output) rather than in Phase 6 itself, so that the Phase 6 output can reference an already-running server. This matches the spec.
+- **Graceful fallback when port unknown:** If `assignedPort` is not extractable from TASK.md, the skill skips auto-start and shows the full nohup command in the Phase 6 template. This satisfies the "must not break Phase 6 when no port is available" constraint.
