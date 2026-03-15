@@ -3061,23 +3061,28 @@ class CodemanApp {
     // touchstart on buttons while keyboard is visible, preventDefault to stop
     // the dismiss-swallows-tap behavior, and trigger the click programmatically.
     if (MobileDetection.isTouchDevice()) {
-      const addKeyboardTapFix = (container) => {
+      const addKeyboardTapFix = (container, { requireKeyboardVisible = true } = {}) => {
         if (!container) return;
         container.addEventListener('touchstart', (e) => {
-          if (!KeyboardHandler.keyboardVisible) return;
+          if (requireKeyboardVisible && !KeyboardHandler.keyboardVisible) return;
           const btn = e.target.closest('button');
           if (!btn) return;
           e.preventDefault();
           btn.click();
-          // Refocus terminal so keyboard stays open (e.g. voice input button)
-          if (typeof app !== 'undefined' && app.terminal) {
+          // Refocus terminal so keyboard stays open (e.g. voice input button),
+          // but skip refocus for the plus button — it opens the action sheet / file
+          // picker and re-focusing the terminal would dismiss it immediately.
+          const isPlusBtn = btn.id === 'composePlusBtn';
+          if (!isPlusBtn && typeof app !== 'undefined' && app.terminal) {
             app.terminal.focus();
           }
         }, { passive: false });
       };
       addKeyboardTapFix(document.querySelector('.toolbar'));
       addKeyboardTapFix(document.querySelector('.welcome-overlay'));
-      addKeyboardTapFix(document.getElementById('mobileInputPanel'));
+      // mobileInputPanel: do NOT guard behind keyboardVisible — the plus button
+      // must work even when the keyboard is closed (see fix/mobile-plus-button-upload).
+      addKeyboardTapFix(document.getElementById('mobileInputPanel'), { requireKeyboardVisible: false });
     }
     // System stats polling deferred until sessions exist (started in handleInit/session:created)
     // Setup online/offline detection

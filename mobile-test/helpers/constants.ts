@@ -8,6 +8,7 @@ export const PORTS = {
   DEVICE_MATRIX: 3205,
   VISUAL_REGRESSION: 3206,
   ACCESSIBILITY: 3207,
+  MOBILE_COMPOSE_UPLOAD: 3208,
 } as const;
 
 // CSS Selectors
@@ -64,8 +65,8 @@ export const BREAKPOINTS = {
 
 // Keyboard constants (match app.js KeyboardHandler)
 export const KEYBOARD = {
-  SHOW_THRESHOLD: 150,    // heightDiff > 150px triggers show
-  HIDE_THRESHOLD: 100,    // heightDiff < 100px triggers hide
+  SHOW_THRESHOLD: 150, // heightDiff > 150px triggers show
+  HIDE_THRESHOLD: 100, // heightDiff < 100px triggers hide
   TYPICAL_IOS_HEIGHT: 336,
   FOCUSIN_DELAY: 400,
   ANIMATION_DELAY: 150,
@@ -87,7 +88,7 @@ export const SWIPE = {
 export const SUBAGENT = {
   MOBILE_CARD_HEIGHT: 110,
   MOBILE_CARD_GAP: 4,
-  MOBILE_CARD_STRIDE: 114,   // height + gap
+  MOBILE_CARD_STRIDE: 114, // height + gap
   TOOLBAR_OFFSET: 40,
   DEFAULT_HEADER_HEIGHT: 36,
 } as const;
