@@ -2712,12 +2712,42 @@ html.mobile-init .file-browser-panel {
   text-overflow: ellipsis;
 }
 
+/* ============================================================================
+   MOBILE BOTTOM-SHEET DRAWER PATTERN
+   All bottom-sheet drawers in this app use this open/close pattern:
+
+   HTML structure:
+     <div class="some-backdrop" id="someBackdrop" onclick="close()"></div>
+     <div class="some-sheet" id="someSheet">...</div>
+
+   Opening: JS adds .open to both backdrop and sheet.
+     - Backdrop fades in via opacity transition.
+     - Sheet slides up via @keyframes sheet-up (defined near #newPickerModal below).
+       Using keyframe animation — not a CSS transition — because animations fire
+       reliably on every class add, even on iOS WebKit where transitions can miss
+       the first frame if there was no prior paint in the transformed state.
+
+   Closing: JS removes .open from both.
+     - Backdrop fades out via opacity transition.
+     - Sheet immediately returns to translateY(100%) (off-screen). No close animation
+       (matches the #newPickerModal pattern).
+
+   z-index convention:
+     session-drawer-overlay: 8999 / session-drawer: 9000
+     compose-action-backdrop: 10002 / compose-action-sheet: 10003
+     (always above session drawer)
+
+   Background color: #0d1117 — same as .session-drawer in styles.css.
+   Border: 1px solid rgba(255,255,255,0.07) — same as session-drawer border-left.
+   ============================================================================ */
+
 /* Plus action sheet */
 .compose-action-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 10002;          /* above everything including session drawer (9000) */
+  z-index: 10002;
   background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.22s ease;
@@ -2731,8 +2761,9 @@ html.mobile-init .file-browser-panel {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 10003;          /* above backdrop */
-  background: #1a1a2e;
+  z-index: 10003;
+  background: #0d1117;
+  border-top: 1px solid rgba(255,255,255,0.07);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 8px 16px calc(16px + var(--safe-area-bottom));
@@ -2740,13 +2771,13 @@ html.mobile-init .file-browser-panel {
   flex-direction: column;
   gap: 4px;
   transform: translateY(100%);
-  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .compose-action-sheet.open {
   transform: translateY(0);
+  animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .compose-action-item {
-  background: #252540;
+  background: #161b22;
   color: #e2e8f0;
   border: none;
   border-radius: 10px;
@@ -2756,7 +2787,7 @@ html.mobile-init .file-browser-panel {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.compose-action-item:active { background: #2a2a4e; }
+.compose-action-item:active { background: #1a1a2e; }
 .compose-action-cancel {
   background: none;
   color: #94a3b8;

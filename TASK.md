@@ -1,24 +1,29 @@
 # Task
 
 type: bug
-status: done
-title: Mobile upload options — convert to bottom drawer and fix z-index overlap with working indicator
+status: fixing
+title: Mobile upload options — match drawer animation/colors to app pattern, fix working indicator z-index
 description: |
-  Two related issues with the mobile plus/upload UI.
+  Revised scope based on screenshot review. Four issues:
 
-  ## Problem 1 — Upload options should be a bottom drawer
-  Currently when the user taps the plus (+) button on mobile, upload/attach options appear
-  hovering above the plus icon as a floating menu/popup. This should instead be a bottom
-  drawer that slides up from the bottom of the screen (same pattern as the hamburger menu
-  drawer / SessionDrawer).
+  1. ANIMATION: The upload sheet appears instantly with no slide-up animation. It should use
+     the exact same slide-up drawer animation as the other drawers in the app (e.g. project/
+     testcase drawer). Find that pattern and apply it to the upload sheet.
 
-  ## Problem 2 — Working/loading animation overlaps the drawer
-  The working/loading animation (shown when a session is busy) is rendered at a z-index that
-  puts it on top of the upload drawer/popup. When the user opens the upload options while
-  something is loading, the animation covers the drawer content, making it unusable.
+  2. COLOR SCHEME: The upload sheet uses a different (lighter/mismatched) background color
+     compared to the rest of the dark UI. It should match the same dark color variables used
+     by other drawers.
 
-  Fix: Ensure the upload drawer has a higher z-index than the working indicator, OR ensure
-  the working animation is hidden/suppressed while the upload drawer is open.
+  3. WORKING ANIMATION Z-INDEX: The three-dot loading/working animation bleeds through the
+     upload drawer — dots are visible overlapping the drawer content. Suppress or hide the
+     working indicator whenever the upload drawer is open.
+
+  4. DOCUMENT THE PATTERN: Once the upload sheet uses the shared drawer pattern, add a brief
+     comment block documenting the drawer pattern (animation, color variables, how to add new
+     drawers) in an appropriate code location for future developers.
+
+  NOTE: The drawer is already full-width and bottom-anchored — its layout/structure is fine.
+  Only animation, color, z-index, and documentation need to change.
 
 affected_area: frontend
 fix_cycles: 0
@@ -211,7 +216,7 @@ The typing indicator suppression in `_openActionSheet` is the belt-and-suspender
 
 ## Fix / Implementation Notes
 
-### Changes made
+### Changes made (round 2 — animation/color refinement)
 
 **mobile.css** (`src/web/public/mobile.css`, lines 2715–2735):
 - Replaced the static "Plus action sheet" CSS block with an animated bottom drawer pattern.
