@@ -154,7 +154,6 @@ body {
   font-size: 0.75rem;
   color: var(--text-dim);
   flex-shrink: 0;
-  contain: layout style;
 }
 
 .sib-left {

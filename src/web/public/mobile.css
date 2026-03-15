@@ -358,19 +358,14 @@ html.mobile-init .file-browser-panel {
     top: 0;
     left: 0;
     right: 0;
-    height: 28px;
+    height: calc(28px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
     z-index: 201;
-    background: linear-gradient(135deg, rgba(96,165,250,0.15), rgba(59,130,246,0.08));
-    border-bottom: 1px solid rgba(96,165,250,0.25);
-    padding: 0 10px;
-    padding-left: calc(10px + var(--safe-area-left));
-    padding-right: calc(10px + var(--safe-area-right));
+    background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(59,130,246,0.12));
+    border-bottom: 1px solid rgba(96,165,250,0.3);
+    padding-left: calc(10px + env(safe-area-inset-left, 0px));
+    padding-right: calc(10px + env(safe-area-inset-right, 0px));
     font-size: 0.8rem;
-  }
-
-  .ios-device .session-indicator-bar {
-    padding-top: var(--safe-area-top);
-    height: calc(28px + var(--safe-area-top));
   }
 
   .sib-session-name {
@@ -381,21 +376,22 @@ html.mobile-init .file-browser-panel {
   .sib-project {
     font-size: 0.7rem;
     max-width: 30vw;
-    background: rgba(255,255,255,0.08);
-    border-color: rgba(255,255,255,0.15);
+    color: rgba(147, 197, 253, 0.9);
+    background: rgba(96,165,250,0.15);
+    border-color: rgba(96,165,250,0.3);
   }
 
   /* Ultra-compact header for mobile - fixed below indicator bar */
   .header {
     position: fixed;
-    top: 28px;
+    top: calc(28px + env(safe-area-inset-top, 0px));
     left: 0;
     right: 0;
     min-height: 36px;
     max-height: 36px;
     padding: 0.15rem 0.3rem;
-    padding-left: calc(0.3rem + var(--safe-area-left));
-    padding-right: calc(0.3rem + var(--safe-area-right));
+    padding-left: calc(0.3rem + env(safe-area-inset-left, 0px));
+    padding-right: calc(0.3rem + env(safe-area-inset-right, 0px));
     gap: 0.15rem;
     overflow: hidden;
     background: #0a0a0a;
@@ -403,22 +399,11 @@ html.mobile-init .file-browser-panel {
     z-index: 200;
   }
 
-  /* iOS safe area adjustment for fixed header - header extends into notch area */
-  .ios-device .header {
-    top: calc(28px + var(--safe-area-top));
-    padding-top: 0.15rem;
-    min-height: 36px;
-    max-height: 36px;
-  }
-
   /* Add top margin to main content to account for indicator bar + header */
   .main {
-    margin-top: 70px;
+    margin-top: calc(70px + env(safe-area-inset-top, 0px));
   }
 
-  .ios-device .main {
-    margin-top: calc(70px + var(--safe-area-top));
-  }
 
   .header-right {
     padding-left: 0.2rem;
