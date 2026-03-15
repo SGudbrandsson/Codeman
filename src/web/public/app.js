@@ -1837,14 +1837,10 @@ const TranscriptView = {
     if (state._sseBuffer !== null && state._sseBuffer !== undefined) return;
     if (state.viewMode !== 'web') return;
 
-    // Case 1: showing empty CTA but session may have content — trigger a full reload
-    const showingEmptyCTA = !!this._container.querySelector('.tv-empty-cta');
-    if (showingEmptyCTA && state.blocks.length === 0) {
-      this.load(sessionId);
-      return;
-    }
-
-    // Case 2: have content — do an incremental check for missed trailing blocks
+    // Only sync when there is cached content — incremental check for missed trailing blocks.
+    // Do NOT trigger load() when showing the empty CTA: that is the correct state after
+    // /clear, and an unsolicited reload would pull in content from an active session that
+    // resumed in the background (e.g. an orchestrator that kept running after clear).
     if (state.blocks.length > 0) {
       const currentCount = state.blocks.length;
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript')

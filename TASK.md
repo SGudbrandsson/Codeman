@@ -1,7 +1,7 @@
 # Task
 
 type: bug
-status: done
+status: fixing
 title: Mobile new session not detected after double-tap clear
 description: |
   After creating a new session and double-tapping the clear button, the prompt
@@ -21,7 +21,7 @@ description: |
   initialized so typed input is handled as a new session.
 
 affected_area: frontend
-fix_cycles: 2
+fix_cycles: 3
 
 ## Reproduction
 
