@@ -7496,6 +7496,9 @@ kbd {
   flex-shrink: 0;
   gap: 6px;
   flex-direction: column;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 .auq-header {
   font-size: 11px;
@@ -7508,6 +7511,7 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  overflow-x: hidden;
 }
 .auq-option-btn {
   display: flex;

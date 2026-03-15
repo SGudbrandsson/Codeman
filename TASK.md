@@ -1,176 +1,231 @@
 # Task
 
-type: feature
+type: fix
 status: done
-title: Worktree post-creation setup — symlink node_modules and auto-start dev server
+title: Mobile question UI card triggers right-side session drawer to slide open simultaneously
 description: |
-  Two improvements to the worktree lifecycle to reduce manual setup steps.
+  When the AskUserQuestion multi-select UI appears on mobile, the right-side session drawer
+  slides open at the same time.
 
-  ## Problem 1 — No node_modules after worktree creation
-  When a new git worktree is created, node_modules is not present (not tracked by git).
-  This means the worktree cannot run until dependencies are installed. The QA stage hits
-  missing module errors or the user has to manually run npm install.
+  Screenshot observations:
+  - A MODE question card ("How do you want to work through this build?") is rendered with
+    options 1. YOLO and 2. Interactive
+  - The question card is cut off on the right side
+  - The session/sidebar drawer is simultaneously sliding in from the right, visible behind
+    the question card
+  - Both UI elements are competing for screen space at the same time
 
-  Fix: After worktree creation, add a post-creation step that symlinks node_modules (and any
-  other necessary runtime artifacts like .env, dist/ references, etc.) from the parent repo
-  directory into the new worktree directory. Symlink is preferred over copy — fast, low disk
-  usage, and keeps them in sync.
+  Likely causes:
+  1. The question UI card is wider than the viewport, causing horizontal overflow that
+     triggers the swipe-to-open-drawer gesture detection
+  2. OR the question UI render is triggering some state change that also opens the drawer
+  3. OR the question card has a touch/scroll handler that conflicts with the swipe gesture
+     detector for the right drawer
 
-  Look at where worktrees are created in the backend (session/worktree creation code) and add
-  the symlink step there.
+  Fix requirements:
+  - Ensure the question UI card is constrained to viewport width (max-width: 100vw, no overflow)
+  - Ensure the question card does not trigger the right-side drawer swipe gesture
+  - The two UI states (question card visible vs drawer open) should be mutually exclusive —
+    if a question card is showing, the drawer should not open
+  - Check touch event propagation on the question card component and prevent it from bubbling
+    to the drawer swipe handler
 
-  ## Problem 2 — Dev server not auto-started at QA phase
-  At the end of the task runner workflow, the "How to test" / Phase 6 output tells the user
-  how to start the dev server manually, but never actually starts it. The user always has to
-  explicitly ask.
-
-  Fix: After the task runner completes its final commit, automatically start the dev server on
-  the worktree's assigned port (the session already has an assignedPort field). Print the URL
-  so the user knows where to access it. Use the same nohup + tsx startup pattern documented in
-  the codebase (nohup npx tsx src/index.ts web --port PORT > /tmp/codeman-PORT.log 2>&1 &).
-
-  This applies to the codeman-task-runner skill and potentially the server startup logic.
-
-affected_area: backend
+affected_area: frontend
 fix_cycles: 0
+
+## Reproduction
+
+1. Open Codeman on a mobile device (screen width < 768px).
+2. Start a Claude Code session that uses the AskUserQuestion tool (e.g. a session that immediately
+   asks a mode question like "How do you want to work through this build?").
+3. Observe: The question card appears partially clipped/cut off on the right side of the screen.
+4. Observe: Simultaneously, the session list appears to slide in from the right (the SwipeHandler
+   session-switch animation fires), competing with the question card for screen space.
+5. Attempting to tap any question option may instead trigger a session-switch swipe gesture.
+
+Alternatively, the sequence can be reproduced by:
+1. Loading a session that fires an AskUserQuestion SSE event.
+2. Watching `renderAskUserQuestionPanel()` set `display:flex` on `#askUserQuestionPanel`.
+3. The panel renders as a hidden/clipped flex row child of `.main` — off-screen to the right.
+4. A touch interaction on the right part of the screen triggers SwipeHandler._onTouchStart
+   (since `_isDisabled()` has no check for auq-panel visibility).
 
 ## Root Cause / Spec
 
-### Problem 1 — Missing node_modules in worktrees
+### Root Cause — Two compounding bugs
 
-**Root cause:** `git worktree add` creates a clean checkout of the branch's tracked files. `node_modules/` is gitignored (not tracked), so it is never copied into the new worktree directory. Same applies to `dist/` (build output, also gitignored).
+**Bug 1: auq-panel renders in the wrong flex axis (layout bug)**
 
-**Code location:** Worktree creation happens in two route handlers in
-`src/web/routes/worktree-session-routes.ts`:
-- `POST /api/sessions/:id/worktree` (line 80)
-- `POST /api/cases/:name/worktree` (line 264)
+`#askUserQuestionPanel` (`.auq-panel`) is a direct child of `<main class="main">`.
+The `.main` CSS rule in `styles.css` is `display: flex` with no `flex-direction` set,
+defaulting to `row`. This means all direct children of `.main` — the
+`#terminalContainer` (with `flex: 1`) and `#askUserQuestionPanel` (with `flex-shrink: 0`)
+— lay out side by side horizontally.
 
-Both handlers call `addWorktree(gitRoot, worktreePath, branch, isNew)` from
-`src/utils/git-utils.ts` (line 53). The actual `git worktree add` exec is on line 59.
+When `renderAskUserQuestionPanel()` sets `panel.style.display = 'flex'`, the panel
+appears to the *right* of the terminal container. Because `terminal-container` has
+`flex: 1` it claims all available space first, pushing the `auq-panel` off-screen
+to the right. The `.main` has `overflow: hidden`, so the panel is clipped — visible only
+at the right edge. This is why the question card appears "cut off on the right side".
 
-**Implementation spec:**
+The mobile CSS (`@media (max-width: 768px)` inside `mobile.css`) overrides the panel's
+internal layout (buttons get `width: 100%`, column direction) but does NOT change the
+panel's position within the `.main` flex row — it remains a horizontal sibling of the
+terminal container.
 
-Add a new exported async function `setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void>` in `src/utils/git-utils.ts`.
+The fix for Bug 1 is to make `.main` use `flex-direction: column` on mobile so the
+`auq-panel` appears *below* the terminal as intended. Alternatively (and more robustly),
+give the `auq-panel` `position: absolute; bottom: 0; left: 0; right: 0` on mobile so it
+floats above the terminal at the bottom without disturbing the flex layout. A simpler
+approach: on mobile (inside the `@media (max-width: 768px)` block) set `.auq-panel` to
+`position: fixed; left: 0; right: 0; bottom: var(--toolbar-height, 52px);` so it is
+always properly anchored above the toolbar.
 
-This function symlinks the following artifacts from `gitRoot` into `worktreePath`, but only if the source exists and the destination does not already exist:
-- `node_modules` (always needed to run tsx/npm scripts)
-- `dist` (optional — only if it exists in gitRoot; avoids build step)
+**Bug 2: SwipeHandler._isDisabled() does not check for active auq-panel**
 
-Use `fs.symlink(src, dest, 'dir')` from `node:fs/promises`.
+`SwipeHandler._isDisabled()` checks for many overlay states (modal, MCP panel, Plugins panel,
+ContextBar, InputPanel, sessionDrawer open) but does NOT check whether `#askUserQuestionPanel`
+is currently visible. When the auq-panel renders (even partially off-screen), any horizontal
+touch gesture on `.main` can trigger the SwipeHandler session-switch animation. This
+makes the current `.main` content translate horizontally (slide left) and the incoming session
+skeleton slide in from the right — which the user sees as "the session drawer sliding in from
+the right" competing with the question card.
 
-Catch and swallow errors per-artifact (e.g. symlink already exists, no permission) — a failed symlink should be logged but must not abort worktree creation.
+The `_isDisabled()` check should also return `true` when:
+```js
+const auqPanel = document.getElementById('askUserQuestionPanel');
+if (auqPanel && auqPanel.style.display !== 'none') return true;
+```
 
-Call `setupWorktreeArtifacts(gitRoot, worktreePath)` in both POST handlers, after `addWorktree()` succeeds and before `new Session(...)` is constructed. Since it's async, `await` it. Wrap in try/catch so a failure logs a warning but does not prevent the session from being created.
+### Implementation Spec
 
-**Rationale for symlink over copy:** Fast (O(1)), zero additional disk usage, stays in sync with parent if deps are updated (npm install in main repo benefits all worktrees).
+**Change 1 — mobile.css: Fix auq-panel layout position on mobile**
 
----
+Inside the `@media (max-width: 768px)` block where `.auq-panel` is already styled,
+add position rules to take the panel out of the `.main` flex row and pin it above the
+toolbar:
 
-### Problem 2 — Dev server not auto-started after task runner commit
+```css
+/* In the @media (max-width: 768px) block: */
+.auq-panel {
+  /* existing properties... */
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 52px;   /* above the fixed keyboard accessory bar */
+  z-index: 200;   /* above terminal, below modals */
+  max-width: 100vw;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+```
 
-**Root cause:** The `codeman-task-runner` skill (`~/.claude/skills/codeman-task-runner/SKILL.md`) Phase 6 only **prints** the nohup command for the user to run manually. It never executes it.
+OR alternatively keep it in normal flow but ensure `.main` uses `flex-direction: column`
+on mobile so auq-panel stacks below terminal. Either approach is acceptable; the fixed
+position approach is more robust since it doesn't require changing `.main` layout.
 
-**Code location:** Phase 6 template in `~/.claude/skills/codeman-task-runner/SKILL.md` lines 229–252.
+**Change 2 — mobile-handlers.js: Add auq-panel guard to SwipeHandler._isDisabled()**
 
-**Implementation spec:**
+In `SwipeHandler._isDisabled()`, add a check for the visible auq-panel before the
+`return false`:
 
-Modify Phase 5 of the skill (after the commit completes on either the clean or NEEDS REVIEW path) to add a **"Auto-start dev server"** step before the Phase 6 output. The runner should:
+```js
+const auqPanel = document.getElementById('askUserQuestionPanel');
+if (auqPanel && auqPanel.style.display !== 'none') return true;
+```
 
-1. Check if `assignedPort` is known (from `worktreeNotes` in TASK.md or via the session API).
-2. If known, run the following bash commands in the worktree directory:
-   ```bash
-   nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
-   sleep 6 && curl -s http://localhost:<assignedPort>/api/status
-   ```
-3. Print the result — either a success confirmation with the URL, or a warning if the server failed to start.
-4. If `assignedPort` is unknown, skip and note it in the Phase 6 output (the existing manual command format).
+This ensures that while a question is displayed, horizontal swipe gestures are blocked.
 
-The Phase 6 template's "Dev server (if not already running):" section should be updated to say "Dev server (started automatically — verify with):" followed by the curl health-check command, rather than the full nohup command (since it was already started).
+**Change 3 — styles.css: Ensure auq-panel never overflows viewport width on any screen**
 
-**Affected file:** `~/.claude/skills/codeman-task-runner/SKILL.md`
+In the base `.auq-panel` rule in `styles.css`, add:
+```css
+max-width: 100%;
+box-sizing: border-box;
+overflow-x: hidden;
+```
 
----
+And in `.auq-options`, add `overflow-x: hidden` so buttons never push the container
+wider than its parent.
 
-### Affected area
+### Files to change
 
-`backend` for Problem 1 (TypeScript source changes to `git-utils.ts` and `worktree-session-routes.ts`).
-`logic` / skill change for Problem 2 (markdown skill file edit only, no TypeScript).
-
-Both changes are minimal and isolated. No schema changes, no new dependencies.
+- `src/web/public/mobile.css` — fix `auq-panel` positioning inside `@media (max-width: 768px)`
+- `src/web/public/mobile-handlers.js` — add auq-panel visibility guard in `SwipeHandler._isDisabled()`
+- `src/web/public/styles.css` — add `max-width: 100%; box-sizing: border-box; overflow-x: hidden` to `.auq-panel` base rule
 
 ## Fix / Implementation Notes
 
-### Problem 1 — `setupWorktreeArtifacts` in `git-utils.ts`
+Three changes implemented as specified:
 
-Added `import fs from 'node:fs/promises'` to `src/utils/git-utils.ts` (the file previously only used the sync `fs` exports via named imports, so the default import is new but non-conflicting).
+**Change 1 — `src/web/public/mobile.css`**
+Inside the `@media (max-width: 768px)` block, replaced `.auq-panel`'s `position: relative; z-index: 10` with `position: fixed; left: 0; right: 0; bottom: 52px; z-index: 200; max-width: 100vw; box-sizing: border-box; overflow-x: hidden`. This takes the panel out of the `.main` flex row so it no longer renders as an off-screen horizontal sibling of `#terminalContainer`, and instead pins it above the toolbar at the bottom of the viewport.
 
-Added `setupWorktreeArtifacts(gitRoot, worktreePath)` as a new exported async function. It iterates over `['node_modules', 'dist']`, checks existence of the source in `gitRoot` and absence of the destination in `worktreePath`, and calls `fs.symlink(src, dest, 'dir')`. Each artifact is wrapped in its own try/catch so one failure cannot affect the others or abort worktree creation. Failures are logged via `console.warn`.
+**Change 2 — `src/web/public/mobile-handlers.js`**
+Added auq-panel visibility guard at the end of `SwipeHandler._isDisabled()`, before `return false`:
+```js
+const auqPanel = document.getElementById('askUserQuestionPanel');
+if (auqPanel && auqPanel.style.display !== 'none') return true;
+```
+This prevents horizontal swipe gestures from triggering the session-switch animation while a question card is visible.
 
-In `src/web/routes/worktree-session-routes.ts`:
-- Added `setupWorktreeArtifacts` to the named imports from `../../utils/git-utils.js`.
-- In `POST /api/sessions/:id/worktree` (line ~102): added a try/catch block calling `await setupWorktreeArtifacts(gitRoot, worktreePath)` immediately after the `addWorktree()` success block and before port allocation / `new Session(...)`. Failures are logged with `req.log.warn` and do not return an error response.
-- In `POST /api/cases/:name/worktree` (line ~279): same pattern applied.
-
-### Problem 2 — Auto-start dev server in `codeman-task-runner` SKILL.md
-
-Modified Phase 5 in `~/.claude/skills/codeman-task-runner/SKILL.md` to add an **"Auto-start dev server"** step that runs after the git commit on both the clean and NEEDS REVIEW paths. The step:
-1. Extracts `assignedPort` from TASK.md's worktreeNotes by matching `Assigned dev port for this worktree: <N>`.
-2. If found, runs `nohup npx tsx src/index.ts web --port <port> > /tmp/codeman-<port>.log 2>&1 &` followed by `sleep 6 && curl -s http://localhost:<port>/api/status`.
-3. Reports success or a warning based on the curl response.
-4. Gracefully skips if no port is found (falls back to manual instructions in Phase 6).
-
-Updated the Phase 6 template's "Dev server" section from "if not already running" (nohup command) to "started automatically — verify with" (curl health-check only), with a fallback block for the case where auto-start was skipped.
-
-Updated the Phase 6 rules bullet to clarify the auto-start behaviour and the fallback to port 3099.
+**Change 3 — `src/web/public/styles.css`**
+Added `max-width: 100%; box-sizing: border-box; overflow-x: hidden` to the base `.auq-panel` rule, and `overflow-x: hidden` to `.auq-options`. This ensures buttons can never push the container wider than its parent on any screen size.
 
 ## Review History
+
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**git-utils.ts — `setupWorktreeArtifacts`**
-- Import `fs from 'node:fs/promises'` is non-conflicting with the existing named sync imports from `node:fs`. Correct.
-- `WORKTREE_ARTIFACTS as const` — prevents mutation, gives literal tuple type. Good.
-- `existsSync(src)` guard before `fs.symlink`: correct. There is a theoretical TOCTOU window, but this is a non-security-sensitive one-shot path and the inner `catch` handles any race outcome acceptably.
-- `existsSync(dest)` guard: correctly prevents re-symlinking if the destination already exists (e.g., re-used worktree path or prior run).
-- `fs.symlink(src, dest, 'dir')`: correct API. Absolute source path (via `join(gitRoot, artifact)`) — correct; relative symlinks would break if worktrees are moved.
-- Per-artifact `try/catch` with `console.warn`: appropriate since the function has no access to `req.log`. Outer handler adds a second safety layer with `req.log.warn`.
-- No implicit `any`, no unused variables. TypeScript-clean.
+All three changes were verified against the actual files in `src/web/public/`.
 
-**worktree-session-routes.ts**
-- `setupWorktreeArtifacts` correctly added to named imports from `git-utils.js`.
-- Both POST handlers call it immediately after `addWorktree()` succeeds and before port allocation / `new Session()` — matches spec exactly.
-- Outer `try/catch` uses `req.log.warn` and does NOT return an error — correct non-blocking pattern.
-- Minor style inconsistency (missing blank line before `const [[globalNice...` in the cases handler vs. the sessions handler), but not a defect.
+**Change 1 (mobile.css):** The `.auq-panel` rule inside `@media (max-width: 768px)` correctly replaces `position: relative; z-index: 10` with `position: fixed; left: 0; right: 0; bottom: 52px; z-index: 200; max-width: 100vw; box-sizing: border-box; overflow-x: hidden`. The `left: 0; right: 0` pair on a `position: fixed` element fills the full viewport width without needing an explicit `width: 100%`.
 
-**SKILL.md — Phase 5 auto-start**
-- Auto-start step added to Phase 5 for both clean and NEEDS REVIEW paths.
-- Port extraction from `worktreeNotes` is clearly documented with graceful skip if not found.
-- Phase 6 template correctly updated to "started automatically — verify with:" with a fallback block for unknown-port case.
-- No `--host` flag used in the nohup command — consistent with the documented gotcha in MEMORY.md.
-- Fallback port 3099 aligns with the QA subagent's existing default.
+The existing `.auq-panel[style*="display:none"] { display: none !important; }` rule at line 2352 remains fully functional — the `position: fixed` change does not affect the `display` property it targets.
 
-No issues found. Implementation is correct, minimal, well-guarded, and consistent with existing patterns.
+Keyboard-open edge case: `KeyboardHandler.updateLayoutForKeyboard()` moves the toolbar, accessoryBar and inputPanel upward via `translateY` when the keyboard is visible, but does NOT move the auq-panel. However, this is not an issue in practice because (a) the auq-panel is a button-only UI that does not require keyboard input, so the keyboard should never be open while the auq-panel is shown; and (b) `SwipeHandler._isDisabled()` already returns `true` unconditionally when `KeyboardHandler.keyboardVisible` is true (line 545), making the new auq-panel guard redundant in that state anyway.
+
+**Change 2 (mobile-handlers.js):** The `_isDisabled()` guard is placed correctly (before `return false`, after all other checks). The inline-style check `auqPanel.style.display !== 'none'` is valid: the HTML initializes the panel with `style="display:none;"` and `renderAskUserQuestionPanel()` only ever sets `panel.style.display` to either `'none'` or `'flex'`, so the check will never encounter an empty-string edge case that could accidentally block swipe.
+
+**Change 3 (styles.css):** `overflow-x: hidden` on `.auq-options` does not conflict with `flex-wrap: wrap` in the desktop base rule — buttons will wrap before overflowing since the parent has `max-width: 100%` and `box-sizing: border-box`. On mobile, `.auq-options` uses `flex-direction: column; gap: 5px` (no wrap), so the property is a safe no-op there.
 
 ## QA Results
-<!-- filled by QA subagent -->
 
 **Date:** 2026-03-15
+**Status:** ALL PASS — status set to `done`
 
-| Check | Result | Notes |
-|---|---|---|
-| `tsc --noEmit` | PASS | Zero type errors |
-| `npm run lint` | PASS | Zero ESLint warnings/errors |
-| Dev server startup (port 3099) | PASS | Server responded with valid JSON from `/api/status` |
-| `setupWorktreeArtifacts` exported | PASS | Exported from `src/utils/git-utils.ts` and imported+called in both POST handlers in `worktree-session-routes.ts` |
+### 1. TypeScript typecheck (`tsc --noEmit`)
+PASS — Zero errors
 
-All checks passed. Status set to `done`.
+### 2. ESLint (`npm run lint`)
+PASS — Zero errors/warnings
+
+### 3. CSS verification (served files at mobile viewport 375x812)
+
+Dev server started on port 3088 (`npx tsx src/index.ts web --port 3088`) and verified via Playwright at 375x812 viewport.
+
+**Change 1 — mobile.css auq-panel positioning:**
+PASS — Computed styles when panel is shown:
+- `position: fixed` (correct, was `relative`)
+- `bottom: 52px` (correct)
+- `z-index: 200` (correct, was `10`)
+- `left: 0px, right: 0px` (spans full viewport width of 375px)
+- `overflow-x: hidden` (correct)
+
+**Change 2 — mobile-handlers.js SwipeHandler._isDisabled() guard:**
+PASS — Lines 552-553 confirmed present in served file:
+```js
+const auqPanel = document.getElementById('askUserQuestionPanel');
+if (auqPanel && auqPanel.style.display !== 'none') return true;
+```
+
+**Change 3 — styles.css base auq-panel rule:**
+PASS — Base `.auq-panel` rule in served styles.css contains `max-width: 100%; box-sizing: border-box; overflow-x: hidden`. `.auq-options` contains `overflow-x: hidden`.
 
 ## Decisions & Context
 
-- **Symlink vs copy:** Chose symlink (O(1), zero disk) as specified. The `'dir'` type argument to `fs.symlink` is required on Windows but ignored on Linux/macOS; kept for cross-platform correctness.
-- **Per-artifact try/catch inside `setupWorktreeArtifacts`:** A missing `dist/` or a pre-existing `node_modules` symlink must not kill the whole function. Outer try/catch in the route handlers adds a second safety layer but inner catches carry the real per-artifact resilience.
-- **`existsSync` for destination check:** Using sync existence check before `fs.symlink` is fine since this is a one-shot setup path, not a hot loop. This matches the existing pattern in `git-utils.ts`.
-- **`console.warn` inside `setupWorktreeArtifacts`:** The function has no access to the Fastify request logger (`req.log`), so `console.warn` is the appropriate choice. The route handler re-logs via `req.log.warn` for the outer error.
-- **Skill auto-start placement:** The auto-start step is placed in Phase 5 (after commit, before Phase 6 output) rather than in Phase 6 itself, so that the Phase 6 output can reference an already-running server. This matches the spec.
-- **Graceful fallback when port unknown:** If `assignedPort` is not extractable from TASK.md, the skill skips auto-start and shows the full nohup command in the Phase 6 template. This satisfies the "must not break Phase 6 when no port is available" constraint.
+- Used `position: fixed` approach for Bug 1 (rather than changing `.main` to `flex-direction: column`) because it is more robust: it doesn't disturb the existing desktop/main layout flex configuration and works regardless of where the panel sits in the DOM tree.
+- `bottom: 52px` chosen to match the hardcoded toolbar height constant used elsewhere in mobile layout (per MEMORY.md: `barHeight = 52px bar`).
+- `z-index: 200` is above terminal layers but below modals (which typically use 1000+), matching the spec.
+- The `_isDisabled()` guard checks `auqPanel.style.display !== 'none'` (inline style check) to match how `renderAskUserQuestionPanel()` shows/hides the panel via `panel.style.display = 'flex'` / `'none'`.
