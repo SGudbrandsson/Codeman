@@ -1804,6 +1804,7 @@ const TranscriptView = {
   _workingDebounce: null,
   _workingHideTimer: null,
   _clearFallbackTimer: null, // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
+  _fallbackFired: false,    // true after the clearOnly() fallback timer fires; guards against late transcript:clear SSE wiping user content
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -2058,6 +2059,22 @@ const TranscriptView = {
     // Cancel the fallback timer set by clearOnly() — TRANSCRIPT_CLEAR arrived normally.
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
+
+    // Guard: if the fallback timer already fired and the user has already started
+    // interacting (optimistic message or real content visible in the DOM), do NOT
+    // wipe the container and reload. The late-arriving transcript:clear SSE would
+    // erase the user's optimistic bubble and re-show the empty CTA, making it appear
+    // as if the input was lost. The user's message IS being processed by Claude; we
+    // just need to leave the DOM alone and let transcript:block SSE blocks arrive.
+    if (this._fallbackFired && this._container) {
+      const hasUserContent = !!this._container.querySelector('[data-optimistic="true"], .tv-block');
+      if (hasUserContent) {
+        this._fallbackFired = false;
+        return;
+      }
+    }
+    this._fallbackFired = false;
+
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2084,6 +2101,7 @@ const TranscriptView = {
   // Bumping _loadGen here also aborts any stale in-flight load() so its fetch result
   // can't overwrite the "Clearing…" placeholder with stale blocks.
   clearOnly() {
+    this._fallbackFired = false;
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2115,6 +2133,7 @@ const TranscriptView = {
     // short enough that the view doesn't feel broken if it never arrives.
     this._clearFallbackTimer = setTimeout(() => {
       this._clearFallbackTimer = null;
+      this._fallbackFired = true;
       if (this._sessionId !== pendingSessionId || !pendingSessionId) return;
       // Show empty CTA without fetching — user cleared, so empty is the correct state.
       this._pendingToolUses = {};
@@ -2142,6 +2161,7 @@ const TranscriptView = {
     this._workingHideTimer = null;
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
+    this._fallbackFired = false;
     const _overlay = document.getElementById('tvTypingIndicator');
     if (_overlay) _overlay.style.display = 'none';
     if (this._container) {

@@ -2,157 +2,123 @@
 
 type: bug
 status: done
-title: Gear icon in bottom action buttons doesn't open session options
+title: Mobile new session not detected after double-tap clear
 description: |
-  On both mobile and desktop, the gear/settings icon (⚙) that should open session options
-  is not working when it appears in the bottom action buttons area.
+  After creating a new session and double-tapping the clear button, the prompt
+  "What's on your mind today?" appears. After the user types something and submits,
+  Codeman does not detect there is a new session ongoing and fails to process/route
+  the input correctly.
 
-  On mobile: There is no gear icon in the session drawer (hamburger menu → right sidebar).
-  The session options modal (which contains the Respawn tab, Context tab with Safe Mode toggle,
-  Ralph tab, etc.) is unreachable on mobile because the gear icon only exists in the desktop
-  left sidebar session tabs.
+  Steps to reproduce:
+  1. Open Codeman on mobile
+  2. Create a new session
+  3. Double-tap the clear button — prompt "What's on your mind today?" appears
+  4. Type a message and send
+  5. Expected: message is routed as a new session input
+  6. Actual: Codeman does not pick up the new session context; message not processed correctly
 
-  The fix should make session options accessible from mobile — either by:
-  1. Adding a gear icon button to each session row in the mobile SessionDrawer (alongside the
-     existing × close button), OR
-  2. Investigating if there are gear icons in the bottom action buttons area that are broken
-     and fixing those.
-
-  The SessionDrawer._renderSessionRow() function in app.js builds each row with: dot, name,
-  mode badge, close button — but no gear/options button. This needs a gear button that calls
-  app.openSessionOptions(sessionId) and closes the drawer.
-
-  On desktop: The gear icon in session tabs (left sidebar) should work fine — but if there are
-  gear icons in any bottom toolbar or action bar that don't work, those need to be fixed too.
-
-  Expected: Tapping a gear/options icon on mobile opens the session options modal.
-  Actual: No gear icon is accessible on mobile; session options are unreachable.
+  Investigate the new session creation and clear flow. Ensure the session state is correctly
+  initialized so typed input is handled as a new session.
 
 affected_area: frontend
 fix_cycles: 0
 
 ## Reproduction
 
-1. Open Codeman on a mobile device (or DevTools mobile emulation).
-2. The top session tabs bar exists and each active tab shows a tiny ⚙ gear icon
-   (`.tab-gear`, visible on `.session-tab.active`), but it is very small (12×12px,
-   opacity 0.6) and hard to tap reliably.
-3. Open the session drawer via the hamburger/sessions button (right sidebar).
-4. Each session row shows: status dot | name | mode badge | × close button.
-   There is NO gear icon in the drawer rows — `_renderSessionRow()` only appends
-   `dot`, `name`, `badge`, and `closeBtn` elements.
-5. Result: session options (Respawn, Context/Safe Mode, Ralph, etc.) are only
-   reachable on mobile via the tiny active-tab gear — there is no obvious,
-   consistently accessible path to `app.openSessionOptions()` from the drawer.
-
-Note on the bottom toolbar gear: `btn-settings-mobile` (line 413 index.html) opens
-`app.openAppSettings()` (global app settings), NOT session-specific options. The
-`btn-case-settings-mobile` opens project/case settings. Neither calls
-`openSessionOptions`. There is no broken gear in the bottom toolbar — the bottom
-toolbar gear icons are working but serve different purposes.
+1. Open Codeman on mobile (or resize browser to mobile width <430px).
+2. Create a new Claude session via the session drawer (+) button — this calls `runClaude()` → `selectSession()`, which shows the transcript view (web mode) with the empty CTA "What's on your mind today?" immediately (new session → empty transcript → `_setEmptyPlaceholder()`).
+3. Open the keyboard accessory bar Commands drawer (/ ▲ button) and double-tap `/clear`:
+   - First tap: button turns amber (`setConfirm` state, 2s window)
+   - Second tap: `sendCommand('/clear')` fires → `TranscriptView.clearOnly()` shows "Clearing…" and starts the 1.5s `_clearFallbackTimer`; `/clear\r` is sent to the PTY via `app.sendInput`
+4. After ~1.5s (if `transcript:clear` SSE hasn't arrived from the backend), the `_clearFallbackTimer` fallback fires → `_setEmptyPlaceholder()` shows "What's on your mind today?".
+5. User types a message in the InputPanel compose area and taps Send → `InputPanel.send()` calls `app.sendInput(text + '\r')`.
+6. Expected: message is sent to Claude and the response appears in the transcript view.
+7. Actual: `transcript:clear` SSE arrives AFTER the fallback timer (late, because the new session may not have established its conversation UUID yet), which calls `TranscriptView.clear()` → wipes the DOM and reloads the transcript. If the transcript is still empty at that moment (Claude hasn't written the user's first message yet), `_setEmptyPlaceholder()` renders again and any optimistic message from `appendOptimistic()` is erased. The user sees the CTA again with no sign their message was processed.
 
 ## Root Cause / Spec
 
-**Root cause**: `SessionDrawer._renderSessionRow()` (app.js line 16449) builds the
-DOM row with four elements — status dot, session name, mode badge, close button —
-but never adds a gear/options button. `app.openSessionOptions()` exists and works
-correctly; it simply has no call site in the drawer.
+**Primary cause**: A timing race between the `_clearFallbackTimer` fallback path in `TranscriptView.clearOnly()` and the late-arriving `transcript:clear` SSE.
 
-On the session tabs (desktop left sidebar), the gear is rendered via the tab HTML
-template at line 6080 as `.tab-gear`, wired to `app.openSessionOptions(id)`. This
-works fine on desktop (hover reveals it). On mobile, the active tab's `.tab-gear` is
-displayed at 12×12px with 0.6 opacity (mobile.css lines 531–541) — too small to be
-a reliable tap target.
+For a **brand new session**, the `conversationId` event (fired by the PTY stream parser in `session.ts` line 1892–1894 when Claude outputs a JSON message with its new session UUID) may not fire quickly. The `_clearFallbackTimer` in `clearOnly()` (1.5s timeout in `app.js` line 2116) fires first, showing the empty CTA without fetching from the server and without starting a fresh `load()` cycle.
 
-**Fix spec**:
+When the user types and submits their message via `InputPanel.send()`:
+- `app.sendInput()` succeeds (sends to PTY) — the message IS processed by Claude
+- `TranscriptView.appendOptimistic(text)` adds the optimistic bubble to the DOM
 
-1. **Add a gear button to each drawer session row** in `_renderSessionRow()`:
-   - Create a `<button class="drawer-session-gear">` element with a ⚙ character
-     (or matching SVG from elsewhere in the UI).
-   - `stopPropagation()` on click to prevent row activation.
-   - On click: call `app.openSessionOptions(s.id)` then `SessionDrawer.close()`.
-   - Append it between the mode badge and the close button.
+However, the late `transcript:clear` SSE then arrives (triggered by `conversationId(newUUID)` → `startTranscriptWatcher` → `updatePath` → `emit('transcript:clear')` in `server.ts` line 789). This fires `_onTranscriptClear` → `TranscriptView.clear()` (app.js line 2057), which:
+1. Calls `this._container.textContent = ''` — **erases** the optimistic message and any partial response already in the DOM
+2. Calls `load(sessionId)` — re-fetches the transcript from the server
 
-2. **Add CSS** for `.drawer-session-gear` in `styles.css` alongside the existing
-   `.drawer-session-close` rules (around line 1189). Style it identically to
-   `.drawer-session-close` but with a blue/neutral hover (not red). Hide by default
-   (`opacity: 0`) and reveal on `.drawer-session-row:hover` (matching the pattern for
-   `.drawer-session-close`). On mobile (touch) devices, always show it (`opacity: 1`)
-   so there is a reliable tap target.
+The `load()` fetch (via `GET /api/sessions/:id/transcript` → `resolveTranscriptPath`) may return an **empty array** because:
+- The watcher path is `uuid2.jsonl` (new conversation after `/clear`)
+- Claude has not yet written the user's first message to `uuid2.jsonl`
 
-3. **No addKeyboardTapFix needed** for the drawer: the drawer is a separate overlay
-   (`#sessionDrawer`) that isn't part of the keyboard-open tap-suppression containers
-   (`.toolbar`, `.welcome-overlay`, `#mobileInputPanel`). The drawer is not shown
-   while the keyboard is open in normal flows, so the existing keyboard tap fix does
-   not need to be extended.
+This shows the empty CTA again, making it appear the session "reset" and the input was lost. Claude IS processing the input, but the UI wipes its state before the response blocks arrive via `transcript:block` SSE.
 
-4. **Bump version strings** in `index.html` for `app.js` and `styles.css` per the
-   deployment rules (CLAUDE.md).
+**Secondary factor**: The `_clearFallbackTimer` path intentionally does NOT call `load()` (to avoid fetching stale content), leaving `state._sseBuffer = null`. This means SSE blocks after the fallback append directly to the DOM — but the subsequent `transcript:clear` wipe undoes this.
 
-No backend changes needed.
+**Where to fix**:
+- `TranscriptView.clearOnly()` in `src/web/public/app.js` (~line 2086): the `_clearFallbackTimer` callback and its interaction with a late-arriving `transcript:clear` SSE need to be made safe. Specifically, once the fallback has fired and shown the empty CTA, a subsequent `transcript:clear` → `clear()` should NOT wipe the DOM and restart `load()` if the user has already started interacting (e.g., optimistic message is present, or `InputPanel.send()` has fired). One approach: track whether a user message has been sent since the fallback fired, and skip or defer the `clear()` DOM wipe in that case.
+- Alternatively: in `_onTranscriptClear`, if the `_clearFallbackTimer` has already fired (i.e., `_clearFallbackTimer === null` AND the container shows the empty CTA), avoid calling `clear()` → `load()` again unless there's actual content to show. Instead just stay in the current empty state and let `transcript:block` SSE blocks append normally.
+- A simpler fix: in `TranscriptView.clear()`, check if there's an optimistic/user message in the DOM (`.tv-empty-cta` vs actual content) and skip the `textContent = ''` wipe if user content is already visible.
 
 ## Fix / Implementation Notes
 
-**app.js** (`_renderSessionRow`, line ~16473):
-- Added a `<button class="drawer-session-gear">` element with ⚙ text content and aria-label "Session options".
-- Click handler calls `e.stopPropagation()`, then `SessionDrawer.close()`, then `app.openSessionOptions(s.id)`.
-- The drawer is closed before opening the options modal so the modal appears on top cleanly.
-- Gear button is inserted between the mode badge and the close button in the row's DOM order.
+Added a `_fallbackFired` boolean flag to `TranscriptView` in `src/web/public/app.js`:
 
-**styles.css** (before `.drawer-session-close`, ~line 1188):
-- Added `.drawer-session-gear` block styled identically to `.drawer-session-close` (24×24px, opacity 0, same transitions).
-- Hover state uses blue tones (`rgba(59,130,246,0.12)` bg, `#60a5fa` text) to differentiate from the red close hover.
-- `.drawer-session-row:hover .drawer-session-gear` reveals the button on desktop hover (mirrors the close button pattern).
-- `@media (hover: none)` rule sets `opacity: 1` always on touch devices — ensures a reliable tap target on mobile.
+- **Reset to `false`** in `clearOnly()` at the start (each new clear cycle resets the guard).
+- **Set to `true`** immediately when the `_clearFallbackTimer` callback fires (fallback path taken).
+- **Reset to `false`** in `show()` when switching sessions (guard doesn't bleed across sessions).
+- **Guard in `clear()`**: if `_fallbackFired` is `true` and the container already has user content
+  (`.tv-block` elements or `[data-optimistic="true"]`), skip the `textContent = ''` wipe and the
+  `load()` call — just clear the flag and return. This prevents the late-arriving `transcript:clear`
+  SSE from erasing the user's optimistic message and re-showing the empty CTA.
 
-**index.html** version bumps:
-- `styles.css?v=0.1690` → `v=0.1691`
-- `app.js?v=0.4.106` → `v=0.4.107`
+The normal path (transcript:clear SSE arrives before the fallback timer) is unchanged: `clear()`
+cancels the timer, `_fallbackFired` stays `false`, and the full wipe+reload proceeds as before.
+
+Version bumped: `app.js?v=0.4.108` → `app.js?v=0.4.109` in `index.html`.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Correctness**: The gear button is added exactly where the spec calls for it — in `_renderSessionRow()`, between the mode badge and close button. DOM order matches spec (dot → name → badge → gearBtn → closeBtn). Click handler correctly calls `e.stopPropagation()` then `SessionDrawer.close()` then `app.openSessionOptions(s.id)` — close-before-open order is right to avoid z-index stacking issues.
+**Summary**: The fix is correct, minimal, and well-targeted at the root cause described in the task.
 
-**CSS**: `.drawer-session-gear` mirrors `.drawer-session-close` (24×24px, opacity 0 default, same transition properties). Blue hover tones correctly differentiate from the red close hover. `.drawer-session-row:hover .drawer-session-gear` mirrors the existing close button reveal pattern. `@media (hover: none)` correctly ensures always-visible on touch devices. All rules placed logically immediately before the close button block.
+**Correctness**: The `_fallbackFired` flag approach directly solves the race: once the fallback timer has fired and shown the empty CTA, a late-arriving `transcript:clear` SSE will call `clear()`, which now guards against wiping user content. The DOM query `[data-optimistic="true"], .tv-block` correctly identifies real user content vs. the `tv-empty-cta` placeholder (verified: `_setEmptyPlaceholder` uses class `tv-empty-cta`, not `.tv-block`). The normal path (SSE arrives before the timer) is completely unaffected — `_fallbackFired` stays `false` and `clear()` proceeds as before.
 
-**Edge cases**:
-- `openSessionOptions` guards against a missing session (`if (!session) return`) — safe even if the session was removed between render and tap.
-- `stopPropagation` prevents the row's own click handler from also firing `selectSession` + `close`, which would race with the gear's own `close` call.
-- Worktree session rows also go through `_renderSessionRow()` (confirmed at lines 16667 and 16672), so the gear is consistently present for all session types, including worktree sub-sessions.
+**Flag lifecycle**: All four lifecycle points are covered: reset in `clearOnly()` at the start of each clear cycle, set in the timer callback, reset in `show()` when switching sessions, and reset in `clear()` after the guard check. No bleed-across-sessions risk.
 
-**Version bumps**: Both `styles.css?v=0.1691` and `app.js?v=0.4.107` are correctly incremented per CLAUDE.md rules.
+**Minor observation** (non-blocking): In the timer callback, `_fallbackFired = true` is set (line 2136) before the session ID guard check (line 2137). If the session changed and the timer somehow fired without being cancelled, `_fallbackFired` would be set incorrectly on the new session. However, `show()` calls `clearTimeout(this._clearFallbackTimer)` before updating `this._sessionId`, so the callback can never reach line 2136 after a session switch. The ordering is harmless in practice.
 
-**No issues found.** Implementation is minimal, additive, and consistent with existing patterns.
+**Edge cases checked**:
+- User switches sessions mid-flight: `show()` cancels the timer and resets the flag. Clean.
+- SSE arrives before fallback timer: guard never triggers, normal wipe+reload proceeds. Clean.
+- User sends message before fallback fires: `_fallbackFired` is still `false` when SSE arrives, so `clear()` wipes and reloads — this is acceptable because the optimistic bubble appended by `appendOptimistic()` will be re-added when the SSE block arrives.
+- Multiple `/clear` cycles: `clearOnly()` resets `_fallbackFired = false` at the top. Clean.
+
+**Version bump**: `app.js?v=0.4.108` → `0.4.109` is present and correct.
 
 ## QA Results
 <!-- filled by QA subagent -->
 
-### QA Run — 2026-03-14 — PASS
+### QA run — 2026-03-15 — PASS
 
-| Check | Result | Notes |
-|-------|--------|-------|
-| `tsc --noEmit` | PASS | Zero errors |
-| `npm run lint` | PASS | Zero errors |
-| Page loads (HTTP 200) | PASS | `http://localhost:3099/` returns 200 |
-| `styles.css?v=0.1691` in page source | PASS | Version string confirmed |
-| `app.js?v=0.4.107` in page source | PASS | Version string confirmed |
-| `.drawer-session-gear` CSS rule in browser | PASS | Rule found: `width:24px; height:24px; ...` |
-| `SessionDrawer._renderSessionRow` method | PASS | Method exists on `SessionDrawer` object |
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (typecheck) | PASS — zero errors |
+| `npm run lint` (ESLint) | PASS — zero errors |
+| `app.js?v=0.4.109` in page source | PASS |
+| `TranscriptView._fallbackFired` property exists on page | PASS |
 
 All checks passed. Status set to `done`.
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
 
-2026-03-14: Analysis confirmed the bottom toolbar gears (btn-settings-mobile, btn-case-settings-mobile)
-are NOT broken — they open app settings and project settings respectively, as intended.
-The sole missing piece is a gear button inside SessionDrawer._renderSessionRow(). Fix is
-purely additive frontend work: new button element + CSS rules.
-
-2026-03-14: Implemented gear button. Used `@media (hover: none)` to keep gear always visible on touch
-devices (mobile) while hiding it at opacity 0 on desktop hover-capable devices (revealed on row hover,
-matching the existing close button pattern). Drawer is closed before the options modal opens to avoid
-z-index stacking issues.
+**2026-03-15 — Fix approach selected**: Chose the `_fallbackFired` flag approach over the alternatives
+in TASK.md. Querying `.tv-block` for real content and `[data-optimistic="true"]` for the in-flight
+optimistic bubble covers both the moment between send and first SSE block, and the case where Claude
+has already started responding. The `_onTranscriptClear` code itself was not changed — the guard lives
+in `clear()` which is the single call site that does the destructive wipe.
