@@ -2750,11 +2750,10 @@ html.mobile-init .file-browser-panel {
   inset: 0;
   z-index: 10002;
   background: rgba(0,0,0,0.5);
-  opacity: 0;
-  pointer-events: none;
   transition: opacity 0.22s ease;
 }
 .compose-action-backdrop.open {
+  display: block;
   opacity: 1;
   pointer-events: auto;
 }
@@ -2769,13 +2768,11 @@ html.mobile-init .file-browser-panel {
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 8px 16px calc(16px + var(--safe-area-bottom));
-  display: flex;
   flex-direction: column;
   gap: 4px;
-  transform: translateY(100%);
 }
 .compose-action-sheet.open {
-  transform: translateY(0);
+  display: flex;
   animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .compose-action-item {

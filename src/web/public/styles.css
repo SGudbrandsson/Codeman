@@ -10627,3 +10627,9 @@ kbd {
   padding: 3px 10px;
   height: auto;
 }
+
+/* Upload action sheet — hidden by default via display:none (not transform) to avoid
+   creating a GPU-composited layer that causes a black-screen flash on initial render.
+   The slide-up animation is applied in mobile.css when the .open class is added. */
+#composeActionSheet  { display: none; }
+#composeActionBackdrop { display: none; }
