@@ -108,6 +108,9 @@ const MobileDetection = {
       resizeTimeout = setTimeout(() => this.updateBodyClass(), 100);
     };
     window.addEventListener('resize', this._resizeHandler);
+    // orientationchange fires before resize on iOS — also hook it so body
+    // classes and keyboard baseline update immediately on rotation.
+    window.addEventListener('orientationchange', this._resizeHandler);
 
     // iOS: prevent pinch-to-zoom (Safari ignores user-scalable=no since iOS 10)
     if (this.isIOS()) {
@@ -122,6 +125,7 @@ const MobileDetection = {
   cleanup() {
     if (this._resizeHandler) {
       window.removeEventListener('resize', this._resizeHandler);
+      window.removeEventListener('orientationchange', this._resizeHandler);
       this._resizeHandler = null;
     }
     if (this._gestureStartHandler) {
@@ -237,8 +241,9 @@ const KeyboardHandler = {
   updateLayoutForKeyboard() {
     if (!window.visualViewport) return;
 
-    // Only adjust on mobile
-    if (!MobileDetection.isSmallScreen() && !MobileDetection.isMediumScreen()) {
+    // Only adjust on mobile/tablet (all widths where mobile.css is loaded, i.e. < 1024px).
+    // Previously this bailed at >= 768px, leaving large tablets without keyboard layout.
+    if (window.innerWidth >= 1024) {
       this.resetLayout();
       return;
     }
