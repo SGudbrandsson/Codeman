@@ -3023,17 +3023,17 @@ html.mobile-init .file-browser-panel {
 }
 .compose-plus-btn:active { color: #e2e8f0; }
 .compose-send-btn {
-  right: 8px;
-  width: 44px;
-  height: 44px;
+  right: 4px;
+  bottom: 4px;
+  width: 36px;
+  height: 36px;
   background: #3b82f6;
   color: #fff;
   border-radius: 50%;
   padding: 0;
-  /* vertically center so the 44px button doesn't overflow a 44px min-height wrapper */
-  bottom: auto;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 36px button + 4px bottom + 4px top clearance = 44px min-height wrapper, equal spacing all sides */
+  top: auto;
+  transform: none;
 }
 .compose-send-btn:active { background: #2563eb; }
 
