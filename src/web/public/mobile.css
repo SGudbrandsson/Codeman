@@ -2714,50 +2714,39 @@ html.mobile-init .file-browser-panel {
 
 /* ============================================================================
    MOBILE BOTTOM-SHEET DRAWER PATTERN
-   All bottom-sheet drawers in this app use this open/close pattern:
+   Elements are hidden via style="display:none" in HTML (inline style = highest
+   specificity, guaranteed no GPU layer). JS sets style.display then adds .open.
 
-   HTML structure:
-     <div class="some-backdrop" id="someBackdrop" onclick="close()"></div>
-     <div class="some-sheet" id="someSheet">...</div>
+   Opening: JS sets style.display='flex'/'block', then adds .open class.
+     - Sheet slides up via @keyframes sheet-up.
+     - Backdrop fades in via @keyframes backdrop-fade.
+     Using keyframe animations (not transitions) — fire reliably on every class
+     add on iOS WebKit and Android Chrome.
 
-   Opening: JS adds .open to both backdrop and sheet.
-     - Backdrop fades in via opacity transition.
-     - Sheet slides up via @keyframes sheet-up (defined near #newPickerModal below).
-       Using keyframe animation — not a CSS transition — because animations fire
-       reliably on every class add, even on iOS WebKit where transitions can miss
-       the first frame if there was no prior paint in the transformed state.
+   Closing: JS removes .open class and sets style.display='none'.
+     No close animation (matches #newPickerModal pattern).
 
-   Closing: JS removes .open from both.
-     - Backdrop fades out via opacity transition.
-     - Sheet immediately returns to translateY(100%) (off-screen). No close animation
-       (matches the #newPickerModal pattern).
+   IMPORTANT: Do NOT put position:fixed or z-index on the default (non-.open)
+   state. Android Chrome can create GPU compositor layers for position:fixed
+   elements even when they appear hidden via opacity:0 or transform, causing
+   the entire page to render black until a visibility-change repaint fires.
+   All visual/positioning CSS lives in the .open rule only.
 
-   z-index convention:
-     session-drawer-overlay: 8999 / session-drawer: 9000
-     compose-action-backdrop: 10002 / compose-action-sheet: 10003
-     (always above session drawer)
-
-   Background color: #0d1117 — same as .session-drawer in styles.css.
-   Border: 1px solid rgba(255,255,255,0.07) — same as session-drawer border-left.
-   NOTE: Do NOT add backdrop-filter to the backdrop element. An always-in-DOM
-   position:fixed element with backdrop-filter causes GPU layer compositing to
-   break on Android Chrome, rendering the entire app black.
+   z-index convention: session-drawer 9000, sheet 10003, backdrop 10002.
+   Background: #0d1117 — matches .session-drawer in styles.css.
    ============================================================================ */
 
 /* Plus action sheet */
-.compose-action-backdrop {
+.compose-action-backdrop.open {
+  display: block;
   position: fixed;
   inset: 0;
   z-index: 10002;
   background: rgba(0,0,0,0.5);
-  transition: opacity 0.22s ease;
+  animation: backdrop-fade 0.22s ease;
 }
-.compose-action-backdrop.open {
-  display: block;
-  opacity: 1;
-  pointer-events: auto;
-}
-.compose-action-sheet {
+.compose-action-sheet.open {
+  display: flex;
   position: fixed;
   left: 0;
   right: 0;
@@ -2770,10 +2759,11 @@ html.mobile-init .file-browser-panel {
   padding: 8px 16px calc(16px + var(--safe-area-bottom));
   flex-direction: column;
   gap: 4px;
-}
-.compose-action-sheet.open {
-  display: flex;
   animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .compose-action-item {
   background: #161b22;
