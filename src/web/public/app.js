@@ -16944,6 +16944,13 @@ const InputPanel = {
     await this._uploadFiles(files);
   },
 
+  /** Update Send button disabled state based on pending upload count */
+  _updateSendBtnState() {
+    const btn = document.getElementById('composeSendBtn');
+    if (!btn) return;
+    btn.disabled = this._uploadingCount > 0;
+  },
+
   async _uploadFiles(files) {
     if (!files.length) return;
 
@@ -16966,6 +16973,11 @@ const InputPanel = {
       }
       this._renderThumbnails();
 
+      // Disable Send while this upload is in flight — prevents race where user taps
+      // Send before the fetch resolves and the image path is set on the entry.
+      this._uploadingCount = (this._uploadingCount || 0) + 1;
+      this._updateSendBtnState();
+
       try {
         const formData = new FormData();
         formData.append('file', file);
@@ -16981,6 +16993,9 @@ const InputPanel = {
         if (idx !== -1) this._images.splice(idx, 1);
         URL.revokeObjectURL(objectUrl);
         this._renderThumbnails();
+      } finally {
+        this._uploadingCount = Math.max(0, (this._uploadingCount || 0) - 1);
+        this._updateSendBtnState();
       }
     }
   },
