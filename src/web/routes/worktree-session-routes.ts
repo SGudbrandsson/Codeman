@@ -346,9 +346,12 @@ export function registerWorktreeSessionRoutes(
 
     // Check if the worktree session for this branch has uncommitted changes — if so,
     // git merge will say "already up to date" and the user will be confused.
-    const worktreeSession = [...ctx.sessions.values()].find(
-      (s) => s.worktreeOriginId === id && s.worktreeBranch === branch
-    );
+    // Primary lookup: by origin ID + branch (reliable for sessions created via the UI).
+    // Fallback: by branch alone for sessions that lack worktreeOriginId (e.g. auto-detected
+    // on server restart from old state.json, or started outside the Codeman worktree UI).
+    const worktreeSession =
+      [...ctx.sessions.values()].find((s) => s.worktreeOriginId === id && s.worktreeBranch === branch) ??
+      [...ctx.sessions.values()].find((s) => s.worktreeBranch === branch && s.worktreePath != null);
     if (worktreeSession?.worktreePath) {
       const dirty = await isWorktreeDirty(worktreeSession.worktreePath);
       if (dirty) {
