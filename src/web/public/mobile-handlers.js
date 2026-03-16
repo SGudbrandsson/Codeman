@@ -646,7 +646,10 @@ const SwipeHandler = {
   /** Resolve the session ID in the given direction (+1 = prev, -1 = next) */
   _resolveTarget(direction) {
     if (typeof app === 'undefined' || !app.sessionOrder) return null;
-    const order = app.sessionOrder;
+    // Use the drawer's visual order so swipe navigation matches the session list in the hamburger menu
+    const order = (typeof SessionDrawer !== 'undefined' && SessionDrawer._getOrderedSessionIds)
+      ? SessionDrawer._getOrderedSessionIds()
+      : app.sessionOrder;
     const idx = order.indexOf(app.activeSessionId);
     if (idx < 0) return null;
     if (direction === 1) {
