@@ -16913,15 +16913,27 @@ const InputPanel = {
   _openActionSheet() {
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
-    if (sheet) sheet.style.display = '';
-    if (backdrop) backdrop.style.display = '';
+    // Set display via inline style (overrides HTML style="display:none"), then add
+    // .open for the animation. Inline style keeps the element out of the GPU layer
+    // tree when closed — avoids black-screen compositing bug on Android Chrome.
+    if (sheet) { sheet.style.display = 'flex'; sheet.classList.add('open'); }
+    if (backdrop) { backdrop.style.display = 'block'; backdrop.classList.add('open'); }
+    // Suppress typing indicator while drawer is open — belt-and-suspenders z-index fix
+    const indicator = document.getElementById('tvTypingIndicator');
+    if (indicator) indicator.style.display = 'none';
   },
 
   _closeActionSheet() {
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
-    if (sheet) sheet.style.display = 'none';
-    if (backdrop) backdrop.style.display = 'none';
+    if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
+    if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
+    // Restore typing indicator if session is still working
+    const sessionWorking = typeof app !== 'undefined' && app.activeSessionId
+      ? app.sessions?.get(app.activeSessionId)?.status === 'busy'
+      : false;
+    const indicator = document.getElementById('tvTypingIndicator');
+    if (indicator && sessionWorking) indicator.style.display = '';
   },
 
   _actionSheetPick(type) {

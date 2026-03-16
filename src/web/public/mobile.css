@@ -2745,29 +2745,61 @@ html.mobile-init .file-browser-panel {
   text-overflow: ellipsis;
 }
 
+/* ============================================================================
+   MOBILE BOTTOM-SHEET DRAWER PATTERN
+   Elements are hidden via style="display:none" in HTML (inline style = highest
+   specificity, guaranteed no GPU layer). JS sets style.display then adds .open.
+
+   Opening: JS sets style.display='flex'/'block', then adds .open class.
+     - Sheet slides up via @keyframes sheet-up.
+     - Backdrop fades in via @keyframes backdrop-fade.
+     Using keyframe animations (not transitions) — fire reliably on every class
+     add on iOS WebKit and Android Chrome.
+
+   Closing: JS removes .open class and sets style.display='none'.
+     No close animation (matches #newPickerModal pattern).
+
+   IMPORTANT: Do NOT put position:fixed or z-index on the default (non-.open)
+   state. Android Chrome can create GPU compositor layers for position:fixed
+   elements even when they appear hidden via opacity:0 or transform, causing
+   the entire page to render black until a visibility-change repaint fires.
+   All visual/positioning CSS lives in the .open rule only.
+
+   z-index convention: session-drawer 9000, sheet 10003, backdrop 10002.
+   Background: #0d1117 — matches .session-drawer in styles.css.
+   ============================================================================ */
+
 /* Plus action sheet */
-.compose-action-backdrop {
+.compose-action-backdrop.open {
+  display: block;
   position: fixed;
   inset: 0;
-  z-index: 54;
+  z-index: 10002;
   background: rgba(0,0,0,0.5);
+  animation: backdrop-fade 0.22s ease;
 }
-.compose-action-sheet {
+.compose-action-sheet.open {
+  display: flex;
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 55;
-  background: #1a1a2e;
+  z-index: 10003;
+  background: #0d1117;
+  border-top: 1px solid rgba(255,255,255,0.07);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 8px 16px calc(16px + var(--safe-area-bottom));
-  display: flex;
   flex-direction: column;
   gap: 4px;
+  animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .compose-action-item {
-  background: #252540;
+  background: #161b22;
   color: #e2e8f0;
   border: none;
   border-radius: 10px;
@@ -2777,7 +2809,7 @@ html.mobile-init .file-browser-panel {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.compose-action-item:active { background: #2a2a4e; }
+.compose-action-item:active { background: #1a1a2e; }
 .compose-action-cancel {
   background: none;
   color: #94a3b8;
