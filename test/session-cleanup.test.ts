@@ -140,7 +140,7 @@ describe('Session Cleanup', () => {
       });
 
       // Wait for cleanup to complete (exit event handler)
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Verify respawn controller is cleaned up (enabled: false when controller doesn't exist)
       const respawnAfterRes = await fetch(`${baseUrl}/api/sessions/${sessionData.session.id}/respawn`);
@@ -232,11 +232,11 @@ describe('Resource Management', () => {
       expect(deleteData.success).toBe(true);
 
       // Small delay to allow async cleanup to complete
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
     // Wait a bit more for all cleanup to complete
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Verify created sessions were deleted (account for restored sessions from other tests)
     const listRes = await fetch(`${baseUrl}/api/sessions`);
@@ -265,7 +265,7 @@ describe('Resource Management', () => {
     expect(createData.success).toBe(true);
 
     // Wait for some terminal output - Claude startup time can vary
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Get terminal buffer before stop - may or may not have content depending on timing
     const terminalRes = await fetch(`${baseUrl}/api/sessions/${createData.sessionId}/terminal`);
@@ -283,4 +283,33 @@ describe('Resource Management', () => {
     const afterData = await afterRes.json();
     expect(afterData.error).toBe('Session not found');
   });
+
+  it('POST /api/sessions/:id/clear archives session and creates child', async () => {
+    // Create a session first
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workingDir: '/tmp' }),
+    });
+    expect(createRes.status).toBe(200);
+    const created = await createRes.json();
+    const sessionId = created.session.id;
+
+    // Clear it (force: true to skip idle wait)
+    const clearRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/clear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+    expect(clearRes.status).toBe(200);
+    const { archivedSession, newSession } = await clearRes.json();
+
+    expect(archivedSession.status).toBe('archived');
+    expect(archivedSession.clearedAt).toBeDefined();
+    expect(archivedSession.childSessionId).toBe(newSession.id);
+    expect(newSession.parentSessionId).toBe(sessionId);
+
+    // Cleanup: delete the new child session
+    await fetch(`${baseUrl}/api/sessions/${newSession.id}`, { method: 'DELETE' });
+  }, 20000);
 });
