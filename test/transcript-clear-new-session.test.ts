@@ -131,7 +131,10 @@ async function getTranscriptText(page: Page): Promise<string> {
 async function isEmptyCTAVisible(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const el = document.getElementById('transcriptView');
-    return (el?.innerText ?? '').includes("What's on your mind");
+    // The CTA element uses class tv-empty-cta; text uses \u2019 (curly apostrophe)
+    if (el?.querySelector('.tv-empty-cta')) return true;
+    const text = el?.innerText ?? '';
+    return text.includes('What\u2019s on your mind') || text.includes("What's on your mind");
   });
 }
 

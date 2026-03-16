@@ -1,7 +1,7 @@
 # Task
 
 type: bug
-status: fixing
+status: done
 title: Mobile new session not detected after double-tap clear
 description: |
   After creating a new session and double-tapping the clear button, the prompt
@@ -65,7 +65,19 @@ the user typed into the new session after the CTA appeared.
 
 ## Fix / Implementation Notes
 
-**Current code (app.js?v=0.4.113):**
+**Fix 5 — Scenario 1: `isEmptyCTAVisible` test helper used wrong apostrophe (2026-03-16, v=0.4.116):**
+
+The `_setEmptyPlaceholder()` function in app.js sets the CTA title text using `'What\u2019s on your mind today?'` (Unicode right single quotation mark U+2019). The test's `isEmptyCTAVisible` helper was checking for `"What's on your mind"` with a plain ASCII apostrophe (U+0027). This mismatch caused the check to always return `false` even when the CTA was correctly rendered.
+
+The fix is in `test/transcript-clear-new-session.test.ts` — updated `isEmptyCTAVisible` to:
+1. Check for the `.tv-empty-cta` CSS class directly (primary check — class-based, not text-based)
+2. Also check for `\u2019` (curly apostrophe) as fallback
+3. Keep original ASCII apostrophe check as final fallback
+
+The `load()` logic with `treatAsEmpty = !blocks.length || this._clearPending` was already correct.
+Version bumped to `0.4.116` in `index.html`.
+
+**Current code (app.js?v=0.4.115):**
 
 **Fix 1 — unconditional optimistic save in `clear()`** (the critical fix):
 ```javascript
@@ -112,7 +124,38 @@ save-and-pass-through approach correct. opts={}  default backwards compatible. _
 ### Review attempt 3 — APPROVED (for fix attempt 3)
 sseBuffer replay correct. periodicSync guards correct. setInterval singleton acceptable.
 
+### Review attempt 4 — APPROVED
+The fix is correct and well-targeted. Key findings:
+
+1. **Root cause confirmed**: `_setEmptyPlaceholder()` at app.js line 2017 uses `'What\u2019s on your mind today?'` (U+2019 curly apostrophe). The old test helper checked for ASCII apostrophe U+0027 — a genuine mismatch that caused `isEmptyCTAVisible` to always return `false`.
+
+2. **Class-based check is correct**: `wrap.className = 'tv-empty-cta'` (app.js line 2014) is appended directly to `this._container` which is `document.getElementById('transcriptView')`. `el.querySelector('.tv-empty-cta')` will correctly find it. The primary check is robust and not brittle to text changes.
+
+3. **Fallback ordering is sensible**: CSS class check (primary) → curly apostrophe → ASCII apostrophe. The ASCII fallback is harmless defensive coding.
+
+4. **No production code changed**: Only the test helper and the version bump in `index.html`. The production `load()` logic (`treatAsEmpty = !blocks.length || this._clearPending`) was already correct and is untouched.
+
+5. **Version bump appropriate**: `v=0.4.115` → `v=0.4.116` for the cache-busting increment.
+
+No issues found. Changes are minimal, correct, and consistent with existing patterns.
+
 ## QA Results
+
+### QA run 5 — 2026-03-16 — PASS (v=0.4.116)
+
+**Checks run:**
+- tsc --noEmit: PASS (zero errors)
+- npm run lint: PASS (zero warnings/errors)
+- Server: started on port 3099, confirmed /api/status responded
+- app.js version in HTML: PASS (v=0.4.116 confirmed in index.html script tag)
+- vitest run test/transcript-clear-new-session.test.ts: PASS — 5/5 tests pass
+  - SCENARIO 1: after clearOnly(), switching to transcript must show empty CTA — PASS
+  - SCENARIO 2: after clearOnly() + user sends message, one tab switch preserves the user message — PASS
+  - SCENARIO 3: after clearOnly() + user sends message, TWO tab switches both preserve the user message — PASS
+  - SCENARIO 4: after transcript:clear SSE fires + Claude responds, tab switch shows new session content — PASS
+  - SCENARIO 5: after transcript:clear SSE fires, tab switch × 2 still shows new session content — PASS
+
+All checks passed. Status set to done.
 
 ### QA run 3 — 2026-03-15 — PASS (v=0.4.111)
 tsc, lint, server start, _periodicSync exists, load opts, sseBuffer replay — all pass.
@@ -160,6 +203,13 @@ resets the flag before the real transcript:clear SSE arrives. Fixed by querying
 [data-optimistic="true"] unconditionally — the element's presence is sufficient signal.
 clearOnly() wipes the container, so optimistic can only exist if user typed into new session.
 Version bumped to 0.4.113.
+
+**2026-03-16 — Scenario 1 fix (TDD test helper bug)**: The `isEmptyCTAVisible` helper in
+`test/transcript-clear-new-session.test.ts` used ASCII apostrophe `'` (U+0027) to check for the
+CTA, but `_setEmptyPlaceholder()` renders `\u2019` (Unicode right single quotation mark). The
+`load()` logic with `treatAsEmpty = !blocks.length || this._clearPending` was already correct
+and working. Fixed the test helper to detect `.tv-empty-cta` by CSS class. All 5/5 tests now
+pass. Version bumped to 0.4.116.
 
 ## Resume From Here (post-compaction)
 
