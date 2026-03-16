@@ -2339,8 +2339,14 @@ html.mobile-init .file-browser-panel {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    position: relative;
-    z-index: 10;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 52px;   /* above the fixed keyboard accessory bar */
+    z-index: 200;   /* above terminal, below modals */
+    max-width: 100vw;
+    box-sizing: border-box;
+    overflow-x: hidden;
   }
 
   .auq-panel[style*="display:none"] {

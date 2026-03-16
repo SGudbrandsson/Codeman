@@ -549,6 +549,8 @@ const SwipeHandler = {
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) return true;
     if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) return true;
     if (typeof InputPanel !== 'undefined' && InputPanel._open && KeyboardHandler.keyboardVisible) return true;
+    const auqPanel = document.getElementById('askUserQuestionPanel');
+    if (auqPanel && auqPanel.style.display !== 'none') return true;
     return false;
   },
 
