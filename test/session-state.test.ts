@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import type { SessionState } from '../src/types/session.js';
 
 describe('Session State Management', () => {
   describe('Session Mode Validation', () => {
@@ -167,10 +168,7 @@ describe('Session State Management', () => {
       prompt?: string;
     }
 
-    const shouldTriggerCompact = (
-      totalTokens: number,
-      config: AutoCompactConfig
-    ): boolean => {
+    const shouldTriggerCompact = (totalTokens: number, config: AutoCompactConfig): boolean => {
       return config.enabled && totalTokens >= config.threshold;
     };
 
@@ -196,7 +194,7 @@ describe('Session State Management', () => {
 
     it('should handle various thresholds', () => {
       const thresholds = [50000, 100000, 110000, 140000];
-      thresholds.forEach(threshold => {
+      thresholds.forEach((threshold) => {
         const config: AutoCompactConfig = { enabled: true, threshold };
         expect(shouldTriggerCompact(threshold + 1, config)).toBe(true);
         expect(shouldTriggerCompact(threshold - 1, config)).toBe(false);
@@ -210,10 +208,7 @@ describe('Session State Management', () => {
       threshold: number;
     }
 
-    const shouldTriggerClear = (
-      totalTokens: number,
-      config: AutoClearConfig
-    ): boolean => {
+    const shouldTriggerClear = (totalTokens: number, config: AutoClearConfig): boolean => {
       return config.enabled && totalTokens >= config.threshold;
     };
 
@@ -250,7 +245,7 @@ describe('Session State Management', () => {
     };
 
     const isTimedOut = (lastActivity: number, now: number, timeout: number): boolean => {
-      return (now - lastActivity) >= timeout;
+      return now - lastActivity >= timeout;
     };
 
     it('should detect idle timeout', () => {
@@ -321,11 +316,7 @@ describe('Session State Management', () => {
   describe('PTY Spawn Arguments', () => {
     type OutputFormat = 'stream-json' | 'text';
 
-    const buildClaudeArgs = (
-      interactive: boolean,
-      outputFormat?: OutputFormat,
-      prompt?: string
-    ): string[] => {
+    const buildClaudeArgs = (interactive: boolean, outputFormat?: OutputFormat, prompt?: string): string[] => {
       const args: string[] = [];
 
       if (!interactive) {
@@ -396,7 +387,7 @@ describe('Session State Management', () => {
     });
 
     const isFullyCleaned = (state: CleanupState): boolean => {
-      return Object.values(state).every(v => v === true);
+      return Object.values(state).every((v) => v === true);
     };
 
     it('should start with nothing cleaned', () => {
@@ -493,9 +484,7 @@ describe('Session State Management', () => {
       averageLifetimeMs: number;
     }
 
-    const calculateStats = (
-      lifetimes: number[]
-    ): Pick<SessionStats, 'averageLifetimeMs'> => {
+    const calculateStats = (lifetimes: number[]): Pick<SessionStats, 'averageLifetimeMs'> => {
       if (lifetimes.length === 0) {
         return { averageLifetimeMs: 0 };
       }
@@ -540,14 +529,14 @@ describe('Session Event Handling', () => {
       'session:deleted',
     ] as const;
 
-    type SessionEvent = typeof sessionEvents[number];
+    type SessionEvent = (typeof sessionEvents)[number];
 
     const isValidSessionEvent = (event: string): event is SessionEvent => {
       return sessionEvents.includes(event as SessionEvent);
     };
 
     it('should validate session events', () => {
-      sessionEvents.forEach(event => {
+      sessionEvents.forEach((event) => {
         expect(isValidSessionEvent(event)).toBe(true);
       });
     });
@@ -566,10 +555,7 @@ describe('Session Event Handling', () => {
       timestamp: number;
     }
 
-    const createTerminalEvent = (
-      sessionId: string,
-      data: string
-    ): TerminalEvent => ({
+    const createTerminalEvent = (sessionId: string, data: string): TerminalEvent => ({
       sessionId,
       data,
       timestamp: Date.now(),
@@ -662,8 +648,7 @@ describe('Session Event Handling', () => {
           }
           batch.push(item);
 
-          if (batch.length >= config.maxSize ||
-              now - startTime >= config.maxDelayMs) {
+          if (batch.length >= config.maxSize || now - startTime >= config.maxDelayMs) {
             const result = batch;
             batch = [];
             return result;
@@ -700,6 +685,39 @@ describe('Session Event Handling', () => {
       expect(batcher.forceDrain()).toEqual(['a', 'b']);
       expect(batcher.size()).toBe(0);
     });
+  });
+});
+
+describe('Session Archive Chain Types', () => {
+  it('SessionState accepts archived status', () => {
+    const s: SessionState = {
+      id: 'test-id',
+      pid: null,
+      status: 'archived',
+      workingDir: '/tmp',
+      currentTaskId: null,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    expect(s.status).toBe('archived');
+  });
+
+  it('SessionState accepts chain fields', () => {
+    const s: SessionState = {
+      id: 'child',
+      pid: 123,
+      status: 'idle',
+      workingDir: '/tmp',
+      currentTaskId: null,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      parentSessionId: 'parent-id',
+      childSessionId: 'grandchild-id',
+      clearedAt: new Date().toISOString(),
+      transcriptPath: '/home/user/.claude/transcripts/abc.jsonl',
+    };
+    expect(s.parentSessionId).toBe('parent-id');
+    expect(s.transcriptPath).toContain('.jsonl');
   });
 });
 

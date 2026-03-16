@@ -27,7 +27,7 @@
 import type { RespawnConfig } from './respawn.js';
 
 /** Status of a Claude session */
-export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
+export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error' | 'archived';
 
 /**
  * Claude CLI startup permission mode.
@@ -193,6 +193,14 @@ export interface SessionState {
   claudeResumeId?: string;
   /** When true, session launches with stripped CLI args: no --resume, no MCP config */
   safeMode?: boolean;
+  /** ID of the session that was cleared to create this one (archive chain) */
+  parentSessionId?: string;
+  /** ID of the child session created when this session was cleared */
+  childSessionId?: string;
+  /** ISO timestamp when this session was archived via clear */
+  clearedAt?: string;
+  /** Absolute path to Claude transcript file; captured at archive time for reliable serving */
+  transcriptPath?: string;
 }
 
 /**
