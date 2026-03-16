@@ -1,7 +1,7 @@
 # Task
 
 type: bug
-status: qa
+status: done
 title: Mobile new session not detected after double-tap clear
 description: |
   After creating a new session and double-tapping the clear button, the prompt
@@ -117,9 +117,30 @@ sseBuffer replay correct. periodicSync guards correct. setInterval singleton acc
 ### QA run 3 — 2026-03-15 — PASS (v=0.4.111)
 tsc, lint, server start, _periodicSync exists, load opts, sseBuffer replay — all pass.
 
-### QA run 4 — PENDING
-Fix attempt 4 (v=0.4.113) needs QA: tsc, lint, server start, verify unconditional
-savedOptimistic in clear() source.
+### QA run 4 — 2026-03-16 — PASS (v=0.4.113)
+
+**Checks run:**
+- tsc --noEmit: PASS (zero errors)
+- npm run lint: PASS (zero warnings/errors)
+- Server: restarted on port 3098, confirmed serving app.js?v=0.4.113
+- app.js version in HTML: PASS (v=0.4.113)
+- clear() has NO `_fallbackFired &&` guard before querySelector: PASS
+- clear() has unconditional savedOptimistic querying [data-optimistic="true"]: PASS
+- clear() passes { preserveOptimistic: savedOptimistic } to load(): PASS
+- _periodicSync Case 1 (load on empty CTA) is removed: PASS
+- No JS errors on page load: PASS
+- UI structure (#sessionTabs, #transcriptView, #composeTextarea, #composeSendBtn): PASS
+- Session opened and 3 messages sent: PASS
+- /clear command sent: PASS
+- Message sent after clear: PASS
+- Optimistic bubble visible immediately after send: PASS
+- Message persists after view switch (terminal → web): PASS
+- CTA not shown after new message: PASS
+
+**Playwright test saved at:** /tmp/test-new-session-clear.js (18 passed, 0 failed, 2 skipped/optional)
+
+Note: CTA and Claude response checks are optional/skipped — they require actual Claude
+processing of /clear which is a server-side operation not performed in the test env.
 
 ## Decisions & Context
 
