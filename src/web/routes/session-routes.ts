@@ -229,6 +229,28 @@ export function registerSessionRoutes(
     return { success: true };
   });
 
+  // ========== Clear Session (archive + create child) ==========
+
+  app.post('/api/sessions/:id/clear', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { force = false } = (request.body ?? {}) as { force?: boolean };
+
+    if (!ctx.sessions.has(id)) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
+    }
+
+    try {
+      const result = await ctx.clearSession(id, force);
+      return reply.send({
+        archivedSession: result.archivedSession,
+        newSession: result.newSessionState,
+      });
+    } catch (err) {
+      request.log.error(err, 'clearSession failed');
+      return reply.send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Clear failed'));
+    }
+  });
+
   // ========== Delete All Sessions ==========
 
   app.delete('/api/sessions', async (): Promise<ApiResponse<{ killed: number }>> => {
@@ -477,6 +499,12 @@ export function registerSessionRoutes(
         ApiErrorCode.INVALID_INPUT,
         `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`
       );
+    }
+
+    // Intercept /clear — route to archive+child flow instead of sending to PTY
+    if (inputStr.replace(/\r?\n?$/, '').trim() === '/clear') {
+      void ctx.clearSession(id, false);
+      return { success: true };
     }
 
     // Write input to PTY. Direct write is synchronous; writeViaMux

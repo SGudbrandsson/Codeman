@@ -75,11 +75,7 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(harness.ctx.cleanupSession).toHaveBeenCalledWith(
-        harness.ctx._sessionId,
-        true,
-        'user_delete',
-      );
+      expect(harness.ctx.cleanupSession).toHaveBeenCalledWith(harness.ctx._sessionId, true, 'user_delete');
     });
 
     it('returns error for unknown session', async () => {
@@ -123,10 +119,7 @@ describe('session-routes', () => {
       expect(body.success).toBe(true);
       expect(body.name).toBe('new-name');
       expect(harness.ctx.persistSessionState).toHaveBeenCalled();
-      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
-        'session:updated',
-        expect.anything(),
-      );
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
     });
 
     it('returns error for unknown session', async () => {
@@ -460,6 +453,60 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
+    });
+  });
+
+  // ========== POST /api/sessions/:id/clear ==========
+
+  describe('POST /api/sessions/:id/clear', () => {
+    it('calls ctx.clearSession and returns archived + new session', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/clear`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.archivedSession).toBeDefined();
+      expect(body.newSession).toBeDefined();
+      expect(harness.ctx.clearSession).toHaveBeenCalledWith(harness.ctx._sessionId, false);
+    });
+
+    it('passes force:true when requested', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/clear`,
+        payload: { force: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.clearSession).toHaveBeenCalledWith(harness.ctx._sessionId, true);
+    });
+
+    it('returns 200 with error body for unknown session', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions/nonexistent/clear',
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeDefined();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/input with /clear command ==========
+
+  describe('POST /api/sessions/:id/input with /clear command', () => {
+    it('intercepts /clear and calls clearSession instead of writing to PTY', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: '/clear\r', useMux: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.clearSession).toHaveBeenCalledWith(harness.ctx._sessionId, false);
+      // PTY write should NOT have been called (batchTerminalData is for terminal output, not input)
+      expect(harness.ctx.broadcast).not.toHaveBeenCalledWith('session:clearTerminal', expect.anything());
     });
   });
 });
