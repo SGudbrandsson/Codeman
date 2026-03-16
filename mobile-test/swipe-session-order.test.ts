@@ -5,6 +5,9 @@
 //
 // Fix: SessionDrawer._getOrderedSessionIds() returns the drawer visual order;
 // SwipeHandler._resolveTarget() and nextSession()/prevSession() use it.
+//
+// Note: SessionDrawer and SwipeHandler are `const` globals (not on `window`), so all
+// page.evaluate() calls use the string-based form to access them in the page scope.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
 import { PORTS, WAIT } from './helpers/constants.js';
@@ -37,22 +40,17 @@ const BASE_URL = `http://localhost:${PORT}`;
  */
 async function injectMockSessionEnvironment(page: Page): Promise<void> {
   await page.evaluate(`(function() {
-    // Inject mock data into the global app object
     if (typeof app === 'undefined') return;
-
     app.cases = [
       { name: 'alpha', path: '/proj/alpha' },
       { name: 'beta',  path: '/proj/beta'  },
     ];
-
     app.sessions = new Map([
       ['id-a', { id: 'id-a', name: 's1-alpha', workingDir: '/proj/alpha', worktreeBranch: null, worktreeOriginId: null }],
       ['id-b', { id: 'id-b', name: 's1-beta',  workingDir: '/proj/beta',  worktreeBranch: null, worktreeOriginId: null }],
       ['id-c', { id: 'id-c', name: 's2-alpha', workingDir: '/proj/alpha', worktreeBranch: null, worktreeOriginId: null }],
       ['id-d', { id: 'id-d', name: 's2-beta',  workingDir: '/proj/beta',  worktreeBranch: null, worktreeOriginId: null }],
     ]);
-
-    // Flat creation order — deliberately interleaves projects
     app.sessionOrder = ['id-a', 'id-b', 'id-c', 'id-d'];
     app.activeSessionId = 'id-a';
   })()`);
@@ -91,42 +89,42 @@ describe('Swipe session order matches drawer visual order', () => {
 
   it('SessionDrawer._getOrderedSessionIds is a function', async () => {
     const isFunction = await page.evaluate(
-      () => typeof (window as any).SessionDrawer?._getOrderedSessionIds === 'function'
+      `typeof SessionDrawer !== 'undefined' && typeof SessionDrawer._getOrderedSessionIds === 'function'`
     );
     expect(isFunction).toBe(true);
   });
 
   it('SessionDrawer._resolveCase is a function', async () => {
-    const isFunction = await page.evaluate(() => typeof (window as any).SessionDrawer?._resolveCase === 'function');
+    const isFunction = await page.evaluate(
+      `typeof SessionDrawer !== 'undefined' && typeof SessionDrawer._resolveCase === 'function'`
+    );
     expect(isFunction).toBe(true);
   });
 
   it('SwipeHandler._resolveTarget is a function', async () => {
-    const isFunction = await page.evaluate(() => typeof (window as any).SwipeHandler?._resolveTarget === 'function');
+    const isFunction = await page.evaluate(
+      `typeof SwipeHandler !== 'undefined' && typeof SwipeHandler._resolveTarget === 'function'`
+    );
     expect(isFunction).toBe(true);
   });
 
   // ── drawer ordering ───────────────────────────────────────────────────────
 
   it('_getOrderedSessionIds returns an array', async () => {
-    const result = await page.evaluate(() => (window as any).SessionDrawer._getOrderedSessionIds());
+    const result = await page.evaluate(`SessionDrawer._getOrderedSessionIds()`);
     expect(Array.isArray(result)).toBe(true);
   });
 
   it('_getOrderedSessionIds groups sessions by project — alpha before beta', async () => {
     await injectMockSessionEnvironment(page);
-    const order: string[] = await page.evaluate(() => (window as any).SessionDrawer._getOrderedSessionIds());
-
+    const order = (await page.evaluate(`SessionDrawer._getOrderedSessionIds()`)) as string[];
     expect(order).toEqual(['id-a', 'id-c', 'id-b', 'id-d']);
   });
 
   it('drawer order differs from raw sessionOrder (confirms the bug scenario)', async () => {
     await injectMockSessionEnvironment(page);
-    const [drawerOrder, rawOrder]: [string[], string[]] = await page.evaluate(() => [
-      (window as any).SessionDrawer._getOrderedSessionIds(),
-      (window as any).app?.sessionOrder ?? [],
-    ]);
-
+    const drawerOrder = (await page.evaluate(`SessionDrawer._getOrderedSessionIds()`)) as string[];
+    const rawOrder = (await page.evaluate(`app.sessionOrder.slice()`)) as string[];
     // Raw order is creation order: a, b, c, d
     expect(rawOrder).toEqual(['id-a', 'id-b', 'id-c', 'id-d']);
     // Drawer order is grouped: a, c (alpha), b, d (beta)
@@ -136,73 +134,58 @@ describe('Swipe session order matches drawer visual order', () => {
 
   // ── swipe target resolution ───────────────────────────────────────────────
 
-  it('swiping forward from id-a yields id-c (drawer order), not id-b (raw order)', async () => {
+  it('swipe left (next) from id-a yields id-c in drawer order, not id-b in raw order', async () => {
     await injectMockSessionEnvironment(page);
-    // direction +1 = forward (next in drawer)
-    const target: string | null = await page.evaluate(() => (window as any).SwipeHandler._resolveTarget(1));
-    // Drawer order: id-a → id-c → id-b → id-d
+    // direction -1 = next (swipe left); drawer order: id-a → id-c → id-b → id-d
+    const target = await page.evaluate(`SwipeHandler._resolveTarget(-1)`);
     expect(target).toBe('id-c');
   });
 
-  it('swiping backward from id-a wraps to id-d (last in drawer order)', async () => {
+  it('swipe right (prev) from id-a wraps to id-d (last in drawer order)', async () => {
     await injectMockSessionEnvironment(page);
-    const target: string | null = await page.evaluate(() => (window as any).SwipeHandler._resolveTarget(-1));
-    // Drawer order wraps: before id-a is id-d
+    // direction +1 = prev (swipe right); wraps from id-a to last = id-d
+    const target = await page.evaluate(`SwipeHandler._resolveTarget(1)`);
     expect(target).toBe('id-d');
   });
 
-  it('swiping forward from id-c yields id-b (crossing project boundary)', async () => {
+  it('swipe left (next) from id-c yields id-b (crossing project boundary)', async () => {
     await injectMockSessionEnvironment(page);
-    // Move active session to id-c
-    await page.evaluate(() => {
-      (window as any).app.activeSessionId = 'id-c';
-    });
-    const target: string | null = await page.evaluate(() => (window as any).SwipeHandler._resolveTarget(1));
+    await page.evaluate(`app.activeSessionId = 'id-c'`);
+    const target = await page.evaluate(`SwipeHandler._resolveTarget(-1)`);
     expect(target).toBe('id-b');
   });
 
-  it('swiping forward from id-d wraps back to id-a', async () => {
+  it('swipe left (next) from id-d wraps back to id-a', async () => {
     await injectMockSessionEnvironment(page);
-    await page.evaluate(() => {
-      (window as any).app.activeSessionId = 'id-d';
-    });
-    const target: string | null = await page.evaluate(() => (window as any).SwipeHandler._resolveTarget(1));
+    await page.evaluate(`app.activeSessionId = 'id-d'`);
+    const target = await page.evaluate(`SwipeHandler._resolveTarget(-1)`);
     expect(target).toBe('id-a');
   });
 
   // ── edge cases ────────────────────────────────────────────────────────────
 
   it('_getOrderedSessionIds returns empty array when no sessions', async () => {
-    await page.evaluate(() => {
-      const a = (window as any).app;
-      if (a) {
-        a.sessions = new Map();
-        a.sessionOrder = [];
-        a.cases = [];
-      }
-    });
-    const result: string[] = await page.evaluate(() => (window as any).SessionDrawer._getOrderedSessionIds());
+    await page.evaluate(`(function() {
+      if (typeof app === 'undefined') return;
+      app.sessions = new Map();
+      app.sessionOrder = [];
+      app.cases = [];
+    })()`);
+    const result = (await page.evaluate(`SessionDrawer._getOrderedSessionIds()`)) as string[];
     expect(result).toEqual([]);
   });
 
   it('ungrouped sessions (no cases) appear in raw sessionOrder order', async () => {
-    await page.evaluate(() => {
-      const a = (window as any).app;
-      if (!a) return;
-      a.cases = [];
-      a.sessions = new Map([
-        [
-          'x1',
-          { id: 'x1', name: 'session-1', workingDir: '/home/user/proj', worktreeBranch: null, worktreeOriginId: null },
-        ],
-        [
-          'x2',
-          { id: 'x2', name: 'session-2', workingDir: '/home/user/other', worktreeBranch: null, worktreeOriginId: null },
-        ],
+    await page.evaluate(`(function() {
+      if (typeof app === 'undefined') return;
+      app.cases = [];
+      app.sessions = new Map([
+        ['x1', { id: 'x1', name: 'session-1', workingDir: '/home/user/proj',  worktreeBranch: null, worktreeOriginId: null }],
+        ['x2', { id: 'x2', name: 'session-2', workingDir: '/home/user/other', worktreeBranch: null, worktreeOriginId: null }],
       ]);
-      a.sessionOrder = ['x1', 'x2'];
-    });
-    const result: string[] = await page.evaluate(() => (window as any).SessionDrawer._getOrderedSessionIds());
+      app.sessionOrder = ['x1', 'x2'];
+    })()`);
+    const result = (await page.evaluate(`SessionDrawer._getOrderedSessionIds()`)) as string[];
     expect(result).toEqual(['x1', 'x2']);
   });
 });
