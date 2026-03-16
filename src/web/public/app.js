@@ -10483,7 +10483,7 @@ class CodemanApp {
     document.getElementById('appSettingsStopOnCleanExit').checked = settings.stopOnCleanExit ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Mobile hotbar buttons
-    const hotbarButtons = settings.hotbarButtons || ['scroll-up', 'scroll-down', 'commands', 'paste', 'copy', 'dismiss'];
+    const hotbarButtons = settings.hotbarButtons || ['commands'];
     document.querySelectorAll('input[name="hotbarBtn"]').forEach(cb => {
       cb.checked = hotbarButtons.includes(cb.value);
     });

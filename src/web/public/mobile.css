@@ -993,8 +993,7 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 8px 14px;
-    min-height: 36px; /* Apple HIG: minimum 44px total touch target via bar padding */
+    padding: 6px 12px;
     background: #2a2a2a;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
@@ -1013,13 +1012,13 @@ html.mobile-init .file-browser-panel {
     border-radius: 6px;
     overflow: hidden;
     flex-shrink: 0;
-    height: 36px;
+    height: 32px;
   }
   .view-mode-seg {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0 12px;
+    padding: 0 9px;
     background: #2a2a2a;
     border: none;
     border-right: 1px solid rgba(255, 255, 255, 0.1);
