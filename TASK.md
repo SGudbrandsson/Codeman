@@ -2,348 +2,259 @@
 
 type: fix
 status: done
-title: Fix mobile send button unresponsive when keyboard is closed
+title: Fix mobile swipe session order mismatch
 description: |
-  The send button (↑ arrow) in the message bar is not reliably pressable when the keyboard
-  is closed on mobile.
+  Swiping left/right between sessions on mobile follows a different order than the session
+  list shown in the hamburger menu drawer. The swipe order appears non-deterministic from
+  the user's perspective.
 
-  Steps to reproduce:
-  1. Type a message in the compose bar
-  2. Attach an image (which closes the keyboard as a side effect)
-  3. Try to tap the send (↑) button
-  4. Expected: message sends
-  5. Actual: button is unresponsive or very hard to hit — user must re-open keyboard first
+  Expected behaviour:
+  - Swiping left/right should navigate sessions in the exact same order as displayed in the
+    hamburger menu session list
+  - If sessions are ordered A → B → C in the drawer, swiping right from A should go to B,
+    swiping right from B should go to C
 
-  Likely causes:
-  - The send button may be positioned/sized relative to the keyboard height, so when the
-    keyboard closes the layout shifts and the button ends up behind another element or in a
-    tap-dead zone
-  - The compose bar area may resize when keyboard closes, and the button hitbox does not
-    reflow correctly
-  - A touch event on the send button may be intercepted by the keyboard-dismiss handler
+  Investigation:
+  - Find where the swipe navigation order is determined (likely in mobile-handlers.js or
+    the swipe gesture handler)
+  - Find where the session list order is determined for the hamburger drawer (SessionDrawer
+    in app.js)
+  - Compare the two — they are likely using different data sources or different sort orders
+  - The drawer likely uses the sessions array in a specific sorted order (e.g. by
+    lastActivityAt, or by creation order); the swipe handler likely iterates a different
+    array or uses DOM order
 
   Fix:
-  - Ensure the send button is always tappable regardless of keyboard state
-  - The button should have a consistent, large enough tap target (min 44x44px) that does not
-    shift behind other elements when the keyboard is closed
-  - Attaching an image should NOT prevent the user from sending — if the keyboard closes after
-    attachment, the send button must still work
-  - Check whether any pointer-events, z-index, or layout recalculation on keyboard close is
-    obscuring the button
+  - Make the swipe handler use the same ordered session list as the drawer
+  - When the user swipes, compute prev/next session by looking up the current session in
+    the drawer-ordered list and stepping ±1
+  - Ensure this stays in sync if sessions are added/removed/reordered while the user is
+    swiping
 
 affected_area: frontend
 fix_cycles: 0
 
 ## Reproduction
 
-Concrete observations from code analysis (src/web/public/app.js, mobile-handlers.js, mobile.css,
-index.html):
+1. Open Codeman on a mobile device (or resize browser < 430px wide, touch device).
+2. Create at least 3 sessions that belong to **different projects** (cases). For example:
+   - Session A and Session C in Project 1
+   - Session B and Session D in Project 2
+   — where the creation order / drag-drop order is A, B, C, D (sessionOrder = [A, B, C, D]).
+3. Open the hamburger drawer. Observe the visual order: the drawer groups by project, so it shows
+   **A, C** (Project 1) then **B, D** (Project 2). Reading top-to-bottom: A → C → B → D.
+4. Close the drawer. While viewing Session A, swipe left.
+5. The swipe navigates to Session B (index 1 in flat sessionOrder), but the drawer shows Session C
+   should be next (it is visually below A in the drawer).
+6. This mismatch is reproducible whenever sessions from different projects are interleaved in
+   sessionOrder — the drawer groups them by project, but the swipe navigates the raw flat array.
 
-**Flow that triggers the bug:**
-
-1. User focuses the compose textarea — keyboard opens. `KeyboardHandler.keyboardVisible = true`.
-   `updateLayoutForKeyboard()` applies `translateY(-keyboardOffset)` to `#mobileInputPanel`.
-
-2. User taps the `+` (plus) button. The `addKeyboardTapFix` container listener on `#mobileInputPanel`
-   fires (with `requireKeyboardVisible: false`). Because `isPlusBtn = true`, `app.terminal.focus()`
-   is skipped. `_openActionSheet()` shows the action sheet.
-
-3. User selects "Photo Library" / "Attach File". `_actionSheetPick()` closes the action sheet
-   and calls `composeFileGallery.click()` — the native OS file picker opens. The keyboard closes
-   as a side effect of the native picker taking over. `handleViewportResize()` eventually fires,
-   `keyboardVisible` becomes `false`, `resetLayout()` removes the `translateY` from the panel.
-
-4. User selects an image. The file picker closes, `_onFilesChosen` → `_uploadFiles` runs
-   async. An object-URL thumbnail appears immediately; `entry.path` is `null` until the
-   `POST /api/screenshots` fetch resolves (typically < 1s on localhost).
-
-5. Now: keyboard is CLOSED, `mobileInputPanel` is at its natural fixed position
-   (`bottom: calc(safe-area-bottom + 52px)`), send button is visible.
-
-6. User taps the send (↑) button. Touch event flow:
-   - `touchstart` on `#composeSendBtn` (target phase): inline
-     `ontouchstart="event.preventDefault()"` suppresses browser click synthesis.
-     Does NOT call `stopPropagation()` — event bubbles.
-   - `touchstart` bubbles to `#mobileInputPanel` container: `addKeyboardTapFix` handler fires
-     (`requireKeyboardVisible: false`). Finds `composeSendBtn` via `e.target.closest('button')`.
-     Calls `e.preventDefault()` + `btn.click()` → `InputPanel.send()` executes.
-     Then calls `app.terminal.focus()` because `isPlusBtn = false`.
-
-**The problematic step**: `app.terminal.focus()` is called synchronously after `send()`.
-On mobile, this focuses xterm.js's hidden `<textarea class="xterm-helper-textarea">`.
-Browsers fire the virtual keyboard for focused textarea elements. On iOS and Android,
-this re-opens the keyboard immediately:
-  - `visualViewport` resize fires → `handleViewportResize()` → `keyboardVisible = true` →
-    `onKeyboardShow()` → `updateLayoutForKeyboard()` → applies `translateY(-keyboardOffset)`
-    to `#mobileInputPanel` again.
-
-The first send tap does succeed, but the keyboard re-opens and the panel shifts up. On
-devices/browsers where this keyboard re-open races with or is perceived during the tap,
-the button appears to be in a dead zone or the action sheet of keyboard animation distracts.
-More critically: if the user sees nothing happen (the panel closes after send on mobile via
-`this.close()`) and tries to tap again, the panel has already been hidden.
-
-**Secondary observation:** The send button is 34×34px (below the 44×44px tap target minimum).
-The `compose-inset-btn` class adds `padding: 6px` but `.compose-send-btn` overrides with
-`padding: 0`. The effective tap target is exactly 34×34px — small on touch devices, especially
-when the layout is in transition.
-
-**The `mobile: close after send` behavior:** `send()` calls `this.close()` on mobile
-(`getDeviceType() !== 'mobile'` is false for phones). This hides `#mobileInputPanel` with
-`display: none`. `InputPanel.open()` is only called once at init — there is no re-open path.
-Combined with `app.terminal.focus()` triggering keyboard → layout shift → close, this creates
-the "button disappeared / unresponsive" experience.
+**Simpler single-project reproduction:**
+If all sessions are ungrouped (no projects configured), the flat sessionOrder and the drawer order
+are the same — no bug. The bug is most visible when multiple projects are configured and sessions
+from different projects are interleaved in sessionOrder.
 
 ## Root Cause / Spec
 
 ### Root Cause
 
-**Primary cause**: `addKeyboardTapFix` in `src/web/public/app.js` (around line 3063–3086) calls
-`app.terminal.focus()` after firing `btn.click()` for ALL buttons in `#mobileInputPanel` EXCEPT
-`composePlusBtn`. The send button (`composeSendBtn`) is not excepted. When the keyboard is
-closed, `app.terminal.focus()` focuses the xterm.js hidden textarea, which reopens the virtual
-keyboard on mobile. This triggers a layout shift (`translateY` applied to `#mobileInputPanel`
-via `updateLayoutForKeyboard()`), and `send()` closes the panel on mobile (`this.close()` in
-`InputPanel.send()` when device type is 'mobile'). The net effect: the panel disappears and
-the keyboard opens after the send tap, making the send button appear unresponsive or missing.
+**Two different traversal orders are in use:**
 
-The fix for the plus button (commit e217f74) correctly excepted `composePlusBtn` from
-`app.terminal.focus()` but did not apply the same treatment to the send button.
+1. **SessionDrawer._render()** (`app.js` line 17383): iterates `app.sessionOrder` but distributes
+   sessions into project-grouped buckets, then renders each project group in sequence. The visual
+   top-to-bottom order in the drawer is therefore **group-first**: all sessions of project 1 (in
+   sessionOrder index order), then all sessions of project 2, then ungrouped sessions. This order
+   can differ substantially from the raw `sessionOrder` array whenever sessions from different
+   projects are interleaved in `sessionOrder`.
 
-**Secondary cause**: The send button is 34×34px (`width: 34px; height: 34px` in
-`.compose-send-btn`). The `compose-inset-btn` class sets `padding: 6px` which would give a
-46×46px tap target, but `.compose-send-btn` overrides with `padding: 0`, leaving exactly
-34×34px — below the 44×44px minimum recommended for touch targets. This makes the button
-harder to hit precisely, especially during a layout transition.
+2. **SwipeHandler._resolveTarget()** (`mobile-handlers.js` lines 644-657): navigates the raw flat
+   `app.sessionOrder` array by index (±1). This order is the creation/drag-drop order, not the
+   grouped drawer order.
 
-**Tertiary cause (related)**: `InputPanel.send()` calls `this.close()` on mobile (any device
-where `MobileDetection.getDeviceType() !== 'mobile'` is false, i.e. phone-sized screens <430px).
-After a send, the compose panel is hidden. `InputPanel.open()` is only called once at app init.
-There is no re-open path (no toggle button in the accessory bar; `_inputToggleBtn` is never
-assigned). This means after the first send on mobile, the compose panel is gone. This is
-likely a latent bug separate from the send button issue — the panel should stay open (or be
-reopened) after send on mobile too.
+When sessions are all in the same project (or no projects exist), both orders are identical, so
+the bug is invisible. As soon as sessions from two or more projects are interleaved in
+`sessionOrder`, the swipe navigates in a sequence that differs from what the user sees in the
+drawer.
+
+**Key code locations:**
+
+- `src/web/public/mobile-handlers.js`, lines 644-657 — `_resolveTarget()`: reads `app.sessionOrder`
+  directly as a flat array.
+- `src/web/public/app.js`, line 17383 — `SessionDrawer._render()`: iterates `app.sessionOrder` but
+  outputs sessions grouped by project/case.
+- `src/web/public/app.js`, lines 6462-6465 — `renderSessionTabs()` on mobile: applies a separate
+  reorder putting the active session first (unrelated to this bug, but shows the pattern of
+  derived orderings).
+- `src/web/public/mobile-handlers.js`, line 543 — `_isDisabled()`: also reads
+  `app.sessionOrder.length` (no change needed here).
 
 ### Implementation Spec
 
-**File**: `src/web/public/app.js`
+The fix is to make `SwipeHandler._resolveTarget()` compute prev/next using **the same flat ordered
+list that the drawer produces when rendered**, not the raw `sessionOrder`. This means extracting
+the drawer's rendered ordering into a helper function that both the drawer render path and the
+swipe handler can call.
 
-**Change 1 — Skip `app.terminal.focus()` for send button when keyboard is closed**
-(lines ~3075–3078)
+#### Step 1 — Add a helper method to `SessionDrawer` that returns a flat ordered session ID list
 
-Currently:
-```javascript
-const isPlusBtn = btn.id === 'composePlusBtn';
-if (!isPlusBtn && typeof app !== 'undefined' && app.terminal) {
-  app.terminal.focus();
-}
+Add a new method `_getOrderedSessionIds()` to the `SessionDrawer` object in `app.js`. This method
+should replicate the grouping logic of `_render()` but only return the final flat ordered array of
+IDs (no DOM manipulation). It must:
+- Start from `app.sessionOrder`
+- Distribute IDs into groups using the same `resolveCase()` logic as `_render()` (however, since
+  `resolveCase` is a closure local to `_render()`, it must be either extracted to a standalone
+  helper on `SessionDrawer` or the grouping logic must be inlined in `_getOrderedSessionIds()`).
+- Return the flat list: for each group (in the same group iteration order as `_render()`), emit
+  worktree sessions first (in branch insertion order), then regular sessions, for each group.
+- Sessions with no matching case go into `__ungrouped__` at the end (same as `_render()`).
+
+The simplest approach (avoiding duplication) is to factor out the case-resolution logic from
+`_render()` into a shared private method `_resolveCase(s)` on `SessionDrawer`, then implement
+`_getOrderedSessionIds()` using that shared method.
+
+#### Step 2 — Modify `SwipeHandler._resolveTarget()` to use `SessionDrawer._getOrderedSessionIds()`
+
+In `mobile-handlers.js`, `_resolveTarget()` currently does:
+
+```js
+const order = app.sessionOrder;
 ```
 
-Change to:
-```javascript
-const isPlusBtn = btn.id === 'composePlusBtn';
-const isSendBtn = btn.id === 'composeSendBtn';
-// Only refocus terminal when keyboard is already visible — purpose is to KEEP
-// keyboard open after accessory button taps, NOT to re-open a closed keyboard.
-// Skip for plus btn (opens action sheet / file picker — focus would dismiss it).
-// Skip for send btn when keyboard is closed (would reopen keyboard after send).
-if (!isPlusBtn && !isSendBtn && typeof app !== 'undefined' && app.terminal) {
-  app.terminal.focus();
-} else if (isSendBtn && KeyboardHandler.keyboardVisible && typeof app !== 'undefined' && app.terminal) {
-  app.terminal.focus();
-}
+Change it to use the drawer's ordered list when `SessionDrawer` is available:
+
+```js
+const order = (typeof SessionDrawer !== 'undefined' && SessionDrawer._getOrderedSessionIds)
+  ? SessionDrawer._getOrderedSessionIds()
+  : app.sessionOrder;
 ```
 
-Alternatively, a cleaner formulation: only call `app.terminal.focus()` if the keyboard was
-already visible, and skip it for the plus button specifically:
-```javascript
-const isPlusBtn = btn.id === 'composePlusBtn';
-if (!isPlusBtn && KeyboardHandler.keyboardVisible && typeof app !== 'undefined' && app.terminal) {
-  app.terminal.focus();
-}
-```
-This is the simplest correct fix: the purpose of `app.terminal.focus()` here is to prevent
-keyboard dismissal when tapping accessory buttons while keyboard is open. It should never be
-called when keyboard is already closed — doing so reopens it unnecessarily for all buttons.
+This falls back to raw `sessionOrder` if `SessionDrawer` is unavailable (defensive coding).
 
-**Change 2 — Increase send button tap target to minimum 44×44px**
+The rest of `_resolveTarget()` (index lookup, wrapping arithmetic) remains unchanged.
 
-In `src/web/public/mobile.css`, update `.compose-send-btn`:
+#### Step 3 — Also update `_isDisabled()` in SwipeHandler
 
-Currently:
-```css
-.compose-send-btn {
-  right: 4px;
-  width: 34px;
-  height: 34px;
-  background: #3b82f6;
-  color: #fff;
-  border-radius: 50%;
-  padding: 0;
-}
-```
+Line 543 currently checks `app.sessionOrder.length <= 1`. This check is a guard for "only one
+session exists" — it does not need to change because the total session count is the same regardless
+of ordering.
 
-The visual circle should remain 34×34px but the tap target should be expanded. Use a
-transparent padding area approach — the simplest fix is to make the button 44×44px (matching
-the minimum tap target) so it doesn't need padding override. Alternatively, keep 34px visual
-but add a transparent pseudo-element or use a larger hit area. The most straightforward fix
-given the existing structure is to increase `width` and `height` to 44px and keep padding 0,
-since the button already has `border-radius: 50%` — the circle will still look correct.
+#### Step 4 — Consider `nextSession()` / `prevSession()` keyboard shortcuts
 
-**Change 3 — Keep compose panel open after send on mobile (or reopen it)**
+`app.js` lines 7310-7324 define `nextSession()` and `prevSession()` which also navigate
+`sessionOrder` directly. For consistency with the swipe fix, these should also be updated to use
+`SessionDrawer._getOrderedSessionIds()` — but this is a keyboard-shortcut path, not the mobile
+swipe bug. The task description only requires fixing swipe; include `nextSession`/`prevSession` as
+a nice-to-have, clearly marked as bonus.
 
-In `InputPanel.send()` (line ~16887):
+#### Affected files
 
-Currently:
-```javascript
-// Desktop: keep panel open (always-visible); mobile: close after send
-const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
-if (!isDesktop) this.close();
-```
+- `src/web/public/app.js`:
+  - Factor `resolveCase()` closure in `_render()` into a named method `_resolveCase(s)` on
+    `SessionDrawer` (so it can be called from `_getOrderedSessionIds()`).
+  - Add `_getOrderedSessionIds()` method to `SessionDrawer`.
+  - (Optional) Update `nextSession()` / `prevSession()` to use drawer order.
 
-The panel should remain open on mobile too (it's "always-visible" per the comment at line 3023:
-`// Always-visible compose bar on mobile and desktop`). Change to remove the conditional close:
-```javascript
-// Panel stays open after send on all platforms — it is always-visible
-// (no toggle button to reopen it on mobile)
-```
+- `src/web/public/mobile-handlers.js`:
+  - `_resolveTarget()`: replace `app.sessionOrder` with
+    `SessionDrawer._getOrderedSessionIds()` (with fallback).
 
-Or if closing on mobile is intentional, ensure `open()` is called after close:
-```javascript
-if (!isDesktop) {
-  this.close();
-  requestAnimationFrame(() => this.open());
-}
-```
+#### No changes needed to
 
-But the cleanest fix consistent with the "always-visible" comment is to simply remove
-`if (!isDesktop) this.close()` entirely — let the panel stay open after send on mobile.
-
-### Priority of changes
-
-1. Change 1 (skip `terminal.focus()` when keyboard closed) — **primary fix for the reported bug**
-2. Change 3 (keep panel open after send) — **needed for consistent UX; without it the panel
-   disappears after every send on mobile**
-3. Change 2 (increase tap target) — **secondary improvement for reliability**
+- `SessionDrawer._render()` — it already renders in the correct order; we are just extracting
+  that order into a separate method.
+- `renderSessionTabs()` — the mobile active-first tab reorder is a display-only concern, unrelated.
+- `syncSessionOrder()`, `saveSessionOrder()`, `loadSessionOrder()` — underlying storage unchanged.
+- Any CSS or HTML.
 
 ## Fix / Implementation Notes
 
-Three changes applied:
+### Changes made
 
-**Change 1** — `src/web/public/app.js` line 3076: Added `KeyboardHandler.keyboardVisible &&` guard
-to the `app.terminal.focus()` call in `addKeyboardTapFix`. Previously, `terminal.focus()` was
-called for all non-plus buttons regardless of keyboard state, which reopened the virtual keyboard
-after a send tap when the keyboard was closed — causing a layout shift and hiding the panel.
-Now `terminal.focus()` is only called when the keyboard is already visible (its intended purpose:
-keeping the keyboard open during accessory button taps).
+**`src/web/public/app.js`**
 
-**Change 2** — `src/web/public/mobile.css` `.compose-send-btn`: Increased `width` and `height`
-from `34px` to `44px` to meet the 44×44px minimum touch target. The visual circle scales
-correctly since `border-radius: 50%` and `padding: 0` are unchanged.
+1. Added `SessionDrawer._resolveCase(s)` — a new method that replicates the `resolveCase` closure
+   that previously lived only inside `_render()`. It contains the same three sub-helpers
+   (`findCase`, `findCaseBySessionName`, `findCaseByWorktreeDirPrefix`) and the same resolution
+   priority logic. This is the single source of truth for case assignment.
 
-**Change 3** — `src/web/public/app.js` `InputPanel.send()` (~line 16882): Removed the
-`if (!isDesktop) this.close()` call and the now-unused `isDesktop` variable entirely. The
-compose panel is "always-visible" on all platforms (per design comment at line 3023) and has
-no toggle button to reopen it, so closing it after send on mobile was a latent bug that
-compounded the primary issue.
+2. Added `SessionDrawer._getOrderedSessionIds()` — builds the same group Map that `_render()` builds
+   (seeded from `app.cases`, then populated from `app.sessionOrder` via `_resolveCase()`), then
+   flattens it to a plain array of IDs in the same traversal order: for each group, worktree session
+   IDs first (branch insertion order), then regular session IDs. Returns the flat ordered list with
+   no DOM side-effects. This is the authoritative ordered list for both swipe and keyboard nav.
+
+3. Updated `nextSession()` / `prevSession()` (bonus — keyboard shortcuts) to call
+   `SessionDrawer._getOrderedSessionIds()` with a fallback to `this.sessionOrder`, so keyboard
+   navigation is also consistent with the drawer visual order.
+
+**`src/web/public/mobile-handlers.js`**
+
+4. Updated `SwipeHandler._resolveTarget()`: replaced `const order = app.sessionOrder` with a call
+   to `SessionDrawer._getOrderedSessionIds()` (with a defensive fallback to `app.sessionOrder` if
+   `SessionDrawer` is unavailable). All index-arithmetic logic below that line is unchanged.
+
+### What was NOT changed
+
+- `SessionDrawer._render()` — unchanged; it continues to use its own local closures for rendering.
+  `_resolveCase()` mirrors those closures exactly but is not called from `_render()` to avoid any
+  risk of behavioral regression in the render path.
+- `SwipeHandler._isDisabled()` — the `app.sessionOrder.length <= 1` guard is about total count,
+  not order, so no change needed.
+- All CSS, HTML, server-side code.
 
 ## Review History
+
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Change 1 — `KeyboardHandler.keyboardVisible` guard in `addKeyboardTapFix`**
+**Summary:** The implementation correctly and completely solves the root cause. All changes are well-structured and defensive.
 
-Correctness: The guard is inserted at the right location (line 3076) and uses the established
-`KeyboardHandler.keyboardVisible` static property, which is already used identically at line 3067
-in the same function and in multiple other call sites. No `typeof` guard is needed because
-`KeyboardHandler` is always defined when `MobileDetection.isTouchDevice()` is true (the outer
-`if` condition). The chosen formulation (add `keyboardVisible &&` to the shared condition rather
-than a separate `isSendBtn` exception) is the simpler and more correct of the two options listed
-in the spec — it correctly handles any future non-plus buttons added to `#mobileInputPanel` as
-well, not just the send button.
+**`_resolveCase()` fidelity:** Compared line-for-line against the original `resolveCase` closure in `_render()` (lines 17368–17386). All three sub-helpers (`findCase`, `findCaseBySessionName`, `findCaseByWorktreeDirPrefix`) and the resolution priority logic are exact mirrors. No divergence found.
 
-One subtle concern examined: the `requireKeyboardVisible: false` option on `#mobileInputPanel`
-means the outer early-return guard at line 3067 is bypassed for this container — so the listener
-fires even when the keyboard is closed. The new `KeyboardHandler.keyboardVisible` check inside
-the focus call correctly handles this case: `btn.click()` (i.e. send) still fires, but
-`terminal.focus()` is skipped when keyboard is closed. This is exactly the desired behavior.
+**`_getOrderedSessionIds()` ordering:** The group Map is seeded identically from `app.cases`, the per-session loop uses the same `_resolveCase()` → `groupKey` → `__ungrouped__` fallback pattern, and the flattening loop emits worktrees first then regular sessions per group — matching `_render()` lines 17445 and 17491. JS Map guarantees insertion-order iteration, so group ordering is stable and identical to the render path.
 
-No regression risk for the plus button: `isPlusBtn` is checked first; `keyboardVisible` is only
-reached when `isPlusBtn` is false, so the plus-button fix from commit e217f74 is unaffected.
+**`__ungrouped__` handling:** Not pre-seeded in the Map (same as `_render()`), so ungrouped sessions are appended after all case-seeded groups in insertion order — correct.
 
-**Change 2 — Send button size 34px → 44px in `mobile.css`**
+**Edge cases:** All covered — `app undefined`, empty `sessionOrder`, missing session in `app.sessions`, null `app.cases`, `activeSessionId` not found in order.
 
-Correct and confirmed in the file. `border-radius: 50%` and `padding: 0` remain; the button
-scales proportionally. No overlap with adjacent elements needs review — `.compose-plus-btn` is
-pinned `left: 4px` and `.compose-send-btn` is pinned `right: 4px`, so widening the send button
-by 10px moves its left edge 10px further left; the textarea has `left: 44px; right: 44px`
-padding to accommodate the inset buttons, so with the 10px wider button there is a 10px
-reduction in the textarea's right clearance. This warrants a visual check in QA but is unlikely
-to cause overlap given the `padding` inset on the textarea.
+**Minor observation:** `nextSession()`/`prevSession()` guard on `this.sessionOrder.length <= 1` but then use the drawer-ordered array. If `_getOrderedSessionIds()` returned an empty array (impossible in practice — would require every session to be absent from `app.sessions`), modulo arithmetic would produce `NaN`. This is academically possible but cannot occur in normal operation, and the fallback to `app.sessionOrder` provides an additional safety net.
 
-**Change 3 — Remove `this.close()` from `InputPanel.send()`**
+**No search filter in `_getOrderedSessionIds()`:** Correct and intentional per the decisions section.
 
-Safety analysis:
-- `InputPanel.close()` is called from two places: (a) `closeAllPanels()` — triggered only by
-  Escape key on desktop, which does not apply to mobile; (b) the now-removed `send()` path.
-- `InputPanel.open()` is called once at app init (line 3024). After the remove, the panel stays
-  open permanently on mobile, which matches the "Always-visible compose bar on mobile and
-  desktop" comment at line 3023 and is the correct intent.
-- The old `close()` call also revoked object URLs and cleared `_images`. With the removal, image
-  cleanup on send is now handled by the `this._images = []; this._renderThumbnails();` lines
-  already present at lines 16883–16884 — so no memory leak is introduced.
-- The `_open` state flag: after the fix, `_open` stays `true` permanently on mobile after init,
-  which is consistent with the panel never being hidden. No code paths depend on `_open` being
-  toggled to `false` after send (the only code reading `_open` is `toggle()`, which is not called
-  on mobile given there is no toggle button).
-- The removed `isDesktop` variable was only used by the removed `if` condition; its removal
-  avoids a lint warning. Another `isDesktop` variable exists independently in `_autoGrow` (line
-  16778) with a different scope — no collision.
-
-**Edge cases checked:**
-- Sending with no text and no images: guarded at line 16834 (`if (!text && !images.length) return`),
-  behavior unchanged.
-- Double-tap scenario: with the `keyboardVisible` guard, a second tap while the keyboard is
-  closed will call `send()` again. `send()` returns early if textarea is empty (cleared after
-  first send), so no double-send is possible.
-- `closeAllPanels()` on mobile via Escape: still calls `InputPanel.close()`, hiding the panel.
-  Since `open()` is not called again afterward, the panel would be permanently gone on mobile
-  if Escape is pressed. This is a pre-existing issue unrelated to this fix — the Escape handler
-  was already present before this change.
-
-**Overall:** All three changes are correct, minimal, and consistent with existing patterns. The
-implementation matches the spec's preferred formulations. No issues found.
+**Conclusion:** Implementation is faithful to the spec, covers all edge cases, and introduces no regressions to the render path.
 
 ## QA Results
 
-### QA run — PASSED
+<!-- filled by QA subagent -->
 
-**TypeScript (`tsc --noEmit`):** PASS — zero errors.
+### QA run — PASS
 
-**ESLint (`npm run lint`):** PASS — zero warnings or errors.
-
-**Playwright send button check (iPhone 12 mobile viewport, port 3099):**
-- Send button visible: true
-- Bounding box: 44×44px
-- Width >= 44px: PASS (44px)
-- Height >= 44px: PASS (44px)
-- Overall: PASS
-
-**Implementation verified in source:**
-- `src/web/public/app.js` line 3076: `KeyboardHandler.keyboardVisible &&` guard confirmed in place for `app.terminal.focus()` in `addKeyboardTapFix`.
-- `src/web/public/mobile.css` `.compose-send-btn`: `width: 44px; height: 44px` confirmed.
-- `InputPanel.send()` close-on-mobile removed (Change 3) — confirmed via review notes.
+| Check | Result |
+|---|---|
+| `tsc --noEmit` | PASS — zero errors |
+| `npm run lint` | PASS — zero errors |
+| `SessionDrawer` exists in page context | PASS |
+| `SessionDrawer._getOrderedSessionIds` is a function | PASS |
+| `SessionDrawer._resolveCase` is a function | PASS |
+| `SessionDrawer._getOrderedSessionIds()` returns an array | PASS — returned 16 session IDs |
+| `SwipeHandler` exists in page context | PASS |
+| `SwipeHandler._resolveTarget` is a function | PASS |
 
 All checks passed. Status set to `done`.
 
 ## Decisions & Context
 
-- Chose the simpler `KeyboardHandler.keyboardVisible` guard (spec's preferred formulation) over
-  a separate `isSendBtn` exception. This correctly handles all current and future non-plus buttons:
-  `terminal.focus()` is only meaningful when keyboard is already up.
-- Removed the `isDesktop` variable entirely (it was only used by the removed `if` condition)
-  to avoid a lint/unused-variable warning.
-- Send button enlarged to 44px diameter (not just expanded hit area via padding) — this is the
-  cleanest approach given the existing `border-radius: 50%; padding: 0` style; the visual circle
-  scales proportionally.
+- `_resolveCase()` duplicates the sub-helper closures from `_render()` rather than refactoring
+  `_render()` to call `_resolveCase()`. This keeps the render path entirely unchanged, preventing
+  any subtle regression, at the cost of a small amount of code duplication. The helpers are simple
+  pure functions and unlikely to diverge in practice.
+
+- `_getOrderedSessionIds()` intentionally does NOT apply the `_searchQuery` filter that `_render()`
+  applies when filtering is active. Swipe navigation should always traverse all sessions regardless
+  of the current search state in the drawer; filtering the swipe targets based on search state
+  would be surprising and non-standard behaviour.
+
+- The fallback to `app.sessionOrder` in `_resolveTarget()` and `nextSession()`/`prevSession()` is
+  pure defensive coding — `SessionDrawer` is always defined when the app is loaded. It has no
+  behavioural impact in normal operation.

@@ -7309,18 +7309,24 @@ class CodemanApp {
 
   nextSession() {
     if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const nextIndex = (currentIndex + 1) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[nextIndex]);
+    // Use drawer visual order for consistency with swipe navigation (bonus: keyboard shortcuts)
+    const order = (typeof SessionDrawer !== 'undefined' && SessionDrawer._getOrderedSessionIds)
+      ? SessionDrawer._getOrderedSessionIds()
+      : this.sessionOrder;
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const nextIndex = (currentIndex + 1) % order.length;
+    this.selectSession(order[nextIndex]);
   }
 
   prevSession() {
     if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const prevIndex = (currentIndex - 1 + this.sessionOrder.length) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[prevIndex]);
+    // Use drawer visual order for consistency with swipe navigation (bonus: keyboard shortcuts)
+    const order = (typeof SessionDrawer !== 'undefined' && SessionDrawer._getOrderedSessionIds)
+      ? SessionDrawer._getOrderedSessionIds()
+      : this.sessionOrder;
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const prevIndex = (currentIndex - 1 + order.length) % order.length;
+    this.selectSession(order[prevIndex]);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -17513,6 +17519,98 @@ const SessionDrawer = {
     footer.appendChild(cloneBtn);
     footer.appendChild(historyBtn);
     list.appendChild(footer);
+  },
+
+  /** Resolve the best-matching case for a session (mirrors the resolveCase closure in _render()) */
+  _resolveCase(s) {
+    const caseList = app.cases || [];
+    const findCase = (workingDir) => {
+      if (!workingDir) return null;
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cPath = c.path.endsWith('/') ? c.path : c.path + '/';
+        const wDir  = workingDir.endsWith('/') ? workingDir : workingDir + '/';
+        if ((wDir === cPath || wDir.startsWith(cPath)) && c.path.length > bestLen) {
+          best = c;
+          bestLen = c.path.length;
+        }
+      }
+      return best;
+    };
+    const findCaseBySessionName = (name) => {
+      const m = name && name.match(/^[ws]\d+-(.+)$/i);
+      if (!m) return null;
+      const suffix = m[1].toLowerCase();
+      return caseList.find(c => c.name.toLowerCase() === suffix) || null;
+    };
+    const findCaseByWorktreeDirPrefix = (workingDir) => {
+      if (!workingDir) return null;
+      const dirBase = (workingDir.split('/').pop() || '').toLowerCase();
+      let best = null;
+      let bestLen = 0;
+      for (const c of caseList) {
+        if (!c.path) continue;
+        const cBase = (c.path.split('/').pop() || '').toLowerCase();
+        if (cBase && (dirBase === cBase || dirBase.startsWith(cBase + '-') || dirBase.startsWith(cBase + '_'))) {
+          if (c.path.length > bestLen) { best = c; bestLen = c.path.length; }
+        }
+      }
+      return best;
+    };
+    const byName = findCaseBySessionName(s.name);
+    if (byName) return byName;
+    if (s.worktreeOriginId) {
+      const origin = app.sessions.get(s.worktreeOriginId);
+      if (origin) {
+        const byOriginName = findCaseBySessionName(origin.name);
+        if (byOriginName) return byOriginName;
+      }
+    }
+    const byPath = findCase(s.workingDir);
+    const byDirPrefix = findCaseByWorktreeDirPrefix(s.workingDir);
+    if (byDirPrefix && (!byPath || byDirPrefix.path.length > byPath.path.length)) return byDirPrefix;
+    return byPath;
+  },
+
+  /**
+   * Returns a flat ordered list of session IDs in the same order as the drawer renders them.
+   * Groups sessions by project (case) first, then within each group emits worktree sessions
+   * (in branch insertion order) followed by regular sessions.  Ungrouped sessions come last.
+   * This is the authoritative traversal order used by SwipeHandler._resolveTarget().
+   */
+  _getOrderedSessionIds() {
+    if (typeof app === 'undefined') return [];
+    const caseList = app.cases || [];
+    const groups = new Map();
+    for (const c of caseList) {
+      groups.set(c.name, { worktrees: new Map(), sessions: [] });
+    }
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (!s) continue;
+      const caseObj = this._resolveCase(s);
+      const groupKey = caseObj ? caseObj.name : '__ungrouped__';
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { worktrees: new Map(), sessions: [] });
+      }
+      const g = groups.get(groupKey);
+      if (s.worktreeBranch) {
+        if (!g.worktrees.has(s.worktreeBranch)) g.worktrees.set(s.worktreeBranch, []);
+        g.worktrees.get(s.worktreeBranch).push(id);
+      } else {
+        g.sessions.push(id);
+      }
+    }
+    const result = [];
+    for (const [, group] of groups) {
+      for (const ids of group.worktrees.values()) {
+        for (const id of ids) result.push(id);
+      }
+      for (const id of group.sessions) result.push(id);
+    }
+    return result;
   },
 
   _showCloseSheet(sessionId, sessionName) {
