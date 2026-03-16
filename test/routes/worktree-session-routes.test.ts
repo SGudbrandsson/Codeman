@@ -260,6 +260,48 @@ describe('worktree-session routes', () => {
     expect(body.output).toBe('Merge made by the recursive strategy.');
   });
 
+  it('POST merge — worktree session has worktreeOriginId → cleanupSession called via primary lookup', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    // Add a worktree session linked to the origin session via worktreeOriginId
+    const worktreeSession = {
+      id: 'wt-session-1',
+      worktreeBranch: 'feature/cleanup',
+      worktreePath: '/tmp/wt',
+      worktreeOriginId: ctx._sessionId,
+    } as unknown as ReturnType<typeof ctx.sessions.get>;
+    ctx.sessions.set('wt-session-1', worktreeSession!);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree/merge`,
+      payload: { branch: 'feature/cleanup' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).success).toBe(true);
+    // Allow the fire-and-forget cleanup IIFE to settle
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ctx.cleanupSession).toHaveBeenCalledWith('wt-session-1', true, 'merged');
+  });
+
+  it('POST merge — worktree session lacks worktreeOriginId → cleanupSession called via fallback lookup', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerWorktreeSessionRoutes);
+    // Add a worktree session WITHOUT worktreeOriginId (e.g. restored from old state.json)
+    const worktreeSession = {
+      id: 'wt-session-2',
+      worktreeBranch: 'feature/orphan',
+      worktreePath: '/tmp/wt-orphan',
+    } as unknown as ReturnType<typeof ctx.sessions.get>;
+    ctx.sessions.set('wt-session-2', worktreeSession!);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/worktree/merge`,
+      payload: { branch: 'feature/orphan' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).success).toBe(true);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ctx.cleanupSession).toHaveBeenCalledWith('wt-session-2', true, 'merged');
+  });
+
   // ---------------------------------------------------------------------------
   // DELETE /api/sessions/:id/worktree
   // ---------------------------------------------------------------------------
