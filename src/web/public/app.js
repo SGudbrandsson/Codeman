@@ -2192,6 +2192,8 @@ const TranscriptView = {
     this._clearFallbackTimer = setTimeout(() => {
       this._clearFallbackTimer = null;
       if (this._sessionId !== pendingSessionId || !pendingSessionId) return;
+      // Fallback path: CTA is shown, pending window is over.
+      this._clearPending = false;
       // Show empty CTA without fetching — user cleared, so empty is the correct state.
       this._pendingToolUses = {};
       this._compactingEl = null;
