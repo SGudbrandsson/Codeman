@@ -51,10 +51,10 @@ export async function getCurrentBranch(repoDir: string): Promise<string> {
   return git(['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
 }
 
-const WORKTREE_ARTIFACTS = ['node_modules', 'dist'] as const;
+const WORKTREE_ARTIFACTS = ['node_modules', 'dist', 'src/web/public/vendor'] as const;
 
 /**
- * Symlinks gitignored runtime artifacts (node_modules, dist) from the git root
+ * Symlinks gitignored runtime artifacts (node_modules, dist, src/web/public/vendor) from the git root
  * into a newly-created worktree directory. Each artifact is symlinked independently —
  * a failure on one does not block the others or abort worktree creation.
  */
