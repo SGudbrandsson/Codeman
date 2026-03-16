@@ -38,7 +38,9 @@ describe('RespawnController', () => {
     it('should have default configuration', () => {
       const config = controller.getConfig();
       expect(config.enabled).toBe(true);
-      expect(config.updatePrompt).toBe('write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.');
+      expect(config.updatePrompt).toBe(
+        'write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.'
+      );
     });
 
     it('should allow custom configuration', () => {
@@ -95,9 +97,9 @@ describe('RespawnController', () => {
       session.simulateCompletionMessage();
 
       // Wait for log
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      const hasCompletionLog = logMessages.some(msg => msg.includes('Completion message detected'));
+      const hasCompletionLog = logMessages.some((msg) => msg.includes('Completion message detected'));
       expect(hasCompletionLog).toBe(true);
     });
 
@@ -139,7 +141,7 @@ describe('RespawnController', () => {
       session.simulateCompletionMessage();
 
       // Wait for completion confirmation (completionConfirmMs=50) + processing
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(cycleStarted).toBe(true);
       expect(controller.currentCycle).toBe(1);
@@ -155,7 +157,7 @@ describe('RespawnController', () => {
       session.simulateCompletionMessage();
 
       // Wait for completion confirmation + step delay
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(stepSent).toBe('update');
       expect(session.writeBuffer.length).toBeGreaterThan(0);
@@ -170,7 +172,7 @@ describe('RespawnController', () => {
       session.simulateCompletionMessage();
 
       // Wait for state transitions
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Should have transitioned through multiple states (watching -> confirming_idle -> sending_update)
       expect(states).toContain('watching');
@@ -239,7 +241,7 @@ describe('RespawnController', () => {
       controller.start();
 
       // Wait a bit
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const status = controller.getStatus();
       expect(status.timeSinceActivity).toBeGreaterThan(0);
@@ -299,7 +301,7 @@ describe('RespawnController', () => {
       });
 
       controller.start();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(events.length).toBeGreaterThan(0);
       expect(events[0].state).toBe('watching');
@@ -313,7 +315,7 @@ describe('RespawnController', () => {
       controller.start();
 
       expect(logs.length).toBeGreaterThan(0);
-      expect(logs.some(l => l.includes('Starting'))).toBe(true);
+      expect(logs.some((l) => l.includes('Starting'))).toBe(true);
     });
   });
 });
@@ -346,13 +348,13 @@ describe('RespawnController Integration', () => {
 
     // Alternate between working and idle
     session.simulatePrompt();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     session.simulateWorking();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     session.simulatePrompt();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Should handle transitions gracefully
     expect(controller.isRunning).toBe(true);
@@ -467,7 +469,7 @@ describe('RespawnController Integration', () => {
     controller.start();
     session.simulatePrompt();
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(cycleStarted).toBe(false);
     controller.stop();
@@ -560,7 +562,7 @@ describe('RespawnController Configuration', () => {
 
   it('should clamp completionConfirmMs to noOutputTimeoutMs', () => {
     const controller = new RespawnController(session as unknown as Session, {
-      completionConfirmMs: 60000,  // Greater than noOutputTimeoutMs
+      completionConfirmMs: 60000, // Greater than noOutputTimeoutMs
       noOutputTimeoutMs: 30000,
     });
     // completionConfirmMs should be clamped to noOutputTimeoutMs
@@ -646,7 +648,7 @@ describe('RespawnController State Transitions', () => {
     controller.start();
     session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(stateHistory).toContain('watching');
     expect(stateHistory.length).toBeGreaterThan(1);
@@ -657,7 +659,7 @@ describe('RespawnController State Transitions', () => {
     session.simulateCompletionMessage();
 
     // Wait a bit then stop during potential transition
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 30));
     controller.stop();
 
     expect(controller.state).toBe('stopped');
@@ -672,7 +674,7 @@ describe('RespawnController State Transitions', () => {
     controller.start();
     session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     // May or may not complete depending on timing
     expect(controller.isRunning).toBe(true);
@@ -692,7 +694,7 @@ describe('RespawnController State Transitions', () => {
     session.simulateCompletionMessage();
     session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Should detect completion messages
     expect(completionCount).toBeGreaterThan(0);
@@ -708,10 +710,10 @@ describe('RespawnController State Transitions', () => {
     session.simulateCompletionMessage();
 
     // Before confirmation timer fires, start working
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 20));
     session.simulateWorking();
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Cycle should not have started due to working state canceling confirmation
     expect(controller.getStatus().workingDetected).toBe(true);
@@ -820,7 +822,7 @@ describe('RespawnController Edge Cases', () => {
     // Update config mid-run
     controller.updateConfig({ updatePrompt: 'updated' });
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(controller.getConfig().updatePrompt).toBe('updated');
     controller.stop();
@@ -840,7 +842,7 @@ describe('RespawnController Edge Cases', () => {
     controller.start();
     session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(controller.currentCycle).toBeGreaterThan(0);
     controller.stop();
@@ -853,7 +855,7 @@ describe('RespawnController Edge Cases', () => {
 
     controller.start();
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const status = controller.getStatus();
     // Allow for slight timing variance (timers may fire 1-2ms early)
@@ -868,7 +870,7 @@ describe('RespawnController Edge Cases', () => {
 
     controller.start();
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     session.simulateTerminalOutput('new data');
 
@@ -908,7 +910,7 @@ describe('RespawnController Edge Cases', () => {
       session.simulateTerminalOutput('Would you like to proceed?\n❯ 1. Yes\n  2. No\n');
 
       // Wait for autoAcceptDelayMs to expire
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(autoAcceptFired).toBe(true);
       expect(session.writeBuffer).toContain('\r');
@@ -935,7 +937,7 @@ describe('RespawnController Edge Cases', () => {
       session.simulateCompletionMessage();
 
       // Wait for autoAcceptDelayMs
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(autoAcceptFired).toBe(false);
       autoAcceptController.stop();
@@ -958,7 +960,7 @@ describe('RespawnController Edge Cases', () => {
       autoAcceptController.start();
       session.simulateTerminalOutput('Plan: Waiting for approval...');
 
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(autoAcceptFired).toBe(false);
       autoAcceptController.stop();
@@ -981,7 +983,7 @@ describe('RespawnController Edge Cases', () => {
       autoAcceptController.start();
 
       // Don't simulate any output - just wait
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(autoAcceptFired).toBe(false);
       autoAcceptController.stop();
@@ -1006,15 +1008,15 @@ describe('RespawnController Edge Cases', () => {
       session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
       // Wait 100ms (less than 150ms delay), then send more output
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       session.simulateTerminalOutput('More output');
 
       // Wait another 100ms - total 200ms from start but only 100ms from last output
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(autoAcceptFired).toBe(false);
 
       // Wait the remaining time
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(autoAcceptFired).toBe(true);
       autoAcceptController.stop();
     });
@@ -1038,16 +1040,16 @@ describe('RespawnController Edge Cases', () => {
       session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
       // Wait for first auto-accept
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(autoAcceptCount).toBe(1);
 
       // Wait more - should NOT fire again (hasReceivedOutput is false)
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(autoAcceptCount).toBe(1);
 
       // New output comes in (plan mode again), then silence again - should fire again
       session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(autoAcceptCount).toBe(2);
 
       autoAcceptController.stop();
@@ -1072,14 +1074,14 @@ describe('RespawnController Edge Cases', () => {
 
       // Trigger a respawn cycle via completion message
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       // Now in sending_update or waiting_update state
       expect(autoAcceptController.state).not.toBe('watching');
 
       // Simulate output in the waiting state, then silence
       session.simulateTerminalOutput('Processing update...');
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       // Auto-accept should NOT fire because we're not in watching state
       expect(autoAcceptFired).toBe(false);
@@ -1107,7 +1109,7 @@ describe('RespawnController Edge Cases', () => {
       autoAcceptController.signalElicitation();
 
       // Wait for autoAcceptDelayMs to expire
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Auto-accept should NOT fire because elicitation was signaled
       expect(autoAcceptFired).toBe(false);
@@ -1141,7 +1143,7 @@ describe('RespawnController Edge Cases', () => {
       // New silence after work - plan mode approval with plan mode UI
       session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Auto-accept should fire now (elicitation cleared by working pattern)
       expect(autoAcceptFired).toBe(true);
@@ -1210,7 +1212,7 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for completion confirm timer to fire and AI check to start
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Should have transitioned to ai_checking
     expect(states).toContain('ai_checking');
@@ -1230,13 +1232,13 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for AI check to start
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Simulate working patterns during AI check
     session.simulateWorking();
 
     // Should be back to watching
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(controller.state).toBe('watching');
 
     controller.stop();
@@ -1254,13 +1256,13 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for AI check to start
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Simulate substantial output during AI check
     session.simulateTerminalOutput('Some meaningful output that is more than 2 chars');
 
     // Should be back to watching
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(controller.state).toBe('watching');
 
     controller.stop();
@@ -1282,7 +1284,7 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for completion confirm and direct idle
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(cycleStarted).toBe(true);
     controller.stop();
@@ -1304,7 +1306,7 @@ describe('RespawnController AI Idle Check', () => {
     controller.start();
     session.simulateCompletionMessage();
 
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(aiCheckStarted).toBe(true);
     controller.stop();
@@ -1347,7 +1349,7 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for completion confirm timer + AI check start
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     // Should have triggered ai_checking via completion path
     expect(states).toContain('ai_checking');
@@ -1370,7 +1372,7 @@ describe('RespawnController AI Idle Check', () => {
     session.simulateCompletionMessage();
 
     // Wait for AI check to start and timeout
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
     // Should return to watching after timeout (with cooldown)
     expect(controller.state).toBe('watching');
@@ -1416,7 +1418,7 @@ describe('RespawnController AI Plan Mode Check', () => {
     // Output without plan mode patterns (no numbered list, no selector)
     session.simulateTerminalOutput('Claude is just thinking about something...\nSome regular output here.');
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Pre-filter should block - no plan mode patterns found
     expect(autoAcceptFired).toBe(false);
@@ -1442,13 +1444,10 @@ describe('RespawnController AI Plan Mode Check', () => {
 
     // Output WITH plan mode patterns
     session.simulateTerminalOutput(
-      'Would you like to proceed with this plan?\n' +
-      '❯ 1. Yes\n' +
-      '  2. No\n' +
-      '  3. Type your own\n'
+      'Would you like to proceed with this plan?\n' + '❯ 1. Yes\n' + '  2. No\n' + '  3. Type your own\n'
     );
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Pre-filter should pass and send Enter (AI disabled)
     expect(autoAcceptFired).toBe(true);
@@ -1473,15 +1472,11 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Plan mode patterns BUT also has working patterns (spinner) in the tail
-    session.simulateTerminalOutput(
-      '❯ 1. Yes\n' +
-      '  2. No\n' +
-      'Thinking ⠋\n'
-    );
+    session.simulateTerminalOutput('❯ 1. Yes\n' + '  2. No\n' + 'Thinking ⠋\n');
 
     // Wait for autoAcceptDelay - but working pattern resets the timer
     // so we need to wait longer and check after working pattern was consumed
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Should NOT fire because working patterns detected resets timer
     // (the working pattern in handleTerminalData clears timers)
@@ -1508,13 +1503,9 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Output with plan mode patterns to pass pre-filter
-    session.simulateTerminalOutput(
-      'Would you like to proceed?\n' +
-      '❯ 1. Yes\n' +
-      '  2. No\n'
-    );
+    session.simulateTerminalOutput('Would you like to proceed?\n' + '❯ 1. Yes\n' + '  2. No\n');
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Plan check should have been started (pre-filter passed, AI enabled)
     expect(planCheckStarted).toBe(true);
@@ -1544,17 +1535,14 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Trigger plan check
-    session.simulateTerminalOutput(
-      '❯ 1. Yes\n' +
-      '  2. No\n'
-    );
-    await new Promise(resolve => setTimeout(resolve, 150));
+    session.simulateTerminalOutput('❯ 1. Yes\n' + '  2. No\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(planCheckStarted).toBe(true);
 
     // New output arrives - should cancel plan check (stale)
     session.simulateTerminalOutput('New output from Claude...');
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Auto-accept should NOT have fired (check was cancelled)
     expect(autoAcceptFired).toBe(false);
@@ -1580,16 +1568,14 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Plan mode patterns to trigger check
-    session.simulateTerminalOutput(
-      '❯ 1. Yes\n  2. No\n'
-    );
-    await new Promise(resolve => setTimeout(resolve, 150));
+    session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     // Output arrives during check - result should be discarded
     session.simulateTerminalOutput('Claude started working again');
 
     // Wait for any pending check to complete
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(autoAcceptFired).toBe(false);
     controller.stop();
@@ -1617,11 +1603,9 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Plan mode patterns
-    session.simulateTerminalOutput(
-      '❯ 1. Yes\n  2. No\n'
-    );
+    session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Should send Enter directly (no AI check)
     expect(planCheckStarted).toBe(false);
@@ -1663,7 +1647,7 @@ describe('RespawnController AI Plan Mode Check', () => {
     controller.start();
 
     // Don't send any output - hasReceivedOutput should guard
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(autoAcceptFired).toBe(false);
     controller.stop();
@@ -1861,7 +1845,7 @@ describe('RespawnController Resume Behavior', () => {
     session.simulateCompletionMessage();
 
     // Wait for completion confirm timer to fire
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Should start cycle based on completion message alone
     expect(cycleStarted).toBe(true);
@@ -1886,7 +1870,7 @@ describe('RespawnController Resume Behavior', () => {
     session.simulateTerminalOutput('Some text output');
 
     // Wait for noOutput fallback
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
     // Should eventually trigger via fallback
     expect(cycleStarted).toBe(true);
@@ -1915,7 +1899,7 @@ describe('RespawnController Resume Behavior', () => {
 
     // Verify cycle can still start after resume
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(states).toContain('confirming_idle');
     controller.stop();
@@ -1933,7 +1917,7 @@ describe('RespawnController Resume Behavior', () => {
     session.simulateCompletionMessage();
 
     // Wait for cycle to start
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Pause during cycle
     controller.pause();
@@ -1975,7 +1959,7 @@ describe('RespawnController Step Confirmation', () => {
     session.simulateCompletionMessage();
 
     // Wait for full cycle
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 300));
 
     // Should have gone through: watching -> confirming_idle -> sending_update -> waiting_update -> watching
     expect(states).toContain('watching');
@@ -1996,12 +1980,12 @@ describe('RespawnController Step Confirmation', () => {
     session.simulateCompletionMessage();
 
     // Wait for update to be sent
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     // Simulate continuous output while waiting for update completion
     for (let i = 0; i < 5; i++) {
       session.simulateTerminalOutput(`Processing step ${i}...`);
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
 
     // Controller should still be functional
@@ -2021,7 +2005,7 @@ describe('RespawnController Step Confirmation', () => {
     session.simulateCompletionMessage();
 
     // Wait for cycle to start
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Continuously emit output to prevent completion detection
     const outputInterval = setInterval(() => {
@@ -2029,7 +2013,7 @@ describe('RespawnController Step Confirmation', () => {
     }, 50);
 
     // Wait a reasonable time
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     clearInterval(outputInterval);
 
@@ -2057,7 +2041,7 @@ describe('RespawnController Step Confirmation', () => {
     session.simulateCompletionMessage();
 
     // Wait for step to complete
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // After update step completes (via timeout), should emit stepCompleted
     // Note: with sendClear/sendInit false, cycle completes after update
@@ -2086,7 +2070,7 @@ describe('RespawnController AI Check Cooldown Behavior', () => {
     session.simulateCompletionMessage();
 
     // Wait for AI check to start
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const detection = controller.getDetectionStatus();
     // AI check should have started or be in progress
@@ -2130,7 +2114,7 @@ describe('RespawnController AI Check Cooldown Behavior', () => {
     session.simulateCompletionMessage();
 
     // Wait for AI check to timeout
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Should have gone through ai_checking and back
     expect(states).toContain('ai_checking');
@@ -2151,18 +2135,18 @@ describe('RespawnController AI Check Cooldown Behavior', () => {
 
     // First cycle - should start AI check
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const detection1 = controller.getDetectionStatus();
     // AI check was attempted
 
     // Reset by simulating working
     session.simulateWorking();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Second cycle - might be on cooldown
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Controller should still be functional
     expect(controller.isRunning).toBe(true);
@@ -2240,7 +2224,18 @@ describe('RespawnController Working Pattern Detection', () => {
     controller.start();
 
     // All spinner characters should indicate working
-    const spinnerChars = ['\u280b', '\u2819', '\u2839', '\u2838', '\u283c', '\u2834', '\u2826', '\u2827', '\u2807', '\u280f'];
+    const spinnerChars = [
+      '\u280b',
+      '\u2819',
+      '\u2839',
+      '\u2838',
+      '\u283c',
+      '\u2834',
+      '\u2826',
+      '\u2827',
+      '\u2807',
+      '\u280f',
+    ];
     for (const char of spinnerChars) {
       session.simulateTerminalOutput(char);
     }
@@ -2266,7 +2261,7 @@ describe('RespawnController Working Pattern Detection', () => {
 
     // Then completion
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Working should be cleared after a bit of silence
     status = controller.getStatus();
@@ -2301,7 +2296,7 @@ describe('RespawnController Cycle Count Tracking', () => {
     expect(controller.currentCycle).toBe(0);
 
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(controller.currentCycle).toBeGreaterThan(0);
     controller.stop();
@@ -2321,7 +2316,7 @@ describe('RespawnController Cycle Count Tracking', () => {
 
     controller.start();
     session.simulateCompletionMessage();
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(cycleNumber).toBe(1);
     controller.stop();
@@ -2425,13 +2420,13 @@ describe('RespawnController Timer Cleanup', () => {
     session.simulateCompletionMessage();
 
     // Start a timer-based operation
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Stop should clean up all timers
     controller.stop();
 
     // Wait to ensure no timer fires after stop
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(controller.state).toBe('stopped');
     expect(controller.isRunning).toBe(false);
@@ -2448,13 +2443,13 @@ describe('RespawnController Timer Cleanup', () => {
     session.simulateCompletionMessage();
 
     // Wait for confirming_idle
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
     // Interrupt with working pattern
     session.simulateWorking();
 
     // Should cancel completion confirm timer and return to watching
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(controller.state).toBe('watching');
 
     controller.stop();
@@ -2469,14 +2464,13 @@ describe('RespawnController Timer Cleanup', () => {
     for (let i = 0; i < 10; i++) {
       controller.start();
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
       controller.stop();
     }
 
     // Should end in stopped state without errors
     expect(controller.state).toBe('stopped');
   });
-
 });
 
 // ========== Hook-Based Detection Tests (Phase 1) ==========
@@ -2542,7 +2536,7 @@ describe('RespawnController Hook-Based Idle Detection', () => {
     testController.signalStopHook();
 
     // Wait for hook confirmation timer (3s default)
-    await new Promise(resolve => setTimeout(resolve, 3100));
+    await new Promise((resolve) => setTimeout(resolve, 3100));
 
     expect(cycleStarted).toHaveBeenCalled();
     testController.stop();
@@ -2562,7 +2556,7 @@ describe('RespawnController Hook-Based Idle Detection', () => {
     testController.signalIdlePrompt();
 
     // idle_prompt skips confirmation and goes directly to idle
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(cycleStarted).toHaveBeenCalled();
     testController.stop();
@@ -2582,11 +2576,11 @@ describe('RespawnController Hook-Based Idle Detection', () => {
     testController.signalStopHook();
 
     // Simulate working patterns IMMEDIATELY after hook (before confirmation)
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     session.simulateWorking();
 
     // Wait longer than hook confirmation delay (3s)
-    await new Promise(resolve => setTimeout(resolve, 3500));
+    await new Promise((resolve) => setTimeout(resolve, 3500));
 
     // Cycle should NOT have started because working was detected
     expect(cycleStarted).not.toHaveBeenCalled();
@@ -2608,7 +2602,7 @@ describe('RespawnController Hook-Based Idle Detection', () => {
     testController.start();
     testController.signalIdlePrompt(); // Start a cycle
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Now in sending_update state - Stop hook should be ignored
     testController.signalStopHook();
@@ -2658,7 +2652,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for completion detection to trigger timer
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Should have started at least one timer (completion-confirm or no-output-fallback)
       expect(timerEvents.length).toBeGreaterThan(0);
@@ -2690,9 +2684,9 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       // Send output to trigger no-output timer reset
       session.simulateTerminalOutput('some output');
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      const noOutputTimer = timerEvents.find(e => e.name === 'no-output-fallback');
+      const noOutputTimer = timerEvents.find((e) => e.name === 'no-output-fallback');
       if (noOutputTimer) {
         expect(noOutputTimer.durationMs).toBe(noOutputTimeoutMs);
       }
@@ -2716,7 +2710,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for completion confirm timer to fire (50ms + processing)
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // At least one timer should have completed (completion-confirm)
       expect(completedTimers.length).toBeGreaterThan(0);
@@ -2741,11 +2735,11 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for timer to start
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Simulate working to cancel the completion confirm timer
       session.simulateWorking();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Working patterns should have cancelled at least one timer
       const hasCancel = cancelledTimers.length > 0;
@@ -2770,13 +2764,13 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       // Trigger Stop hook to start hook-confirm timer
       controller.signalStopHook();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Then working patterns should cancel it with a reason
       session.simulateWorking();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      const hookCancel = cancelledTimers.find(e => e.name === 'hook-confirm');
+      const hookCancel = cancelledTimers.find((e) => e.name === 'hook-confirm');
       if (hookCancel) {
         expect(hookCancel.reason).toBeTruthy();
       }
@@ -2797,7 +2791,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for timers to start
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Should have active timers
       const timersBefore = controller.getActiveTimers();
@@ -2822,7 +2816,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for timers to start
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       controller.stop();
 
@@ -2835,7 +2829,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       });
 
       // Wait longer than any timer duration
-      await new Promise(resolve => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 400));
 
       expect(timerFiredAfterStop).toBe(false);
     });
@@ -2852,11 +2846,11 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       // First cycle: start, trigger completion-related timers, stop
       controller.start();
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Should have completion-confirm timer active
       const firstCycleTimers = controller.getActiveTimers();
-      const hasCompletionConfirm = firstCycleTimers.some(t => t.name === 'completion-confirm');
+      const hasCompletionConfirm = firstCycleTimers.some((t) => t.name === 'completion-confirm');
       expect(hasCompletionConfirm).toBe(true);
 
       controller.stop();
@@ -2866,14 +2860,14 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       controller.start();
       expect(controller.state).toBe('watching');
       const restartTimers = controller.getActiveTimers();
-      const staleCompletionConfirm = restartTimers.some(t => t.name === 'completion-confirm');
+      const staleCompletionConfirm = restartTimers.some((t) => t.name === 'completion-confirm');
       expect(staleCompletionConfirm).toBe(false);
 
       // Can still trigger new timers
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const newTimers = controller.getActiveTimers();
-      const hasNewCompletionConfirm = newTimers.some(t => t.name === 'completion-confirm');
+      const hasNewCompletionConfirm = newTimers.some((t) => t.name === 'completion-confirm');
       expect(hasNewCompletionConfirm).toBe(true);
 
       controller.stop();
@@ -2895,13 +2889,13 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       for (let i = 0; i < 5; i++) {
         controller.start();
         session.simulateCompletionMessage();
-        await new Promise(resolve => setTimeout(resolve, 20));
+        await new Promise((resolve) => setTimeout(resolve, 20));
         controller.stop();
       }
 
       // Wait to check no stale timers fire
       const countBefore = completedTimers.length;
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 300));
       const countAfter = completedTimers.length;
 
       // No new timer completions should happen after final stop
@@ -2920,7 +2914,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       controller.start();
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const activeTimers = controller.getActiveTimers();
       expect(activeTimers.length).toBeGreaterThan(0);
@@ -2946,7 +2940,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       controller.start();
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const detectionStatus = controller.getDetectionStatus();
       expect(Array.isArray(detectionStatus.activeTimers)).toBe(true);
@@ -2966,14 +2960,14 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
       session.simulateCompletionMessage();
 
       // Wait for completion confirm timer to be set up
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 20));
       const timersBefore = controller.getActiveTimers();
-      const hasCompletionConfirm = timersBefore.some(t => t.name === 'completion-confirm');
+      const hasCompletionConfirm = timersBefore.some((t) => t.name === 'completion-confirm');
 
       // Wait for the timer to fire
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       const timersAfter = controller.getActiveTimers();
-      const stillHasCompletionConfirm = timersAfter.some(t => t.name === 'completion-confirm');
+      const stillHasCompletionConfirm = timersAfter.some((t) => t.name === 'completion-confirm');
 
       // If we caught the timer before it fired, it should be gone now
       if (hasCompletionConfirm) {
@@ -2992,7 +2986,7 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       controller.start();
       session.simulateCompletionMessage();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Should have timers
       const timersBefore = controller.getActiveTimers();
@@ -3000,11 +2994,11 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       // Cancel via working
       session.simulateWorking();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // completion-confirm should be removed
       const timersAfter = controller.getActiveTimers();
-      const hasCompletionConfirm = timersAfter.some(t => t.name === 'completion-confirm');
+      const hasCompletionConfirm = timersAfter.some((t) => t.name === 'completion-confirm');
       expect(hasCompletionConfirm).toBe(false);
 
       controller.stop();
@@ -3019,10 +3013,10 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       controller.start();
       controller.signalStopHook();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const activeTimers = controller.getActiveTimers();
-      const hookTimer = activeTimers.find(t => t.name === 'hook-confirm');
+      const hookTimer = activeTimers.find((t) => t.name === 'hook-confirm');
       expect(hookTimer).toBeDefined();
       if (hookTimer) {
         expect(hookTimer.totalMs).toBeGreaterThan(0);
@@ -3031,5 +3025,53 @@ describe('RespawnController CleanupManager Timer Tracking', () => {
 
       controller.stop();
     });
+  });
+});
+
+describe('RespawnController onClear callback', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  it('calls onClear callback instead of writing /clear to PTY', async () => {
+    const onClear = vi.fn().mockResolvedValue(undefined);
+    const writeViaMuxSpy = vi.spyOn(session, 'writeViaMux').mockResolvedValue(true);
+
+    const ctrl = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 50,
+      interStepDelayMs: 10,
+      sendClear: true,
+      sendInit: false,
+      onClear,
+      aiIdleCheckEnabled: false,
+    });
+
+    ctrl.start();
+    ctrl.emit('stepCompleted', 'update');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    ctrl.stop();
+
+    if (onClear.mock.calls.length > 0) {
+      expect(onClear).toHaveBeenCalled();
+      expect(writeViaMuxSpy).not.toHaveBeenCalledWith('/clear\r');
+    }
+    writeViaMuxSpy.mockRestore();
+  });
+
+  it('RespawnConfig accepts onClear field', () => {
+    const onClear = async () => {};
+    const config: RespawnConfig = {
+      enabled: true,
+      idleTimeoutMs: 100,
+      updatePrompt: 'test',
+      interStepDelayMs: 50,
+      sendClear: true,
+      sendInit: false,
+      onClear,
+    };
+    expect(config.onClear).toBe(onClear);
   });
 });

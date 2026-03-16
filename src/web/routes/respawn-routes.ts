@@ -103,7 +103,10 @@ export function registerRespawnRoutes(
       // Merge request body with pre-saved config from mux-sessions.json
       const preConfig = ctx.mux.getSession(id)?.respawnConfig;
       const config = body || preConfig ? { ...preConfig, ...body } : undefined;
-      controller = new RespawnController(session, config);
+      controller = new RespawnController(session, {
+        ...config,
+        onClear: () => ctx.clearSession(id, false).then(() => undefined),
+      });
       ctx.respawnControllers.set(id, controller);
       ctx.setupRespawnListeners(id, controller);
     } else if (body) {
@@ -266,7 +269,10 @@ export function registerRespawnRoutes(
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
       // Create and start respawn controller
-      const controller = new RespawnController(session, body?.respawnConfig);
+      const controller = new RespawnController(session, {
+        ...body?.respawnConfig,
+        onClear: () => ctx.clearSession(id, false).then(() => undefined),
+      });
       ctx.respawnControllers.set(id, controller);
       ctx.setupRespawnListeners(id, controller);
       controller.start();
@@ -323,7 +329,10 @@ export function registerRespawnRoutes(
     // Create and start new respawn controller (merge with pre-saved config)
     const preConfig = ctx.mux.getSession(id)?.respawnConfig;
     const config = body?.config || preConfig ? { ...preConfig, ...body?.config } : undefined;
-    const controller = new RespawnController(session, config);
+    const controller = new RespawnController(session, {
+      ...config,
+      onClear: () => ctx.clearSession(id, false).then(() => undefined),
+    });
     ctx.respawnControllers.set(id, controller);
     ctx.setupRespawnListeners(id, controller);
     controller.start();

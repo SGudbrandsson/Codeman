@@ -1913,6 +1913,7 @@ export class WebServer extends EventEmitter {
       aiPlanCheckMaxContext: config.aiPlanCheckMaxContext,
       aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs,
       aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs,
+      onClear: () => this.clearSession(session.id, false).then(() => undefined),
     });
 
     this.respawnControllers.set(session.id, controller);

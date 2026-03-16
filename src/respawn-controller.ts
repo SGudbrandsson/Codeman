@@ -474,6 +474,13 @@ export interface RespawnConfig {
    * @default 15
    */
   confidenceWeightNoWorking?: number;
+
+  /**
+   * Callback to invoke instead of writing /clear to PTY.
+   * Set by the server to route clear operations through the archive+child flow.
+   * When undefined, falls back to writing /clear\r directly.
+   */
+  onClear?: () => Promise<void>;
 }
 
 /**
@@ -2822,7 +2829,11 @@ export class RespawnController extends EventEmitter {
       async () => {
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /clear');
-        await this.session.writeViaMux('/clear\r'); // \r triggers Enter in Ink/Claude CLI
+        if (this.config.onClear) {
+          await this.config.onClear();
+        } else {
+          await this.session.writeViaMux('/clear\r'); // \r triggers Enter in Ink/Claude CLI
+        }
         this.emit('stepSent', 'clear', '/clear');
         this.setState('waiting_clear');
         this.promptDetected = false;

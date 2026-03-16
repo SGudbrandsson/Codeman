@@ -482,6 +482,7 @@ export function registerRalphRoutes(
         sendClear: true,
         sendInit: true,
         kickstartPrompt: ralphKickstartPrompt,
+        onClear: () => ctx.clearSession(session.id, false).then(() => undefined),
       });
       ctx.respawnControllers.set(session.id, controller);
       ctx.setupRespawnListeners(session.id, controller);
