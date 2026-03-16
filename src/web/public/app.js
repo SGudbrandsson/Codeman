@@ -1806,7 +1806,9 @@ const TranscriptView = {
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
   _workingDebounce: null,
   _workingHideTimer: null,
-  _clearFallbackTimer: null, // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
+  _clearFallbackTimer: null,     // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
+  _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
+  _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1825,6 +1827,40 @@ const TranscriptView = {
       const el = this._container;
       state.scrolledUp = el.scrollTop < el.scrollHeight - el.clientHeight - 100;
     }, { passive: true });
+    // Periodic sync: every 30s, check for missed transcript blocks
+    setInterval(() => this._periodicSync(), 30000);
+  },
+
+  // Periodic sync: catches missed SSE blocks by comparing against the backend transcript.
+  // Runs every 30s. Only active when transcript view is visible and not mid-load.
+  _periodicSync() {
+    if (!this._sessionId || !this._container) return;
+    const sessionId = this._sessionId;
+    const state = this._getState(sessionId);
+    // Skip if load() is in progress (sseBuffer is []) or transcript mode is inactive
+    if (state._sseBuffer !== null && state._sseBuffer !== undefined) return;
+    if (state.viewMode !== 'web') return;
+
+    // Only sync when there is cached content — incremental check for missed trailing blocks.
+    // Do NOT trigger load() when showing the empty CTA: that is the correct state after
+    // /clear, and an unsolicited reload would pull in content from an active session that
+    // resumed in the background (e.g. an orchestrator that kept running after clear).
+    if (state.blocks.length > 0) {
+      const currentCount = state.blocks.length;
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript')
+        .then(r => r.ok ? r.json() : null)
+        .then(blocks => {
+          if (!Array.isArray(blocks) || this._sessionId !== sessionId) return;
+          if (blocks.length <= currentCount) return;
+          const newBlocks = blocks.slice(currentCount);
+          for (const b of newBlocks) {
+            state.blocks.push(b);
+            this._appendBlock(b, false);
+          }
+          if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
+        })
+        .catch(() => {});
+    }
   },
 
   _getState(sessionId) {
@@ -1846,7 +1882,7 @@ const TranscriptView = {
     this._getState(sessionId).viewMode = mode;
   },
 
-  async load(sessionId) {
+  async load(sessionId, opts = {}) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
@@ -1894,9 +1930,33 @@ const TranscriptView = {
         this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
-        if (!blocks.length) {
-          this._setEmptyPlaceholder();
+        // If a /clear is in progress (_clearPending), the backend may still be serving
+        // the old conversation's blocks — the new conversation UUID hasn't been registered
+        // yet. Treat any non-empty response as stale and show empty/optimistic instead.
+        // _clearPending is reset to false by clear() when transcript:clear SSE arrives.
+        const treatAsEmpty = !blocks.length || this._clearPending;
+        if (treatAsEmpty) {
+          // Do not cache stale old-session blocks. If we leave state.blocks populated
+          // from the state.blocks=[...blocks] above, the next load() will pre-render
+          // those old blocks before the fetch completes, showing the wrong session.
+          state.blocks = [];
+          if (opts.pendingOptimisticText) {
+            // Transcript is empty but user already sent a message — rebuild their
+            // optimistic bubble from the stored text so it stays visible while
+            // Claude is processing. Using text (not a DOM node) means this works
+            // even if clear() fired multiple times and the DOM was wiped.
+            this.appendOptimistic(opts.pendingOptimisticText);
+          } else {
+            this._setEmptyPlaceholder();
+          }
           this._container.style.opacity = '';
+          // Replay any SSE blocks that arrived during the HTTP fetch.
+          // The non-empty path does this too (httpLastTs replay loop below), but
+          // that path isn't reached when blocks.length === 0, so we do it here.
+          for (const b of (state._sseBuffer ?? [])) {
+            state.blocks.push(b);
+            this._appendBlock(b, false);
+          }
           state._sseBuffer = null;
           return;
         }
@@ -1969,6 +2029,11 @@ const TranscriptView = {
   /** Immediately show a user message bubble before the SSE block arrives. */
   appendOptimistic(text) {
     if (!this._container) return;
+    // Cancel the clearOnly() fallback timer — once the user has sent a message, showing
+    // an empty CTA would be wrong. The optimistic bubble is the correct state.
+    clearTimeout(this._clearFallbackTimer);
+    this._clearFallbackTimer = null;
+    this._pendingOptimisticText = text;  // persist as text so it survives DOM wipes in clear()
     const el = this._renderTextBlock({ type: 'text', role: 'user', text });
     if (el) {
       el.dataset.optimistic = 'true';
@@ -2053,6 +2118,7 @@ const TranscriptView = {
     if (block.type === 'text' && block.role === 'user') {
       const optimistic = this._container.querySelector('[data-optimistic="true"]');
       if (optimistic) optimistic.remove();
+      this._pendingOptimisticText = null;  // real block arrived — no longer needed
     }
     this._appendBlock(block, true);
   },
@@ -2061,6 +2127,15 @@ const TranscriptView = {
     // Cancel the fallback timer set by clearOnly() — TRANSCRIPT_CLEAR arrived normally.
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
+    this._clearPending = false;  // new session is now registered — load() may trust server results
+
+    // Pass the pending optimistic text (set by appendOptimistic()) through the load() cycle.
+    // We use the stored string rather than querying the DOM because clear() can fire multiple
+    // times (e.g. a second transcript:clear SSE arrives while load() is still fetching).
+    // On the second call the DOM has already been wiped, so querySelector returns null —
+    // but _pendingOptimisticText is still set and survives any number of clear() calls.
+    const pendingText = this._pendingOptimisticText;
+
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2070,7 +2145,7 @@ const TranscriptView = {
     if (this._container) this._container.textContent = '';
     this._compactingEl = null;
     this._isCompacting = false;
-    if (this._sessionId) this.load(this._sessionId);
+    if (this._sessionId) this.load(this._sessionId, { pendingOptimisticText: pendingText });
   },
 
   // Clears the view immediately without reloading from server.
@@ -2087,6 +2162,7 @@ const TranscriptView = {
   // Bumping _loadGen here also aborts any stale in-flight load() so its fetch result
   // can't overwrite the "Clearing…" placeholder with stale blocks.
   clearOnly() {
+    this._clearPending = true;   // block load() from rendering stale old-session content until transcript:clear SSE arrives
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2119,6 +2195,8 @@ const TranscriptView = {
     this._clearFallbackTimer = setTimeout(() => {
       this._clearFallbackTimer = null;
       if (this._sessionId !== pendingSessionId || !pendingSessionId) return;
+      // Fallback path: CTA is shown, pending window is over.
+      this._clearPending = false;
       // Show empty CTA without fetching — user cleared, so empty is the correct state.
       this._pendingToolUses = {};
       this._compactingEl = null;
@@ -2135,6 +2213,7 @@ const TranscriptView = {
   },
 
   show(sessionId) {
+    const isSessionSwitch = sessionId !== this._sessionId;
     this._sessionId = sessionId;
     // Bug fix: reset typing indicator state when switching sessions.
     // Without this, the previous session's busy indicator stays visible for up to 4s
@@ -2143,8 +2222,14 @@ const TranscriptView = {
     this._workingDebounce = null;
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
-    clearTimeout(this._clearFallbackTimer);
-    this._clearFallbackTimer = null;
+    if (isSessionSwitch) {
+      // Switching to a different session — cancel clear timer and discard any pending
+      // optimistic text that belongs to the previous session.
+      clearTimeout(this._clearFallbackTimer);
+      this._clearFallbackTimer = null;
+      this._pendingOptimisticText = null;
+      this._clearPending = false;
+    }
     const _overlay = document.getElementById('tvTypingIndicator');
     if (_overlay) _overlay.style.display = 'none';
     if (this._container) {
@@ -2152,7 +2237,10 @@ const TranscriptView = {
       this._container.style.display = '';
     }
     this._detachXterm(sessionId);
-    this.load(sessionId);
+    // Pass pending optimistic text so load() can restore it if the transcript is empty.
+    // On a same-session tab toggle (terminal → transcript), this preserves the user's
+    // message bubble through the tab switch even when _clearPending is active.
+    this.load(sessionId, { pendingOptimisticText: this._pendingOptimisticText });
   },
 
   hide(sessionId) {
