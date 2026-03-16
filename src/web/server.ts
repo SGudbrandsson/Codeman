@@ -215,6 +215,11 @@ interface SessionListenerRefs {
   conversationId: (uuid: string) => void;
 }
 
+/** Returns false for sessions that must never have tmux reattachment attempted. */
+export function shouldAttemptReattach(session: import('../types/session.js').SessionState): boolean {
+  return session.status !== 'archived';
+}
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -2687,6 +2692,12 @@ export class WebServer extends EventEmitter {
           if (!this.sessions.has(muxSession.sessionId)) {
             // Restore session settings from state.json (single source of truth)
             const savedState = this.store.getSession(muxSession.sessionId);
+
+            // Skip archived sessions — they have no tmux pane and must not be reattached
+            if (savedState && !shouldAttemptReattach(savedState)) {
+              console.log(`[Server] Skipping archived session ${muxSession.sessionId}`);
+              continue;
+            }
 
             // Determine the correct session name (priority: savedState > muxSession > muxName)
             // This ensures renamed sessions keep their name after server restart

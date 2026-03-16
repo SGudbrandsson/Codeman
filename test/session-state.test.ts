@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { SessionState } from '../src/types/session.js';
+import { shouldAttemptReattach } from '../src/web/server.js';
 
 describe('Session State Management', () => {
   describe('Session Mode Validation', () => {
@@ -685,6 +686,47 @@ describe('Session Event Handling', () => {
       expect(batcher.forceDrain()).toEqual(['a', 'b']);
       expect(batcher.size()).toBe(0);
     });
+  });
+});
+
+describe('shouldAttemptReattach', () => {
+  it('returns false for archived sessions', () => {
+    const s: SessionState = {
+      id: 'x',
+      pid: null,
+      status: 'archived',
+      workingDir: '/tmp',
+      currentTaskId: null,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    expect(shouldAttemptReattach(s)).toBe(false);
+  });
+
+  it('returns true for stopped sessions', () => {
+    const s: SessionState = {
+      id: 'x',
+      pid: null,
+      status: 'stopped',
+      workingDir: '/tmp',
+      currentTaskId: null,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    expect(shouldAttemptReattach(s)).toBe(true);
+  });
+
+  it('returns true for idle sessions', () => {
+    const s: SessionState = {
+      id: 'x',
+      pid: 123,
+      status: 'idle',
+      workingDir: '/tmp',
+      currentTaskId: null,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+    expect(shouldAttemptReattach(s)).toBe(true);
   });
 });
 
