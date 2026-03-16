@@ -398,8 +398,10 @@ export function registerWorktreeSessionRoutes(
     // Guard: if git reported a no-op, check whether the branch was already merged.
     // Matches both "Already up to date." (modern git) and "Already up-to-date." (older git).
     const isNoOp = /already up[\s-]to[\s-]date/i.test(output);
+    let alreadyMerged = false;
     if (isNoOp) {
-      const alreadyMerged = await isBranchMerged(mainGitRoot, branch);
+      // Pass mainBranch so isBranchMerged skips the master→main fallback when we already know.
+      alreadyMerged = await isBranchMerged(mainGitRoot, branch, mainBranch);
       if (alreadyMerged) {
         // Branch is genuinely merged — treat as success and let cleanup proceed normally.
         req.log.info({ branch }, '[worktree-merge] branch already merged, proceeding to cleanup');
@@ -407,7 +409,7 @@ export function registerWorktreeSessionRoutes(
         // No-op but branch is not merged — commits may be missing. Abort to prevent data loss.
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
-          `Merge was a no-op ("${output}") but branch is not merged into master — commits may be missing. Aborting cleanup to prevent data loss.`
+          'Merge was a no-op but branch is not merged into master — commits may be missing. Aborting cleanup to prevent data loss.'
         );
       }
     }
@@ -453,7 +455,12 @@ export function registerWorktreeSessionRoutes(
       req.log.error({ err, branch }, '[worktree-merge-cleanup] unhandled cleanup error');
     });
 
-    return { success: true, output, cleaned: !!(worktreeSession || worktreePath) };
+    return {
+      success: true,
+      output,
+      cleaned: !!(worktreeSession || worktreePath),
+      ...(alreadyMerged && { alreadyMerged: true }),
+    };
   });
 
   // DELETE /api/sessions/:id/worktree
