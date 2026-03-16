@@ -149,33 +149,7 @@ const KeyboardAccessoryBar = {
     });
     this.element.appendChild(settingsBtn);
 
-    // 2. Scroll-up button
-    const scrollUpBtn = document.createElement('button');
-    scrollUpBtn.className = 'accessory-btn accessory-btn-arrow';
-    scrollUpBtn.dataset.action = 'scroll-up';
-    scrollUpBtn.title = 'Arrow up';
-    scrollUpBtn.type = 'button';
-    {
-      const s = mkSvg(16, 16, { 'stroke-width': '2.5' });
-      s.appendChild(mkEl('path', true, { d: 'M5 15l7-7 7 7' }));
-      scrollUpBtn.appendChild(s);
-    }
-    this.element.appendChild(scrollUpBtn);
-
-    // 4. Scroll-down button
-    const scrollDownBtn = document.createElement('button');
-    scrollDownBtn.className = 'accessory-btn accessory-btn-arrow';
-    scrollDownBtn.dataset.action = 'scroll-down';
-    scrollDownBtn.title = 'Arrow down';
-    scrollDownBtn.type = 'button';
-    {
-      const s = mkSvg(16, 16, { 'stroke-width': '2.5' });
-      s.appendChild(mkEl('path', true, { d: 'M19 9l-7 7-7-7' }));
-      scrollDownBtn.appendChild(s);
-    }
-    this.element.appendChild(scrollDownBtn);
-
-    // 5. Commands button
+    // 2. Commands button
     const commandsBtn = document.createElement('button');
     commandsBtn.className = 'accessory-btn accessory-btn-commands';
     commandsBtn.dataset.action = 'commands';
@@ -373,12 +347,6 @@ const KeyboardAccessoryBar = {
     switch (action) {
       case 'tab':
         this.sendKey('\t');
-        break;
-      case 'scroll-up':
-        this.sendKey('\x1b[A');
-        break;
-      case 'scroll-down':
-        this.sendKey('\x1b[B');
         break;
       case 'commands':
         this.openDrawer();
