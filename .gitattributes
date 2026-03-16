@@ -1,0 +1,3 @@
+# Worktree-specific metadata — always keep master's version on merge
+TASK.md merge=ours
+CLAUDE.md merge=ours
