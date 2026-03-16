@@ -57,6 +57,8 @@ export const SessionTerminal = 'session:terminal' as const;
 export const SessionNeedsRefresh = 'session:needsRefresh' as const;
 /** Terminal buffer cleared (e.g. /clear command). */
 export const SessionClearTerminal = 'session:clearTerminal' as const;
+/** Session was cleared; old session archived, new child session created. */
+export const SessionCleared = 'session:cleared' as const;
 /** Claude finished a prompt — includes result and cost. */
 export const SessionCompletion = 'session:completion' as const;
 /** Session-level error. */
@@ -350,6 +352,7 @@ export const SseEvent = {
   SessionTerminal,
   SessionNeedsRefresh,
   SessionClearTerminal,
+  SessionCleared,
   SessionCompletion,
   SessionError,
   SessionExit,
@@ -500,6 +503,12 @@ export const SseEvent = {
 } as const;
 
 // ─── Payload Types ────────────────────────────────────────────────────────────
+
+/** Payload for the SessionCleared SSE event. */
+export interface SessionClearedPayload {
+  archivedId: string;
+  newSessionId: string;
+}
 
 /** Payload for the SessionContextUsage SSE event. */
 export interface ContextUsagePayload {
