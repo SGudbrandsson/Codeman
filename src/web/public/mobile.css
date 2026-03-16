@@ -1335,7 +1335,7 @@ html.mobile-init .file-browser-panel {
     border-radius: 6px;
     overflow: hidden;
     flex-shrink: 0;
-    height: 36px;
+    height: 40px; /* match accessory-btn min-height: 40px in <=430px breakpoint */
   }
   .view-mode-seg {
     display: inline-flex;
@@ -3030,6 +3030,10 @@ html.mobile-init .file-browser-panel {
   color: #fff;
   border-radius: 50%;
   padding: 0;
+  /* vertically center so the 44px button doesn't overflow a 44px min-height wrapper */
+  bottom: auto;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .compose-send-btn:active { background: #2563eb; }
 
