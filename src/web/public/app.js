@@ -9047,6 +9047,23 @@ class CodemanApp {
 
   _onTranscriptBlock(data) {
     const { sessionId, block } = data;
+
+    // Pre-resolve dismissed state for AskUserQuestion BEFORE appending to view.
+    // This must run before TranscriptView.append so Fix C (_appendBlock) sees
+    // the correct dismissed state when checking _dismissedAskUserQuestionIds.
+    if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+      const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
+      if (questions.length > 0) {
+        if (!this._dismissedAskUserQuestionIds.has(block.id) &&
+            this._dismissedAskUserQuestionSession === sessionId) {
+          // Hook-first race: user answered before toolUseId was known.
+          // Populate the dismissed set now so Fix C (_appendBlock) can skip rendering the card.
+          this._dismissedAskUserQuestionIds.add(block.id);
+          this._dismissedAskUserQuestionSession = null;
+        }
+      }
+    }
+
     const state = app._transcriptState?.[sessionId];
     let handledByView = false;
     if (TranscriptView._sessionId === sessionId) {
@@ -9071,12 +9088,10 @@ class CodemanApp {
       const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
       if (questions.length > 0) {
         // Fix B: suppress re-show when the question was already answered via the panel.
+        // Note: the hook-first race (session flag → dismissed set) is handled by the
+        // pre-check block above, so by this point _dismissedAskUserQuestionIds is authoritative.
         if (this._dismissedAskUserQuestionIds.has(block.id)) {
-          // Already answered (toolUseId known at answer time) — do nothing.
-        } else if (this._dismissedAskUserQuestionSession === sessionId) {
-          // Hook-first race: user answered before toolUseId was known — record it now and clear flag.
-          this._dismissedAskUserQuestionIds.add(block.id);
-          this._dismissedAskUserQuestionSession = null;
+          // Already answered (either toolUseId known at answer time, or pre-check above) — do nothing.
         } else {
           const q = questions[0];
           this.pendingAskUserQuestion = {
