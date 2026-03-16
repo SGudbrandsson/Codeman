@@ -1375,7 +1375,7 @@ export class Session extends EventEmitter {
     // _awaitingContext is cleared immediately on success so only one path resolves.
     if (this._awaitingContext) {
       const cleanData = getCleanData();
-      for (const line of cleanData.split(/\r?\n/)) {
+      for (const line of cleanData.split(/\r?\n|\r/)) {
         const trimmed = line.trim();
         if (trimmed) this._contextOutputLines.push(trimmed);
       }

@@ -62,11 +62,43 @@ const LEGACY_FORMAT_LINES = [
   'Tools: 8,000 tokens',
 ];
 
+// Live session format — ANSI-stripped output from a real PTY session (observed 2026-03-16)
+const LIVE_SESSION_FORMAT_LINES = [
+  'Context Usage',
+  '⛁ ⛁ ⛀ ⛀ ⛀   claude-sonnet-4-6 · 90k/200k tokens (45%)',
+  '⛁ ⛁ ⛁ ⛁ ⛁',
+  '⛁ ⛁ ⛁ ⛁ ⛶   Estimated usage by category',
+  '⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 5.6k tokens (2.8%)',
+  '⛶ ⛝ ⛝ ⛝ ⛝   ⛁ System tools: 8k tokens (4.0%)',
+  '            ⛁ Custom agents: 812 tokens (0.4%)',
+  '            ⛁ Memory files: 2k tokens (1.0%)',
+  '            ⛁ Skills: 2.2k tokens (1.1%)',
+  '            ⛁ Messages: 72.1k tokens (36.0%)',
+  '            ⛶ Free space: 76k (38.2%)',
+  '            ⛝ Autocompact buffer: 33k tokens (16.5%)',
+];
+
 // Empty / unrelated lines
 const EMPTY_LINES: string[] = [];
 const UNRELATED_LINES = ['Hello world', 'Some output', 'No context info here'];
 
 describe('Session.parseContextOutput', () => {
+  describe('live session format (observed PTY output 2026-03-16)', () => {
+    it('parses live fixture with integer-k notation and all categories', () => {
+      const result = Session.parseContextOutput(LIVE_SESSION_FORMAT_LINES);
+      expect(result).not.toBeNull();
+      expect(result!.inputTokens).toBe(90000);
+      expect(result!.maxTokens).toBe(200000);
+      expect(result!.pct).toBe(45);
+      // system = 5.6k + 8k + 812 + 2k + 2.2k = 5600 + 8000 + 812 + 2000 + 2200 = 18612
+      expect(result!.system).toBe(18612);
+      // conversation = 72.1k = 72100
+      expect(result!.conversation).toBe(72100);
+      // tools not present in new format
+      expect(result!.tools).toBeUndefined();
+    });
+  });
+
   describe('new format (Claude Code >= 2025)', () => {
     it('parses full output with all categories', () => {
       const result = Session.parseContextOutput(FULL_NEW_FORMAT_LINES);

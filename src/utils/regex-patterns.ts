@@ -12,13 +12,15 @@
  * - SGR (colors/styles): ESC [ params m
  * - CSI sequences (cursor, scroll, etc.): ESC [ params letter
  * - OSC sequences (title, etc.): ESC ] ... BEL or ESC ] ... ST
- * - Single-char escapes: ESC = or ESC >
+ * - Character set select: ESC ( X  (e.g. ESC(B for US ASCII, ESC(0 for line drawing)
+ * - Single-char C1 escapes: ESC 7, ESC 8, ESC M, ESC c, ESC =, ESC >
  *
  * Use this when you need complete ANSI stripping including OSC sequences.
  * Note: Has global flag - reset lastIndex before exec() if reusing.
  */
 // eslint-disable-next-line no-control-regex
-export const ANSI_ESCAPE_PATTERN_FULL = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
+export const ANSI_ESCAPE_PATTERN_FULL =
+  /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|\([A-Za-z0-9]|[78Mc=>])/g;
 
 /**
  * Simple ANSI CSI-only pattern for basic escape code stripping.
@@ -46,7 +48,7 @@ export const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
  */
 export function createAnsiPatternFull(): RegExp {
   // eslint-disable-next-line no-control-regex
-  return /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
+  return /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|\([A-Za-z0-9]|[78Mc=>])/g;
 }
 
 /**
