@@ -1,176 +1,349 @@
 # Task
 
-type: feature
+type: fix
 status: done
-title: Worktree post-creation setup — symlink node_modules and auto-start dev server
+title: Fix mobile send button unresponsive when keyboard is closed
 description: |
-  Two improvements to the worktree lifecycle to reduce manual setup steps.
+  The send button (↑ arrow) in the message bar is not reliably pressable when the keyboard
+  is closed on mobile.
 
-  ## Problem 1 — No node_modules after worktree creation
-  When a new git worktree is created, node_modules is not present (not tracked by git).
-  This means the worktree cannot run until dependencies are installed. The QA stage hits
-  missing module errors or the user has to manually run npm install.
+  Steps to reproduce:
+  1. Type a message in the compose bar
+  2. Attach an image (which closes the keyboard as a side effect)
+  3. Try to tap the send (↑) button
+  4. Expected: message sends
+  5. Actual: button is unresponsive or very hard to hit — user must re-open keyboard first
 
-  Fix: After worktree creation, add a post-creation step that symlinks node_modules (and any
-  other necessary runtime artifacts like .env, dist/ references, etc.) from the parent repo
-  directory into the new worktree directory. Symlink is preferred over copy — fast, low disk
-  usage, and keeps them in sync.
+  Likely causes:
+  - The send button may be positioned/sized relative to the keyboard height, so when the
+    keyboard closes the layout shifts and the button ends up behind another element or in a
+    tap-dead zone
+  - The compose bar area may resize when keyboard closes, and the button hitbox does not
+    reflow correctly
+  - A touch event on the send button may be intercepted by the keyboard-dismiss handler
 
-  Look at where worktrees are created in the backend (session/worktree creation code) and add
-  the symlink step there.
+  Fix:
+  - Ensure the send button is always tappable regardless of keyboard state
+  - The button should have a consistent, large enough tap target (min 44x44px) that does not
+    shift behind other elements when the keyboard is closed
+  - Attaching an image should NOT prevent the user from sending — if the keyboard closes after
+    attachment, the send button must still work
+  - Check whether any pointer-events, z-index, or layout recalculation on keyboard close is
+    obscuring the button
 
-  ## Problem 2 — Dev server not auto-started at QA phase
-  At the end of the task runner workflow, the "How to test" / Phase 6 output tells the user
-  how to start the dev server manually, but never actually starts it. The user always has to
-  explicitly ask.
-
-  Fix: After the task runner completes its final commit, automatically start the dev server on
-  the worktree's assigned port (the session already has an assignedPort field). Print the URL
-  so the user knows where to access it. Use the same nohup + tsx startup pattern documented in
-  the codebase (nohup npx tsx src/index.ts web --port PORT > /tmp/codeman-PORT.log 2>&1 &).
-
-  This applies to the codeman-task-runner skill and potentially the server startup logic.
-
-affected_area: backend
+affected_area: frontend
 fix_cycles: 0
+
+## Reproduction
+
+Concrete observations from code analysis (src/web/public/app.js, mobile-handlers.js, mobile.css,
+index.html):
+
+**Flow that triggers the bug:**
+
+1. User focuses the compose textarea — keyboard opens. `KeyboardHandler.keyboardVisible = true`.
+   `updateLayoutForKeyboard()` applies `translateY(-keyboardOffset)` to `#mobileInputPanel`.
+
+2. User taps the `+` (plus) button. The `addKeyboardTapFix` container listener on `#mobileInputPanel`
+   fires (with `requireKeyboardVisible: false`). Because `isPlusBtn = true`, `app.terminal.focus()`
+   is skipped. `_openActionSheet()` shows the action sheet.
+
+3. User selects "Photo Library" / "Attach File". `_actionSheetPick()` closes the action sheet
+   and calls `composeFileGallery.click()` — the native OS file picker opens. The keyboard closes
+   as a side effect of the native picker taking over. `handleViewportResize()` eventually fires,
+   `keyboardVisible` becomes `false`, `resetLayout()` removes the `translateY` from the panel.
+
+4. User selects an image. The file picker closes, `_onFilesChosen` → `_uploadFiles` runs
+   async. An object-URL thumbnail appears immediately; `entry.path` is `null` until the
+   `POST /api/screenshots` fetch resolves (typically < 1s on localhost).
+
+5. Now: keyboard is CLOSED, `mobileInputPanel` is at its natural fixed position
+   (`bottom: calc(safe-area-bottom + 52px)`), send button is visible.
+
+6. User taps the send (↑) button. Touch event flow:
+   - `touchstart` on `#composeSendBtn` (target phase): inline
+     `ontouchstart="event.preventDefault()"` suppresses browser click synthesis.
+     Does NOT call `stopPropagation()` — event bubbles.
+   - `touchstart` bubbles to `#mobileInputPanel` container: `addKeyboardTapFix` handler fires
+     (`requireKeyboardVisible: false`). Finds `composeSendBtn` via `e.target.closest('button')`.
+     Calls `e.preventDefault()` + `btn.click()` → `InputPanel.send()` executes.
+     Then calls `app.terminal.focus()` because `isPlusBtn = false`.
+
+**The problematic step**: `app.terminal.focus()` is called synchronously after `send()`.
+On mobile, this focuses xterm.js's hidden `<textarea class="xterm-helper-textarea">`.
+Browsers fire the virtual keyboard for focused textarea elements. On iOS and Android,
+this re-opens the keyboard immediately:
+  - `visualViewport` resize fires → `handleViewportResize()` → `keyboardVisible = true` →
+    `onKeyboardShow()` → `updateLayoutForKeyboard()` → applies `translateY(-keyboardOffset)`
+    to `#mobileInputPanel` again.
+
+The first send tap does succeed, but the keyboard re-opens and the panel shifts up. On
+devices/browsers where this keyboard re-open races with or is perceived during the tap,
+the button appears to be in a dead zone or the action sheet of keyboard animation distracts.
+More critically: if the user sees nothing happen (the panel closes after send on mobile via
+`this.close()`) and tries to tap again, the panel has already been hidden.
+
+**Secondary observation:** The send button is 34×34px (below the 44×44px tap target minimum).
+The `compose-inset-btn` class adds `padding: 6px` but `.compose-send-btn` overrides with
+`padding: 0`. The effective tap target is exactly 34×34px — small on touch devices, especially
+when the layout is in transition.
+
+**The `mobile: close after send` behavior:** `send()` calls `this.close()` on mobile
+(`getDeviceType() !== 'mobile'` is false for phones). This hides `#mobileInputPanel` with
+`display: none`. `InputPanel.open()` is only called once at init — there is no re-open path.
+Combined with `app.terminal.focus()` triggering keyboard → layout shift → close, this creates
+the "button disappeared / unresponsive" experience.
 
 ## Root Cause / Spec
 
-### Problem 1 — Missing node_modules in worktrees
+### Root Cause
 
-**Root cause:** `git worktree add` creates a clean checkout of the branch's tracked files. `node_modules/` is gitignored (not tracked), so it is never copied into the new worktree directory. Same applies to `dist/` (build output, also gitignored).
+**Primary cause**: `addKeyboardTapFix` in `src/web/public/app.js` (around line 3063–3086) calls
+`app.terminal.focus()` after firing `btn.click()` for ALL buttons in `#mobileInputPanel` EXCEPT
+`composePlusBtn`. The send button (`composeSendBtn`) is not excepted. When the keyboard is
+closed, `app.terminal.focus()` focuses the xterm.js hidden textarea, which reopens the virtual
+keyboard on mobile. This triggers a layout shift (`translateY` applied to `#mobileInputPanel`
+via `updateLayoutForKeyboard()`), and `send()` closes the panel on mobile (`this.close()` in
+`InputPanel.send()` when device type is 'mobile'). The net effect: the panel disappears and
+the keyboard opens after the send tap, making the send button appear unresponsive or missing.
 
-**Code location:** Worktree creation happens in two route handlers in
-`src/web/routes/worktree-session-routes.ts`:
-- `POST /api/sessions/:id/worktree` (line 80)
-- `POST /api/cases/:name/worktree` (line 264)
+The fix for the plus button (commit e217f74) correctly excepted `composePlusBtn` from
+`app.terminal.focus()` but did not apply the same treatment to the send button.
 
-Both handlers call `addWorktree(gitRoot, worktreePath, branch, isNew)` from
-`src/utils/git-utils.ts` (line 53). The actual `git worktree add` exec is on line 59.
+**Secondary cause**: The send button is 34×34px (`width: 34px; height: 34px` in
+`.compose-send-btn`). The `compose-inset-btn` class sets `padding: 6px` which would give a
+46×46px tap target, but `.compose-send-btn` overrides with `padding: 0`, leaving exactly
+34×34px — below the 44×44px minimum recommended for touch targets. This makes the button
+harder to hit precisely, especially during a layout transition.
 
-**Implementation spec:**
+**Tertiary cause (related)**: `InputPanel.send()` calls `this.close()` on mobile (any device
+where `MobileDetection.getDeviceType() !== 'mobile'` is false, i.e. phone-sized screens <430px).
+After a send, the compose panel is hidden. `InputPanel.open()` is only called once at app init.
+There is no re-open path (no toggle button in the accessory bar; `_inputToggleBtn` is never
+assigned). This means after the first send on mobile, the compose panel is gone. This is
+likely a latent bug separate from the send button issue — the panel should stay open (or be
+reopened) after send on mobile too.
 
-Add a new exported async function `setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void>` in `src/utils/git-utils.ts`.
+### Implementation Spec
 
-This function symlinks the following artifacts from `gitRoot` into `worktreePath`, but only if the source exists and the destination does not already exist:
-- `node_modules` (always needed to run tsx/npm scripts)
-- `dist` (optional — only if it exists in gitRoot; avoids build step)
+**File**: `src/web/public/app.js`
 
-Use `fs.symlink(src, dest, 'dir')` from `node:fs/promises`.
+**Change 1 — Skip `app.terminal.focus()` for send button when keyboard is closed**
+(lines ~3075–3078)
 
-Catch and swallow errors per-artifact (e.g. symlink already exists, no permission) — a failed symlink should be logged but must not abort worktree creation.
+Currently:
+```javascript
+const isPlusBtn = btn.id === 'composePlusBtn';
+if (!isPlusBtn && typeof app !== 'undefined' && app.terminal) {
+  app.terminal.focus();
+}
+```
 
-Call `setupWorktreeArtifacts(gitRoot, worktreePath)` in both POST handlers, after `addWorktree()` succeeds and before `new Session(...)` is constructed. Since it's async, `await` it. Wrap in try/catch so a failure logs a warning but does not prevent the session from being created.
+Change to:
+```javascript
+const isPlusBtn = btn.id === 'composePlusBtn';
+const isSendBtn = btn.id === 'composeSendBtn';
+// Only refocus terminal when keyboard is already visible — purpose is to KEEP
+// keyboard open after accessory button taps, NOT to re-open a closed keyboard.
+// Skip for plus btn (opens action sheet / file picker — focus would dismiss it).
+// Skip for send btn when keyboard is closed (would reopen keyboard after send).
+if (!isPlusBtn && !isSendBtn && typeof app !== 'undefined' && app.terminal) {
+  app.terminal.focus();
+} else if (isSendBtn && KeyboardHandler.keyboardVisible && typeof app !== 'undefined' && app.terminal) {
+  app.terminal.focus();
+}
+```
 
-**Rationale for symlink over copy:** Fast (O(1)), zero additional disk usage, stays in sync with parent if deps are updated (npm install in main repo benefits all worktrees).
+Alternatively, a cleaner formulation: only call `app.terminal.focus()` if the keyboard was
+already visible, and skip it for the plus button specifically:
+```javascript
+const isPlusBtn = btn.id === 'composePlusBtn';
+if (!isPlusBtn && KeyboardHandler.keyboardVisible && typeof app !== 'undefined' && app.terminal) {
+  app.terminal.focus();
+}
+```
+This is the simplest correct fix: the purpose of `app.terminal.focus()` here is to prevent
+keyboard dismissal when tapping accessory buttons while keyboard is open. It should never be
+called when keyboard is already closed — doing so reopens it unnecessarily for all buttons.
 
----
+**Change 2 — Increase send button tap target to minimum 44×44px**
 
-### Problem 2 — Dev server not auto-started after task runner commit
+In `src/web/public/mobile.css`, update `.compose-send-btn`:
 
-**Root cause:** The `codeman-task-runner` skill (`~/.claude/skills/codeman-task-runner/SKILL.md`) Phase 6 only **prints** the nohup command for the user to run manually. It never executes it.
+Currently:
+```css
+.compose-send-btn {
+  right: 4px;
+  width: 34px;
+  height: 34px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 50%;
+  padding: 0;
+}
+```
 
-**Code location:** Phase 6 template in `~/.claude/skills/codeman-task-runner/SKILL.md` lines 229–252.
+The visual circle should remain 34×34px but the tap target should be expanded. Use a
+transparent padding area approach — the simplest fix is to make the button 44×44px (matching
+the minimum tap target) so it doesn't need padding override. Alternatively, keep 34px visual
+but add a transparent pseudo-element or use a larger hit area. The most straightforward fix
+given the existing structure is to increase `width` and `height` to 44px and keep padding 0,
+since the button already has `border-radius: 50%` — the circle will still look correct.
 
-**Implementation spec:**
+**Change 3 — Keep compose panel open after send on mobile (or reopen it)**
 
-Modify Phase 5 of the skill (after the commit completes on either the clean or NEEDS REVIEW path) to add a **"Auto-start dev server"** step before the Phase 6 output. The runner should:
+In `InputPanel.send()` (line ~16887):
 
-1. Check if `assignedPort` is known (from `worktreeNotes` in TASK.md or via the session API).
-2. If known, run the following bash commands in the worktree directory:
-   ```bash
-   nohup npx tsx src/index.ts web --port <assignedPort> > /tmp/codeman-<assignedPort>.log 2>&1 &
-   sleep 6 && curl -s http://localhost:<assignedPort>/api/status
-   ```
-3. Print the result — either a success confirmation with the URL, or a warning if the server failed to start.
-4. If `assignedPort` is unknown, skip and note it in the Phase 6 output (the existing manual command format).
+Currently:
+```javascript
+// Desktop: keep panel open (always-visible); mobile: close after send
+const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() !== 'mobile';
+if (!isDesktop) this.close();
+```
 
-The Phase 6 template's "Dev server (if not already running):" section should be updated to say "Dev server (started automatically — verify with):" followed by the curl health-check command, rather than the full nohup command (since it was already started).
+The panel should remain open on mobile too (it's "always-visible" per the comment at line 3023:
+`// Always-visible compose bar on mobile and desktop`). Change to remove the conditional close:
+```javascript
+// Panel stays open after send on all platforms — it is always-visible
+// (no toggle button to reopen it on mobile)
+```
 
-**Affected file:** `~/.claude/skills/codeman-task-runner/SKILL.md`
+Or if closing on mobile is intentional, ensure `open()` is called after close:
+```javascript
+if (!isDesktop) {
+  this.close();
+  requestAnimationFrame(() => this.open());
+}
+```
 
----
+But the cleanest fix consistent with the "always-visible" comment is to simply remove
+`if (!isDesktop) this.close()` entirely — let the panel stay open after send on mobile.
 
-### Affected area
+### Priority of changes
 
-`backend` for Problem 1 (TypeScript source changes to `git-utils.ts` and `worktree-session-routes.ts`).
-`logic` / skill change for Problem 2 (markdown skill file edit only, no TypeScript).
-
-Both changes are minimal and isolated. No schema changes, no new dependencies.
+1. Change 1 (skip `terminal.focus()` when keyboard closed) — **primary fix for the reported bug**
+2. Change 3 (keep panel open after send) — **needed for consistent UX; without it the panel
+   disappears after every send on mobile**
+3. Change 2 (increase tap target) — **secondary improvement for reliability**
 
 ## Fix / Implementation Notes
 
-### Problem 1 — `setupWorktreeArtifacts` in `git-utils.ts`
+Three changes applied:
 
-Added `import fs from 'node:fs/promises'` to `src/utils/git-utils.ts` (the file previously only used the sync `fs` exports via named imports, so the default import is new but non-conflicting).
+**Change 1** — `src/web/public/app.js` line 3076: Added `KeyboardHandler.keyboardVisible &&` guard
+to the `app.terminal.focus()` call in `addKeyboardTapFix`. Previously, `terminal.focus()` was
+called for all non-plus buttons regardless of keyboard state, which reopened the virtual keyboard
+after a send tap when the keyboard was closed — causing a layout shift and hiding the panel.
+Now `terminal.focus()` is only called when the keyboard is already visible (its intended purpose:
+keeping the keyboard open during accessory button taps).
 
-Added `setupWorktreeArtifacts(gitRoot, worktreePath)` as a new exported async function. It iterates over `['node_modules', 'dist']`, checks existence of the source in `gitRoot` and absence of the destination in `worktreePath`, and calls `fs.symlink(src, dest, 'dir')`. Each artifact is wrapped in its own try/catch so one failure cannot affect the others or abort worktree creation. Failures are logged via `console.warn`.
+**Change 2** — `src/web/public/mobile.css` `.compose-send-btn`: Increased `width` and `height`
+from `34px` to `44px` to meet the 44×44px minimum touch target. The visual circle scales
+correctly since `border-radius: 50%` and `padding: 0` are unchanged.
 
-In `src/web/routes/worktree-session-routes.ts`:
-- Added `setupWorktreeArtifacts` to the named imports from `../../utils/git-utils.js`.
-- In `POST /api/sessions/:id/worktree` (line ~102): added a try/catch block calling `await setupWorktreeArtifacts(gitRoot, worktreePath)` immediately after the `addWorktree()` success block and before port allocation / `new Session(...)`. Failures are logged with `req.log.warn` and do not return an error response.
-- In `POST /api/cases/:name/worktree` (line ~279): same pattern applied.
-
-### Problem 2 — Auto-start dev server in `codeman-task-runner` SKILL.md
-
-Modified Phase 5 in `~/.claude/skills/codeman-task-runner/SKILL.md` to add an **"Auto-start dev server"** step that runs after the git commit on both the clean and NEEDS REVIEW paths. The step:
-1. Extracts `assignedPort` from TASK.md's worktreeNotes by matching `Assigned dev port for this worktree: <N>`.
-2. If found, runs `nohup npx tsx src/index.ts web --port <port> > /tmp/codeman-<port>.log 2>&1 &` followed by `sleep 6 && curl -s http://localhost:<port>/api/status`.
-3. Reports success or a warning based on the curl response.
-4. Gracefully skips if no port is found (falls back to manual instructions in Phase 6).
-
-Updated the Phase 6 template's "Dev server" section from "if not already running" (nohup command) to "started automatically — verify with" (curl health-check only), with a fallback block for the case where auto-start was skipped.
-
-Updated the Phase 6 rules bullet to clarify the auto-start behaviour and the fallback to port 3099.
+**Change 3** — `src/web/public/app.js` `InputPanel.send()` (~line 16882): Removed the
+`if (!isDesktop) this.close()` call and the now-unused `isDesktop` variable entirely. The
+compose panel is "always-visible" on all platforms (per design comment at line 3023) and has
+no toggle button to reopen it, so closing it after send on mobile was a latent bug that
+compounded the primary issue.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**git-utils.ts — `setupWorktreeArtifacts`**
-- Import `fs from 'node:fs/promises'` is non-conflicting with the existing named sync imports from `node:fs`. Correct.
-- `WORKTREE_ARTIFACTS as const` — prevents mutation, gives literal tuple type. Good.
-- `existsSync(src)` guard before `fs.symlink`: correct. There is a theoretical TOCTOU window, but this is a non-security-sensitive one-shot path and the inner `catch` handles any race outcome acceptably.
-- `existsSync(dest)` guard: correctly prevents re-symlinking if the destination already exists (e.g., re-used worktree path or prior run).
-- `fs.symlink(src, dest, 'dir')`: correct API. Absolute source path (via `join(gitRoot, artifact)`) — correct; relative symlinks would break if worktrees are moved.
-- Per-artifact `try/catch` with `console.warn`: appropriate since the function has no access to `req.log`. Outer handler adds a second safety layer with `req.log.warn`.
-- No implicit `any`, no unused variables. TypeScript-clean.
+**Change 1 — `KeyboardHandler.keyboardVisible` guard in `addKeyboardTapFix`**
 
-**worktree-session-routes.ts**
-- `setupWorktreeArtifacts` correctly added to named imports from `git-utils.js`.
-- Both POST handlers call it immediately after `addWorktree()` succeeds and before port allocation / `new Session()` — matches spec exactly.
-- Outer `try/catch` uses `req.log.warn` and does NOT return an error — correct non-blocking pattern.
-- Minor style inconsistency (missing blank line before `const [[globalNice...` in the cases handler vs. the sessions handler), but not a defect.
+Correctness: The guard is inserted at the right location (line 3076) and uses the established
+`KeyboardHandler.keyboardVisible` static property, which is already used identically at line 3067
+in the same function and in multiple other call sites. No `typeof` guard is needed because
+`KeyboardHandler` is always defined when `MobileDetection.isTouchDevice()` is true (the outer
+`if` condition). The chosen formulation (add `keyboardVisible &&` to the shared condition rather
+than a separate `isSendBtn` exception) is the simpler and more correct of the two options listed
+in the spec — it correctly handles any future non-plus buttons added to `#mobileInputPanel` as
+well, not just the send button.
 
-**SKILL.md — Phase 5 auto-start**
-- Auto-start step added to Phase 5 for both clean and NEEDS REVIEW paths.
-- Port extraction from `worktreeNotes` is clearly documented with graceful skip if not found.
-- Phase 6 template correctly updated to "started automatically — verify with:" with a fallback block for unknown-port case.
-- No `--host` flag used in the nohup command — consistent with the documented gotcha in MEMORY.md.
-- Fallback port 3099 aligns with the QA subagent's existing default.
+One subtle concern examined: the `requireKeyboardVisible: false` option on `#mobileInputPanel`
+means the outer early-return guard at line 3067 is bypassed for this container — so the listener
+fires even when the keyboard is closed. The new `KeyboardHandler.keyboardVisible` check inside
+the focus call correctly handles this case: `btn.click()` (i.e. send) still fires, but
+`terminal.focus()` is skipped when keyboard is closed. This is exactly the desired behavior.
 
-No issues found. Implementation is correct, minimal, well-guarded, and consistent with existing patterns.
+No regression risk for the plus button: `isPlusBtn` is checked first; `keyboardVisible` is only
+reached when `isPlusBtn` is false, so the plus-button fix from commit e217f74 is unaffected.
+
+**Change 2 — Send button size 34px → 44px in `mobile.css`**
+
+Correct and confirmed in the file. `border-radius: 50%` and `padding: 0` remain; the button
+scales proportionally. No overlap with adjacent elements needs review — `.compose-plus-btn` is
+pinned `left: 4px` and `.compose-send-btn` is pinned `right: 4px`, so widening the send button
+by 10px moves its left edge 10px further left; the textarea has `left: 44px; right: 44px`
+padding to accommodate the inset buttons, so with the 10px wider button there is a 10px
+reduction in the textarea's right clearance. This warrants a visual check in QA but is unlikely
+to cause overlap given the `padding` inset on the textarea.
+
+**Change 3 — Remove `this.close()` from `InputPanel.send()`**
+
+Safety analysis:
+- `InputPanel.close()` is called from two places: (a) `closeAllPanels()` — triggered only by
+  Escape key on desktop, which does not apply to mobile; (b) the now-removed `send()` path.
+- `InputPanel.open()` is called once at app init (line 3024). After the remove, the panel stays
+  open permanently on mobile, which matches the "Always-visible compose bar on mobile and
+  desktop" comment at line 3023 and is the correct intent.
+- The old `close()` call also revoked object URLs and cleared `_images`. With the removal, image
+  cleanup on send is now handled by the `this._images = []; this._renderThumbnails();` lines
+  already present at lines 16883–16884 — so no memory leak is introduced.
+- The `_open` state flag: after the fix, `_open` stays `true` permanently on mobile after init,
+  which is consistent with the panel never being hidden. No code paths depend on `_open` being
+  toggled to `false` after send (the only code reading `_open` is `toggle()`, which is not called
+  on mobile given there is no toggle button).
+- The removed `isDesktop` variable was only used by the removed `if` condition; its removal
+  avoids a lint warning. Another `isDesktop` variable exists independently in `_autoGrow` (line
+  16778) with a different scope — no collision.
+
+**Edge cases checked:**
+- Sending with no text and no images: guarded at line 16834 (`if (!text && !images.length) return`),
+  behavior unchanged.
+- Double-tap scenario: with the `keyboardVisible` guard, a second tap while the keyboard is
+  closed will call `send()` again. `send()` returns early if textarea is empty (cleared after
+  first send), so no double-send is possible.
+- `closeAllPanels()` on mobile via Escape: still calls `InputPanel.close()`, hiding the panel.
+  Since `open()` is not called again afterward, the panel would be permanently gone on mobile
+  if Escape is pressed. This is a pre-existing issue unrelated to this fix — the Escape handler
+  was already present before this change.
+
+**Overall:** All three changes are correct, minimal, and consistent with existing patterns. The
+implementation matches the spec's preferred formulations. No issues found.
 
 ## QA Results
-<!-- filled by QA subagent -->
 
-**Date:** 2026-03-15
+### QA run — PASSED
 
-| Check | Result | Notes |
-|---|---|---|
-| `tsc --noEmit` | PASS | Zero type errors |
-| `npm run lint` | PASS | Zero ESLint warnings/errors |
-| Dev server startup (port 3099) | PASS | Server responded with valid JSON from `/api/status` |
-| `setupWorktreeArtifacts` exported | PASS | Exported from `src/utils/git-utils.ts` and imported+called in both POST handlers in `worktree-session-routes.ts` |
+**TypeScript (`tsc --noEmit`):** PASS — zero errors.
+
+**ESLint (`npm run lint`):** PASS — zero warnings or errors.
+
+**Playwright send button check (iPhone 12 mobile viewport, port 3099):**
+- Send button visible: true
+- Bounding box: 44×44px
+- Width >= 44px: PASS (44px)
+- Height >= 44px: PASS (44px)
+- Overall: PASS
+
+**Implementation verified in source:**
+- `src/web/public/app.js` line 3076: `KeyboardHandler.keyboardVisible &&` guard confirmed in place for `app.terminal.focus()` in `addKeyboardTapFix`.
+- `src/web/public/mobile.css` `.compose-send-btn`: `width: 44px; height: 44px` confirmed.
+- `InputPanel.send()` close-on-mobile removed (Change 3) — confirmed via review notes.
 
 All checks passed. Status set to `done`.
 
 ## Decisions & Context
 
-- **Symlink vs copy:** Chose symlink (O(1), zero disk) as specified. The `'dir'` type argument to `fs.symlink` is required on Windows but ignored on Linux/macOS; kept for cross-platform correctness.
-- **Per-artifact try/catch inside `setupWorktreeArtifacts`:** A missing `dist/` or a pre-existing `node_modules` symlink must not kill the whole function. Outer try/catch in the route handlers adds a second safety layer but inner catches carry the real per-artifact resilience.
-- **`existsSync` for destination check:** Using sync existence check before `fs.symlink` is fine since this is a one-shot setup path, not a hot loop. This matches the existing pattern in `git-utils.ts`.
-- **`console.warn` inside `setupWorktreeArtifacts`:** The function has no access to the Fastify request logger (`req.log`), so `console.warn` is the appropriate choice. The route handler re-logs via `req.log.warn` for the outer error.
-- **Skill auto-start placement:** The auto-start step is placed in Phase 5 (after commit, before Phase 6 output) rather than in Phase 6 itself, so that the Phase 6 output can reference an already-running server. This matches the spec.
-- **Graceful fallback when port unknown:** If `assignedPort` is not extractable from TASK.md, the skill skips auto-start and shows the full nohup command in the Phase 6 template. This satisfies the "must not break Phase 6 when no port is available" constraint.
+- Chose the simpler `KeyboardHandler.keyboardVisible` guard (spec's preferred formulation) over
+  a separate `isSendBtn` exception. This correctly handles all current and future non-plus buttons:
+  `terminal.focus()` is only meaningful when keyboard is already up.
+- Removed the `isDesktop` variable entirely (it was only used by the removed `if` condition)
+  to avoid a lint/unused-variable warning.
+- Send button enlarged to 44px diameter (not just expanded hit area via padding) — this is the
+  cleanest approach given the existing `border-radius: 50%; padding: 0` style; the visual circle
+  scales proportionally.
