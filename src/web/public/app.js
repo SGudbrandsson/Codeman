@@ -5496,6 +5496,13 @@ class CodemanApp {
       title: q.header || 'Question',
       message: q.question || 'Claude is asking a question',
     });
+    // If the user already answered via the hook panel (hook-first race), suppress the panel
+    // re-show.  This event fires BEFORE transcript:block (processEntry calls handleAssistantEntry
+    // then emits transcript:block), so we must NOT delete the session entry here — the
+    // _onTranscriptBlock pre-check needs it to populate _dismissedAskUserQuestionIds for Fix C.
+    if (this._dismissedAskUserQuestionSessions.has(data.sessionId)) {
+      return;
+    }
     this.pendingAskUserQuestion = {
       sessionId: data.sessionId,
       header: q.header || '',
@@ -9129,7 +9136,9 @@ class CodemanApp {
     // Clear dismissed-question tracking for this session so stale suppression doesn't persist.
     // Only clear the session-flag for this specific session; _dismissedAskUserQuestionIds entries
     // are toolUseId-keyed (globally unique) — after a transcript clear, old IDs will never match
-    // new blocks, so they are harmless dead entries cleaned up by Fix D on tool_result arrival.
+    // new blocks (new questions get new UUIDs), so they are harmless dead entries.  Fix D removes
+    // them on tool_result arrival for the normal lifecycle, but orphaned entries from a transcript
+    // clear are left in the Set indefinitely.  The memory impact is negligible (~36 bytes per entry).
     this._dismissedAskUserQuestionSessions.delete(sessionId);
   }
 
