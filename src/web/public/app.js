@@ -1933,6 +1933,10 @@ const TranscriptView = {
         // _clearPending is reset to false by clear() when transcript:clear SSE arrives.
         const treatAsEmpty = !blocks.length || this._clearPending;
         if (treatAsEmpty) {
+          // Do not cache stale old-session blocks. If we leave state.blocks populated
+          // from the state.blocks=[...blocks] above, the next load() will pre-render
+          // those old blocks before the fetch completes, showing the wrong session.
+          state.blocks = [];
           if (opts.pendingOptimisticText) {
             // Transcript is empty but user already sent a message — rebuild their
             // optimistic bubble from the stored text so it stays visible while
@@ -2022,6 +2026,10 @@ const TranscriptView = {
   /** Immediately show a user message bubble before the SSE block arrives. */
   appendOptimistic(text) {
     if (!this._container) return;
+    // Cancel the clearOnly() fallback timer — once the user has sent a message, showing
+    // an empty CTA would be wrong. The optimistic bubble is the correct state.
+    clearTimeout(this._clearFallbackTimer);
+    this._clearFallbackTimer = null;
     this._pendingOptimisticText = text;  // persist as text so it survives DOM wipes in clear()
     const el = this._renderTextBlock({ type: 'text', role: 'user', text });
     if (el) {
