@@ -1,7 +1,7 @@
 # Task
 
 type: bug
-status: deferred
+status: fixing
 title: Mobile new session not detected after double-tap clear
 description: |
   After creating a new session and double-tapping the clear button, the prompt
@@ -160,6 +160,40 @@ resets the flag before the real transcript:clear SSE arrives. Fixed by querying
 [data-optimistic="true"] unconditionally — the element's presence is sufficient signal.
 clearOnly() wipes the container, so optimistic can only exist if user typed into new session.
 Version bumped to 0.4.113.
+
+## Resume From Here (post-compaction)
+
+**Current state (2026-03-16):** TDD approach in progress. 4/5 tests pass.
+
+**Run tests:** `npx vitest run test/transcript-clear-new-session.test.ts`
+
+**Passing (4/5):**
+- Scenario 2: message survives one tab switch ✓
+- Scenario 3: message survives two tab switches ✓
+- Scenario 4: post-SSE tab switch shows new session content ✓
+- Scenario 5: post-SSE two tab switches show new session content ✓
+
+**Failing (1/5):**
+- Scenario 1: tab switch with NO message sent shows old session content instead of empty CTA
+
+**Scenario 1 diagnosis needed:** `_clearPending = true` is confirmed set after `clearOnly()`.
+The `treatAsEmpty = !blocks.length || this._clearPending` guard in `load()` SHOULD catch stale
+blocks, but Scenario 1 still shows old content. Root cause not yet isolated — needs one diagnostic
+pass (add `console.log(this._clearPending)` inside `load()` at the `treatAsEmpty` line and re-run
+to confirm the value at that exact moment).
+
+**Likely cause:** The cache pre-render at the TOP of `load()` (lines ~1896-1901) runs before the
+`treatAsEmpty` check. If `state.blocks` is somehow non-empty (e.g. from a previous load that wasn't
+properly cleared), it renders old blocks visually before the fetch even completes. Check whether
+`state.blocks = []` in `clearOnly()` is executing when `this._sessionId` is set correctly.
+
+**Key files:**
+- `src/web/public/app.js` — TranscriptView (v=0.4.115)
+- `test/transcript-clear-new-session.test.ts` — the 5 TDD scenarios
+- `TODO-future.md` — Level 2 server-side state design (fallback if this approach fails)
+
+**Next step:** Fix Scenario 1, run all 5 tests green, bump version, restart server on 3098, commit,
+then update status to `qa` and run full QA.
 
 ## Known Issue & Workaround
 
