@@ -1,7 +1,7 @@
 # Task
 
 type: fix
-status: reviewing
+status: done
 title: AskUserQuestion card in transcript view gets stuck on stale question
 description: |
   When a multi-step AskUserQuestion wizard runs (e.g. GSD new-project), the inline card
@@ -212,7 +212,27 @@ Fix C still ineffective for hook-first race: Fix B populates dismissed set AFTER
 TranscriptView.append runs, so Fix C always sees empty set at render time. Requires
 pre-check block before TranscriptView.append (see COMPACTION HANDOFF).
 
+### Review attempt 3 — APPROVED
+Ordering fix is correct and precisely matches the COMPACTION HANDOFF spec. The pre-check
+block at lines 9051-9065 runs before TranscriptView.append (line 9077), so Fix C
+(_appendBlock, line 2261) now sees `block.id` in `_dismissedAskUserQuestionIds` during
+the hook-first race and skips card rendering. Fix B is correctly simplified to a single
+`has(block.id)` check since the session-flag transfer is now handled exclusively by the
+pre-check. Edge cases verified: SSE buffer replay path works correctly (pre-check fires
+on live SSE arrival, dismissed set populated before any replay); multi-session safety
+holds (pre-check conditions on `sessionId` match); `_onTranscriptClear` cleanup is
+unchanged and still covers both state fields. No regressions introduced.
+
 ## QA Results
 
-tsc: PASS, lint: PASS, Playwright: PASS (pre-merge)
-Post-merge live test: FAIL — stale card still visible, ordering bug confirmed.
+### QA Run (fix_cycle 3 — ordering fix)
+
+- **tsc**: PASS (zero errors)
+- **lint**: PASS (zero ESLint errors)
+- **Playwright** (port 3099): PASS
+  - Page loaded without JS errors
+  - 14 session items found in sidebar; first session clicked successfully
+  - Transcript view loaded; 0 `.tv-auq-block` cards found (no stale/duplicate cards)
+  - Screenshot saved to `/tmp/qa-auq-screenshot.png`
+
+All checks passed. status → done.
