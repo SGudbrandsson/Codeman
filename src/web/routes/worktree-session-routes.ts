@@ -19,6 +19,7 @@ import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { CreateWorktreeSchema, RemoveWorktreeSchema, MergeWorktreeSchema, CleanupOrphansSchema } from '../schemas.js';
 import {
   findGitRoot,
+  findMainGitRoot,
   isGitWorktreeDir,
   listBranches,
   getCurrentBranch,
@@ -363,15 +364,30 @@ export function registerWorktreeSessionRoutes(
       }
     }
 
+    // Resolve the main repo root (not a worktree dir) so `git merge` runs from master,
+    // not from the feature branch worktree (which would be "already up to date" with itself).
+    const mainGitRoot = await findMainGitRoot(session.workingDir);
+    if (!mainGitRoot) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Could not resolve main git repository root');
+    }
+
     let output: string;
     try {
-      output = await mergeBranch(session.workingDir, branch);
+      output = await mergeBranch(mainGitRoot, branch);
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Merge failed: ${String(err)}`);
     }
 
+    // Guard: if git reported a no-op, the branch was not actually merged — do not clean up.
+    const isNoOp = /already up.?to.?date/i.test(output);
+    if (isNoOp) {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Merge was a no-op ("${output}") — branch commits may not be present in master. Aborting cleanup to prevent data loss.`
+      );
+    }
+
     // Post-merge auto-cleanup (fire-and-forget wrapped in try/catch)
-    const gitRoot = findGitRoot(session.workingDir);
     const worktreePath = worktreeSession?.worktreePath;
     (async () => {
       try {
@@ -379,24 +395,22 @@ export function registerWorktreeSessionRoutes(
           req.log.info({ sessionId: worktreeSession.id }, '[worktree-merge-cleanup] cleaning up worktree session');
           await ctx.cleanupSession(worktreeSession.id, true, 'merged');
         }
-        if (gitRoot && worktreePath) {
+        if (worktreePath) {
           try {
-            await removeWorktree(gitRoot, worktreePath, false);
+            await removeWorktree(mainGitRoot, worktreePath, false);
             req.log.info({ worktreePath }, '[worktree-merge-cleanup] removed worktree directory');
           } catch {
             // May already be gone — not an error
           }
         }
-        if (gitRoot) {
-          try {
-            await deleteBranch(gitRoot, branch, false);
-            req.log.info({ branch }, '[worktree-merge-cleanup] deleted branch');
-          } catch (err) {
-            req.log.warn(
-              { err, branch },
-              '[worktree-merge-cleanup] failed to delete branch (may be checked out elsewhere)'
-            );
-          }
+        try {
+          await deleteBranch(mainGitRoot, branch, false);
+          req.log.info({ branch }, '[worktree-merge-cleanup] deleted branch');
+        } catch (err) {
+          req.log.warn(
+            { err, branch },
+            '[worktree-merge-cleanup] failed to delete branch (may be checked out elsewhere)'
+          );
         }
         // Remove from dormant store if present
         const store = getWorktreeStore();
@@ -412,7 +426,7 @@ export function registerWorktreeSessionRoutes(
       }
     })();
 
-    return { success: true, output, cleaned: !!(worktreeSession || gitRoot) };
+    return { success: true, output, cleaned: !!(worktreeSession || mainGitRoot) };
   });
 
   // DELETE /api/sessions/:id/worktree

@@ -1,139 +1,154 @@
 # Task
 
-type: fix
+type: bug
 status: done
-title: Fix mobile action bar tap target sizes
+title: Merge API reports 'already up to date' when branch has unmerged commits
 description: |
-  The action bar buttons on mobile have small tap areas again. A previous state had
-  large, finger-friendly tap targets on all action bar buttons but a recent merge
-  (fix/action-bar-regression, commit 865e83b) restored original button sizes which
-  were too small.
+  POST /api/sessions/:id/worktree/merge returned {"success":true,"output":"Already up to date.","cleaned":true}
+  for branch fix/mobile-new-session-detection, even though that branch had 7 commits not present in master.
+  The API also cleaned up the worktree directory, leaving the branch dangling with no working directory.
 
-  Fix: Restore large tap targets on all action bar buttons. Each button should have a
-  minimum tap area of 44x44px (Apple HIG / Material Design recommendation). The visual
-  button icon can remain the same size — use padding, min-width, min-height, or a
-  ::before pseudo-element to enlarge the tappable area without changing the visual
-  appearance.
+  A manual `git merge fix/mobile-new-session-detection` from the main repo confirmed the commits were
+  genuinely missing from master — it produced a merge commit with real changes (app.js, index.html).
 
-  IMPORTANT: The fix must NOT bring back scroll buttons that were intentionally removed
-  in commit 865e83b. Only fix the tap target size on existing buttons.
+  The bug likely involves how the merge endpoint determines the target branch or resolves the working
+  directory. Hypothesis: the merge is being run from inside the worktree directory (which is already
+  on that branch, making it "already up to date" with itself), rather than from the parent repo's
+  master branch. Or the wrong base ref is being used.
 
-affected_area: frontend
+  Additionally, "cleaned: true" was returned, meaning the worktree was deleted before confirming the
+  merge actually landed in master — this is a secondary safety issue.
+
+affected_area: backend — worktree merge API endpoint
 fix_cycles: 0
 
 ## Reproduction
 
-**Current state (after commit 865e83b):**
+1. Create a Codeman session pointing at a git repo (the "origin session", e.g. session ID `ABC`). Its `workingDir` is the main repo root, e.g. `/home/siggi/sources/Codeman`.
+2. From that session, create a worktree for a new branch (`fix/mobile-new-session-detection`). This creates `/home/siggi/sources/Codeman-fix-mobile-new-session-detection` with `workingDir` = that worktree path.
+3. Make commits in the worktree branch so it diverges from master.
+4. Call `POST /api/sessions/ABC/worktree/merge` with body `{"branch":"fix/mobile-new-session-detection"}`.
+5. Expected: git merges the branch commits into master in the main repo. Actual: returns `{"success":true,"output":"Already up to date.","cleaned":true}` — no commits land in master.
 
-The accessory bar is 52px tall with 6px top/bottom padding, leaving at most 40px of
-inner height. Button styles in `mobile.css` (inside the `@media (max-width: 767px)` block):
-
-- `.accessory-btn`: `padding: 6px 12px` — no `min-height`. Actual rendered height depends
-  on content + padding only; with a 14px SVG icon + 12px padding = ~26px height. Fails 44px
-  minimum.
-- `.accessory-btn-arrow`: `padding: 6px 10px` — dead code now (no arrow buttons rendered),
-  but also undersized.
-- `.accessory-btn-dismiss`: `padding: 8px 14px` — SVG is 22×22px, height ≈ 38px. Still
-  below 44px minimum.
-- `.view-mode-toggle`: `height: 32px` — explicitly 32px, well below 44px.
-- `.view-mode-seg`: `padding: 0 9px` — height inherited from parent 32px container.
-
-**What it should be:**
-
-Each tappable button (`.accessory-btn`, `.accessory-btn-dismiss`, `.view-mode-toggle`,
-`.view-mode-seg`) should achieve a minimum 44×44px tap target. Commit 82bdb8b previously
-achieved this by:
-- `.accessory-btn`: `padding: 8px 14px` + `min-height: 36px` (bar's own 6px vertical
-  padding on each side adds another 12px, bringing total to ~44px touch area via bar height)
-- `.view-mode-toggle`: `height: 36px` (same bar-padding math: 36+6+6 = 48px effective)
-- `.view-mode-seg`: `padding: 0 12px` (wider horizontal tap area)
+The "already up to date" message is reproducible whenever `session.workingDir` for the origin session is itself a worktree directory (i.e. the origin session was created for a worktree, not for the bare main repo), OR more commonly: if the `findGitRoot` resolution for `session.workingDir` yields a path whose `HEAD` is already pointing to the feature branch (e.g. because the origin session's worktree happens to be on the same branch, or git resolves the wrong repo context).
 
 ## Root Cause / Spec
 
-**Root cause:**
+### Primary Bug — wrong `cwd` for `git merge`
 
-Commit 865e83b intentionally reverted the tap-target improvements from commit 82bdb8b as
-part of removing the scroll buttons. The commit message says "Revert accessory button
-padding: 8px 14px → 6px 12px (remove min-height: 36px)" and "Revert view-mode-toggle
-height: 36px → 32px". These tap-target improvements were bundled with the scroll-button
-additions, but they are independent — the button size changes should have been kept.
+In `src/web/routes/worktree-session-routes.ts` line 368, the merge is run as:
 
-**Affected file:** `src/web/public/mobile.css`
-**Affected media block:** `@media (max-width: 767px)`
+```typescript
+output = await mergeBranch(session.workingDir, branch);
+```
 
-**Implementation spec — exact property changes needed:**
+where `session` is the **origin session** (identified by `:id` in the URL).
 
-1. Selector `.accessory-btn` (line ~996):
-   - Change `padding: 6px 12px` → `padding: 8px 14px`
-   - Add `min-height: 36px;` (Apple HIG: bar's 6px top+bottom padding brings effective
-     touch target to 52px bar height, achieving ≥44px)
+`mergeBranch` in `src/utils/git-utils.ts` executes:
+```typescript
+git(['merge', branch, '--no-edit'], targetDir)
+```
 
-2. Selector `.view-mode-toggle` (line ~1015):
-   - Change `height: 32px` → `height: 36px`
+which runs `git merge <branch> --no-edit` with `cwd = session.workingDir`.
 
-3. Selector `.view-mode-seg` (line ~1021):
-   - Change `padding: 0 9px` → `padding: 0 12px`
+**The intent** is to merge the feature branch into the main repo's current branch (master). For that to work, `cwd` must be the main repo root **with HEAD on master**.
 
-No changes needed to:
-- `.accessory-btn-dismiss` — already has `padding: 8px 14px` and its 22px SVG brings
-  it to 38px; combined with the 52px bar it is adequately tappable, but adding
-  `min-height: 36px` for consistency is optional.
-- `keyboard-accessory.js` — no JS changes required.
-- Any scroll-button references — they were already removed in 865e83b and must stay removed.
+**The failure case** — the origin session's `workingDir` IS the worktree directory for another feature branch. This is the normal case in Codeman's autonomous workflow: the "codeman-merge-worktree" skill calls the merge endpoint against the origin session, but the origin session in practice IS a worktree session itself (the fix/feat worktree session that ran the autonomous agent). When `git merge fix/mobile-new-session-detection` runs inside `/home/siggi/sources/Codeman-fix-mobile-new-session-detection` (which is already checked out on that branch), git correctly reports "Already up to date" — because you are merging a branch into itself.
 
-The three property changes above exactly mirror what 82bdb8b added, minus the scroll-button
-sections that were correctly removed by 865e83b.
+**Root cause summary:** `mergeBranch` must be run from the **git root on the target base branch (master)**, not from `session.workingDir`, which may be the worktree directory for the very branch being merged. The fix must resolve the true git root and ensure it is on `master` (or the configured base branch), OR use `findGitRoot(session.workingDir)` to get the main repo root and verify its current branch before merging.
+
+### Secondary Bug — cleanup runs unconditionally on "already up to date"
+
+Lines 376–415 fire the post-merge cleanup (delete session, remove worktree directory, delete branch) regardless of whether the merge actually integrated any new commits. The `cleaned: true` flag in the response is set based on whether `worktreeSession` exists or `gitRoot` is resolvable — not on whether the merge output indicates real work was done (i.e., it fires even on "Already up to date."). This causes the worktree directory to be destroyed without the commits ever landing in master.
+
+**Fix needed for secondary bug:** Guard the cleanup behind a check that the merge output is NOT "Already up to date." (or similar no-op messages). If the merge was a no-op, return an error rather than silently cleaning up.
+
+### Affected files
+- `src/utils/git-utils.ts` — `mergeBranch` function (line 99)
+- `src/web/routes/worktree-session-routes.ts` — merge route handler (lines 334–416), specifically line 368 (`mergeBranch(session.workingDir, branch)`) and the cleanup guard logic
 
 ## Fix / Implementation Notes
 
-Applied three targeted CSS changes in `src/web/public/mobile.css` inside the `@media (max-width: 767px)` block:
+### Primary fix — `src/utils/git-utils.ts`
 
-1. `.accessory-btn` (line ~996): changed `padding: 6px 12px` → `padding: 8px 14px` and added `min-height: 36px;`
-2. `.view-mode-toggle` (line ~1015): changed `height: 32px` → `height: 36px`
-3. `.view-mode-seg` (line ~1021): changed `padding: 0 9px` → `padding: 0 12px`
+Added `findMainGitRoot(startDir: string): Promise<string | null>`.
 
-No scroll buttons were added back. No JS changes were made. Changes exactly mirror the tap-target improvements from commit 82bdb8b, excluding the scroll-button sections that were correctly removed in 865e83b.
+Uses `git rev-parse --git-common-dir` which returns the path to the shared `.git` directory regardless of whether `startDir` is inside a linked worktree or the main repo. Stripping the trailing `/.git` yields the main repo working tree root. This is the correct `cwd` for running `git merge`.
+
+### Primary fix — `src/web/routes/worktree-session-routes.ts`
+
+- Imported `findMainGitRoot`.
+- In the merge route, replaced `mergeBranch(session.workingDir, branch)` with `mergeBranch(mainGitRoot, branch)` where `mainGitRoot = await findMainGitRoot(session.workingDir)`. If resolution fails, returns an error before attempting the merge.
+- Updated `removeWorktree` and `deleteBranch` calls to use `mainGitRoot` instead of the old `gitRoot` derived from `findGitRoot` (which was scoped to the worktree path).
+
+### Secondary fix — no-op guard
+
+After `mergeBranch` returns, added a check: if output matches `/already up.?to.?date/i`, return an `OPERATION_FAILED` error immediately (before the cleanup async block runs). This prevents worktree directory deletion and branch deletion when no commits actually landed in master.
 
 ## Review History
-
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Changes reviewed against spec:**
+**Primary fix correctness — PASS**
 
-1. `.accessory-btn` — `padding: 6px 12px` → `padding: 8px 14px` and `min-height: 36px` added. Matches spec exactly.
-2. `.view-mode-toggle` — `height: 32px` → `height: 36px`. Matches spec exactly.
-3. `.view-mode-seg` — `padding: 0 9px` → `padding: 0 12px`. Matches spec exactly.
+`findMainGitRoot` uses `git rev-parse --git-common-dir` which is the canonical mechanism for finding the shared `.git` directory. Verified empirically: from inside this worktree (`/home/siggi/sources/Codeman-fix-merge-api-already-up-to-date`) it returns `/home/siggi/sources/Codeman/.git`, while `--git-dir` would return `.git/worktrees/...`. The path normalization regex `/.git\/?$/` is correct for all real-world cases (`--git-common-dir` always returns the top-level `.git` dir, not a subdirectory within it).
 
-**Scope check (git diff vs master):** Only `src/web/public/mobile.css` is modified on this branch. No JS changes, no HTML changes, no scroll buttons added.
+**Edge case: relative vs. absolute path from `--git-common-dir` — PASS**
 
-**Media block containment:** All three changed selectors live inside the `@media (max-width: 430px)` block (lines 321–2172). This is mobile-phone-only — no desktop regression possible.
+From the main repo, git returns `.git` (relative); from a linked worktree, it returns an absolute path. The code correctly handles both: `commonDir.startsWith('/') ? commonDir : join(startDir, commonDir)`. Tested both paths manually.
 
-**Tap target arithmetic:**
-- `.accessory-btn`: 14px SVG + 8px top + 8px bottom padding = 30px rendered height; `min-height: 36px` floors it at 36px. The bar itself is 52px tall with 6px top/bottom internal padding — the button sits within a 40px inner zone, and the full 52px bar height forms the effective touch target, clearing the 44px minimum.
-- `.view-mode-toggle`: 36px explicit height; same 52px bar touch area math applies — adequate.
-- `.view-mode-seg`: wider horizontal padding (0 12px) improves horizontal tap area on the segmented control.
+**Secondary fix (no-op guard) — PASS**
 
-**No scroll buttons present:** Confirmed — no `scroll-btn`, `accessory-btn-arrow`, `scrollLeft`, or `scrollRight` patterns exist anywhere in the modified file.
+The `/already up.?to.?date/i` regex is broader than needed but not dangerously so — it correctly catches git's "Already up to date." message and the early return fires before the cleanup async block. This is the right behavior.
+
+**Secondary fix: cleanup uses `mainGitRoot` — PASS**
+
+`removeWorktree` and `deleteBranch` now use `mainGitRoot` instead of the old `findGitRoot`-derived `gitRoot`. The old code wrapped these in `if (gitRoot)` guards, which are now simplified since `mainGitRoot` is guaranteed non-null at that point. This is a clean improvement.
+
+**Minor observation: `cleaned` flag semantics (non-blocking)**
+
+`return { success: true, output, cleaned: !!(worktreeSession || mainGitRoot) }` will always return `cleaned: true` after a successful merge, because `mainGitRoot` is non-null at that point. Previously `gitRoot` could theoretically be null (causing `cleaned: false` when neither a worktree session existed nor a git root was found). The new value is semantically "cleanup was attempted" rather than "cleanup succeeded/is happening", which is slightly more optimistic but consistent — the cleanup is fire-and-forget anyway. Not worth blocking on.
+
+**TypeScript correctness — PASS**
+
+No implicit `any`, no unused variables. The `catch` in `findMainGitRoot` swallows the error and returns `null`, which is the documented contract. The return type `Promise<string | null>` is accurate.
+
+**Security — PASS**
+
+Branch name is already validated by `BRANCH_PATTERN` before reaching the new code. `findMainGitRoot` only reads from git, no writes. `git` helper uses `execFile` (not shell), so no injection risk from `startDir`.
+
+**Consistency with existing patterns — PASS**
+
+The new utility follows the same pattern as `findGitRoot` / `isWorktreeDirty` / `mergeBranch`. The import is properly added.
+
+No blocking issues found.
 
 ## QA Results
 
-### QA run — PASS
+**Date:** 2026-03-16
 
-- **tsc --noEmit**: PASS (zero errors)
-- **npm run lint**: PASS (zero errors)
-- **Dev server start (port 3099)**: PASS
-- **`.accessory-btn` padding: 8px 14px**: PASS (computed style confirmed)
-- **`.accessory-btn` min-height: 36px**: PASS (computed style confirmed)
-- **`.view-mode-toggle` height: 36px**: PASS (computed style confirmed)
-- **`.view-mode-seg` padding: 0px 12px**: PASS (computed style confirmed)
-- **No `.accessory-btn-arrow` elements in DOM**: PASS (count: 0)
+### TypeScript typecheck (`tsc --noEmit`) — PASS
+Zero errors. No type issues in `findMainGitRoot`, `mainGitRoot` usage, or the no-op guard.
+
+### ESLint (`npm run lint`) — PASS
+Zero warnings or errors.
+
+### Dev server startup (port 3099) — PASS
+Server started successfully and responded to `GET /api/status` with full session list (v0.6.4). Worktree session `restored-d5b27bcb` for `fix/merge-api-already-up-to-date` was visible in the sessions list, confirming the worktree registration path works correctly.
+
+### Fix verification — PASS
+Confirmed in `src/web/routes/worktree-session-routes.ts`:
+- `findMainGitRoot` imported and called on `session.workingDir` (line 369).
+- `mergeBranch` now called with `mainGitRoot` instead of `session.workingDir` (line 376).
+- `removeWorktree` and `deleteBranch` both use `mainGitRoot` (lines 400, 407).
+- No-op guard with `/already up.?to.?date/i` regex fires at line 382–388, returning `OPERATION_FAILED` before any cleanup runs.
+
+**Overall: ALL CHECKS PASSED**
 
 ## Decisions & Context
+<!-- append-only log of key decisions made during the workflow -->
 
-- The fix/action-bar-regression merge (commit 865e83b) removed scroll buttons and
-  restored original button sizes. Scroll buttons must stay removed. Only tap targets
-  need to be enlarged.
-- Affected files: src/web/public/keyboard-accessory.js and src/web/public/mobile.css
-- The action bar button styles are in those two files.
+2026-03-16: Used `git rev-parse --git-common-dir` (via new `findMainGitRoot`) rather than walking the filesystem with `findGitRoot`. The filesystem walk finds the first directory containing a `.git` entry — in a worktree that is the worktree dir itself (`.git` is a file there), not the main repo. `--git-common-dir` is the canonical git mechanism for this.
+
+2026-03-16: The no-op guard returns `OPERATION_FAILED` (not `success:false`) so that callers (e.g. `codeman-merge-worktree` skill) get a clear error signal and can investigate rather than silently proceeding. The worktree and branch are left intact for the user to retry.
