@@ -456,6 +456,57 @@ describe('session-routes', () => {
     });
   });
 
+  // ========== GET /api/sessions/:id/chain ==========
+
+  describe('GET /api/sessions/:id/chain', () => {
+    it('returns single-item chain for session with no parent', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/chain`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(Array.isArray(body.sessions)).toBe(true);
+      expect(body.sessions).toHaveLength(1);
+      expect(body.sessions[0].id).toBe(harness.ctx._sessionId);
+    });
+
+    it('returns 200 with error body for unknown session', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/sessions/nonexistent/chain',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeDefined();
+    });
+  });
+
+  // ========== GET /api/sessions/:id/state ==========
+
+  describe('GET /api/sessions/:id/state', () => {
+    it('returns session state and transcript array', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/state`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.session.id).toBe(harness.ctx._sessionId);
+      expect(Array.isArray(body.transcript)).toBe(true);
+    });
+
+    it('returns 200 with error body for unknown session', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/sessions/nonexistent/state',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.error).toBeDefined();
+    });
+  });
+
   // ========== POST /api/sessions/:id/clear ==========
 
   describe('POST /api/sessions/:id/clear', () => {
