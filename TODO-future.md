@@ -61,6 +61,78 @@ Future iteration ideas:
 
 ---
 
+## Fix: Server-side session state for frontend reconciliation (Level 2 clear fix)
+
+**Priority:** Medium — implement if the in-memory string fix (Level 1, this branch) still
+fails on real devices. Level 1 fixes the DOM-node race; Level 2 fixes deeper issues like
+browser refresh, multi-tab, and periodic sync having no ground truth.
+
+### Problem
+
+The Level 1 fix stores `_pendingOptimisticText` as a string on the `TranscriptView` object.
+This survives multiple `clear()` + `load()` cycles in a single page session, but cannot survive:
+
+- Browser refresh / tab close+reopen
+- Multiple tabs open on the same session
+- The periodic sync having no reliable block count to diff against (it uses positional
+  array length, which breaks if the server ever compacts or rewrites the transcript)
+
+### Proposed design
+
+**Backend writes a lightweight state file per session:**
+
+```
+~/.codeman/sessions/{sessionId}/state.json
+```
+
+Contents:
+```json
+{
+  "pendingOptimistic": "Testing new session detection after clear",
+  "pendingOptimisticAt": 1773650000000,
+  "lastTranscriptBlock": 42,
+  "clearedAt": 1773649900000
+}
+```
+
+- `pendingOptimistic` — text the user sent that hasn't appeared in transcript yet.
+  Written when frontend POSTs the message. Cleared when a new transcript block
+  arrives for this session (hook into the existing jsonl tail watcher).
+- `lastTranscriptBlock` — how many blocks the backend has written. Frontend
+  compares against `state.blocks.length`. Mismatch → incremental fetch.
+- `clearedAt` — timestamp of last `/clear`. Frontend knows if view is pre/post-clear.
+
+**New backend endpoints (minimal):**
+
+```
+POST   /api/sessions/:id/state           — frontend writes pendingOptimistic text
+GET    /api/sessions/:id/state           — frontend reads on load() and periodic sync
+DELETE /api/sessions/:id/state/pending   — backend calls when new block arrives
+```
+
+Or simpler: add a `session:state` SSE event type that fires whenever state.json changes.
+Frontend subscribes and updates `_pendingOptimisticText` from the SSE stream instead of
+polling. Reuses the existing SSE connection — no new polling loop needed.
+
+**Frontend changes:**
+
+- `appendOptimistic(text)` → POST to `/api/sessions/:id/state`
+- `load()` empty-transcript path → GET state, use `pendingOptimistic` if present
+- `_periodicSync()` → compare `state.lastTranscriptBlock` vs `state.blocks.length`
+  instead of refetching the full transcript array (eliminates positional-count assumption)
+- On new `transcript:block` SSE → DELETE `/api/sessions/:id/state/pending`
+
+**Benefits over Level 1:**
+- Refresh-safe: reopening the browser recovers the pending message
+- Cross-tab: second tab sees the correct post-clear state immediately
+- Periodic sync has a reliable count to diff against
+- Debuggable: `cat ~/.codeman/sessions/{id}/state.json` shows ground truth
+
+**Estimated scope:** ~1 day. New backend route, state file writer hooked into
+the existing transcript watcher, small frontend changes to read/write state.
+
+---
+
 ## Feature: Codeman as Distributable Application
 
 **Priority:** Low (longer term)

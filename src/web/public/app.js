@@ -1803,8 +1803,8 @@ const TranscriptView = {
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
   _workingDebounce: null,
   _workingHideTimer: null,
-  _clearFallbackTimer: null, // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
-  _fallbackFired: false,    // true after the clearOnly() fallback timer fires; guards against late transcript:clear SSE wiping user content
+  _clearFallbackTimer: null,     // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
+  _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1927,11 +1927,12 @@ const TranscriptView = {
         this._container.textContent = '';
         this._pendingToolUses = {};
         if (!blocks.length) {
-          if (opts.preserveOptimistic) {
-            // Transcript is empty but user already sent a message — re-inject their
-            // optimistic bubble so it stays visible while Claude is processing.
-            this._container.appendChild(opts.preserveOptimistic);
-            this._container.scrollTop = this._container.scrollHeight;
+          if (opts.pendingOptimisticText) {
+            // Transcript is empty but user already sent a message — rebuild their
+            // optimistic bubble from the stored text so it stays visible while
+            // Claude is processing. Using text (not a DOM node) means this works
+            // even if clear() fired multiple times and the DOM was wiped.
+            this.appendOptimistic(opts.pendingOptimisticText);
           } else {
             this._setEmptyPlaceholder();
           }
@@ -2015,6 +2016,7 @@ const TranscriptView = {
   /** Immediately show a user message bubble before the SSE block arrives. */
   appendOptimistic(text) {
     if (!this._container) return;
+    this._pendingOptimisticText = text;  // persist as text so it survives DOM wipes in clear()
     const el = this._renderTextBlock({ type: 'text', role: 'user', text });
     if (el) {
       el.dataset.optimistic = 'true';
@@ -2099,6 +2101,7 @@ const TranscriptView = {
     if (block.type === 'text' && block.role === 'user') {
       const optimistic = this._container.querySelector('[data-optimistic="true"]');
       if (optimistic) optimistic.remove();
+      this._pendingOptimisticText = null;  // real block arrived — no longer needed
     }
     this._appendBlock(block, true);
   },
@@ -2108,17 +2111,12 @@ const TranscriptView = {
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
 
-    // Save any optimistic bubble unconditionally. clearOnly() already wiped the container,
-    // so the only way an optimistic element exists when clear() runs is if the user typed
-    // into the new session after the CTA appeared. Always preserve it through the load()
-    // cycle so the user's message stays visible while Claude is processing.
-    // NOTE: _fallbackFired guard was removed — the fallback now calls this.clear() directly,
-    // which resets the flag before the real transcript:clear SSE arrives, making the
-    // conditional guard always false at the moment it matters.
-    const savedOptimistic = this._container
-      ? this._container.querySelector('[data-optimistic="true"]')
-      : null;
-    this._fallbackFired = false;
+    // Pass the pending optimistic text (set by appendOptimistic()) through the load() cycle.
+    // We use the stored string rather than querying the DOM because clear() can fire multiple
+    // times (e.g. a second transcript:clear SSE arrives while load() is still fetching).
+    // On the second call the DOM has already been wiped, so querySelector returns null —
+    // but _pendingOptimisticText is still set and survives any number of clear() calls.
+    const pendingText = this._pendingOptimisticText;
 
     this._pendingToolUses = {};
     if (this._sessionId) {
@@ -2129,7 +2127,7 @@ const TranscriptView = {
     if (this._container) this._container.textContent = '';
     this._compactingEl = null;
     this._isCompacting = false;
-    if (this._sessionId) this.load(this._sessionId, { preserveOptimistic: savedOptimistic });
+    if (this._sessionId) this.load(this._sessionId, { pendingOptimisticText: pendingText });
   },
 
   // Clears the view immediately without reloading from server.
@@ -2146,7 +2144,6 @@ const TranscriptView = {
   // Bumping _loadGen here also aborts any stale in-flight load() so its fetch result
   // can't overwrite the "Clearing…" placeholder with stale blocks.
   clearOnly() {
-    this._fallbackFired = false;
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2178,7 +2175,6 @@ const TranscriptView = {
     // short enough that the view doesn't feel broken if it never arrives.
     this._clearFallbackTimer = setTimeout(() => {
       this._clearFallbackTimer = null;
-      this._fallbackFired = true;
       if (this._sessionId !== pendingSessionId || !pendingSessionId) return;
       // Show empty CTA without fetching — user cleared, so empty is the correct state.
       this._pendingToolUses = {};
@@ -2206,7 +2202,7 @@ const TranscriptView = {
     this._workingHideTimer = null;
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
-    this._fallbackFired = false;
+    this._pendingOptimisticText = null;  // switching sessions — discard any pending optimistic
     const _overlay = document.getElementById('tvTypingIndicator');
     if (_overlay) _overlay.style.display = 'none';
     if (this._container) {
