@@ -8,11 +8,13 @@
  *   2. Copy static assets (web/public, templates)
  *   3. Build vendor xterm bundles
  *   4. Minify frontend assets (app.js, styles.css, mobile.css)
- *   5. Compress with gzip + brotli
+ *   5. Inject content-hash ?v= strings into dist index.html (no conflicts in source)
+ *   6. Compress with gzip + brotli
  */
 
 import { execSync } from 'child_process';
-import { appendFileSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 
@@ -61,7 +63,36 @@ run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist
 run('minify styles.css', 'npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite');
 run('minify mobile.css', 'npx esbuild dist/web/public/mobile.css --minify --outfile=dist/web/public/mobile.css --allow-overwrite');
 
-// 5. Compress with gzip + brotli
+// 5. Inject content-hash cache-busting into dist/web/public/index.html
+// Source index.html has bare filenames (no ?v=...) — version strings are added here
+// based on actual file content so they update automatically whenever files change.
+{
+  const htmlPath = join(ROOT, 'dist/web/public/index.html');
+  let html = readFileSync(htmlPath, 'utf8');
+  // Match src="..." and href="..." pointing to local files (no protocol, no leading /)
+  html = html.replace(/\b(src|href)="([^"]+\.(js|css))"/g, (match, attr, filePath) => {
+    // Skip external URLs and absolute paths
+    if (filePath.startsWith('http') || filePath.startsWith('//') || filePath.startsWith('/')) {
+      return match;
+    }
+    // Strip any existing ?... query string to get the bare file path
+    const bareFilePath = filePath.replace(/\?.*$/, '');
+    const absPath = join(ROOT, 'dist/web/public', bareFilePath);
+    let hash;
+    try {
+      const contents = readFileSync(absPath);
+      hash = createHash('sha256').update(contents).digest('hex').slice(0, 8);
+    } catch {
+      // File not found — leave the tag unchanged
+      return match;
+    }
+    return `${attr}="${bareFilePath}?v=${hash}"`;
+  });
+  writeFileSync(htmlPath, html);
+  console.log('\n[build] inject content hashes into index.html — done');
+}
+
+// 6. Compress with gzip + brotli
 // If brotli is unavailable, remove any stale .br files so the server falls back to .gz
 run(
   'compress',
