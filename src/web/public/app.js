@@ -2867,10 +2867,11 @@ class CodemanApp {
     // Track dismissed AskUserQuestion toolUseIds so stale cards / panel re-shows are suppressed.
     // Set<toolUseId> — populated when the user answers; cleared when tool_result arrives.
     this._dismissedAskUserQuestionIds = new Set();
-    // Transient flag for the hook-first race: hook fires before transcript:block, so when the
+    // Transient Set for the hook-first race: hook fires before transcript:block, so when the
     // user answers via the panel (no toolUseId yet) we record the sessionId here.  The next
-    // transcript:block handler for AskUserQuestion will transfer it into the Set.
-    this._dismissedAskUserQuestionSession = null;
+    // transcript:block handler for AskUserQuestion will transfer it into the dismissed Set.
+    // Using a Set (not a single string) so concurrent multi-session wizards don't clobber each other.
+    this._dismissedAskUserQuestionSessions = new Set();
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -5301,7 +5302,7 @@ class CodemanApp {
       } else {
         // Hook-first path: toolUseId not yet known — record the session so that when the
         // transcript:block for this tool_use arrives we can suppress it.
-        this._dismissedAskUserQuestionSession = sessionId;
+        this._dismissedAskUserQuestionSessions.add(sessionId);
       }
     }
 
@@ -9055,11 +9056,11 @@ class CodemanApp {
       const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
       if (questions.length > 0) {
         if (!this._dismissedAskUserQuestionIds.has(block.id) &&
-            this._dismissedAskUserQuestionSession === sessionId) {
+            this._dismissedAskUserQuestionSessions.has(sessionId)) {
           // Hook-first race: user answered before toolUseId was known.
           // Populate the dismissed set now so Fix C (_appendBlock) can skip rendering the card.
           this._dismissedAskUserQuestionIds.add(block.id);
-          this._dismissedAskUserQuestionSession = null;
+          this._dismissedAskUserQuestionSessions.delete(sessionId);
         }
       }
     }
@@ -9126,10 +9127,10 @@ class CodemanApp {
       this.renderAskUserQuestionPanel();
     }
     // Clear dismissed-question tracking for this session so stale suppression doesn't persist.
-    if (this._dismissedAskUserQuestionSession === sessionId) {
-      this._dismissedAskUserQuestionSession = null;
-    }
-    this._dismissedAskUserQuestionIds.clear();
+    // Only clear the session-flag for this specific session; _dismissedAskUserQuestionIds entries
+    // are toolUseId-keyed (globally unique) — after a transcript clear, old IDs will never match
+    // new blocks, so they are harmless dead entries cleaned up by Fix D on tool_result arrival.
+    this._dismissedAskUserQuestionSessions.delete(sessionId);
   }
 
   _closeWorktreeCleanupModal() {
