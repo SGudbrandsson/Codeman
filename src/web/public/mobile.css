@@ -2739,6 +2739,9 @@ html.mobile-init .file-browser-panel {
 
    Background color: #0d1117 — same as .session-drawer in styles.css.
    Border: 1px solid rgba(255,255,255,0.07) — same as session-drawer border-left.
+   NOTE: Do NOT add backdrop-filter to the backdrop element. An always-in-DOM
+   position:fixed element with backdrop-filter causes GPU layer compositing to
+   break on Android Chrome, rendering the entire app black.
    ============================================================================ */
 
 /* Plus action sheet */
@@ -2747,7 +2750,6 @@ html.mobile-init .file-browser-panel {
   inset: 0;
   z-index: 10002;
   background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(2px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.22s ease;
