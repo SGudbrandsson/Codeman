@@ -7,12 +7,15 @@ vi.mock('../../src/session-lifecycle-log.js', () => ({
 
 vi.mock('../../src/utils/git-utils.js', () => ({
   findGitRoot: vi.fn().mockReturnValue('/tmp/test-repo'),
+  findMainGitRoot: vi.fn().mockResolvedValue('/tmp/test-repo'),
   isGitWorktreeDir: vi.fn().mockReturnValue(false),
   listBranches: vi.fn().mockResolvedValue(['main', 'feature/x']),
   getCurrentBranch: vi.fn().mockResolvedValue('main'),
   addWorktree: vi.fn().mockResolvedValue(undefined),
   removeWorktree: vi.fn().mockResolvedValue(undefined),
   isWorktreeDirty: vi.fn().mockResolvedValue(false),
+  isBranchMerged: vi.fn().mockResolvedValue(false),
+  deleteBranch: vi.fn().mockResolvedValue(undefined),
   mergeBranch: vi.fn().mockResolvedValue('Merge made by the recursive strategy.'),
 }));
 
@@ -40,12 +43,15 @@ import * as gitUtils from '../../src/utils/git-utils.js';
 describe('worktree-session routes', () => {
   beforeEach(() => {
     vi.mocked(gitUtils.findGitRoot).mockReturnValue('/tmp/test-repo');
+    vi.mocked(gitUtils.findMainGitRoot).mockResolvedValue('/tmp/test-repo');
     vi.mocked(gitUtils.isGitWorktreeDir).mockReturnValue(false);
     vi.mocked(gitUtils.listBranches).mockResolvedValue(['main', 'feature/x']);
     vi.mocked(gitUtils.getCurrentBranch).mockResolvedValue('main');
     vi.mocked(gitUtils.addWorktree).mockResolvedValue(undefined);
     vi.mocked(gitUtils.removeWorktree).mockResolvedValue(undefined);
     vi.mocked(gitUtils.isWorktreeDirty).mockResolvedValue(false);
+    vi.mocked(gitUtils.isBranchMerged).mockResolvedValue(false);
+    vi.mocked(gitUtils.deleteBranch).mockResolvedValue(undefined);
     vi.mocked(gitUtils.mergeBranch).mockResolvedValue('Merge made by the recursive strategy.');
   });
 

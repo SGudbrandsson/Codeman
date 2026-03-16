@@ -375,6 +375,12 @@ export function registerWorktreeSessionRoutes(
     // If someone has checked out a different branch in the main repo, merging there would
     // silently corrupt that branch instead of master.
     const mainBranch = await getCurrentBranch(mainGitRoot);
+    if (mainBranch === 'HEAD') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        'Main repo is in detached HEAD state — check out master or main first'
+      );
+    }
     if (mainBranch !== 'master' && mainBranch !== 'main') {
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
@@ -389,14 +395,21 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Merge failed: ${String(err)}`);
     }
 
-    // Guard: if git reported a no-op, the branch was not actually merged — do not clean up.
+    // Guard: if git reported a no-op, check whether the branch was already merged.
     // Matches both "Already up to date." (modern git) and "Already up-to-date." (older git).
     const isNoOp = /already up[\s-]to[\s-]date/i.test(output);
     if (isNoOp) {
-      return createErrorResponse(
-        ApiErrorCode.OPERATION_FAILED,
-        `Merge was a no-op ("${output}") — branch commits may not be present in master. Aborting cleanup to prevent data loss.`
-      );
+      const alreadyMerged = await isBranchMerged(mainGitRoot, branch);
+      if (alreadyMerged) {
+        // Branch is genuinely merged — treat as success and let cleanup proceed normally.
+        req.log.info({ branch }, '[worktree-merge] branch already merged, proceeding to cleanup');
+      } else {
+        // No-op but branch is not merged — commits may be missing. Abort to prevent data loss.
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          `Merge was a no-op ("${output}") but branch is not merged into master — commits may be missing. Aborting cleanup to prevent data loss.`
+        );
+      }
     }
 
     // Post-merge auto-cleanup — fire-and-forget (response is sent before cleanup completes).
