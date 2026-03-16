@@ -1805,6 +1805,7 @@ const TranscriptView = {
   _workingHideTimer: null,
   _clearFallbackTimer: null,     // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
   _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
+  _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1926,7 +1927,12 @@ const TranscriptView = {
         this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
-        if (!blocks.length) {
+        // If a /clear is in progress (_clearPending), the backend may still be serving
+        // the old conversation's blocks — the new conversation UUID hasn't been registered
+        // yet. Treat any non-empty response as stale and show empty/optimistic instead.
+        // _clearPending is reset to false by clear() when transcript:clear SSE arrives.
+        const treatAsEmpty = !blocks.length || this._clearPending;
+        if (treatAsEmpty) {
           if (opts.pendingOptimisticText) {
             // Transcript is empty but user already sent a message — rebuild their
             // optimistic bubble from the stored text so it stays visible while
@@ -2110,6 +2116,7 @@ const TranscriptView = {
     // Cancel the fallback timer set by clearOnly() — TRANSCRIPT_CLEAR arrived normally.
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
+    this._clearPending = false;  // new session is now registered — load() may trust server results
 
     // Pass the pending optimistic text (set by appendOptimistic()) through the load() cycle.
     // We use the stored string rather than querying the DOM because clear() can fire multiple
@@ -2144,6 +2151,7 @@ const TranscriptView = {
   // Bumping _loadGen here also aborts any stale in-flight load() so its fetch result
   // can't overwrite the "Clearing…" placeholder with stale blocks.
   clearOnly() {
+    this._clearPending = true;   // block load() from rendering stale old-session content until transcript:clear SSE arrives
     this._pendingToolUses = {};
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -2192,6 +2200,7 @@ const TranscriptView = {
   },
 
   show(sessionId) {
+    const isSessionSwitch = sessionId !== this._sessionId;
     this._sessionId = sessionId;
     // Bug fix: reset typing indicator state when switching sessions.
     // Without this, the previous session's busy indicator stays visible for up to 4s
@@ -2200,9 +2209,14 @@ const TranscriptView = {
     this._workingDebounce = null;
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
-    clearTimeout(this._clearFallbackTimer);
-    this._clearFallbackTimer = null;
-    this._pendingOptimisticText = null;  // switching sessions — discard any pending optimistic
+    if (isSessionSwitch) {
+      // Switching to a different session — cancel clear timer and discard any pending
+      // optimistic text that belongs to the previous session.
+      clearTimeout(this._clearFallbackTimer);
+      this._clearFallbackTimer = null;
+      this._pendingOptimisticText = null;
+      this._clearPending = false;
+    }
     const _overlay = document.getElementById('tvTypingIndicator');
     if (_overlay) _overlay.style.display = 'none';
     if (this._container) {
@@ -2210,7 +2224,10 @@ const TranscriptView = {
       this._container.style.display = '';
     }
     this._detachXterm(sessionId);
-    this.load(sessionId);
+    // Pass pending optimistic text so load() can restore it if the transcript is empty.
+    // On a same-session tab toggle (terminal → transcript), this preserves the user's
+    // message bubble through the tab switch even when _clearPending is active.
+    this.load(sessionId, { pendingOptimisticText: this._pendingOptimisticText });
   },
 
   hide(sessionId) {
