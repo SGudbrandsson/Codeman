@@ -52,7 +52,7 @@
   border-top: 1px solid #1a1a2e;
   padding: 8px;
   padding-left: calc(8px + var(--safe-area-left));
-  padding-right: calc(6px + var(--safe-area-right));
+  padding-right: calc(8px + var(--safe-area-right));
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2586,7 +2586,7 @@ html.mobile-init .file-browser-panel {
   border-top: 1px solid #1a1a2e;
   padding: 8px;
   padding-left: calc(8px + var(--safe-area-left));
-  padding-right: calc(6px + var(--safe-area-right));
+  padding-right: calc(8px + var(--safe-area-right));
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2701,7 +2701,7 @@ html.mobile-init .file-browser-panel {
 }
 .compose-plus-btn:active { color: #e2e8f0; }
 .compose-send-btn {
-  right: 4px;
+  right: 8px;
   width: 44px;
   height: 44px;
   background: #3b82f6;
