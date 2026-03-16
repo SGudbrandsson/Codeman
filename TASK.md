@@ -1,7 +1,7 @@
 # Task
 
 type: bug
-status: done
+status: deferred
 title: Mobile new session not detected after double-tap clear
 description: |
   After creating a new session and double-tapping the clear button, the prompt
@@ -160,6 +160,21 @@ resets the flag before the real transcript:clear SSE arrives. Fixed by querying
 [data-optimistic="true"] unconditionally — the element's presence is sufficient signal.
 clearOnly() wipes the container, so optimistic can only exist if user typed into new session.
 Version bumped to 0.4.113.
+
+## Known Issue & Workaround
+
+**2026-03-16 — Deferred**: Fix attempt 4 passed automated QA (Playwright 18/18, tsc, lint) but
+user testing on real mobile confirmed the issue persists. The optimistic bubble still disappears
+after the terminal→transcript view switch in real usage.
+
+**Root cause not fully resolved**: The timing race between `clearOnly()` fallback and late
+`transcript:clear` SSE is deeper than the `_fallbackFired` flag. Further investigation needed.
+
+**Workaround**: Close the browser tab and reopen the Codeman URL. The session will reload
+fresh and the new session context will be correctly displayed.
+
+**Deferred for**: Future investigation session. The automated Playwright checks may not fully
+simulate the real SSE timing conditions on device.
 
 ## Next Steps After Compaction
 
