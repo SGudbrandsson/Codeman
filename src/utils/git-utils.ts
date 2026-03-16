@@ -104,15 +104,13 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
  */
 export async function findMainGitRoot(startDir: string): Promise<string | null> {
   try {
-    // --git-common-dir returns the path to the shared .git dir (e.g. /repo/.git or /repo/.git/worktrees/<name>/../..)
-    // For the main worktree: returns ".git" (relative) or absolute path to .git
-    // For a linked worktree: returns absolute path like /repo/.git
+    // --git-common-dir returns the path to the shared .git dir.
+    // From the main worktree: relative ".git"; from a linked worktree: absolute "/repo/.git".
     const commonDir = await git(['rev-parse', '--git-common-dir'], startDir);
-    // commonDir is the .git directory itself; we want its parent (the working tree root)
     const absCommonDir = commonDir.startsWith('/') ? commonDir : join(startDir, commonDir);
-    // Normalize: if it ends with /.git, strip it; otherwise use dirname
-    const normalized = absCommonDir.replace(/\/.git\/?$/, '') || dirname(absCommonDir);
-    return normalized;
+    // realpath resolves symlinks and normalises the path; dirname gives the working tree root.
+    const resolved = await fs.realpath(absCommonDir);
+    return dirname(resolved);
   } catch {
     return null;
   }

@@ -371,6 +371,17 @@ export function registerWorktreeSessionRoutes(
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Could not resolve main git repository root');
     }
 
+    // Safety check: ensure the main repo is on master/main before merging.
+    // If someone has checked out a different branch in the main repo, merging there would
+    // silently corrupt that branch instead of master.
+    const mainBranch = await getCurrentBranch(mainGitRoot);
+    if (mainBranch !== 'master' && mainBranch !== 'main') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Main repo HEAD is on "${mainBranch}", not master/main — cannot merge safely`
+      );
+    }
+
     let output: string;
     try {
       output = await mergeBranch(mainGitRoot, branch);
@@ -379,7 +390,8 @@ export function registerWorktreeSessionRoutes(
     }
 
     // Guard: if git reported a no-op, the branch was not actually merged — do not clean up.
-    const isNoOp = /already up.?to.?date/i.test(output);
+    // Matches both "Already up to date." (modern git) and "Already up-to-date." (older git).
+    const isNoOp = /already up[\s-]to[\s-]date/i.test(output);
     if (isNoOp) {
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
@@ -387,7 +399,7 @@ export function registerWorktreeSessionRoutes(
       );
     }
 
-    // Post-merge auto-cleanup (fire-and-forget wrapped in try/catch)
+    // Post-merge auto-cleanup — fire-and-forget (response is sent before cleanup completes).
     const worktreePath = worktreeSession?.worktreePath;
     (async () => {
       try {
@@ -424,9 +436,11 @@ export function registerWorktreeSessionRoutes(
       } catch (err) {
         req.log.error({ err, branch }, '[worktree-merge-cleanup] unexpected error during post-merge cleanup');
       }
-    })();
+    })().catch((err) => {
+      req.log.error({ err, branch }, '[worktree-merge-cleanup] unhandled cleanup error');
+    });
 
-    return { success: true, output, cleaned: !!(worktreeSession || mainGitRoot) };
+    return { success: true, output, cleaned: !!(worktreeSession || worktreePath) };
   });
 
   // DELETE /api/sessions/:id/worktree
