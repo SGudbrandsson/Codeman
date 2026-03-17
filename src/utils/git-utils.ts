@@ -96,6 +96,26 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Resolves the main (non-worktree) git repo root from any path inside the repo or a worktree.
+ * Uses `git rev-parse --git-common-dir` which always points to the common `.git` directory
+ * in the main clone, even when called from inside a linked worktree.
+ * Returns null if the directory is not inside a git repo.
+ */
+export async function findMainGitRoot(startDir: string): Promise<string | null> {
+  try {
+    // --git-common-dir returns the path to the shared .git dir.
+    // From the main worktree: relative ".git"; from a linked worktree: absolute "/repo/.git".
+    const commonDir = await git(['rev-parse', '--git-common-dir'], startDir);
+    const absCommonDir = commonDir.startsWith('/') ? commonDir : join(startDir, commonDir);
+    // realpath resolves symlinks and normalises the path; dirname gives the working tree root.
+    const resolved = await fs.realpath(absCommonDir);
+    return dirname(resolved);
+  } catch {
+    return null;
+  }
+}
+
 export async function mergeBranch(targetDir: string, branch: string): Promise<string> {
   return git(['merge', branch, '--no-edit'], targetDir);
 }
