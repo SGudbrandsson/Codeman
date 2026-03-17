@@ -1284,17 +1284,25 @@ export class WebServer extends EventEmitter {
       this.sessions.set(childSession.id, childSession);
       await this.setupSessionListeners(childSession);
 
-      // 12. Persist child state with parentSessionId
+      // 12. Start the child session's Claude/shell process automatically
+      if (archivedState.mode === 'shell') {
+        await childSession.startShell();
+      } else {
+        await childSession.startInteractive();
+      }
+      this.broadcast(SseEvent.SessionInteractive, { id: childSession.id });
+
+      // 13. Persist child state with parentSessionId
       const childState = childSession.toState() as SessionState;
       childState.parentSessionId = sessionId;
       this.store.setSession(childSession.id, childState);
 
-      // 13. Link archived → child
+      // 14. Link archived → child
       archivedState.childSessionId = childSession.id;
       this.store.setSession(sessionId, archivedState);
       this.store.save();
 
-      // 14. Broadcast: session cleared + new session created
+      // 15. Broadcast: session cleared + new session created
       this.broadcast(SseEvent.SessionCleared, {
         archivedId: sessionId,
         newSessionId: childSession.id,
