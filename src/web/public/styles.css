@@ -9241,7 +9241,7 @@ kbd {
     gap: 6px;
     overflow-x: auto;
     padding: 8px 44px 6px 44px;
-    border-bottom: 1px solid rgba(255,255,255,0.07);
+    border-bottom: none;
     scrollbar-width: thin;
   }
   .compose-thumb {
