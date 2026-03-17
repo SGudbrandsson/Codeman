@@ -47,6 +47,7 @@ import {
   type ActiveBashTool,
 } from '../session.js';
 import type { ClaudeMode } from '../types.js';
+import type { SessionState } from '../types/session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
@@ -91,7 +92,7 @@ import {
 } from '../types.js';
 import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
-import { SseEvent } from './sse-events.js';
+import { SseEvent, type SessionClearedPayload } from './sse-events.js';
 import { resolveTranscriptPath } from './transcript-path-resolver.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders } from './middleware/auth.js';
@@ -215,6 +216,22 @@ interface SessionListenerRefs {
   conversationId: (uuid: string) => void;
 }
 
+/** Returns false for sessions that must never have tmux reattachment attempted. */
+export function shouldAttemptReattach(session: SessionState): boolean {
+  return session.status !== 'archived';
+}
+
+/**
+ * Increment a session name for archive child generation.
+ * "My session" → "My session (2)", "My session (2)" → "My session (3)"
+ */
+function incrementSessionName(name?: string): string {
+  if (!name) return 'Session';
+  const match = name.match(/^(.*)\s\((\d+)\)$/);
+  if (match) return `${match[1]!} (${parseInt(match[2]!) + 1})`;
+  return `${name} (2)`;
+}
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -225,6 +242,7 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
+  private readonly _clearingSessionIds = new Set<string>();
   /**
    * SSE clients mapped to their session subscription filter.
    * Value is a Set of session IDs the client wants events for,
@@ -513,6 +531,7 @@ export class WebServer extends EventEmitter {
         this.sessions.set(session.id, session);
       },
       cleanupSession: this.cleanupSession.bind(this),
+      clearSession: this.clearSession.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
@@ -838,14 +857,20 @@ export class WebServer extends EventEmitter {
   /** Return the transcript file path for a session.
    * Prefers the existing watcher path (already resolved by hook events) to avoid
    * a synchronous directory scan on every request. Falls back to scanning the
-   * project directory so we pick up new conversations created by /clear. */
+   * project directory so we pick up new conversations created by /clear.
+   *
+   * NOTE: Only claudeResumeId (not claudeSessionId) is passed to the resolver.
+   * claudeSessionId equals session.id and is always set, so using it as a fallback
+   * would bypass the resolver's "brand-new session → return null" guard and cause
+   * the freshness scan to pick up the most recent JSONL in the project dir —
+   * showing stale transcript content from a prior session in the same directory. */
   private getTranscriptPath(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
     return resolveTranscriptPath(
       session.workingDir,
       this.transcriptWatchers.get(sessionId),
-      session.claudeResumeId ?? session.claudeSessionId ?? undefined
+      session.claudeResumeId ?? undefined
     );
   }
 
@@ -1111,6 +1136,192 @@ export class WebServer extends EventEmitter {
     }
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
+  }
+
+  /**
+   * Archive the given session and create a linked child session.
+   * This is the core of the "clear" operation — the old session is preserved
+   * in state.json with status:'archived' while the child starts fresh.
+   * Does NOT broadcast SessionDeleted (archived sessions are hidden, not gone).
+   */
+  async clearSession(
+    sessionId: string,
+    force: boolean
+  ): Promise<{ archivedSession: SessionState; newSession: Session; newSessionState: SessionState }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    if (this._clearingSessionIds.has(sessionId)) {
+      throw new Error(`Session ${sessionId} is already being cleared`);
+    }
+    this._clearingSessionIds.add(sessionId);
+
+    try {
+      // 1. Stop RespawnController — do not carry it to the child session
+      const respawnController = this.respawnControllers.get(sessionId);
+      if (respawnController) {
+        respawnController.stop();
+        respawnController.removeAllListeners();
+        this.respawnControllers.delete(sessionId);
+      }
+
+      // Clear respawn timer
+      const timerInfo = this.respawnTimers.get(sessionId);
+      if (timerInfo) {
+        clearTimeout(timerInfo.timer);
+        this.respawnTimers.delete(sessionId);
+      }
+      const pendingStart = this.pendingRespawnStarts.get(sessionId);
+      if (pendingStart) {
+        clearTimeout(pendingStart);
+        this.pendingRespawnStarts.delete(sessionId);
+      }
+
+      // 2. Stop run summary tracker
+      const summaryTracker = this.runSummaryTrackers.get(sessionId);
+      if (summaryTracker) {
+        summaryTracker.recordSessionStopped();
+        summaryTracker.stop();
+        this.runSummaryTrackers.delete(sessionId);
+      }
+
+      // 3. Capture transcript path BEFORE stopping the watcher
+      const transcriptPath = this.transcriptWatchers.get(sessionId)?.transcriptPath ?? undefined;
+      this.stopTranscriptWatcher(sessionId);
+
+      // 4. Kill subagents, close file streams, stop image watcher
+      try {
+        await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
+      } catch (err) {
+        console.error(`[Server] clearSession: failed to kill subagents for ${sessionId}:`, err);
+      }
+      fileStreamManager.closeSessionStreams(sessionId);
+      imageWatcher.unwatchSession(sessionId);
+
+      // 5. Remove event listeners from session object
+      const listeners = this.sessionListenerRefs.get(sessionId);
+      if (listeners) {
+        session.off('terminal', listeners.terminal);
+        session.off('clearTerminal', listeners.clearTerminal);
+        session.off('needsRefresh', listeners.needsRefresh);
+        session.off('message', listeners.message);
+        session.off('error', listeners.error);
+        session.off('completion', listeners.completion);
+        session.off('exit', listeners.exit);
+        session.off('working', listeners.working);
+        session.off('idle', listeners.idle);
+        session.off('taskCreated', listeners.taskCreated);
+        session.off('taskUpdated', listeners.taskUpdated);
+        session.off('taskCompleted', listeners.taskCompleted);
+        session.off('taskFailed', listeners.taskFailed);
+        session.off('autoClear', listeners.autoClear);
+        session.off('autoCompact', listeners.autoCompact);
+        session.off('cliInfoUpdated', listeners.cliInfoUpdated);
+        session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
+        session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
+        session.off('ralphCompletionDetected', listeners.ralphCompletionDetected);
+        session.off('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
+        session.off('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
+        session.off('ralphExitGateMet', listeners.ralphExitGateMet);
+        session.off('bashToolStart', listeners.bashToolStart);
+        session.off('bashToolEnd', listeners.bashToolEnd);
+        session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        session.off('contextUpdate', listeners.contextUpdate);
+        session.off('conversationId', listeners.conversationId);
+        this.sessionListenerRefs.delete(sessionId);
+      }
+      session.removeAllListeners();
+
+      // 6. Clear batch/timer state
+      this.persistDeb.cancelKey(sessionId);
+      this.terminalBatches.delete(sessionId);
+      this.terminalBatchSizes.delete(sessionId);
+      const batchTimer = this.terminalBatchTimers.get(sessionId);
+      if (batchTimer) {
+        clearTimeout(batchTimer);
+        this.terminalBatchTimers.delete(sessionId);
+      }
+      this.taskUpdateBatches.delete(sessionId);
+      this.stateUpdatePending.delete(sessionId);
+      this.lastTerminalEventTime.delete(sessionId);
+
+      // 7. Kill Claude process + tmux pane.
+      // force=true: immediate SIGKILL; force=false: graceful stop
+      // In both cases we kill the mux pane (killMux=true) but the process signal differs
+      await session.stop(force);
+
+      // 8. Remove from live session map (stays in state.json as archived)
+      this.sessions.delete(sessionId);
+
+      // 9. Build and persist archived state
+      const archivedState = session.toState() as SessionState;
+      archivedState.status = 'archived';
+      archivedState.clearedAt = new Date().toISOString();
+      archivedState.pid = null;
+      if (transcriptPath) archivedState.transcriptPath = transcriptPath;
+      this.store.setSession(sessionId, archivedState);
+
+      // 10. Create child session inheriting safe config fields (not tokens/cost/resumeId/safeMode)
+      const modelConfig = await this.getModelConfig();
+      const claudeModeConfig = await this.getClaudeModeConfig();
+      const childSession = new Session({
+        workingDir: archivedState.workingDir,
+        mux: this.mux,
+        useMux: true,
+        name: incrementSessionName(archivedState.name),
+        mode: archivedState.mode ?? 'claude',
+        niceConfig: await this.getGlobalNiceConfig(),
+        model: archivedState.mode !== 'shell' ? (modelConfig?.defaultModel ?? undefined) : undefined,
+        claudeMode: claudeModeConfig.claudeMode,
+        allowedTools: claudeModeConfig.allowedTools,
+      });
+      // Copy inherited properties that are set directly on the session object
+      if (archivedState.color && archivedState.color !== 'default') {
+        childSession.setColor(archivedState.color);
+      }
+      if (archivedState.mcpServers !== undefined) {
+        childSession.mcpServers = archivedState.mcpServers;
+      }
+      if (archivedState.ralphEnabled) {
+        childSession.ralphTracker.enable();
+      }
+
+      // 11. Register child session
+      this.sessions.set(childSession.id, childSession);
+      await this.setupSessionListeners(childSession);
+
+      // 12. Start the child session's Claude/shell process automatically
+      if (archivedState.mode === 'shell') {
+        await childSession.startShell();
+      } else {
+        await childSession.startInteractive();
+      }
+      this.broadcast(SseEvent.SessionInteractive, { id: childSession.id });
+
+      // 13. Persist child state with parentSessionId
+      const childState = childSession.toState() as SessionState;
+      childState.parentSessionId = sessionId;
+      this.store.setSession(childSession.id, childState);
+
+      // 14. Link archived → child
+      archivedState.childSessionId = childSession.id;
+      this.store.setSession(sessionId, archivedState);
+      this.store.save();
+
+      // 15. Broadcast: session cleared + new session created
+      this.broadcast(SseEvent.SessionCleared, {
+        archivedId: sessionId,
+        newSessionId: childSession.id,
+      } satisfies SessionClearedPayload);
+      this.broadcast(SseEvent.SessionCreated, {
+        ...this.getSessionStateWithRespawn(childSession),
+        parentSessionId: childState.parentSessionId,
+      });
+
+      return { archivedSession: archivedState, newSession: childSession, newSessionState: childState };
+    } finally {
+      this._clearingSessionIds.delete(sessionId);
+    }
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
@@ -1730,6 +1941,7 @@ export class WebServer extends EventEmitter {
       aiPlanCheckMaxContext: config.aiPlanCheckMaxContext,
       aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs,
       aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs,
+      onClear: () => this.clearSession(session.id, false).then(() => undefined),
     });
 
     this.respawnControllers.set(session.id, controller);
@@ -1980,12 +2192,20 @@ export class WebServer extends EventEmitter {
    */
   private getSessionStateWithRespawn(session: Session) {
     const controller = this.respawnControllers.get(session.id);
-    return {
+    const stored = this.store.getSession(session.id);
+    const state: Record<string, unknown> = {
       ...session.toLightDetailedState(),
       respawnEnabled: controller?.getConfig()?.enabled ?? false,
       respawnConfig: controller?.getConfig() ?? null,
       respawn: controller?.getStatus() ?? null,
     };
+    if (stored) {
+      if (stored.parentSessionId) state.parentSessionId = stored.parentSessionId;
+      if (stored.childSessionId) state.childSessionId = stored.childSessionId;
+      if (stored.clearedAt) state.clearedAt = stored.clearedAt;
+      if (stored.transcriptPath) state.transcriptPath = stored.transcriptPath;
+    }
+    return state;
   }
 
   /**
@@ -1999,8 +2219,13 @@ export class WebServer extends EventEmitter {
       return this.cachedSessionsList.data;
     }
     // getSessionStateWithRespawn already uses toLightDetailedState() which
-    // excludes terminalBuffer and textOutput — no extra stripping needed
-    const data = Array.from(this.sessions.values()).map((s) => this.getSessionStateWithRespawn(s));
+    // excludes terminalBuffer and textOutput — no extra stripping needed.
+    // Filter out archived sessions — they are intentionally removed from this.sessions
+    // by clearSession(), but a defensive filter here ensures they never reach the sidebar
+    // in any edge case (e.g., mid-flight clear interrupted by restart).
+    const data = Array.from(this.sessions.values())
+      .filter((s) => s.status !== 'archived')
+      .map((s) => this.getSessionStateWithRespawn(s));
     this.cachedSessionsList = { data, timestamp: now };
     return data;
   }
@@ -2687,6 +2912,12 @@ export class WebServer extends EventEmitter {
           if (!this.sessions.has(muxSession.sessionId)) {
             // Restore session settings from state.json (single source of truth)
             const savedState = this.store.getSession(muxSession.sessionId);
+
+            // Skip archived sessions — they have no tmux pane and must not be reattached
+            if (savedState && !shouldAttemptReattach(savedState)) {
+              console.log(`[Server] Skipping archived session ${muxSession.sessionId}`);
+              continue;
+            }
 
             // Determine the correct session name (priority: savedState > muxSession > muxName)
             // This ensures renamed sessions keep their name after server restart

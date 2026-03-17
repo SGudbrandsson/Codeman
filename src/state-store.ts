@@ -496,7 +496,11 @@ export class StateStore {
 
     for (const sessionId of allSessionIds) {
       if (!activeSessionIds.has(sessionId)) {
-        const name = this.state.sessions[sessionId]?.name;
+        const sessionData = this.state.sessions[sessionId];
+        // Archived sessions are intentionally absent from the active sessions Map —
+        // they must be preserved in state.json so the chain history survives restarts.
+        if (sessionData?.status === 'archived') continue;
+        const name = sessionData?.name;
         cleaned.push({ id: sessionId, name });
         delete this.state.sessions[sessionId];
         this.cachedSessionJsons.delete(sessionId);

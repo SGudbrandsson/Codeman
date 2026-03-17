@@ -47,6 +47,7 @@ import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { parseTranscriptJSONL } from '../../types/transcript-blocks.js';
+import type { SessionState } from '../../types/session.js';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -227,6 +228,88 @@ export function registerSessionRoutes(
 
     await ctx.cleanupSession(id, killMux, 'user_delete');
     return { success: true };
+  });
+
+  // ========== Clear Session (archive + create child) ==========
+
+  app.post('/api/sessions/:id/clear', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { force = false } = (request.body ?? {}) as { force?: boolean };
+
+    if (!ctx.sessions.has(id)) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
+    }
+
+    try {
+      const result = await ctx.clearSession(id, force);
+      return reply.send({
+        archivedSession: result.archivedSession,
+        newSession: result.newSessionState,
+      });
+    } catch (err) {
+      request.log.error(err, 'clearSession failed');
+      return reply.send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Clear failed'));
+    }
+  });
+
+  // ========== Session Chain (ancestry list) ==========
+
+  app.get('/api/sessions/:id/chain', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    // Check active sessions first, then archived (state.json)
+    const leafState: SessionState | undefined =
+      (ctx.sessions.get(id)?.toState() as SessionState | undefined) ??
+      (ctx.store.getSession(id) as SessionState | undefined);
+    if (!leafState) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
+    }
+
+    // Walk backwards to root via parentSessionId
+    const MAX_CHAIN_DEPTH = 100;
+    const visited = new Set<string>();
+    const chain: SessionState[] = [];
+    let current: SessionState | undefined = leafState;
+    while (current && chain.length < MAX_CHAIN_DEPTH) {
+      if (visited.has(current.id)) break; // cycle detected
+      visited.add(current.id);
+      chain.unshift(current);
+      const parentId: string | undefined = current.parentSessionId;
+      if (!parentId) break;
+      current =
+        (ctx.sessions.get(parentId)?.toState() as SessionState | undefined) ??
+        (ctx.store.getSession(parentId) as SessionState | undefined);
+    }
+
+    return reply.send({ sessions: chain });
+  });
+
+  // ========== Session State (full snapshot for stale-while-revalidate) ==========
+
+  app.get('/api/sessions/:id/state', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const sessionState: SessionState | undefined =
+      (ctx.sessions.get(id)?.toState() as SessionState | undefined) ??
+      (ctx.store.getSession(id) as SessionState | undefined);
+    if (!sessionState) {
+      return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
+    }
+
+    // Read transcript blocks
+    let transcript: ReturnType<typeof parseTranscriptJSONL> = [];
+    // Archived sessions have transcriptPath; active sessions use getTranscriptPath()
+    const transcriptPath = sessionState.transcriptPath ?? ctx.getTranscriptPath(id);
+    if (transcriptPath) {
+      try {
+        const raw = await fs.readFile(transcriptPath, 'utf-8');
+        transcript = parseTranscriptJSONL(raw);
+      } catch (_e) {
+        transcript = [];
+      }
+    }
+
+    return reply.send({ session: sessionState, transcript });
   });
 
   // ========== Delete All Sessions ==========
@@ -477,6 +560,14 @@ export function registerSessionRoutes(
         ApiErrorCode.INVALID_INPUT,
         `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`
       );
+    }
+
+    // Intercept /clear — route to archive+child flow instead of sending to PTY
+    if (inputStr.replace(/\r?\n?$/, '').trim() === '/clear') {
+      ctx.clearSession(id, false).catch((err: unknown) => {
+        req.log.error(err, `clearSession failed for session ${id}`);
+      });
+      return { success: true };
     }
 
     // Write input to PTY. Direct write is synchronous; writeViaMux

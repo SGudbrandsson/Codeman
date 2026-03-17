@@ -9,6 +9,7 @@
  */
 import { vi } from 'vitest';
 import { MockSession, createMockSession } from './mock-session.js';
+import type { SessionState } from '../../src/types/session.js';
 
 /**
  * Creates a mock context that satisfies all port interfaces.
@@ -27,6 +28,20 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       sessions.set(s.id, s);
     }),
     cleanupSession: vi.fn(async () => {}),
+    clearSession: vi.fn(async (_id: string, _force: boolean) => {
+      const archivedSession = createMockSession('archived-session');
+      const archivedState: SessionState = {
+        ...archivedSession.toState(),
+        status: 'archived',
+        clearedAt: new Date().toISOString(),
+      };
+      const newSession = createMockSession('new-child-session');
+      const newSessionState: SessionState = {
+        ...newSession.toState(),
+        parentSessionId: 'archived-session',
+      };
+      return { archivedSession: archivedState, newSession, newSessionState };
+    }),
     setupSessionListeners: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
     persistSessionStateNow: vi.fn(),
@@ -81,6 +96,8 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     getLightSessionsState: vi.fn(() => {
       const result: Record<string, unknown>[] = [];
       for (const s of sessions.values()) {
+        // Mirror the server-side filter: archived sessions are excluded from the sidebar list.
+        if (s.status === 'archived') continue;
         result.push(s.toState());
       }
       return result;

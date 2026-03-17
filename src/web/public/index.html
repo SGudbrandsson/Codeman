@@ -272,6 +272,8 @@
 
     <!-- Main Terminal Area -->
     <main class="main">
+      <!-- Session chain breadcrumb bar — shown when active session has a parent (archive chain) -->
+      <div id="sessionChainBar" class="session-chain-bar" style="display:none;" aria-label="Session history chain"></div>
       <div class="terminal-container" id="terminalContainer"></div>
       <!-- Transcript web view — shown instead of xterm for Claude Code sessions in web mode -->
       <div id="transcriptView" class="transcript-view" style="display:none;"

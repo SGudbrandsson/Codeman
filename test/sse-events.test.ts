@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { EventEmitter } from 'node:events';
+import { SessionCleared, SseEvent } from '../src/web/sse-events.js';
+
+describe('SSE Event Constants', () => {
+  it('defines session:cleared event constant', () => {
+    expect(SessionCleared).toBe('session:cleared');
+    expect(SseEvent.SessionCleared).toBe('session:cleared');
+  });
+});
 
 const TEST_PORT = 3107;
 
@@ -93,7 +101,7 @@ describe('SSE Events', () => {
 
       // Parse and check for init event
       const events = parseSSEEvents(receivedData);
-      const initEvent = events.find(e => e.event === 'init');
+      const initEvent = events.find((e) => e.event === 'init');
 
       expect(initEvent).toBeDefined();
       expect((initEvent?.data as any).sessions).toBeDefined();
@@ -109,7 +117,7 @@ describe('SSE Events', () => {
       // Start listening
       const fetchPromise = fetch(`${baseUrl}/api/events`, {
         signal: controller.signal,
-      }).then(async response => {
+      }).then(async (response) => {
         const reader = response.body?.getReader();
         if (reader) {
           try {
@@ -123,7 +131,7 @@ describe('SSE Events', () => {
       });
 
       // Give time to connect
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Create a session
       await fetch(`${baseUrl}/api/sessions`, {
@@ -133,15 +141,17 @@ describe('SSE Events', () => {
       });
 
       // Wait a bit for the event
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Stop listening
       controller.abort();
-      try { await fetchPromise; } catch {}
+      try {
+        await fetchPromise;
+      } catch {}
 
       // Parse events
       const events = parseSSEEvents(receivedData);
-      const sessionCreated = events.find(e => e.event === 'session:created');
+      const sessionCreated = events.find((e) => e.event === 'session:created');
 
       expect(sessionCreated).toBeDefined();
       expect((sessionCreated?.data as any).id).toBeDefined();
@@ -197,7 +207,7 @@ describe('SSE Event Types', () => {
       // Start listening
       const fetchPromise = fetch(`${baseUrl}/api/events`, {
         signal: controller.signal,
-      }).then(async response => {
+      }).then(async (response) => {
         const reader = response.body?.getReader();
         if (reader) {
           try {
@@ -211,7 +221,7 @@ describe('SSE Event Types', () => {
       });
 
       // Give time to connect
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Create a session
       const createRes = await fetch(`${baseUrl}/api/sessions`, {
@@ -227,15 +237,17 @@ describe('SSE Event Types', () => {
       });
 
       // Wait for events
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Stop listening
       controller.abort();
-      try { await fetchPromise; } catch {}
+      try {
+        await fetchPromise;
+      } catch {}
 
       // Parse events
       const events = parseSSEEvents(receivedData);
-      const sessionDeleted = events.find(e => e.event === 'session:deleted');
+      const sessionDeleted = events.find((e) => e.event === 'session:deleted');
 
       expect(sessionDeleted).toBeDefined();
       expect((sessionDeleted?.data as any).id).toBe(createData.session.id);
@@ -250,7 +262,7 @@ describe('SSE Event Types', () => {
       // Start listening
       const fetchPromise = fetch(`${baseUrl}/api/events`, {
         signal: controller.signal,
-      }).then(async response => {
+      }).then(async (response) => {
         const reader = response.body?.getReader();
         if (reader) {
           try {
@@ -264,7 +276,7 @@ describe('SSE Event Types', () => {
       });
 
       // Give time to connect
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Create a case
       const caseName = `test-sse-case-${Date.now()}`;
@@ -275,15 +287,17 @@ describe('SSE Event Types', () => {
       });
 
       // Wait for events
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Stop listening
       controller.abort();
-      try { await fetchPromise; } catch {}
+      try {
+        await fetchPromise;
+      } catch {}
 
       // Parse events
       const events = parseSSEEvents(receivedData);
-      const caseCreated = events.find(e => e.event === 'case:created');
+      const caseCreated = events.find((e) => e.event === 'case:created');
 
       expect(caseCreated).toBeDefined();
       expect((caseCreated?.data as any).name).toBe(caseName);

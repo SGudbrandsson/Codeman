@@ -300,6 +300,40 @@ describe('StateStore', () => {
     });
   });
 
+  describe('cleanupStaleSessions', () => {
+    it('removes a non-archived stale session that is absent from the active set', () => {
+      const store = new StateStore(testFilePath);
+      store.setSession('stale-session', createMockSessionState('stale-session'));
+      store.setSession('active-session', createMockSessionState('active-session'));
+
+      const result = store.cleanupStaleSessions(new Set(['active-session']));
+
+      expect(result.count).toBe(1);
+      expect(result.cleaned.map((c) => c.id)).toContain('stale-session');
+      expect(store.getSession('stale-session')).toBeNull();
+      // Active session must be untouched
+      expect(store.getSession('active-session')).not.toBeNull();
+    });
+
+    it('preserves an archived session even when it is absent from the active set', () => {
+      const store = new StateStore(testFilePath);
+      const archivedSession: SessionState = {
+        ...createMockSessionState('archived-session'),
+        status: 'archived',
+      };
+      store.setSession('archived-session', archivedSession);
+      store.setSession('active-session', createMockSessionState('active-session'));
+
+      // Neither 'archived-session' nor any other stale session is in the active set
+      const result = store.cleanupStaleSessions(new Set(['active-session']));
+
+      // Archived session must NOT be cleaned up
+      expect(result.cleaned.map((c) => c.id)).not.toContain('archived-session');
+      expect(store.getSession('archived-session')).not.toBeNull();
+      expect(store.getSession('archived-session')?.status).toBe('archived');
+    });
+  });
+
   describe('flushAll', () => {
     it('should flush both main and ralph state', () => {
       const store = new StateStore(testFilePath);
