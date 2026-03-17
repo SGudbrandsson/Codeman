@@ -2746,6 +2746,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_EXIT, '_onSessionExit'],
   [SSE_EVENTS.SESSION_IDLE, '_onSessionIdle'],
   [SSE_EVENTS.SESSION_WORKING, '_onSessionWorking'],
+  [SSE_EVENTS.SESSION_CLEARED, '_onSessionCleared'],
   [SSE_EVENTS.SESSION_AUTO_CLEAR, '_onSessionAutoClear'],
   [SSE_EVENTS.SESSION_AUTO_COMPACT, '_onSessionAutoCompact'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
@@ -3036,6 +3037,13 @@ class CodemanApp {
 
     // DOM element cache for performance (avoid repeated getElementById calls)
     this._elemCache = {};
+
+    // Pending clear set — sessions awaiting a POST /clear response
+    this._pendingClear = new Set();
+
+    // In-memory stale-while-revalidate cache for /api/sessions/:id/state
+    // Map<sessionId, { data: object, fetchedAt: number }>
+    this._sessionStateCache = new Map();
 
     this.init();
   }
@@ -4542,15 +4550,25 @@ class CodemanApp {
   _onSessionCreated(data) {
     data.displayStatus = data.status || 'idle';
     this.sessions.set(data.id, data);
-    // Add new session to end of tab order
-    if (!this.sessionOrder.includes(data.id)) {
-      this.sessionOrder.push(data.id);
-      this.saveSessionOrder();
+    // Archived sessions are kept in sessions Map for chain lookups, but
+    // must not appear in the sidebar tab order.
+    if (data.status !== 'archived') {
+      if (!this.sessionOrder.includes(data.id)) {
+        this.sessionOrder.push(data.id);
+        this.saveSessionOrder();
+      }
     }
     this.renderSessionTabs();
     this.updateCost();
     // Start stats polling when first session appears
-    if (this.sessions.size === 1) this.startSystemStatsPolling();
+    const nonArchived = [...this.sessions.values()].filter(s => s.status !== 'archived');
+    if (nonArchived.length === 1) this.startSystemStatsPolling();
+
+    // Deferred switch: if a clear just happened and we were waiting for this session
+    if (this._pendingClearSwitchTo === data.id) {
+      this._pendingClearSwitchTo = null;
+      this.selectSession(data.id);
+    }
   }
 
   _onSessionUpdated(data) {
@@ -4875,6 +4893,53 @@ class CodemanApp {
       title: 'Auto-Cleared',
       message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
     });
+  }
+
+  /**
+   * Handles session:cleared SSE event.
+   * The old session is now archived; a new child session has been created.
+   * - Marks the archived session as archived in the sessions Map (hides from sidebar)
+   * - Clears pending clear state
+   * - Switches active session to the new child if the archived one was active
+   */
+  _onSessionCleared(data) {
+    // data: { archivedId: string, newSessionId: string }
+    const { archivedId, newSessionId } = data;
+
+    // Mark archived session — update status in sessions Map so sidebar filter works
+    const archived = this.sessions.get(archivedId);
+    if (archived) {
+      archived.status = 'archived';
+      archived.displayStatus = 'archived';
+      this.sessions.set(archivedId, archived);
+    }
+
+    // Clear pending clear flag
+    this._pendingClear.delete(archivedId);
+
+    // Invalidate session state cache for both sessions
+    this._sessionStateCache.delete(archivedId);
+    this._sessionStateCache.delete(newSessionId);
+
+    // Auto-switch to new child session if:
+    // a) the archived session was the active one, OR
+    // b) we initiated the clear (pendingClear was set)
+    if (this.activeSessionId === archivedId) {
+      // The new session will arrive via session:created SSE shortly.
+      // If it's already in sessions Map (race), switch immediately; else defer.
+      if (this.sessions.has(newSessionId)) {
+        this.selectSession(newSessionId);
+      } else {
+        // Store the ID to switch to once session:created fires
+        this._pendingClearSwitchTo = newSessionId;
+      }
+    }
+
+    // Remove archived session from sidebar (don't remove from sessions Map — needed for chain)
+    // Rebuild tabs now so archived session disappears
+    this.renderSessionTabs();
+
+    this.showToast('Context cleared — new session started', 'info');
   }
 
   _onSessionAutoCompact(data) {
@@ -6256,6 +6321,8 @@ class CodemanApp {
     SwipeHandler.init();
     // Clear tab alerts
     this.tabAlerts.clear();
+    // Invalidate all session state cache entries on reconnect (server is authoritative)
+    this._sessionStateCache.clear();
     // Clear shown completions (used for duplicate notification prevention)
     if (this._shownCompletions) {
       this._shownCompletions.clear();
@@ -6472,7 +6539,13 @@ class CodemanApp {
     const container = this.$('sessionTabs');
     const existingTabs = container.querySelectorAll('.session-tab[data-id]');
     const existingIds = new Set([...existingTabs].map(t => t.dataset.id));
-    const currentIds = new Set(this.sessions.keys());
+    // Exclude archived sessions from the sidebar — they are in sessions Map
+    // only for chain lookups, not for tab display.
+    const currentIds = new Set(
+      [...this.sessions.entries()]
+        .filter(([, s]) => s.status !== 'archived')
+        .map(([id]) => id)
+    );
 
     // Check if we can do incremental update (same session IDs)
     const canIncremental = existingIds.size === currentIds.size &&
@@ -6706,13 +6779,19 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   // Sync sessionOrder with current sessions (preserve order for existing, add new at end)
+  // Archived sessions are kept in this.sessions for chain lookups but excluded from sessionOrder.
   syncSessionOrder() {
-    const currentIds = new Set(this.sessions.keys());
+    // Only include non-archived sessions in the tab order
+    const currentIds = new Set(
+      [...this.sessions.entries()]
+        .filter(([, s]) => s.status !== 'archived')
+        .map(([id]) => id)
+    );
 
-    // Load saved order from localStorage
+    // Load saved order (now always returns []) — start fresh from INIT event order
     const savedOrder = this.loadSessionOrder();
 
-    // Start with saved order, keeping only sessions that still exist
+    // Start with saved order, keeping only sessions that still exist and are not archived
     const preserved = savedOrder.filter(id => currentIds.has(id));
     const preservedSet = new Set(preserved);
 
@@ -6722,23 +6801,16 @@ class CodemanApp {
     this.sessionOrder = [...preserved, ...newSessions];
   }
 
-  // Load session order from localStorage
+  // Load session order — no longer persisted to localStorage (server is authoritative)
   loadSessionOrder() {
-    try {
-      const saved = localStorage.getItem('codeman-session-order');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+    return [];
   }
 
-  // Save session order to localStorage
+  // Save session order — no-op (server owns session order)
   saveSessionOrder() {
-    try {
-      localStorage.setItem('codeman-session-order', JSON.stringify(this.sessionOrder));
-    } catch {
-      // Ignore storage errors
-    }
+    // Session order is no longer persisted to localStorage.
+    // The server's session list is the authoritative source; order is derived
+    // from the order sessions appear in the INIT SSE event.
   }
 
   // Set up drag-and-drop handlers on tab elements
@@ -6852,6 +6924,177 @@ class CodemanApp {
     return this.getShortId(session.id);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Task 10: Stale-while-revalidate session state cache
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Return cached session state if fresh (< 60s), else null */
+  _getCachedSessionState(sessionId) {
+    const entry = this._sessionStateCache.get(sessionId);
+    if (!entry) return null;
+    const age = Date.now() - entry.fetchedAt;
+    if (age > 60000) return null; // expired
+    return entry.data;
+  }
+
+  /** Store session state in the in-memory cache */
+  _setCachedSessionState(sessionId, data) {
+    this._sessionStateCache.set(sessionId, { data, fetchedAt: Date.now() });
+  }
+
+  /** Invalidate a session's state cache entry */
+  _invalidateCachedSessionState(sessionId) {
+    this._sessionStateCache.delete(sessionId);
+  }
+
+  /**
+   * Refresh session state from the server in the background.
+   * Used as the "revalidate" step in stale-while-revalidate.
+   * Updates the in-memory cache but does NOT block the caller.
+   */
+  async _refreshSessionState(sessionId) {
+    try {
+      const data = await this._apiJson(`/api/sessions/${sessionId}/state`);
+      if (data) this._setCachedSessionState(sessionId, data);
+    } catch {
+      // Ignore fetch errors — cache entry remains stale, will retry next access
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Task 11: Session chain breadcrumb bar
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Render the session chain breadcrumb bar for the currently active session.
+   * Shows the archive chain (parent -> ... -> current) above the terminal.
+   * Hidden when there is no parent chain.
+   */
+  async _renderSessionChainBar(sessionId) {
+    const barEl = this.$('sessionChainBar');
+    if (!barEl) return;
+
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.parentSessionId) {
+      barEl.style.display = 'none';
+      barEl.textContent = '';
+      this._removeArchivedOverlay();
+      return;
+    }
+
+    // Fetch the chain from the server
+    let chain = [];
+    try {
+      const result = await this._apiJson(`/api/sessions/${sessionId}/chain`);
+      chain = result?.sessions || [];
+    } catch {
+      barEl.style.display = 'none';
+      return;
+    }
+
+    if (chain.length <= 1) {
+      barEl.style.display = 'none';
+      barEl.textContent = '';
+      this._removeArchivedOverlay();
+      return;
+    }
+
+    // Build breadcrumb using DOM methods to avoid XSS
+    barEl.textContent = '';
+    for (let i = 0; i < chain.length; i++) {
+      const s = chain[i];
+      const isActive = s.id === sessionId;
+      const isArchived = s.status === 'archived';
+
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'chain-sep';
+        sep.textContent = '\u203A';
+        barEl.appendChild(sep);
+      }
+
+      const crumb = document.createElement('span');
+      crumb.className = 'chain-crumb' + (isActive ? ' active' : '');
+      if (isArchived) {
+        crumb.textContent = '\uD83D\uDCE6 ' + (s.name || this.getShortId(s.id));
+        crumb.title = 'View archived session';
+        crumb.addEventListener('click', () => this._viewArchivedSession(s.id));
+      } else if (!isActive) {
+        crumb.textContent = s.name || this.getShortId(s.id);
+        crumb.title = 'Switch to session';
+        crumb.addEventListener('click', () => this.selectSession(s.id));
+      } else {
+        crumb.textContent = s.name || this.getShortId(s.id);
+      }
+      barEl.appendChild(crumb);
+    }
+
+    barEl.style.display = 'flex';
+  }
+
+  /** Remove any archived session read-only overlay from the terminal area */
+  _removeArchivedOverlay() {
+    const existing = document.getElementById('archivedSessionOverlay');
+    if (existing) existing.remove();
+  }
+
+  /**
+   * Show an archived session read-only overlay above the terminal with a
+   * "Jump to current session" button.
+   * @param {string} archivedSessionId - The archived session being viewed
+   * @param {string|null} childSessionId - The live child session to jump to
+   */
+  _showArchivedOverlay(archivedSessionId, childSessionId) {
+    this._removeArchivedOverlay();
+
+    const termContainer = document.getElementById('terminalContainer');
+    if (!termContainer) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'archivedSessionOverlay';
+    overlay.className = 'archived-session-overlay';
+
+    const label = document.createElement('span');
+    label.className = 'archived-label';
+    label.textContent = 'Archived session \u2014 read only';
+    overlay.appendChild(label);
+
+    if (childSessionId && this.sessions.has(childSessionId)) {
+      const btn = document.createElement('button');
+      btn.className = 'archived-jump-btn';
+      btn.textContent = 'Jump to current session';
+      btn.addEventListener('click', () => this.selectSession(childSessionId));
+      overlay.appendChild(btn);
+    }
+
+    termContainer.appendChild(overlay);
+  }
+
+  /**
+   * View an archived session. The terminal buffer is loaded via the normal
+   * selectSession path; we add a read-only overlay on top.
+   */
+  async _viewArchivedSession(archivedSessionId) {
+    // Ensure the archived session is in sessions Map (may not be after page reload)
+    if (!this.sessions.has(archivedSessionId)) {
+      try {
+        const result = await this._apiJson(`/api/sessions/${archivedSessionId}/state`);
+        if (result?.session) {
+          result.session.displayStatus = result.session.status || 'archived';
+          this.sessions.set(archivedSessionId, result.session);
+        }
+      } catch {
+        this.showToast('Could not load archived session', 'error');
+        return;
+      }
+    }
+
+    await this.selectSession(archivedSessionId);
+
+    const session = this.sessions.get(archivedSessionId);
+    this._showArchivedOverlay(archivedSessionId, session?.childSessionId || null);
+  }
+
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
     const _selStart = performance.now();
@@ -6948,6 +7191,10 @@ class CodemanApp {
     this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
+    // Remove any archived overlay from the previous session
+    this._removeArchivedOverlay();
+    // Render chain breadcrumb bar (async — doesn't block session switch)
+    this._renderSessionChainBar(sessionId);
 
     // Restore transcript vs terminal view for this session and update the accessory button.
     // Hide the previous session's transcript view first, then apply this session's preference.

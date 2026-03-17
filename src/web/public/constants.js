@@ -294,6 +294,9 @@ const SSE_EVENTS = {
   TRANSCRIPT_ASK_USER_QUESTION: 'transcript:ask_user_question',
   TRANSCRIPT_ASK_USER_QUESTION_RESOLVED: 'transcript:ask_user_question_resolved',
 
+  // Session archive/clear
+  SESSION_CLEARED: 'session:cleared',
+
   // Worktree
   WORKTREE_SESSION_ENDED: 'worktree:sessionEnded',
 

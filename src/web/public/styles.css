@@ -2628,6 +2628,95 @@ body {
   position: relative;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Session Chain Breadcrumb Bar
+   ═══════════════════════════════════════════════════════════════ */
+
+.session-chain-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: var(--surface-2, #1a1a2e);
+  border-bottom: 1px solid var(--border, #333);
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  flex-shrink: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.session-chain-bar .chain-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.session-chain-bar .chain-crumb:hover {
+  background: var(--surface-hover, #252542);
+  color: var(--text, #ccc);
+}
+
+.session-chain-bar .chain-crumb.active {
+  color: var(--text, #ccc);
+  font-weight: 500;
+  cursor: default;
+}
+
+.session-chain-bar .chain-sep {
+  color: var(--text-muted, #555);
+  user-select: none;
+}
+
+/* Archived session read-only overlay */
+.archived-session-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 16px;
+  background: rgba(26, 26, 46, 0.92);
+  border-top: 1px solid var(--border, #444);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted, #999);
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+
+.archived-session-overlay .archived-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.archived-session-overlay .archived-label::before {
+  content: '📦';
+  font-size: 14px;
+}
+
+.archived-session-overlay .archived-jump-btn {
+  padding: 4px 12px;
+  background: var(--accent, #4a5568);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.archived-session-overlay .archived-jump-btn:hover {
+  background: var(--accent-hover, #5a6578);
+}
+
 .terminal-container {
   flex: 1;
   background: #0d0d0d;
