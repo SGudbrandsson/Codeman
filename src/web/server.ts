@@ -857,14 +857,20 @@ export class WebServer extends EventEmitter {
   /** Return the transcript file path for a session.
    * Prefers the existing watcher path (already resolved by hook events) to avoid
    * a synchronous directory scan on every request. Falls back to scanning the
-   * project directory so we pick up new conversations created by /clear. */
+   * project directory so we pick up new conversations created by /clear.
+   *
+   * NOTE: Only claudeResumeId (not claudeSessionId) is passed to the resolver.
+   * claudeSessionId equals session.id and is always set, so using it as a fallback
+   * would bypass the resolver's "brand-new session → return null" guard and cause
+   * the freshness scan to pick up the most recent JSONL in the project dir —
+   * showing stale transcript content from a prior session in the same directory. */
   private getTranscriptPath(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
     return resolveTranscriptPath(
       session.workingDir,
       this.transcriptWatchers.get(sessionId),
-      session.claudeResumeId ?? session.claudeSessionId ?? undefined
+      session.claudeResumeId ?? undefined
     );
   }
 
