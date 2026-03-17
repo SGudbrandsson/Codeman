@@ -1681,6 +1681,12 @@ export class WebServer extends EventEmitter {
        *  a conversation UUID that doesn't match the file the watcher is currently tracking).
        *  This catches /clear and fresh-spawn cases before any hook event fires. */
       conversationId: (uuid: string) => {
+        // Always persist the new conversation ID explicitly so it survives server restarts,
+        // regardless of whether the watcher setup path is taken below.
+        if (session.claudeResumeId !== uuid) {
+          session.setClaudeResumeId(uuid);
+          this.persistSessionState(session);
+        }
         const watcher = this.transcriptWatchers.get(session.id);
         if (watcher?.transcriptPath && basename(watcher.transcriptPath, '.jsonl') === uuid) return;
         if (!session.workingDir) return;

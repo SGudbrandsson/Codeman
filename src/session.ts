@@ -890,7 +890,7 @@ export class Session extends EventEmitter {
     };
   }
 
-  /** Sets the Claude resume ID (from transcript filename) and persists state */
+  /** Sets the Claude resume ID (from transcript filename). Caller is responsible for persisting state. */
   setClaudeResumeId(id: string): void {
     this.claudeResumeId = id;
   }
