@@ -168,7 +168,9 @@ Also update `_onSessionCleared` handler in server to call `store.setActiveSessio
 
 #### 1. Replace localStorage-first restore with backend-first resolve
 
-**Important:** `handleInit` must be converted from a plain function to an `async` function. All call sites (`_onInit`, `loadState`) already tolerate this — `_onInit` is fire-and-forget and `loadState` already awaits nothing from `handleInit`. The `_initGeneration` guard protects against stale continuations (see generation re-check note below).
+**Important:** `handleInit` must be converted from a plain function to an `async` function. All call sites (`_onInit`, `loadState`) already tolerate this — `_onInit` is fire-and-forget and `loadState` already awaits nothing from `handleInit`.
+
+At the very top of `handleInit`, capture the current generation counter: `const gen = ++this._initGeneration;`. All async continuations inside `handleInit` must compare against this value to detect and abort stale calls. Without this, two overlapping `handleInit` calls can both call `selectSession`, with the first (stale) call winning if its `fetch` resolves first.
 
 Current `handleInit` restore logic (line ~6511):
 ```js
