@@ -3115,6 +3115,15 @@ export class WebServer extends EventEmitter {
             await this.setupSessionListeners(session);
             this.persistSessionState(session);
 
+            // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
+            // failure does not abort the entire startup loop.
+            if (!this.mux.isPaneDead(muxSession.muxName)) {
+              session.startInteractive().catch((err) => {
+                console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
+              });
+              console.log(`[Server] Auto-reconnecting session ${session.id} to mux ${muxSession.muxName}`);
+            }
+
             // Mark it as restored (not started yet - user needs to attach)
             getLifecycleLog().log({
               event: 'recovered',
