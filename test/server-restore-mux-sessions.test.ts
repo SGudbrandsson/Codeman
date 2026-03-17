@@ -15,6 +15,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // All mock functions must be declared via vi.hoisted() so they are available
@@ -48,6 +50,14 @@ const mocks = vi.hoisted(() => ({
     return '';
   }),
   spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn(), pid: 12345 })),
+  // TranscriptWatcher instances created during tests — captured for assertion
+  transcriptWatcherInstances: [] as Array<{
+    updatePath: ReturnType<typeof vi.fn>;
+    _transcriptPath: string | null;
+    on: ReturnType<typeof vi.fn>;
+    emit: (event: string, ...args: unknown[]) => boolean;
+    transcriptClearCount: { value: number };
+  }>,
 }));
 
 // ---------------------------------------------------------------------------
@@ -163,6 +173,7 @@ vi.mock('../src/session.js', async () => {
     workingDir: string;
     mode: string;
     name: string;
+    claudeResumeId: string | null = null;
     ptyProcess = null;
     ralphTracker = {
       enabled: false,
@@ -170,12 +181,20 @@ vi.mock('../src/session.js', async () => {
       startLoop: vi.fn(),
     };
 
-    constructor(opts: { id: string; workingDir: string; mode: string; name?: string; [key: string]: unknown }) {
+    constructor(opts: {
+      id: string;
+      workingDir: string;
+      mode: string;
+      name?: string;
+      claudeResumeId?: string | null;
+      [key: string]: unknown;
+    }) {
       super();
       this.id = opts.id;
       this.workingDir = opts.workingDir ?? '/tmp';
       this.mode = opts.mode ?? 'claude';
       this.name = opts.name ?? 'unnamed';
+      this.claudeResumeId = opts.claudeResumeId ?? null;
     }
 
     startInteractive = mocks.startInteractiveImpl;
@@ -302,14 +321,30 @@ vi.mock('../src/transcript-watcher.js', async () => {
   const { EventEmitter } = await import('node:events');
   return {
     TranscriptWatcher: class extends EventEmitter {
+      _transcriptPath: string | null = null;
       watch = vi.fn();
       unwatch = vi.fn();
+      updatePath = vi.fn(function (
+        this: { _transcriptPath: string | null; emit: (e: string) => boolean },
+        path: string
+      ) {
+        if (this._transcriptPath !== path) {
+          this.emit('transcript:clear');
+          this._transcriptPath = path;
+        }
+      });
+      constructor() {
+        super();
+        // Capture this instance for test assertions
+        mocks.transcriptWatcherInstances.push(this as unknown as (typeof mocks.transcriptWatcherInstances)[0]);
+      }
     },
   };
 });
 
 // Import after all mocks are registered
 import { WebServer } from '../src/web/server.js';
+import { getStore } from '../src/state-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -422,5 +457,138 @@ describe('WebServer.restoreMuxSessions() — auto-reconnect on restart', () => {
 
     // Both sessions had startInteractive() attempted
     expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2 — Eager transcript watcher on restore
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — eager transcript watcher', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Reset shared mock state
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+    mocks.transcriptWatcherInstances = [];
+
+    // Default store.getSession returns null (no saved state)
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    // Construct in testMode — start() will NOT call restoreMuxSessions()
+    server = new WebServer(0, false, true);
+
+    // Stub methods not under test
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('calls startTranscriptWatcher() with the correct JSONL path when claudeResumeId and workingDir are set', async () => {
+    const resumeId = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
+    const workingDir = '/home/user/myproject';
+    const muxSession = makeMuxSession({
+      sessionId: 'sess-with-resume',
+      muxName: 'codeman-resumetest',
+      workingDir,
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: ['sess-with-resume'], dead: [], discovered: [] };
+
+    // Return savedState with claudeResumeId so the server sets it on the session
+    (getStore() as any).getSession.mockReturnValue({
+      status: 'idle',
+      claudeResumeId: resumeId,
+    });
+
+    // Spy on startTranscriptWatcher before calling restoreMuxSessions
+    const startWatcherSpy = vi.spyOn(server as any, 'startTranscriptWatcher');
+
+    await (server as any).restoreMuxSessions();
+
+    // Expected path uses same escaping as the production code
+    const escapedDir = workingDir.replace(/\//g, '-');
+    const expectedPath = join(homedir(), '.claude', 'projects', escapedDir, `${resumeId}.jsonl`);
+
+    expect(startWatcherSpy).toHaveBeenCalledTimes(1);
+    expect(startWatcherSpy).toHaveBeenCalledWith('sess-with-resume', expectedPath);
+  });
+
+  it('does NOT call startTranscriptWatcher() when claudeResumeId is absent from savedState', async () => {
+    const muxSession = makeMuxSession({
+      sessionId: 'sess-no-resume',
+      muxName: 'codeman-noresume',
+      workingDir: '/home/user/myproject',
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: ['sess-no-resume'], dead: [], discovered: [] };
+
+    // savedState has no claudeResumeId
+    (getStore() as any).getSession.mockReturnValue({ status: 'idle' });
+
+    const startWatcherSpy = vi.spyOn(server as any, 'startTranscriptWatcher');
+
+    await (server as any).restoreMuxSessions();
+
+    expect(startWatcherSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit transcript:clear on second startTranscriptWatcher() call with the same path', async () => {
+    const resumeId = '11112222-3333-4444-5555-666677778888';
+    const workingDir = '/home/user/project2';
+    const muxSession = makeMuxSession({
+      sessionId: 'sess-double-watch',
+      muxName: 'codeman-doublewatch',
+      workingDir,
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: ['sess-double-watch'], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue({
+      status: 'idle',
+      claudeResumeId: resumeId,
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    // The eager watcher call created exactly one TranscriptWatcher instance
+    expect(mocks.transcriptWatcherInstances).toHaveLength(1);
+    const watcher = mocks.transcriptWatcherInstances[0];
+
+    // Record how many times transcript:clear was emitted by the watcher
+    let transcriptClearCount = 0;
+    watcher.on('transcript:clear', () => {
+      transcriptClearCount++;
+    });
+
+    // Simulate the conversationId SSE listener calling startTranscriptWatcher again
+    // with the same path — this is the scenario the eager watcher is designed to prevent
+    const escapedDir = workingDir.replace(/\//g, '-');
+    const samePath = join(homedir(), '.claude', 'projects', escapedDir, `${resumeId}.jsonl`);
+    (server as any).startTranscriptWatcher('sess-double-watch', samePath);
+
+    // updatePath was called twice total (once eager, once simulated conversationId)
+    expect(watcher.updatePath).toHaveBeenCalledTimes(2);
+
+    // No transcript:clear must have been emitted from the second call
+    // (the watcher already has the path set, so updatePath() is a no-op)
+    expect(transcriptClearCount).toBe(0);
   });
 });
