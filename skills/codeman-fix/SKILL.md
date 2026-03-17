@@ -49,11 +49,11 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
     "branch": "fix/<slug>",
     "isNew": true,
     "notes": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
-    "autoStart": true
+    "autoStart": false
   }'
 ```
 
-The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. The `autoStart: true` flag immediately spawns the Claude process after worktree creation so the session starts automatically.
+The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. **Do NOT set `autoStart: true`** — that races against the TASK.md write. Write the files first, then start the session in Step 5b.
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/absolute/path/to/worktree" }`
 
@@ -65,7 +65,7 @@ The `notes` field is just this short trigger sentence — the full task descript
 
 ## Step 5 — Write TASK.md and CLAUDE.md
 
-**Immediately** after the API call returns, write both files to `worktreePath` from the response. Do this before anything else — the session is already starting.
+Write both files to `worktreePath` from the response **before starting the session**.
 
 **Write `<worktreePath>/TASK.md`:**
 
@@ -78,6 +78,7 @@ title: <title from Step 1>
 description: <full description from Step 1>
 affected_area: unknown
 fix_cycles: 0
+test_fix_cycles: 0
 
 ## Reproduction
 <!-- filled by analysis subagent -->
@@ -90,6 +91,15 @@ fix_cycles: 0
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
+
+## Test Gap Analysis
+<!-- filled by test gap analysis subagent -->
+
+## Test Writing Notes
+<!-- filled by test writing subagent -->
+
+## Test Review History
+<!-- appended by each Opus test review subagent — never overwrite -->
 
 ## QA Results
 <!-- filled by QA subagent -->
@@ -108,6 +118,16 @@ Do not rely on conversation history.
 Then invoke the codeman-task-runner skill.
 ```
 
+## Step 5b — Start the session
+
+After both files are written, start the Claude process:
+
+```bash
+curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/interactive
+```
+
+Use the session ID returned in Step 4 (from `session.id` in the response).
+
 ## Step 6 — Report
 
 Summarize what was created:
@@ -123,7 +143,8 @@ Summarize what was created:
 | Mistake | Fix |
 |---------|-----|
 | Putting full description in `notes` | `notes` is just the short trigger sentence; full description goes in TASK.md |
-| Delaying TASK.md write | Write immediately after API returns — the session is already starting |
+| Using `autoStart: true` | **Never use autoStart: true** — it races against the TASK.md write. Use `autoStart: false`, write files, then call `/interactive` |
+| Forgetting to call `/interactive` after writing files | After `autoStart: false` creation + file writes, always POST to `/api/sessions/:id/interactive` to start Claude |
 | Using a worktree session as parent | Filter for `worktreeBranch: null` sessions only |
 | Wrong port | Codeman runs on **3001**, not 3000 |
 | Branch name with spaces | Use hyphens only, max 37 chars |

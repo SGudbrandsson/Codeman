@@ -80,6 +80,7 @@ description: <full description from Step 1>
 constraints: <constraints/acceptance criteria from Step 1, or "none specified">
 affected_area: unknown
 fix_cycles: 0
+test_fix_cycles: 0
 
 ## Root Cause / Spec
 <!-- filled by analysis subagent -->
@@ -89,6 +90,15 @@ fix_cycles: 0
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
+
+## Test Gap Analysis
+<!-- filled by test gap analysis subagent -->
+
+## Test Writing Notes
+<!-- filled by test writing subagent -->
+
+## Test Review History
+<!-- appended by each Opus test review subagent — never overwrite -->
 
 ## QA Results
 <!-- filled by QA subagent -->
