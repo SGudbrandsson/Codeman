@@ -471,6 +471,44 @@ describe('session-routes', () => {
       expect(body.sessions[0].id).toBe(harness.ctx._sessionId);
     });
 
+    it('returns ordered chain [root, mid, leaf] for a 3-level ancestry', async () => {
+      // root (archived, in store only) → mid (archived, in store only) → leaf (active session)
+      const rootState = {
+        ...harness.ctx._session.toState(),
+        id: 'root-id',
+        status: 'archived' as const,
+        childSessionId: 'mid-id',
+      };
+      const midState = {
+        ...harness.ctx._session.toState(),
+        id: 'mid-id',
+        status: 'archived' as const,
+        parentSessionId: 'root-id',
+        childSessionId: harness.ctx._sessionId,
+      };
+      // Leaf is the active session with parentSessionId pointing to mid
+      vi.spyOn(harness.ctx._session, 'toState').mockReturnValue({
+        ...harness.ctx._session.toState(),
+        parentSessionId: 'mid-id',
+      });
+      harness.ctx.store.getSession.mockImplementation((id: string) => {
+        if (id === 'root-id') return rootState;
+        if (id === 'mid-id') return midState;
+        return undefined;
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/chain`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.sessions).toHaveLength(3);
+      expect(body.sessions[0].id).toBe('root-id');
+      expect(body.sessions[1].id).toBe('mid-id');
+      expect(body.sessions[2].id).toBe(harness.ctx._sessionId);
+    });
+
     it('returns 200 with error body for unknown session', async () => {
       const res = await harness.app.inject({
         method: 'GET',
