@@ -2192,12 +2192,20 @@ export class WebServer extends EventEmitter {
    */
   private getSessionStateWithRespawn(session: Session) {
     const controller = this.respawnControllers.get(session.id);
-    return {
+    const stored = this.store.getSession(session.id);
+    const state: Record<string, unknown> = {
       ...session.toLightDetailedState(),
       respawnEnabled: controller?.getConfig()?.enabled ?? false,
       respawnConfig: controller?.getConfig() ?? null,
       respawn: controller?.getStatus() ?? null,
     };
+    if (stored) {
+      if (stored.parentSessionId) state.parentSessionId = stored.parentSessionId;
+      if (stored.childSessionId) state.childSessionId = stored.childSessionId;
+      if (stored.clearedAt) state.clearedAt = stored.clearedAt;
+      if (stored.transcriptPath) state.transcriptPath = stored.transcriptPath;
+    }
+    return state;
   }
 
   /**
