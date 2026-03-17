@@ -266,9 +266,13 @@ export function registerSessionRoutes(
     }
 
     // Walk backwards to root via parentSessionId
+    const MAX_CHAIN_DEPTH = 100;
+    const visited = new Set<string>();
     const chain: SessionState[] = [];
     let current: SessionState | undefined = leafState;
-    while (current) {
+    while (current && chain.length < MAX_CHAIN_DEPTH) {
+      if (visited.has(current.id)) break; // cycle detected
+      visited.add(current.id);
       chain.unshift(current);
       const parentId: string | undefined = current.parentSessionId;
       if (!parentId) break;
@@ -560,7 +564,9 @@ export function registerSessionRoutes(
 
     // Intercept /clear — route to archive+child flow instead of sending to PTY
     if (inputStr.replace(/\r?\n?$/, '').trim() === '/clear') {
-      void ctx.clearSession(id, false);
+      ctx.clearSession(id, false).catch((err: unknown) => {
+        req.log.error(err, `clearSession failed for session ${id}`);
+      });
       return { success: true };
     }
 

@@ -242,6 +242,7 @@ export class WebServer extends EventEmitter {
   // Store session listener references for explicit cleanup (prevents memory leaks)
   private sessionListenerRefs: Map<string, SessionListenerRefs> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
+  private readonly _clearingSessionIds = new Set<string>();
   /**
    * SSE clients mapped to their session subscription filter.
    * Value is a Set of session IDs the client wants events for,
@@ -1139,161 +1140,174 @@ export class WebServer extends EventEmitter {
    */
   async clearSession(
     sessionId: string,
-    _force: boolean
+    force: boolean
   ): Promise<{ archivedSession: SessionState; newSession: Session; newSessionState: SessionState }> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    // 1. Stop RespawnController — do not carry it to the child session
-    const respawnController = this.respawnControllers.get(sessionId);
-    if (respawnController) {
-      respawnController.stop();
-      respawnController.removeAllListeners();
-      this.respawnControllers.delete(sessionId);
+    if (this._clearingSessionIds.has(sessionId)) {
+      throw new Error(`Session ${sessionId} is already being cleared`);
     }
+    this._clearingSessionIds.add(sessionId);
 
-    // Clear respawn timer
-    const timerInfo = this.respawnTimers.get(sessionId);
-    if (timerInfo) {
-      clearTimeout(timerInfo.timer);
-      this.respawnTimers.delete(sessionId);
-    }
-    const pendingStart = this.pendingRespawnStarts.get(sessionId);
-    if (pendingStart) {
-      clearTimeout(pendingStart);
-      this.pendingRespawnStarts.delete(sessionId);
-    }
-
-    // 2. Stop run summary tracker
-    const summaryTracker = this.runSummaryTrackers.get(sessionId);
-    if (summaryTracker) {
-      summaryTracker.recordSessionStopped();
-      summaryTracker.stop();
-      this.runSummaryTrackers.delete(sessionId);
-    }
-
-    // 3. Capture transcript path BEFORE stopping the watcher
-    const transcriptPath = this.transcriptWatchers.get(sessionId)?.transcriptPath ?? undefined;
-    this.stopTranscriptWatcher(sessionId);
-
-    // 4. Kill subagents, close file streams, stop image watcher
     try {
-      await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
-    } catch (err) {
-      console.error(`[Server] clearSession: failed to kill subagents for ${sessionId}:`, err);
+      // 1. Stop RespawnController — do not carry it to the child session
+      const respawnController = this.respawnControllers.get(sessionId);
+      if (respawnController) {
+        respawnController.stop();
+        respawnController.removeAllListeners();
+        this.respawnControllers.delete(sessionId);
+      }
+
+      // Clear respawn timer
+      const timerInfo = this.respawnTimers.get(sessionId);
+      if (timerInfo) {
+        clearTimeout(timerInfo.timer);
+        this.respawnTimers.delete(sessionId);
+      }
+      const pendingStart = this.pendingRespawnStarts.get(sessionId);
+      if (pendingStart) {
+        clearTimeout(pendingStart);
+        this.pendingRespawnStarts.delete(sessionId);
+      }
+
+      // 2. Stop run summary tracker
+      const summaryTracker = this.runSummaryTrackers.get(sessionId);
+      if (summaryTracker) {
+        summaryTracker.recordSessionStopped();
+        summaryTracker.stop();
+        this.runSummaryTrackers.delete(sessionId);
+      }
+
+      // 3. Capture transcript path BEFORE stopping the watcher
+      const transcriptPath = this.transcriptWatchers.get(sessionId)?.transcriptPath ?? undefined;
+      this.stopTranscriptWatcher(sessionId);
+
+      // 4. Kill subagents, close file streams, stop image watcher
+      try {
+        await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
+      } catch (err) {
+        console.error(`[Server] clearSession: failed to kill subagents for ${sessionId}:`, err);
+      }
+      fileStreamManager.closeSessionStreams(sessionId);
+      imageWatcher.unwatchSession(sessionId);
+
+      // 5. Remove event listeners from session object
+      const listeners = this.sessionListenerRefs.get(sessionId);
+      if (listeners) {
+        session.off('terminal', listeners.terminal);
+        session.off('clearTerminal', listeners.clearTerminal);
+        session.off('needsRefresh', listeners.needsRefresh);
+        session.off('message', listeners.message);
+        session.off('error', listeners.error);
+        session.off('completion', listeners.completion);
+        session.off('exit', listeners.exit);
+        session.off('working', listeners.working);
+        session.off('idle', listeners.idle);
+        session.off('taskCreated', listeners.taskCreated);
+        session.off('taskUpdated', listeners.taskUpdated);
+        session.off('taskCompleted', listeners.taskCompleted);
+        session.off('taskFailed', listeners.taskFailed);
+        session.off('autoClear', listeners.autoClear);
+        session.off('autoCompact', listeners.autoCompact);
+        session.off('cliInfoUpdated', listeners.cliInfoUpdated);
+        session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
+        session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
+        session.off('ralphCompletionDetected', listeners.ralphCompletionDetected);
+        session.off('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
+        session.off('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
+        session.off('ralphExitGateMet', listeners.ralphExitGateMet);
+        session.off('bashToolStart', listeners.bashToolStart);
+        session.off('bashToolEnd', listeners.bashToolEnd);
+        session.off('bashToolsUpdate', listeners.bashToolsUpdate);
+        session.off('contextUpdate', listeners.contextUpdate);
+        session.off('conversationId', listeners.conversationId);
+        this.sessionListenerRefs.delete(sessionId);
+      }
+      session.removeAllListeners();
+
+      // 6. Clear batch/timer state
+      this.persistDeb.cancelKey(sessionId);
+      this.terminalBatches.delete(sessionId);
+      this.terminalBatchSizes.delete(sessionId);
+      const batchTimer = this.terminalBatchTimers.get(sessionId);
+      if (batchTimer) {
+        clearTimeout(batchTimer);
+        this.terminalBatchTimers.delete(sessionId);
+      }
+      this.taskUpdateBatches.delete(sessionId);
+      this.stateUpdatePending.delete(sessionId);
+      this.lastTerminalEventTime.delete(sessionId);
+
+      // 7. Kill Claude process + tmux pane.
+      // force=true: immediate SIGKILL; force=false: graceful stop
+      // In both cases we kill the mux pane (killMux=true) but the process signal differs
+      await session.stop(force);
+
+      // 8. Remove from live session map (stays in state.json as archived)
+      this.sessions.delete(sessionId);
+
+      // 9. Build and persist archived state
+      const archivedState = session.toState() as SessionState;
+      archivedState.status = 'archived';
+      archivedState.clearedAt = new Date().toISOString();
+      archivedState.pid = null;
+      if (transcriptPath) archivedState.transcriptPath = transcriptPath;
+      this.store.setSession(sessionId, archivedState);
+
+      // 10. Create child session inheriting safe config fields (not tokens/cost/resumeId/safeMode)
+      const modelConfig = await this.getModelConfig();
+      const claudeModeConfig = await this.getClaudeModeConfig();
+      const childSession = new Session({
+        workingDir: archivedState.workingDir,
+        mux: this.mux,
+        useMux: true,
+        name: incrementSessionName(archivedState.name),
+        mode: archivedState.mode ?? 'claude',
+        niceConfig: await this.getGlobalNiceConfig(),
+        model: archivedState.mode !== 'shell' ? (modelConfig?.defaultModel ?? undefined) : undefined,
+        claudeMode: claudeModeConfig.claudeMode,
+        allowedTools: claudeModeConfig.allowedTools,
+      });
+      // Copy inherited properties that are set directly on the session object
+      if (archivedState.color && archivedState.color !== 'default') {
+        childSession.setColor(archivedState.color);
+      }
+      if (archivedState.mcpServers !== undefined) {
+        childSession.mcpServers = archivedState.mcpServers;
+      }
+      if (archivedState.ralphEnabled) {
+        childSession.ralphTracker.enable();
+      }
+
+      // 11. Register child session
+      this.sessions.set(childSession.id, childSession);
+      await this.setupSessionListeners(childSession);
+
+      // 12. Persist child state with parentSessionId
+      const childState = childSession.toState() as SessionState;
+      childState.parentSessionId = sessionId;
+      this.store.setSession(childSession.id, childState);
+
+      // 13. Link archived → child
+      archivedState.childSessionId = childSession.id;
+      this.store.setSession(sessionId, archivedState);
+      this.store.save();
+
+      // 14. Broadcast: session cleared + new session created
+      this.broadcast(SseEvent.SessionCleared, {
+        archivedId: sessionId,
+        newSessionId: childSession.id,
+      } satisfies SessionClearedPayload);
+      this.broadcast(SseEvent.SessionCreated, {
+        ...this.getSessionStateWithRespawn(childSession),
+        parentSessionId: childState.parentSessionId,
+      });
+
+      return { archivedSession: archivedState, newSession: childSession, newSessionState: childState };
+    } finally {
+      this._clearingSessionIds.delete(sessionId);
     }
-    fileStreamManager.closeSessionStreams(sessionId);
-    imageWatcher.unwatchSession(sessionId);
-
-    // 5. Remove event listeners from session object
-    const listeners = this.sessionListenerRefs.get(sessionId);
-    if (listeners) {
-      session.off('terminal', listeners.terminal);
-      session.off('clearTerminal', listeners.clearTerminal);
-      session.off('needsRefresh', listeners.needsRefresh);
-      session.off('message', listeners.message);
-      session.off('error', listeners.error);
-      session.off('completion', listeners.completion);
-      session.off('exit', listeners.exit);
-      session.off('working', listeners.working);
-      session.off('idle', listeners.idle);
-      session.off('taskCreated', listeners.taskCreated);
-      session.off('taskUpdated', listeners.taskUpdated);
-      session.off('taskCompleted', listeners.taskCompleted);
-      session.off('taskFailed', listeners.taskFailed);
-      session.off('autoClear', listeners.autoClear);
-      session.off('autoCompact', listeners.autoCompact);
-      session.off('cliInfoUpdated', listeners.cliInfoUpdated);
-      session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
-      session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
-      session.off('ralphCompletionDetected', listeners.ralphCompletionDetected);
-      session.off('ralphStatusBlockDetected', listeners.ralphStatusBlockDetected);
-      session.off('ralphCircuitBreakerUpdate', listeners.ralphCircuitBreakerUpdate);
-      session.off('ralphExitGateMet', listeners.ralphExitGateMet);
-      session.off('bashToolStart', listeners.bashToolStart);
-      session.off('bashToolEnd', listeners.bashToolEnd);
-      session.off('bashToolsUpdate', listeners.bashToolsUpdate);
-      session.off('contextUpdate', listeners.contextUpdate);
-      session.off('conversationId', listeners.conversationId);
-      this.sessionListenerRefs.delete(sessionId);
-    }
-    session.removeAllListeners();
-
-    // 6. Clear batch/timer state
-    this.persistDeb.cancelKey(sessionId);
-    this.terminalBatches.delete(sessionId);
-    this.terminalBatchSizes.delete(sessionId);
-    const batchTimer = this.terminalBatchTimers.get(sessionId);
-    if (batchTimer) {
-      clearTimeout(batchTimer);
-      this.terminalBatchTimers.delete(sessionId);
-    }
-    this.taskUpdateBatches.delete(sessionId);
-    this.stateUpdatePending.delete(sessionId);
-    this.lastTerminalEventTime.delete(sessionId);
-
-    // 7. Kill Claude process + tmux pane. force=true means immediate SIGKILL.
-    //    For non-force, the client waits for idle before calling, so stop(true) is always safe.
-    await session.stop(true);
-
-    // 8. Remove from live session map (stays in state.json as archived)
-    this.sessions.delete(sessionId);
-
-    // 9. Build and persist archived state
-    const archivedState = session.toState() as SessionState;
-    archivedState.status = 'archived';
-    archivedState.clearedAt = new Date().toISOString();
-    archivedState.pid = null;
-    if (transcriptPath) archivedState.transcriptPath = transcriptPath;
-    this.store.setSession(sessionId, archivedState);
-
-    // 10. Create child session inheriting safe config fields (not tokens/cost/resumeId/safeMode)
-    const modelConfig = await this.getModelConfig();
-    const claudeModeConfig = await this.getClaudeModeConfig();
-    const childSession = new Session({
-      workingDir: archivedState.workingDir,
-      mux: this.mux,
-      useMux: true,
-      name: incrementSessionName(archivedState.name),
-      mode: archivedState.mode ?? 'claude',
-      niceConfig: await this.getGlobalNiceConfig(),
-      model: archivedState.mode !== 'shell' ? (modelConfig?.defaultModel ?? undefined) : undefined,
-      claudeMode: claudeModeConfig.claudeMode,
-      allowedTools: claudeModeConfig.allowedTools,
-    });
-    // Copy inherited properties that are set directly on the session object
-    if (archivedState.color && archivedState.color !== 'default') {
-      childSession.setColor(archivedState.color);
-    }
-    if (archivedState.mcpServers !== undefined) {
-      childSession.mcpServers = archivedState.mcpServers;
-    }
-    if (archivedState.ralphEnabled) {
-      childSession.ralphTracker.enable();
-    }
-
-    // 11. Register child session
-    this.sessions.set(childSession.id, childSession);
-    await this.setupSessionListeners(childSession);
-
-    // 12. Persist child state with parentSessionId
-    const childState = childSession.toState() as SessionState;
-    childState.parentSessionId = sessionId;
-    this.store.setSession(childSession.id, childState);
-
-    // 13. Link archived → child
-    archivedState.childSessionId = childSession.id;
-    this.store.setSession(sessionId, archivedState);
-    this.store.save();
-
-    // 14. Broadcast: session cleared + new session created
-    this.broadcast(SseEvent.SessionCleared, {
-      archivedId: sessionId,
-      newSessionId: childSession.id,
-    } satisfies SessionClearedPayload);
-    this.broadcast(SseEvent.SessionCreated, this.getSessionStateWithRespawn(childSession));
-
-    return { archivedSession: archivedState, newSession: childSession, newSessionState: childState };
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
