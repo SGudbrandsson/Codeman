@@ -1486,7 +1486,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   capturePaneContent(muxName: string): string | null {
-    return this.capturePaneBuffer(muxName, '0');
+    if (IS_TEST_MODE) return '';
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in capturePaneContent:', muxName);
+      return null;
+    }
+    // Target the session by name only — no pane ID suffix. Tmux assigns pane IDs
+    // globally across all sessions (%0, %1, ...), so the old '.%0' suffix only worked
+    // if %0 happened to be alive. Targeting the session name directly always selects
+    // the active pane in the session's first window.
+    try {
+      return execSync(`tmux capture-pane -p -e -t ${shellescape(muxName)} -S -5000`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
+    } catch (err) {
+      console.error('[TmuxManager] Failed to capture pane content:', err);
+      return null;
+    }
   }
 
   /**

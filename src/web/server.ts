@@ -3115,6 +3115,26 @@ export class WebServer extends EventEmitter {
             await this.setupSessionListeners(session);
             this.persistSessionState(session);
 
+            // Eagerly start transcript watcher for sessions with a known claudeResumeId.
+            // This wires up SSE events before PTY output arrives, and prevents the spurious
+            // transcript:clear that would otherwise fire when the conversationId event is
+            // processed from scrollback output.
+            if (session.claudeResumeId && session.workingDir) {
+              const escapedDir = session.workingDir.replace(/\//g, '-');
+              const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+              const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
+              this.startTranscriptWatcher(session.id, transcriptPath);
+            }
+
+            // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
+            // failure does not abort the entire startup loop.
+            if (!this.mux.isPaneDead(muxSession.muxName)) {
+              session.startInteractive().catch((err) => {
+                console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
+              });
+              console.log(`[Server] Auto-reconnecting session ${session.id} to mux ${muxSession.muxName}`);
+            }
+
             // Mark it as restored (not started yet - user needs to attach)
             getLifecycleLog().log({
               event: 'recovered',

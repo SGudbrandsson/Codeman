@@ -133,6 +133,23 @@ the existing transcript watcher, small frontend changes to read/write state.
 
 ---
 
+## Bug: capturePaneBuffer still uses broken `.%0` pane ID format
+
+**Priority:** Low (cosmetic cleanup — capturePaneContent no longer calls it)
+
+`capturePaneBuffer(muxName, paneTarget)` builds the tmux target as
+`session.%N` where it prepends `%` to a numeric index. This is wrong — `%N` is
+a global pane ID, not a per-session index. The method has no callers that
+currently pass a numeric index (the only caller was `capturePaneContent` which
+was fixed to bypass it entirely), but if it's ever used again it will silently
+fail on machines where pane `%N` doesn't exist.
+
+**Suggested fix:** Remove or rewrite `capturePaneBuffer` to use `session:window.pane`
+index notation (e.g. `codeman-X:0.0`) instead of `%N` pane IDs, or look up the
+real pane ID via `tmux list-panes -t session -F '#{pane_id}'` first.
+
+---
+
 ## Feature: Codeman as Distributable Application
 
 **Priority:** Low (longer term)
