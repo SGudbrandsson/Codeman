@@ -296,8 +296,22 @@ function renderMarkdown(text) {
 
 /** Process inline markdown on already-HTML-escaped text. */
 function inlineMarkdown(escaped, safeHref, esc) {
-  return escaped
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Step 1: Extract code spans into opaque placeholder tokens so that URL
+  // linkification (and other replacements) cannot alter their contents.
+  const snippets = [];
+  let s = escaped.replace(/`([^`]+)`/g, (_, inner) => {
+    snippets.push('<code>' + inner + '</code>');
+    return '\x00CODESNIP' + (snippets.length - 1) + '\x00';
+  });
+
+  // Step 2: Linkify bare URLs (code content is now opaque — no false matches).
+  s = s.replace(/(?<!\()(https?:\/\/[^\s<>"&()*_]+)(?!\))/g, (_, url) => {
+    const cleanUrl = url.replace(/[.,!?]+$/, '');
+    return '<a href="' + safeHref(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + cleanUrl + '</a>';
+  });
+
+  // Step 3: Bold, italic, and markdown link replacements.
+  s = s
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
@@ -305,6 +319,11 @@ function inlineMarkdown(escaped, safeHref, esc) {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
       '<a href="' + esc(safeHref(url)) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
     );
+
+  // Step 4: Restore code span placeholders to their original <code>...</code> HTML.
+  s = s.replace(/\x00CODESNIP(\d+)\x00/g, (_, i) => snippets[+i]);
+
+  return s;
 }
 
 // ═══════════════════════════════════════════════════════════════
