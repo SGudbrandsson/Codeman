@@ -1935,9 +1935,17 @@ const TranscriptView = {
       if (myGen !== this._loadGen) return;
 
       const prevCount = state.blocks.length;
+      // Defensive: detect if cached blocks belong to a different session's content.
+      // Compare the first block's id/timestamp between what was pre-rendered (cached)
+      // and what the server just returned. If they differ the cache was stale/wrong
+      // (e.g. populated by a previous bad backend response) — force full re-render.
+      const cachedFirst = state.blocks[0];
+      const fetchedFirst = blocks[0];
+      const cacheMatchesFetch = !cachedFirst || !fetchedFirst ||
+        (cachedFirst.id === fetchedFirst.id && cachedFirst.timestamp === fetchedFirst.timestamp);
       state.blocks = [...blocks];  // update cache with authoritative server data
 
-      if (prevCount > 0 && blocks.length >= prevCount) {
+      if (prevCount > 0 && blocks.length >= prevCount && cacheMatchesFetch) {
         // Incremental update — cache was rendered, just append anything new.
         // No DOM clear, no scroll — avoids any flash or jump.
         const newBlocks = blocks.slice(prevCount);
