@@ -2219,8 +2219,13 @@ export class WebServer extends EventEmitter {
       return this.cachedSessionsList.data;
     }
     // getSessionStateWithRespawn already uses toLightDetailedState() which
-    // excludes terminalBuffer and textOutput — no extra stripping needed
-    const data = Array.from(this.sessions.values()).map((s) => this.getSessionStateWithRespawn(s));
+    // excludes terminalBuffer and textOutput — no extra stripping needed.
+    // Filter out archived sessions — they are intentionally removed from this.sessions
+    // by clearSession(), but a defensive filter here ensures they never reach the sidebar
+    // in any edge case (e.g., mid-flight clear interrupted by restart).
+    const data = Array.from(this.sessions.values())
+      .filter((s) => s.status !== 'archived')
+      .map((s) => this.getSessionStateWithRespawn(s));
     this.cachedSessionsList = { data, timestamp: now };
     return data;
   }

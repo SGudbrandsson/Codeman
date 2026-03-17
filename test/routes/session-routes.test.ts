@@ -37,6 +37,23 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       expect(JSON.parse(res.body)).toEqual([]);
     });
+
+    it('excludes archived sessions from the response', async () => {
+      // Add an archived session to the sessions Map to simulate an edge-case where
+      // an archived session is present (e.g., mid-flight clear interrupted by restart).
+      const { createMockSession } = await import('../mocks/mock-session.js');
+      const archivedSession = createMockSession('archived-session-id');
+      (archivedSession as unknown as { status: string }).status = 'archived';
+      harness.ctx.sessions.set('archived-session-id', archivedSession);
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/sessions' });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body) as Array<{ id: string }>;
+      const ids = body.map((s) => s.id);
+      expect(ids).not.toContain('archived-session-id');
+      // The original non-archived session should still be present
+      expect(ids).toContain(harness.ctx._sessionId);
+    });
   });
 
   // ========== GET /api/sessions/:id ==========

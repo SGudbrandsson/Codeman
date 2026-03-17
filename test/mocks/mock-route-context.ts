@@ -96,6 +96,8 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     getLightSessionsState: vi.fn(() => {
       const result: Record<string, unknown>[] = [];
       for (const s of sessions.values()) {
+        // Mirror the server-side filter: archived sessions are excluded from the sidebar list.
+        if (s.status === 'archived') continue;
         result.push(s.toState());
       }
       return result;
