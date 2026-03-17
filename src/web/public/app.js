@@ -4936,7 +4936,8 @@ class CodemanApp {
     }
 
     // Remove archived session from sidebar (don't remove from sessions Map — needed for chain)
-    // Rebuild tabs now so archived session disappears
+    // Sync order to remove archived ID, then rebuild tabs so archived session disappears
+    this.syncSessionOrder();
     this.renderSessionTabs();
 
     this.showToast('Context cleared — new session started', 'info');
@@ -6669,7 +6670,7 @@ class CodemanApp {
     }
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
-      if (!session) continue; // Skip if session was removed
+      if (!session || session.status === 'archived') continue; // Skip if session was removed or archived
 
       const isActive = id === this.activeSessionId;
       const status = session.displayStatus ?? session.status ?? 'idle';
