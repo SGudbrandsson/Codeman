@@ -7576,58 +7576,7 @@ kbd {
   display: none;
 }
 
-/* AskUserQuestion panel — desktop base (hidden by default, shown by JS) */
-.auq-panel {
-  display: none;
-  background: #111;
-  border-top: 1px solid rgba(255,255,255,0.12);
-  padding: 8px 12px;
-  flex-shrink: 0;
-  gap: 6px;
-  flex-direction: column;
-  max-width: 100%;
-  box-sizing: border-box;
-  overflow-x: hidden;
-}
-.auq-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: #3b82f6;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.auq-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  overflow-x: hidden;
-}
-.auq-option-btn {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 12px;
-  background: #1e1e1e;
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 6px;
-  color: #fff;
-  font-family: inherit;
-  cursor: pointer;
-  text-align: left;
-  min-width: 120px;
-}
-.auq-option-btn:hover {
-  background: #2a2a2a;
-  border-color: rgba(255,255,255,0.3);
-}
-.auq-option-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-.auq-option-desc {
-  font-size: 11px;
-  color: rgba(255,255,255,0.5);
-}
+/* AskUserQuestion panel CSS removed — questions are now rendered inline in tv-auq-block only */
 
 .log-viewer-window-title .status.streaming {
   background: var(--success);
@@ -9714,6 +9663,15 @@ kbd {
 .tv-auq-custom-input:focus { border-color: rgba(59,130,246,0.5); }
 .tv-auq-custom-send { padding: 7px 14px; background: #3b82f6; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
 .tv-auq-custom-send:hover { background: #2563eb; }
+/* Multi-select selected state */
+.tv-auq-option.selected { background: #1e3a5f; border-color: rgba(59,130,246,0.7); }
+.tv-auq-option.selected:hover { background: #1e4070; }
+/* Wizard action row: Back + Next/Submit buttons */
+.tv-auq-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.tv-auq-back { padding: 7px 14px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: rgba(255,255,255,0.7); font-family: inherit; font-size: 0.875rem; cursor: pointer; }
+.tv-auq-back:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.35); }
+.tv-auq-next { padding: 7px 14px; background: #3b82f6; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; margin-left: auto; }
+.tv-auq-next:hover { background: #2563eb; }
 
 /* Context-continuation compaction summary — collapsed pill with expandable markdown */
 .tv-compact-block { max-width: 860px; margin: 4px auto; border: 1px solid rgba(251,191,36,0.2); border-radius: 6px; overflow: hidden; }

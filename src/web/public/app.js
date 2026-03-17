@@ -2005,20 +2005,7 @@ const TranscriptView = {
       // clearCompacting() sets _isCompacting=false when the compact summary arrives as a block,
       // so if it's still true here, compaction is genuinely still pending.
       if (this._isCompacting && !this._compactingEl) this.showCompacting();
-      // Scan all loaded blocks for a pending AskUserQuestion (unanswered tool_use)
-      if (typeof app !== 'undefined') {
-        let pendingQ = null;
-        for (const b of allBlocks) {
-          if (b.type === 'tool_use' && b.name === 'AskUserQuestion' && Array.isArray(b.input?.questions) && b.input.questions.length > 0) {
-            const q = b.input.questions[0];
-            pendingQ = { sessionId, header: q.header || '', question: q.question || '', options: Array.isArray(q.options) ? q.options : [], toolUseId: b.id };
-          } else if (b.type === 'tool_result' && pendingQ && b.toolUseId === pendingQ.toolUseId) {
-            pendingQ = null;
-          }
-        }
-        app.pendingAskUserQuestion = pendingQ;
-        app.renderAskUserQuestionPanel();
-      }
+      // AskUserQuestion blocks are rendered inline by _appendBlock above — no panel to update.
       // Scroll to bottom unless the user explicitly scrolled up during the fetch.
       if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
       if (!hadCache) this._container.style.opacity = '';
@@ -2071,68 +2058,159 @@ const TranscriptView = {
     }
   },
 
-  /** Renders an AskUserQuestion tool block as an inline interactive question. */
+  /** Renders an AskUserQuestion tool block as an inline interactive question.
+   *
+   * Supports:
+   * - Radio (single-select): clicking an option immediately submits and removes the block.
+   * - Checkbox (multi-select, q.multiSelect === true): options toggle .selected; a "Next"
+   *   button collects all selected option numbers and submits them.
+   * - Wizard navigation: if questions array has multiple items, a "Back" button appears on
+   *   questions after the first, and previously selected answers are pre-filled on return.
+   */
   _renderAskUserQuestionBlock(block) {
-    const q = block.input.questions[0];
+    const questions = block.input.questions;
     const sessionId = this._sessionId;
+
+    // answers[i] = string value selected at question index i (undefined if not yet answered)
+    const answers = {};
+
+    // Outer container — persists for the life of this tool_use block
     const el = document.createElement('div');
     el.className = 'tv-auq-block';
-    if (q.header) {
-      const hdr = document.createElement('div');
-      hdr.className = 'tv-auq-header';
-      hdr.textContent = q.header;
-      el.appendChild(hdr);
-    }
-    if (q.question) {
-      const qtxt = document.createElement('div');
-      qtxt.className = 'tv-auq-question';
-      qtxt.textContent = q.question;
-      el.appendChild(qtxt);
-    }
-    const opts = document.createElement('div');
-    opts.className = 'tv-auq-options';
-    (q.options || []).forEach((opt, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'tv-auq-option';
-      const lbl = document.createElement('span');
-      lbl.className = 'tv-auq-option-label';
-      lbl.textContent = (i + 1) + '. ' + opt.label;
-      btn.appendChild(lbl);
-      if (opt.description) {
-        const desc = document.createElement('span');
-        desc.className = 'tv-auq-option-desc';
-        desc.textContent = opt.description;
-        btn.appendChild(desc);
-      }
-      btn.addEventListener('click', () => {
-        if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, String(i + 1));
-        el.remove();
-      });
-      opts.appendChild(btn);
-    });
-    // Free-text "write your own answer" row
-    const customRow = document.createElement('div');
-    customRow.className = 'tv-auq-custom';
-    const customInput = document.createElement('input');
-    customInput.type = 'text';
-    customInput.className = 'tv-auq-custom-input';
-    customInput.placeholder = 'Write your own answer…';
-    const customBtn = document.createElement('button');
-    customBtn.className = 'tv-auq-custom-send';
-    customBtn.textContent = 'Send';
-    const sendCustom = () => {
-      const val = customInput.value.trim();
-      if (!val) return;
-      if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, val);
-      el.remove();
-    };
-    customBtn.addEventListener('click', sendCustom);
-    customInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCustom(); });
-    customRow.appendChild(customInput);
-    customRow.appendChild(customBtn);
-    opts.appendChild(customRow);
 
-    el.appendChild(opts);
+    const renderQuestion = (idx) => {
+      // Clear and re-render inner content for the current question index
+      el.textContent = '';
+      const q = questions[idx];
+
+      if (q.header) {
+        const hdr = document.createElement('div');
+        hdr.className = 'tv-auq-header';
+        hdr.textContent = q.header;
+        el.appendChild(hdr);
+      }
+      if (q.question) {
+        const qtxt = document.createElement('div');
+        qtxt.className = 'tv-auq-question';
+        qtxt.textContent = q.question;
+        el.appendChild(qtxt);
+      }
+
+      const multiSelect = !!q.multiSelect;
+      const opts = document.createElement('div');
+      opts.className = 'tv-auq-options';
+
+      (q.options || []).forEach((opt, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'tv-auq-option';
+        // Pre-fill selection from previously stored answer for this question
+        const prevAnswer = answers[idx];
+        if (multiSelect && prevAnswer) {
+          // prevAnswer is comma-separated list of 1-based numbers e.g. "1, 3"
+          const nums = prevAnswer.split(',').map(s => parseInt(s.trim(), 10));
+          if (nums.includes(i + 1)) btn.classList.add('selected');
+        } else if (!multiSelect && prevAnswer === String(i + 1)) {
+          btn.classList.add('selected');
+        }
+        const lbl = document.createElement('span');
+        lbl.className = 'tv-auq-option-label';
+        lbl.textContent = (i + 1) + '. ' + opt.label;
+        btn.appendChild(lbl);
+        if (opt.description) {
+          const desc = document.createElement('span');
+          desc.className = 'tv-auq-option-desc';
+          desc.textContent = opt.description;
+          btn.appendChild(desc);
+        }
+
+        if (multiSelect) {
+          // Toggle selection state; do NOT auto-advance
+          btn.addEventListener('click', () => {
+            btn.classList.toggle('selected');
+          });
+        } else {
+          // Radio: clicking immediately advances or submits
+          btn.addEventListener('click', () => {
+            answers[idx] = String(i + 1);
+            if (idx + 1 < questions.length) {
+              renderQuestion(idx + 1);
+            } else {
+              if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, String(i + 1));
+              el.remove();
+            }
+          });
+        }
+        opts.appendChild(btn);
+      });
+
+      // Free-text "write your own answer" row (only on the last question)
+      if (idx === questions.length - 1) {
+        const customRow = document.createElement('div');
+        customRow.className = 'tv-auq-custom';
+        const customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'tv-auq-custom-input';
+        customInput.placeholder = 'Write your own answer…';
+        const customBtn = document.createElement('button');
+        customBtn.className = 'tv-auq-custom-send';
+        customBtn.textContent = 'Send';
+        const sendCustom = () => {
+          const val = customInput.value.trim();
+          if (!val) return;
+          if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, val);
+          el.remove();
+        };
+        customBtn.addEventListener('click', sendCustom);
+        customInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCustom(); });
+        customRow.appendChild(customInput);
+        customRow.appendChild(customBtn);
+        opts.appendChild(customRow);
+      }
+
+      el.appendChild(opts);
+
+      // Action row: Back (if not first question) + Next/Submit (if multiSelect)
+      const isLastQuestion = idx === questions.length - 1;
+      if (idx > 0 || multiSelect) {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'tv-auq-actions';
+
+        if (idx > 0) {
+          const backBtn = document.createElement('button');
+          backBtn.className = 'tv-auq-back';
+          backBtn.textContent = '← Back';
+          backBtn.addEventListener('click', () => {
+            renderQuestion(idx - 1);
+          });
+          actionRow.appendChild(backBtn);
+        }
+
+        if (multiSelect) {
+          const nextBtn = document.createElement('button');
+          nextBtn.className = 'tv-auq-next';
+          nextBtn.textContent = isLastQuestion ? 'Submit' : 'Next →';
+          nextBtn.addEventListener('click', () => {
+            const selected = Array.from(opts.querySelectorAll('.tv-auq-option.selected'));
+            const optButtons = Array.from(opts.querySelectorAll('.tv-auq-option'));
+            const nums = selected.map(s => optButtons.indexOf(s) + 1);
+            if (nums.length === 0) return; // require at least one selection
+            const val = nums.join(', ');
+            answers[idx] = val;
+            if (!isLastQuestion) {
+              renderQuestion(idx + 1);
+            } else {
+              if (typeof app !== 'undefined') app.sendAskUserQuestionResponse(sessionId, val);
+              el.remove();
+            }
+          });
+          actionRow.appendChild(nextBtn);
+        }
+
+        el.appendChild(actionRow);
+      }
+    };
+
+    renderQuestion(0);
     return el;
   },
 
@@ -2375,11 +2453,6 @@ const TranscriptView = {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
       if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
-        // Fix C: don't render a card for a question the user already answered.
-        if (app._dismissedAskUserQuestionIds?.has(block.id)) {
-          if (scroll) this._scrollToBottom(false);
-          return;
-        }
         el = this._renderAskUserQuestionBlock(block);
         el.dataset.toolId = block.id;
         this._container.appendChild(el);
@@ -2395,9 +2468,8 @@ const TranscriptView = {
         : null;
       if (pendingEl) {
         if (pendingEl.classList.contains('tv-auq-block')) {
+          // AskUserQuestion was answered — remove the inline widget.
           pendingEl.remove();
-          // Fix D: clean up dismissed-set entry now that the lifecycle is complete.
-          if (block.toolUseId) app._dismissedAskUserQuestionIds?.delete(block.toolUseId);
           if (scroll) this._scrollToBottom(false);
           return;
         }
@@ -2992,17 +3064,8 @@ class CodemanApp {
     // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
     this.pendingElicitation = null;
 
-    // AskUserQuestion state: { sessionId, header, question, options: [{label, description}] } | null
-    this.pendingAskUserQuestion = null;
-
-    // Track dismissed AskUserQuestion toolUseIds so stale cards / panel re-shows are suppressed.
-    // Set<toolUseId> — populated when the user answers; cleared when tool_result arrives.
-    this._dismissedAskUserQuestionIds = new Set();
-    // Transient Set for the hook-first race: hook fires before transcript:block, so when the
-    // user answers via the panel (no toolUseId yet) we record the sessionId here.  The next
-    // transcript:block handler for AskUserQuestion will transfer it into the dismissed Set.
-    // Using a Set (not a single string) so concurrent multi-session wizards don't clobber each other.
-    this._dismissedAskUserQuestionSessions = new Set();
+    // AskUserQuestion is now handled entirely by the inline tv-auq-block in TranscriptView.
+    // No panel state needed — the block element manages its own lifecycle.
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -3134,11 +3197,7 @@ class CodemanApp {
       this.pendingElicitation = null;
       this.renderElicitationPanel();
     }
-    if (this.pendingAskUserQuestion?.sessionId === sessionId &&
-        (!hookType || hookType === 'ask_user_question')) {
-      this.pendingAskUserQuestion = null;
-      this.renderAskUserQuestionPanel();
-    }
+    // AskUserQuestion is now handled by the inline tv-auq-block — no panel state to clear.
   }
 
   updateTabAlertFromHooks(sessionId) {
@@ -5453,57 +5512,13 @@ class CodemanApp {
     }).catch(() => {});
   }
 
-  /** Renders or hides the AskUserQuestion panel based on this.pendingAskUserQuestion. */
-  renderAskUserQuestionPanel() {
-    const panel = document.getElementById('askUserQuestionPanel');
-    if (!panel) return;
-    const pq = this.pendingAskUserQuestion;
-    if (!pq || pq.sessionId !== this.activeSessionId) {
-      panel.style.display = 'none';
-      return;
-    }
-    panel.style.display = 'flex';
-    const escapedSessionId = pq.sessionId.replace(/'/g, "\\'");
-    const headerHtml = pq.header ? `<div class="auq-header">${pq.header}</div>` : '';
-    const questionHtml = pq.question ? `<div class="elicitation-question">${pq.question}</div>` : '';
-    const optionsHtml = pq.options.map((opt, i) => {
-      const num = i + 1;
-      const escapedLabel = opt.label.replace(/'/g, "\\'");
-      const descHtml = opt.description ? `<span class="auq-option-desc">${opt.description}</span>` : '';
-      return `<button class="auq-option-btn" ` +
-        `onclick="app.sendAskUserQuestionResponse('${escapedSessionId}','${num}')" ` +
-        `ontouchend="event.preventDefault();app.sendAskUserQuestionResponse('${escapedSessionId}','${num}')">` +
-        `<span class="auq-option-label">${num}. ${opt.label}</span>${descHtml}` +
-        `</button>`;
-    }).join('');
-    panel.innerHTML = headerHtml + questionHtml + `<div class="auq-options">${optionsHtml}</div>`;
-  }
-
-  /** Sends an AskUserQuestion response (option number) and clears the panel. */
+  /** Sends an AskUserQuestion response (option number) from the inline tv-auq-block.
+   * The block element removes itself after calling this. This method clears the pending
+   * hook state and sends the answer to the session input.
+   */
   sendAskUserQuestionResponse(sessionId, value) {
     if (!value) return;
-    // Capture FIRST before clearPendingHooks nulls pendingAskUserQuestion.
-    const auq = this.pendingAskUserQuestion;
     this.clearPendingHooks(sessionId, 'ask_user_question');
-
-    // Record the answered question so stale transcript:block / card renders are suppressed.
-    if (auq) {
-      if (auq.toolUseId) {
-        // We know the toolUseId — add to dismissed set and immediately remove the inline card.
-        this._dismissedAskUserQuestionIds.add(auq.toolUseId);
-        if (TranscriptView._sessionId === sessionId && TranscriptView._container) {
-          const cardEl = TranscriptView._container.querySelector('[data-tool-id="' + CSS.escape(auq.toolUseId) + '"]');
-          if (cardEl) cardEl.remove();
-        }
-      } else {
-        // Hook-first path: toolUseId not yet known — record the session so that when the
-        // transcript:block for this tool_use arrives we can suppress it.
-        this._dismissedAskUserQuestionSessions.add(sessionId);
-      }
-    }
-
-    this.pendingAskUserQuestion = null;
-    this.renderAskUserQuestionPanel();
     fetch(`/api/sessions/${sessionId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5692,27 +5707,12 @@ class CodemanApp {
       title: q.header || 'Question',
       message: q.question || 'Claude is asking a question',
     });
-    // If the user already answered via the hook panel (hook-first race), suppress the panel
-    // re-show.  This event fires BEFORE transcript:block (processEntry calls handleAssistantEntry
-    // then emits transcript:block), so we must NOT delete the session entry here — the
-    // _onTranscriptBlock pre-check needs it to populate _dismissedAskUserQuestionIds for Fix C.
-    if (this._dismissedAskUserQuestionSessions.has(data.sessionId)) {
-      return;
-    }
-    this.pendingAskUserQuestion = {
-      sessionId: data.sessionId,
-      header: q.header || '',
-      question: q.question || '',
-      options: Array.isArray(q.options) ? q.options : [],
-    };
-    this.renderAskUserQuestionPanel();
+    // The inline tv-auq-block in TranscriptView handles all rendering — no panel needed.
   }
 
-  _onTranscriptAskUserQuestionResolved(data) {
-    if (this.pendingAskUserQuestion?.sessionId === data.sessionId) {
-      this.pendingAskUserQuestion = null;
-      this.renderAskUserQuestionPanel();
-    }
+  _onTranscriptAskUserQuestionResolved(_data) {
+    // The tv-auq-block removes itself when the tool_result arrives via _appendBlock.
+    // Nothing to do here for the panel (it no longer exists).
   }
 
   _onHookAskUserQuestion(data) {
@@ -5723,7 +5723,7 @@ class CodemanApp {
     // tool_input.questions is preserved by sanitizeHookData for AskUserQuestion
     const questions = data.tool_input?.questions;
     if (!questions || !Array.isArray(questions) || questions.length === 0) return;
-    const q = questions[0]; // render first question (multi-question is rare)
+    const q = questions[0];
     this.notificationManager?.notify({
       urgency: 'critical',
       category: 'hook-ask-user-question',
@@ -5732,13 +5732,7 @@ class CodemanApp {
       title: q.header || 'Question',
       message: q.question || 'Claude is asking a question',
     });
-    this.pendingAskUserQuestion = {
-      sessionId: data.sessionId,
-      header: q.header || '',
-      question: q.question || '',
-      options: Array.isArray(q.options) ? q.options : [],
-    };
-    this.renderAskUserQuestionPanel();
+    // The inline tv-auq-block in TranscriptView handles all rendering — no panel needed.
   }
 
   _onHookStop(data) {
@@ -7216,7 +7210,6 @@ class CodemanApp {
     PluginsPanel.showChip();
     ContextBar.onSessionSelected(sessionId);
     this.renderElicitationPanel();
-    this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
     // Remove any archived overlay from the previous session
@@ -9440,22 +9433,6 @@ class CodemanApp {
   _onTranscriptBlock(data) {
     const { sessionId, block } = data;
 
-    // Pre-resolve dismissed state for AskUserQuestion BEFORE appending to view.
-    // This must run before TranscriptView.append so Fix C (_appendBlock) sees
-    // the correct dismissed state when checking _dismissedAskUserQuestionIds.
-    if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
-      const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
-      if (questions.length > 0) {
-        if (!this._dismissedAskUserQuestionIds.has(block.id) &&
-            this._dismissedAskUserQuestionSessions.has(sessionId)) {
-          // Hook-first race: user answered before toolUseId was known.
-          // Populate the dismissed set now so Fix C (_appendBlock) can skip rendering the card.
-          this._dismissedAskUserQuestionIds.add(block.id);
-          this._dismissedAskUserQuestionSessions.delete(sessionId);
-        }
-      }
-    }
-
     const state = app._transcriptState?.[sessionId];
     let handledByView = false;
     if (TranscriptView._sessionId === sessionId) {
@@ -9474,35 +9451,6 @@ class CodemanApp {
     // Only push to state.blocks when not handled above — append() already does it,
     // and _sseBuffer blocks are added to state.blocks after the load() fetch completes.
     if (state && !handledByView) state.blocks.push(block);
-
-    // Detect pending AskUserQuestion from the block stream (works for both HTTP replay and live SSE)
-    if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
-      const questions = Array.isArray(block.input?.questions) ? block.input.questions : [];
-      if (questions.length > 0) {
-        // Fix B: suppress re-show when the question was already answered via the panel.
-        // Note: the hook-first race (session flag → dismissed set) is handled by the
-        // pre-check block above, so by this point _dismissedAskUserQuestionIds is authoritative.
-        if (this._dismissedAskUserQuestionIds.has(block.id)) {
-          // Already answered (either toolUseId known at answer time, or pre-check above) — do nothing.
-        } else {
-          const q = questions[0];
-          this.pendingAskUserQuestion = {
-            sessionId,
-            header: q.header || '',
-            question: q.question || '',
-            options: Array.isArray(q.options) ? q.options : [],
-            toolUseId: block.id,
-          };
-          if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
-        }
-      }
-    } else if (block.type === 'tool_result' &&
-               this.pendingAskUserQuestion?.sessionId === sessionId &&
-               this.pendingAskUserQuestion?.toolUseId === block.toolUseId) {
-      // The AskUserQuestion was answered
-      this.pendingAskUserQuestion = null;
-      if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
-    }
   }
 
   _onTranscriptClear(data) {
@@ -9513,17 +9461,6 @@ class CodemanApp {
     if (TranscriptView._sessionId === sessionId) {
       TranscriptView.clear();
     }
-    if (this.pendingAskUserQuestion?.sessionId === sessionId) {
-      this.pendingAskUserQuestion = null;
-      this.renderAskUserQuestionPanel();
-    }
-    // Clear dismissed-question tracking for this session so stale suppression doesn't persist.
-    // Only clear the session-flag for this specific session; _dismissedAskUserQuestionIds entries
-    // are toolUseId-keyed (globally unique) — after a transcript clear, old IDs will never match
-    // new blocks (new questions get new UUIDs), so they are harmless dead entries.  Fix D removes
-    // them on tool_result arrival for the normal lifecycle, but orphaned entries from a transcript
-    // clear are left in the Set indefinitely.  The memory impact is negligible (~36 bytes per entry).
-    this._dismissedAskUserQuestionSessions.delete(sessionId);
   }
 
   _closeWorktreeCleanupModal() {
