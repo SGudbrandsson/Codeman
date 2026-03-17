@@ -242,7 +242,7 @@ const KeyboardAccessoryBar = {
     hamburgerBtn.setAttribute('aria-label', 'Open session list');
     hamburgerBtn.type = 'button';
     {
-      const hSvg = mkSvg(18, 18);
+      const hSvg = mkSvg(16, 16);
       [6, 12, 18].forEach(y => {
         hSvg.appendChild(mkEl('line', true, { x1: '3', y1: String(y), x2: '21', y2: String(y) }));
       });
