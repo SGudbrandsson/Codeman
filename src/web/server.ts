@@ -33,7 +33,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, chmodSync, readdirSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -3124,6 +3124,38 @@ export class WebServer extends EventEmitter {
               const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
               const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
               this.startTranscriptWatcher(session.id, transcriptPath);
+            } else if (!session.claudeResumeId && session.workingDir) {
+              // claudeResumeId was never persisted (e.g. hooks not configured for this dir).
+              // Codeman passes --session-id <sessionId> to Claude for fresh sessions, so the
+              // JSONL file should be named after the session ID. Try that first — safe for
+              // any dir since the filename is session-specific.
+              // If not found, scan the project dir for the most recent JSONL, but only when
+              // no other active session shares this workingDir (prevents cross-contamination).
+              const escapedDir = session.workingDir.replace(/\//g, '-');
+              const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+              const sessionIdFile = join(projectDir, `${session.id}.jsonl`);
+              if (existsSync(sessionIdFile)) {
+                console.log(`[Server] Discovered transcript by session ID for ${session.id}`);
+                this.startTranscriptWatcher(session.id, sessionIdFile);
+              } else {
+                const sharesDir = [...this.sessions.values()].some(
+                  (s) => s.id !== session.id && s.workingDir === session.workingDir
+                );
+                if (!sharesDir) {
+                  try {
+                    const files = readdirSync(projectDir)
+                      .filter((f) => f.endsWith('.jsonl') && !f.startsWith('.'))
+                      .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+                      .sort((a, b) => b.mtime - a.mtime);
+                    if (files.length > 0) {
+                      console.log(`[Server] Discovered transcript by recency for ${session.id}: ${files[0].path}`);
+                      this.startTranscriptWatcher(session.id, files[0].path);
+                    }
+                  } catch {
+                    // project dir doesn't exist or can't be read — no transcript yet
+                  }
+                }
+              }
             }
 
             // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
