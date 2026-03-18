@@ -245,6 +245,9 @@ export class StateStore {
     if (this.state.tokenStats) {
       parts.push(`"tokenStats":${JSON.stringify(this.state.tokenStats)}`);
     }
+    if (this.state.activeSessionId !== undefined) {
+      parts.push(`"activeSessionId":${JSON.stringify(this.state.activeSessionId)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
@@ -581,6 +584,15 @@ export class StateStore {
   /** Updates configuration (partial merge) and triggers a debounced save. */
   setConfig(config: Partial<AppState['config']>) {
     this.state.config = { ...this.state.config, ...config };
+    this.save();
+  }
+
+  getActiveSessionId(): string | null {
+    return this.getState().activeSessionId ?? null;
+  }
+
+  setActiveSessionId(id: string | null): void {
+    this.getState().activeSessionId = id;
     this.save();
   }
 

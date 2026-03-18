@@ -21,6 +21,8 @@ export class MockSession extends EventEmitter {
   writeBuffer: string[] = [];
   terminalBuffer: string = '';
 
+  lastActivityAt: number = Date.now();
+
   private _muxName: string | null = null;
 
   constructor(id: string = 'mock-session-id') {
@@ -52,9 +54,7 @@ export class MockSession extends EventEmitter {
 
   /** Check if a specific command was written */
   hasWritten(pattern: string | RegExp): boolean {
-    return this.writeBuffer.some((data) =>
-      typeof pattern === 'string' ? data.includes(pattern) : pattern.test(data),
-    );
+    return this.writeBuffer.some((data) => (typeof pattern === 'string' ? data.includes(pattern) : pattern.test(data)));
   }
 
   // ========== Terminal Output Simulation ==========
@@ -113,10 +113,7 @@ export class MockSession extends EventEmitter {
    */
   simulatePlanModePrompt(): void {
     this.simulateTerminalOutput(
-      'Would you like to proceed with this plan?\n' +
-        '\u276f 1. Yes\n' +
-        '  2. No\n' +
-        '  3. Type your own\n',
+      'Would you like to proceed with this plan?\n' + '\u276f 1. Yes\n' + '  2. No\n' + '  3. Type your own\n'
     );
   }
 
@@ -131,11 +128,7 @@ export class MockSession extends EventEmitter {
   /** Simulate token count display */
   simulateTokenCount(tokens: number | string): void {
     const formatted =
-      typeof tokens === 'number'
-        ? tokens >= 1000
-          ? `${(tokens / 1000).toFixed(1)}k`
-          : String(tokens)
-        : tokens;
+      typeof tokens === 'number' ? (tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)) : tokens;
     this.simulateTerminalOutput(`${formatted} tokens used`);
   }
 
@@ -219,6 +212,7 @@ export class MockSession extends EventEmitter {
       color: this.color,
       mode: this.mode,
       muxName: this._muxName,
+      lastActivityAt: this.lastActivityAt,
     };
   }
 
