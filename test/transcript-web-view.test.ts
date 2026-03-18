@@ -871,3 +871,156 @@ describe('Scroll anchor', () => {
     expect(scrollAfter).toBeLessThanOrEqual(scrollBefore + 5); // should not have scrolled down
   });
 });
+
+// ─── Helper: render markdown in page context ─────────────────────────────────
+
+async function renderMd(page: Page, text: string): Promise<string> {
+  return page.evaluate((md) => {
+    return (window as unknown as { renderMarkdown: (t: string) => string }).renderMarkdown(md);
+  }, text);
+}
+
+describe('Pipe table rendering', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, []);
+    await selectSession(page, sessionId);
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await page.evaluate(async (id) => {
+      await fetch('/api/sessions/' + id, { method: 'DELETE' });
+    }, sessionId);
+    await context?.close();
+  });
+
+  it('renders a basic pipe table as <table> element', async () => {
+    const tableText = ['| Col A | Col B |', '|-------|-------|', '| val 1 | val 2 |'].join('\n');
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('<table');
+    expect(html).toContain('</table>');
+  });
+
+  it('wraps the table in .tv-table-wrap and .tv-table classes', async () => {
+    const tableText = '| A | B |\n|---|---|\n| 1 | 2 |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('tv-table-wrap');
+    expect(html).toContain('tv-table');
+  });
+
+  it('renders first row above separator as <thead> with <th> elements', async () => {
+    const tableText = '| Name | Age |\n|------|-----|\n| Alice | 30 |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('<thead>');
+    expect(html).toContain('<th>');
+    expect(html).toContain('Name');
+    expect(html).toContain('Age');
+  });
+
+  it('renders rows below separator as <tbody> with <td> elements', async () => {
+    const tableText = '| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('<tbody>');
+    expect(html).toContain('<td>');
+    expect(html).toContain('Alice');
+    expect(html).toContain('Bob');
+  });
+
+  it('honours right alignment (---:) with style="text-align:right"', async () => {
+    const tableText = '| Item | Price |\n|------|------:|\n| Book | 9.99 |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('text-align:right');
+  });
+
+  it('honours center alignment (:---:) with style="text-align:center"', async () => {
+    const tableText = '| A | B |\n|:---:|---|\n| x | y |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('text-align:center');
+  });
+
+  it('honours left alignment (:---) with style="text-align:left"', async () => {
+    const tableText = '| A | B |\n|:---|---|\n| x | y |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('text-align:left');
+  });
+
+  it('applies inline formatting (bold, code) inside table cells', async () => {
+    const tableText = '| Feature | Status |\n|---------|--------|\n| **Auth** | `done` |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('<strong>');
+    expect(html).toContain('<code>');
+  });
+
+  it('does NOT render as a table when there is no separator row', async () => {
+    const nonTable = '| just | some | pipes |\n| but | no | separator |';
+    const html = await renderMd(page, nonTable);
+    expect(html).not.toContain('<table');
+  });
+
+  it('does not absorb table lines into a preceding paragraph', async () => {
+    const mixed = 'Regular paragraph text.\n| Col A | Col B |\n|-------|-------|\n| v1 | v2 |';
+    const html = await renderMd(page, mixed);
+    expect(html).toContain('<p>');
+    expect(html).toContain('<table');
+  });
+
+  it('renders a table block in the transcript view via SSE block injection', async () => {
+    const tableText = ['| Layer | Status |', '|-------|--------|', '| Auth | Active |', '| DB | Active |'].join('\n');
+
+    await page.evaluate(
+      ({ sid, text }) => {
+        const block = { type: 'text', role: 'assistant', text, timestamp: new Date().toISOString() };
+        (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
+          sessionId: sid,
+          block,
+        });
+      },
+      { sid: sessionId, text: tableText }
+    );
+    await page.waitForTimeout(300);
+
+    const tableCount = await page.locator('#transcriptView .tv-table').count();
+    expect(tableCount).toBeGreaterThan(0);
+  });
+
+  it('unaligned columns (plain ---) produce no style attribute on <th> or <td>', async () => {
+    // Gap 1: all separator cells are plain `---` with no colons — aligns[ci] returns null,
+    // styleAttr is '', so no style= attribute should appear on any th or td element.
+    const tableText = '| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |';
+    const html = await renderMd(page, tableText);
+    expect(html).toContain('<table');
+    // The rendered th/td elements must not carry any text-align style
+    expect(html).not.toContain('text-align');
+    expect(html).not.toContain('style=');
+  });
+
+  it('does NOT render as a table when the separator is the first row (no header row above it)', async () => {
+    // Gap 2: sepIndex === 0 — separator is the very first line, leaving no header row above it.
+    // The sepIndex < 1 guard should reject this and fall back to a plain <p> block.
+    const noHeaderTable = '|---|---|\n| val1 | val2 |';
+    const html = await renderMd(page, noHeaderTable);
+    expect(html).not.toContain('<table');
+  });
+
+  it('renders a ragged body row (fewer cells than separator) without crashing', async () => {
+    // Gap 3: body row has fewer cells than the separator column count — aligns[ci] is
+    // undefined (out-of-bounds), which gracefully produces no style attribute for that cell.
+    const raggedTable = '| A | B | C |\n|---|---|---|\n| only two cells | here |';
+    const html = await renderMd(page, raggedTable);
+    // Table should still render (no crash)
+    expect(html).toContain('<table');
+    // The short row's cells should appear
+    expect(html).toContain('only two cells');
+    expect(html).toContain('here');
+    // No style attribute on the short row's cells (plain separator → no alignment)
+    expect(html).not.toContain('style=');
+  });
+});
