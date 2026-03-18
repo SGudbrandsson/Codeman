@@ -584,6 +584,15 @@ export class StateStore {
     this.save();
   }
 
+  getActiveSessionId(): string | null {
+    return this.getState().activeSessionId ?? null;
+  }
+
+  setActiveSessionId(id: string | null): void {
+    this.getState().activeSessionId = id;
+    this.save();
+  }
+
   /** Resets all state to initial values and saves immediately. */
   reset(): void {
     this.state = createInitialState();

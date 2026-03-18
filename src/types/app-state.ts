@@ -109,6 +109,8 @@ export interface AppState {
   globalStats?: GlobalStats;
   /** Daily token usage statistics */
   tokenStats?: TokenStats;
+  /** The session ID last explicitly selected by the user. Used by resolve-active. */
+  activeSessionId?: string | null;
 }
 
 // ========== Default Configuration ==========
@@ -151,6 +153,7 @@ export function createInitialState(): AppState {
     },
     config: { ...DEFAULT_CONFIG },
     globalStats: createInitialGlobalStats(),
+    activeSessionId: null,
   };
 }
 
