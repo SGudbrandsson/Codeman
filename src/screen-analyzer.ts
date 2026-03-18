@@ -66,13 +66,6 @@ export function analyzeScreen(rawScreen: string): ScreenAnalysis {
   const stripped = stripAnsi(rawScreen);
   const lastVisibleText = getLastVisibleText(stripped);
 
-  const hasClaudePresence =
-    COMPLETION_PATTERN.test(stripped) ||
-    TOOL_PATTERN.test(stripped) ||
-    CLAUDE_PROMPT_PATTERN.test(stripped) ||
-    SPINNER_CHARS.test(stripped) ||
-    THINKING_PATTERN.test(stripped);
-
   if (COMPLETION_PATTERN.test(stripped)) {
     return { state: 'completion', lastVisibleText, hasClaudePresence: true, confidence: 95 };
   }

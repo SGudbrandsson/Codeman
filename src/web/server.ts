@@ -117,6 +117,7 @@ import {
   registerMcpRoutes,
   registerPluginRoutes,
 } from './routes/index.js';
+import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -747,6 +748,7 @@ export class WebServer extends EventEmitter {
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
     registerHistoryRoutes(this.app, ctx);
+    registerActiveSessionRoutes(this.app, ctx);
     registerSessionRoutes(this.app, ctx);
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);

@@ -250,6 +250,8 @@ export function registerSessionRoutes(
 
     try {
       const result = await ctx.clearSession(id, force);
+      // Persist new session as active so resolve-active returns it on the next frontend reconnect
+      ctx.store.setActiveSessionId(result.newSessionState.id);
       return reply.send({
         archivedSession: result.archivedSession,
         newSession: result.newSessionState,
