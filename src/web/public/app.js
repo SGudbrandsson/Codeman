@@ -7225,6 +7225,7 @@ class CodemanApp {
     this.renderElicitationPanel();
     this.renderAskUserQuestionPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mark-active`, { method: 'POST' }).catch(() => {});
     this.hideWelcome();
     // Remove any archived overlay from the previous session
     this._removeArchivedOverlay();
