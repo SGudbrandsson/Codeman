@@ -245,6 +245,9 @@ export class StateStore {
     if (this.state.tokenStats) {
       parts.push(`"tokenStats":${JSON.stringify(this.state.tokenStats)}`);
     }
+    if (this.state.activeSessionId !== undefined) {
+      parts.push(`"activeSessionId":${JSON.stringify(this.state.activeSessionId)}`);
+    }
 
     return `{${parts.join(',')}}`;
   }
