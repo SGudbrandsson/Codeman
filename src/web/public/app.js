@@ -1828,6 +1828,7 @@ const TranscriptView = {
   _clearFallbackTimer: null,     // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
   _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
   _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
+  _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1904,6 +1905,7 @@ const TranscriptView = {
   async load(sessionId, opts = {}) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
     // NOTE: do NOT clear state.blocks here — caller (clear()) does it when needed.
@@ -1957,6 +1959,7 @@ const TranscriptView = {
         this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
+        this._lastSkillLaunch = null;
         // If a /clear is in progress (_clearPending), the backend may still be serving
         // the old conversation's blocks — the new conversation UUID hasn't been registered
         // yet. Treat any non-empty response as stale and show empty/optimistic instead.
@@ -2164,6 +2167,7 @@ const TranscriptView = {
     const pendingText = this._pendingOptimisticText;
 
     this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
       state.blocks = [];
@@ -2191,6 +2195,7 @@ const TranscriptView = {
   clearOnly() {
     this._clearPending = true;   // block load() from rendering stale old-session content until transcript:clear SSE arrives
     this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
       state.blocks = [];
@@ -2226,6 +2231,7 @@ const TranscriptView = {
       this._clearPending = false;
       // Show empty CTA without fetching — user cleared, so empty is the correct state.
       this._pendingToolUses = {};
+      this._lastSkillLaunch = null;
       this._compactingEl = null;
       this._isCompacting = false;
       const state = this._getState(pendingSessionId);
@@ -2393,6 +2399,27 @@ const TranscriptView = {
       const pendingEl = block.toolUseId
         ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
         : null;
+      // Detect skill launches — render a pill instead of a tool wrapper row.
+      const skillMatch = typeof block.content === 'string' && block.content.match(/^Launching skill: (.+)/);
+      if (skillMatch) {
+        const skillName = skillMatch[1].trim();
+        this._lastSkillLaunch = skillName;
+        if (block.toolUseId) delete this._pendingToolUses[block.toolUseId];
+        const pill = this._renderSkillPill(skillName);
+        if (pendingEl) {
+          // pendingEl may be inside a .tv-tool-group body. Remove the whole group
+          // from this._container, then append the pill directly to the container.
+          const group = pendingEl.closest('.tv-tool-group');
+          if (group && group.parentElement === this._container) {
+            group.remove();
+          } else {
+            pendingEl.remove();
+          }
+        }
+        this._container.appendChild(pill);
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
       if (pendingEl) {
         if (pendingEl.classList.contains('tv-auq-block')) {
           pendingEl.remove();
@@ -2470,12 +2497,16 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
-      // Hide skill content blocks — Claude Code injects the full skill markdown as a separate
-      // user text message (sibling to the tool_result block in the same JSONL entry) after
-      // the tool_result confirmation. The tool view already shows "Launching skill: ..." so
-      // the content block is redundant and clutters the chat.
-      // Pattern anchors to an absolute path + blank line + markdown heading to avoid false
-      // positives from real user messages that happen to start with a similar phrase.
+      // Suppress skill content block injected after "Launching skill: <name>" tool_result.
+      // Covers both Superpowers (path prefix) and GSD (XML content) skill patterns.
+      // Check flag first — it was set when the tool_result was processed.
+      if (this._lastSkillLaunch) {
+        this._lastSkillLaunch = null;  // consume — one suppression per launch
+        return null;
+      }
+
+      // Legacy fallback: Hide skill content blocks by path+heading pattern (backward compat).
+      // In the new flow the flag check above fires first, so this is a safety net only.
       if (/^Base directory for this skill: \/.+\n\n#/.test(block.text)) {
         return null;
       }
@@ -2583,6 +2614,13 @@ const TranscriptView = {
       div.appendChild(content);
     }
     return div;
+  },
+
+  _renderSkillPill(skillName) {
+    const pill = document.createElement('div');
+    pill.className = 'tv-skill-pill';
+    pill.textContent = '/' + skillName;
+    return pill;
   },
 
   _renderToolWrapper(toolUse, toolResult) {
