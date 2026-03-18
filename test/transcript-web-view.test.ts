@@ -1024,3 +1024,48 @@ describe('Pipe table rendering', () => {
     expect(html).not.toContain('style=');
   });
 });
+
+describe('Horizontal rule rendering', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, []);
+    await selectSession(page, sessionId);
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await page.evaluate(async (id) => {
+      await fetch('/api/sessions/' + id, { method: 'DELETE' });
+    }, sessionId);
+    await context?.close();
+  });
+
+  it('renders --- on its own line as <hr>', async () => {
+    const html = await renderMd(page, '---');
+    expect(html).toContain('<hr');
+  });
+
+  it('renders *** on its own line as <hr>', async () => {
+    const html = await renderMd(page, '***');
+    expect(html).toContain('<hr');
+  });
+
+  it('renders ___ on its own line as <hr>', async () => {
+    const html = await renderMd(page, '___');
+    expect(html).toContain('<hr');
+  });
+
+  it('does not absorb ___ line into a preceding paragraph', async () => {
+    const html = await renderMd(page, 'Some text above.\n___\nSome text below.');
+    expect(html).toContain('<hr');
+    // The underscore line must not appear as raw text inside a <p>
+    expect(html).not.toMatch(/<p[^>]*>[^<]*___/);
+  });
+});

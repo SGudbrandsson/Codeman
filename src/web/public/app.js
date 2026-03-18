@@ -234,7 +234,7 @@ function renderMarkdown(text) {
     }
 
     // Horizontal rule
-    if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim())) {
+    if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim()) || /^___+$/.test(line.trim())) {
       out.push('<hr>');
       i++; continue;
     }
@@ -345,7 +345,7 @@ function renderMarkdown(text) {
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
-      !/^(#{1,3} |```|> |[-*+] |\d+\. |---+$|\*\*\*+$|\|)/.test(lines[i])
+      !/^(#{1,3} |```|> |[-*+] |\d+\. |---+$|\*\*\*+$|___+$|\|)/.test(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;
