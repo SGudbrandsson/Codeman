@@ -28,7 +28,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HookEventType } from './types.js';
-import { HOOK_TIMEOUT_MS } from './config/auth-config.js';
+import { HOOK_TIMEOUT_MS, AUQ_HOOK_TIMEOUT_MS } from './config/auth-config.js';
 
 /**
  * Generates the hooks section for .claude/settings.local.json
@@ -83,7 +83,26 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
       PreToolUse: [
         {
           matcher: 'AskUserQuestion',
-          hooks: [{ type: 'command', command: curlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
+          hooks: [
+            {
+              type: 'command',
+              // AskUserQuestion hook: posts question to Codeman, then polls for user's
+              // answer from the web UI. Returns a deny decision with the answer so Claude
+              // Code never renders its native terminal selector. Falls back to native UI
+              // if Codeman API is unreachable (direct SSH usage).
+              command:
+                `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
+                `[ -z "$CODEMAN_API_URL" ] && exit 0; ` +
+                `printf '{"event":"ask_user_question","sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$HOOK_DATA" | ` +
+                `curl -s -X POST "$CODEMAN_API_URL/api/hook-event" -H 'Content-Type: application/json' --data @- >/dev/null 2>&1; ` +
+                `while :; do ` +
+                `R=$(curl -s "$CODEMAN_API_URL/api/sessions/$CODEMAN_SESSION_ID/auq-response" 2>/dev/null); ` +
+                `echo "$R" | grep -q hookSpecificOutput && { echo "$R"; exit 0; }; ` +
+                `sleep 2; ` +
+                `done`,
+              timeout: AUQ_HOOK_TIMEOUT_MS,
+            },
+          ],
         },
       ],
     },

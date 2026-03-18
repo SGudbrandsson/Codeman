@@ -5512,17 +5512,18 @@ class CodemanApp {
     }).catch(() => {});
   }
 
-  /** Sends an AskUserQuestion response (option number) from the inline tv-auq-block.
-   * The block element removes itself after calling this. This method clears the pending
-   * hook state and sends the answer to the session input.
+  /** Sends an AskUserQuestion response from the inline tv-auq-block.
+   * Posts the answer to the auq-response endpoint where the PreToolUse hook
+   * script is polling. The hook returns the answer to Claude Code as a deny
+   * decision, bypassing Claude Code's native terminal selector entirely.
    */
   sendAskUserQuestionResponse(sessionId, value) {
     if (!value) return;
     this.clearPendingHooks(sessionId, 'ask_user_question');
-    fetch(`/api/sessions/${sessionId}/input`, {
+    fetch(`/api/sessions/${sessionId}/auq-response`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
+      body: JSON.stringify({ answer: String(value) }),
     }).catch(() => {});
   }
 
