@@ -9935,6 +9935,36 @@ kbd {
   margin: 12px 0;
 }
 
+/* Pipe tables */
+.tv-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.tv-table {
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+  width: 100%;
+}
+.tv-table th,
+.tv-table td {
+  padding: 6px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.tv-table thead tr {
+  background: rgba(255,255,255,0.06);
+}
+.tv-table th {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+.tv-table tbody tr:nth-child(even) {
+  background: rgba(255,255,255,0.03);
+}
+.tv-table tbody tr:hover {
+  background: rgba(255,255,255,0.06);
+}
+
 /* Tool use row (collapsed by default) */
 .tv-tool-row {
   display: flex;

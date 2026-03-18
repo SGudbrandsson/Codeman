@@ -277,12 +277,75 @@ function renderMarkdown(text) {
     // Blank line
     if (line.trim() === '') { i++; continue; }
 
+    // Pipe table — collect consecutive lines that start and end with '|'
+    if (/^\|.*\|$/.test(line.trim())) {
+      const tableLines = [];
+      while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+        tableLines.push(lines[i].trim());
+        i++;
+      }
+      // Validate: must have at least one separator row
+      const sepIndex = tableLines.findIndex(l => {
+        const cells = l.split('|').slice(1, -1);
+        return cells.length > 0 && cells.every(c => /^:?-+:?$/.test(c.trim()));
+      });
+      if (sepIndex < 1) {
+        // Not a valid table — fall through by re-processing these lines as paragraphs
+        const paraHtml = tableLines.map(l => inlineMarkdown(esc(l), safeHref, esc)).join(' ');
+        out.push('<p>' + paraHtml + '</p>');
+      } else {
+        // Parse alignment from separator row
+        const sepCells = tableLines[sepIndex].split('|').slice(1, -1).map(c => c.trim());
+        const aligns = sepCells.map(c => {
+          const left = c.startsWith(':');
+          const right = c.endsWith(':');
+          if (left && right) return 'center';
+          if (left) return 'left';
+          if (right) return 'right';
+          return null;
+        });
+
+        // Helper: parse a row into cells
+        function parseRow(rowLine) {
+          return rowLine.split('|').slice(1, -1).map(c => c.trim());
+        }
+
+        // Header row is the one immediately above the separator
+        const headerCells = parseRow(tableLines[sepIndex - 1]);
+        const bodyRows = tableLines.slice(sepIndex + 1).map(parseRow);
+
+        // Build HTML
+        const thHtml = headerCells.map((cell, ci) => {
+          const align = aligns[ci];
+          const styleAttr = align ? ` style="text-align:${align}"` : '';
+          return `<th${styleAttr}>${inlineMarkdown(esc(cell), safeHref, esc)}</th>`;
+        }).join('');
+
+        const tbodyHtml = bodyRows.map(row => {
+          const tdHtml = row.map((cell, ci) => {
+            const align = aligns[ci];
+            const styleAttr = align ? ` style="text-align:${align}"` : '';
+            return `<td${styleAttr}>${inlineMarkdown(esc(cell), safeHref, esc)}</td>`;
+          }).join('');
+          return `<tr>${tdHtml}</tr>`;
+        }).join('');
+
+        out.push(
+          `<div class="tv-table-wrap"><table class="tv-table">` +
+          `<thead><tr>${thHtml}</tr></thead>` +
+          `<tbody>${tbodyHtml}</tbody>` +
+          `</table></div>`
+        );
+      }
+      continue;
+    }
+
     // Paragraph — collect consecutive non-special lines
     const paraLines = [];
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
-      !/^(#{1,3} |```|> |[-*+] |\d+\. |---+$|\*\*\*+$)/.test(lines[i])
+      !/^(#{1,3} |```|> |[-*+] |\d+\. |---+$|\*\*\*+$|\|)/.test(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;
