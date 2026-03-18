@@ -83,6 +83,8 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       getGlobalStats: vi.fn(() => ({ sessionsCreated: 0 })),
       getDailyStats: vi.fn(() => []),
       cleanupStaleSessions: vi.fn(() => ({ count: 0, cleaned: [] })),
+      getActiveSessionId: vi.fn(() => null),
+      setActiveSessionId: vi.fn(),
     },
     port: 3000,
     https: false,
