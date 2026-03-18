@@ -4594,6 +4594,10 @@ class CodemanApp {
     // Deferred switch: if a clear just happened and we were waiting for this session
     if (this._pendingClearSwitchTo === data.id) {
       this._pendingClearSwitchTo = null;
+      if (this._pendingClearSwitchToTimer) {
+        clearTimeout(this._pendingClearSwitchToTimer);
+        this._pendingClearSwitchToTimer = null;
+      }
       this.selectSession(data.id);
     }
   }
@@ -4959,6 +4963,20 @@ class CodemanApp {
       } else {
         // Store the ID to switch to once session:created fires
         this._pendingClearSwitchTo = newSessionId;
+        // Safety: if session:created is missed, ask backend after 5 seconds
+        if (this._pendingClearSwitchToTimer) clearTimeout(this._pendingClearSwitchToTimer);
+        this._pendingClearSwitchToTimer = setTimeout(async () => {
+          if (this._pendingClearSwitchTo !== newSessionId) return;
+          this._pendingClearSwitchTo = null;
+          this._pendingClearSwitchToTimer = null;
+          try {
+            const res = await fetch('/api/sessions/resolve-active');
+            const data = await res.json();
+            if (data.sessionId && this.sessions.has(data.sessionId)) {
+              this.selectSession(data.sessionId);
+            }
+          } catch {}
+        }, 5000);
       }
     }
 
