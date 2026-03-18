@@ -126,6 +126,12 @@ export const CreateSessionSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   openCodeConfig: OpenCodeConfigSchema,
   safeMode: z.boolean().optional(),
+  worktreeBranch: z.string().optional(),
+  worktreePath: z.string().optional(),
+  worktreeOriginId: z.string().optional(),
+  worktreeNotes: z.string().optional(),
+  assignedPort: z.number().optional(),
+  claudeResumeId: z.string().uuid().optional(),
 });
 
 /** POST /api/sessions/:id/safe-mode */

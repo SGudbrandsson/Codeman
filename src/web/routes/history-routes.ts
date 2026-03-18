@@ -231,12 +231,7 @@ export function registerHistoryRoutes(
           'A session with this conversation ID is already active'
         );
       }
-      if (s.workingDir === workingDir && !s.worktreeBranch) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'A session for this working directory is already active'
-        );
-      }
+      // Allow multiple sessions in the same workingDir — Codeman supports w1/w2 style tabs
     }
 
     // Resolve config

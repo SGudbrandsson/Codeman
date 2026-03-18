@@ -1051,7 +1051,10 @@ export class Session extends EventEmitter {
             claudeMode: this._safeMode ? 'dangerously-skip-permissions' : this._claudeMode,
             allowedTools: this._safeMode ? undefined : this._allowedTools,
             openCodeConfig: this._openCodeConfig,
-            extraArgs: initialPromptArgs,
+            extraArgs: [
+              ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
+              ...initialPromptArgs,
+            ],
           });
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness

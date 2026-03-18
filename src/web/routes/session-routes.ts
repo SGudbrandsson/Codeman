@@ -150,7 +150,15 @@ export function registerSessionRoutes(
       allowedTools: claudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
       safeMode: body.safeMode,
+      worktreeBranch: body.worktreeBranch,
+      worktreePath: body.worktreePath,
+      worktreeOriginId: body.worktreeOriginId,
+      worktreeNotes: body.worktreeNotes,
+      assignedPort: body.assignedPort,
     });
+    if (body.claudeResumeId) {
+      session.claudeResumeId = body.claudeResumeId;
+    }
 
     ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
