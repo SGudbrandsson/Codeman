@@ -6270,7 +6270,7 @@ class CodemanApp {
     }
   }
 
-  handleInit(data) {
+  async handleInit(data) {
     // Clear the init fallback timer since we got data
     if (this._initFallbackTimer) {
       clearTimeout(this._initFallbackTimer);
@@ -6500,27 +6500,34 @@ class CodemanApp {
       });
     }
 
-    // Restore previously active session (survives page reload + SSE reconnect)
-    // Must always re-select because handleInit clears terminal state above.
-    // Reset activeSessionId so selectSession doesn't early-return.
-    // Guard: skip if a newer handleInit has already started (race between loadState + SSE init).
+    // Restore previously active session — ask backend first, fall back to localStorage
     if (gen !== this._initGeneration) return;
     const previousActiveId = this.activeSessionId;
     this.activeSessionId = null;
     if (this.sessionOrder.length > 0) {
-      // Priority: current active > localStorage > first session
       let restoreId = previousActiveId;
-      if (!restoreId || !this.sessions.has(restoreId)) {
-        try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
-      }
       if (restoreId && this.sessions.has(restoreId)) {
-        // Soft reconnect: if SSE dropped and same session is being restored with cached
-        // content, selectSession will skip the hide+clear+reload and just verify in background.
-        this._sseReconnectRestoreId = (previousActiveId === restoreId && this.terminalBufferCache.has(restoreId))
-          ? restoreId : null;
+        // Soft reconnect: same session still valid, reuse cached terminal content
+        this._sseReconnectRestoreId = this.terminalBufferCache.has(restoreId) ? restoreId : null;
         this.selectSession(restoreId);
       } else {
-        this.selectSession(this.sessionOrder[0]);
+        // Ask backend for authoritative answer (persisted active session, tmux-verified)
+        try {
+          const res = await fetch('/api/sessions/resolve-active');
+          // Re-check generation — a newer handleInit may have completed during the await
+          if (gen !== this._initGeneration) return;
+          const data = await res.json();
+          restoreId = data.sessionId && this.sessions.has(data.sessionId) ? data.sessionId : null;
+        } catch { /* network error — fall through to localStorage */ }
+        // Guard again after catch path
+        if (gen !== this._initGeneration) return;
+        // Fall back to localStorage
+        if (!restoreId) {
+          try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
+        }
+        this.selectSession(
+          (restoreId && this.sessions.has(restoreId)) ? restoreId : this.sessionOrder[0]
+        );
       }
     }
   }
