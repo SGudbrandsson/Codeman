@@ -28,6 +28,7 @@ export interface ScreenAnalysis {
   confidence: number;
 }
 
+// eslint-disable-next-line no-control-regex
 const ANSI_RE = /\u001b\[[0-9;]*[A-Za-z]|\u001b[^[]/g;
 
 export function stripAnsi(raw: string): string {
