@@ -4649,6 +4649,9 @@ class CodemanApp {
       for (const [event, method] of _SSE_HANDLER_MAP) {
         const fn = this[method];
         this._sseHandlerWrappers.set(event, (e) => {
+          // Refresh timestamp on every named event so staleness detection in
+          // _onTabVisible() measures "time since last event" not "time since connect"
+          this._lastSseEventTime = Date.now();
           try {
             fn.call(this, e.data ? JSON.parse(e.data) : {});
           } catch (err) {
@@ -6386,6 +6389,14 @@ class CodemanApp {
     if (Date.now() - this._lastSseEventTime > STALE_THRESHOLD_MS) {
       this.reconnectAttempts = 0;
       this.connectSSE();
+      return;
+    }
+    // SSE is connected and not stale, but the browser may have silently dropped
+    // named events while this tab was backgrounded. Re-fetch full state as a
+    // belt-and-suspenders sync so any missed sessions/updates appear immediately.
+    // Guard: skip if a reconnect is already pending (sseReconnectTimeout is set).
+    if (!this.sseReconnectTimeout) {
+      this.loadState();
     }
   }
 
