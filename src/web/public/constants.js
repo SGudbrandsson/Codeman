@@ -291,6 +291,7 @@ const SSE_EVENTS = {
   // Transcript
   TRANSCRIPT_BLOCK: 'transcript:block',
   TRANSCRIPT_CLEAR: 'transcript:clear',
+  TRANSCRIPT_READY: 'transcript:ready',
   TRANSCRIPT_ASK_USER_QUESTION: 'transcript:ask_user_question',
   TRANSCRIPT_ASK_USER_QUESTION_RESOLVED: 'transcript:ask_user_question_resolved',
 

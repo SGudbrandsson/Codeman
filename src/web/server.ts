@@ -840,8 +840,14 @@ export class WebServer extends EventEmitter {
       }
     }
 
+    // If this watcher didn't have a path yet (new session or first-time discovery),
+    // broadcast transcript:ready so clients with an empty cache know to reload.
+    const wasUnwatched = !watcher.transcriptPath;
     // Start or update the watcher with the transcript path
     watcher.updatePath(transcriptPath);
+    if (wasUnwatched) {
+      this.broadcast(SseEvent.TranscriptReady, { sessionId });
+    }
   }
 
   /**
@@ -3160,10 +3166,32 @@ export class WebServer extends EventEmitter {
                 console.log(`[Server] Discovered transcript by session ID for ${session.id}`);
                 this.startTranscriptWatcher(session.id, sessionIdFile);
               } else {
+                // For sessions restored from tmux (e.g. id='restored-6fc31da7', muxName='codeman-6fc31da7'),
+                // the JSONL filename starts with the same prefix that was passed to Claude via --session-id.
+                // This is safe even when sessions share a workingDir because the prefix is session-unique.
+                const muxPrefix = muxSession.muxName.replace(/^codeman-/, '');
+                let foundByPrefix = false;
+                if (muxPrefix && muxPrefix !== muxSession.muxName) {
+                  try {
+                    const prefixMatch = readdirSync(projectDir)
+                      .filter((f) => f.endsWith('.jsonl') && f.startsWith(muxPrefix))
+                      .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+                      .sort((a, b) => b.mtime - a.mtime)[0];
+                    if (prefixMatch) {
+                      console.log(
+                        `[Server] Discovered transcript by mux prefix for ${session.id}: ${prefixMatch.path}`
+                      );
+                      this.startTranscriptWatcher(session.id, prefixMatch.path);
+                      foundByPrefix = true;
+                    }
+                  } catch {
+                    /* project dir unreadable */
+                  }
+                }
                 const sharesDir = [...this.sessions.values()].some(
                   (s) => s.id !== session.id && s.workingDir === session.workingDir
                 );
-                if (!sharesDir) {
+                if (!foundByPrefix && !sharesDir) {
                   try {
                     const files = readdirSync(projectDir)
                       .filter((f) => f.endsWith('.jsonl') && !f.startsWith('.'))

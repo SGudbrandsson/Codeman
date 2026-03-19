@@ -1920,8 +1920,21 @@ const TranscriptView = {
     if (!this._sessionId || !this._container) return;
     const sessionId = this._sessionId;
     const state = this._getState(sessionId);
-    // Skip if load() is in progress (sseBuffer is []) or transcript mode is inactive
+    // Skip if load() is in progress
     if (state._sseBuffer !== null && state._sseBuffer !== undefined) return;
+
+    // If transcript is empty, retry a full load regardless of viewMode state —
+    // state.viewMode defaults to 'terminal' in memory even when the user prefers 'web',
+    // so we rely on DOM visibility as the authoritative check instead.
+    if (state.blocks.length === 0 && !this._clearPending) {
+      const transcriptEl = document.getElementById('transcriptView');
+      if (transcriptEl?.style.display !== 'none') {
+        TranscriptView.load(sessionId).catch(() => {});
+      }
+      return;
+    }
+
+    // Skip incremental sync if transcript mode is inactive
     if (state.viewMode !== 'web') return;
 
     // Only sync when there is cached content — incremental check for missed trailing blocks.
@@ -2978,6 +2991,7 @@ const _SSE_HANDLER_MAP = [
   // Transcript streaming
   [SSE_EVENTS.TRANSCRIPT_BLOCK, '_onTranscriptBlock'],
   [SSE_EVENTS.TRANSCRIPT_CLEAR, '_onTranscriptClear'],
+  [SSE_EVENTS.TRANSCRIPT_READY, '_onTranscriptReady'],
   [SSE_EVENTS.TRANSCRIPT_ASK_USER_QUESTION, '_onTranscriptAskUserQuestion'],
   [SSE_EVENTS.TRANSCRIPT_ASK_USER_QUESTION_RESOLVED, '_onTranscriptAskUserQuestionResolved'],
 ];
@@ -9640,6 +9654,21 @@ class CodemanApp {
       // The AskUserQuestion was answered
       this.pendingAskUserQuestion = null;
       if (sessionId === this.activeSessionId) this.renderAskUserQuestionPanel();
+    }
+  }
+
+  // Transcript watcher attached to a real file for the first time. If the client fetched
+  // the transcript before Claude started (got []) and is still showing an empty view,
+  // reload now that the server has something to serve.
+  _onTranscriptReady(data) {
+    const { sessionId } = data;
+    const state = app._transcriptState?.[sessionId];
+    if (!state || state.blocks.length > 0) return; // already has content, nothing to do
+    if (TranscriptView._sessionId === sessionId) {
+      const transcriptEl = document.getElementById('transcriptView');
+      if (transcriptEl?.style.display !== 'none') {
+        TranscriptView.load(sessionId).catch(() => {});
+      }
     }
   }
 

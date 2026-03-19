@@ -641,6 +641,9 @@ export const ResumeClosedSessionSchema = z.object({
   resumeId: z.string().uuid(),
   name: z.string().max(128).optional(),
   mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+  worktreePath: z.string().optional(),
+  worktreeBranch: z.string().optional(),
+  worktreeOriginId: z.string().optional(),
 });
 
 export type ResumeClosedSessionInput = z.infer<typeof ResumeClosedSessionSchema>;

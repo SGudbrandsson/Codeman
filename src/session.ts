@@ -1039,11 +1039,13 @@ export class Session extends EventEmitter {
         const isRestoredSession = this._muxSession !== null && !needsNewSession;
         if (isRestoredSession) {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
-          // Seed _textOutput from tmux scrollback so text/chat view is populated on restore
+          // Seed _textOutput and _terminalBuffer from tmux scrollback so both views are populated on restore
           const scrollback = this._mux.capturePaneContent(this._muxSession!.muxName);
           if (scrollback) {
             const stripped = stripAnsi(scrollback);
             if (stripped.trim()) this._textOutput.append(stripped);
+            // Populate terminal buffer so the terminal view shows history immediately on restore
+            this._terminalBuffer.set(scrollback);
           }
         } else {
           // Create a new mux session
@@ -1092,8 +1094,14 @@ export class Session extends EventEmitter {
         }
 
         // For NEW mux sessions: wait for readiness then clean buffer
-        // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
-        if (!isRestoredSession) {
+        // For RESTORED mux sessions: buffer already pre-populated from scrollback; signal client to refresh
+        if (isRestoredSession) {
+          this._promptCheckTimeout = setTimeout(() => {
+            this._promptCheckTimeout = null;
+            if (this._isStopped) return;
+            this.emit('needsRefresh');
+          }, 500);
+        } else {
           if (this.mode === 'opencode') {
             // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
             // Wait for TUI to stabilize (output stops changing), then mark ready.

@@ -211,7 +211,7 @@ export function registerHistoryRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Validation failed');
     }
 
-    const { workingDir, resumeId, name, mode } = parsed.data;
+    const { workingDir, resumeId, name, mode, worktreePath, worktreeBranch, worktreeOriginId } = parsed.data;
 
     // Validate workingDir exists and is a directory
     try {
@@ -255,6 +255,9 @@ export function registerHistoryRoutes(
       model,
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
+      worktreePath,
+      worktreeBranch,
+      worktreeOriginId,
     });
 
     // Set claudeResumeId BEFORE startInteractive() so CLI builder injects --resume <uuid>

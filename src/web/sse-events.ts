@@ -247,6 +247,8 @@ export const TranscriptToolEnd = 'transcript:tool_end' as const;
 export const TranscriptBlock = 'transcript:block' as const;
 /** Transcript cleared (e.g. session reset). */
 export const TranscriptClear = 'transcript:clear' as const;
+/** Transcript watcher attached to a real file — client should reload if it has an empty cache. */
+export const TranscriptReady = 'transcript:ready' as const;
 
 // ─── Plan Orchestration ──────────────────────────────────────────────────────
 
@@ -452,6 +454,7 @@ export const SseEvent = {
   TranscriptToolEnd,
   TranscriptBlock,
   TranscriptClear,
+  TranscriptReady,
   TranscriptAskUserQuestion,
   TranscriptAskUserQuestionResolved,
 
