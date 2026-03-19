@@ -1059,7 +1059,18 @@ export function registerSessionRoutes(
 
   app.get<{ Params: { id: string } }>('/api/sessions/:id/transcript', async (req, reply) => {
     const { id } = req.params;
-    const transcriptPath = ctx.getTranscriptPath(id);
+    let transcriptPath = ctx.getTranscriptPath(id);
+    // Fallback: if claudeResumeId was never persisted (e.g. Claude finished before the
+    // conversationId event could fire), look for a JSONL named after the session ID itself.
+    if (!transcriptPath) {
+      const session = ctx.sessions.get(id);
+      if (session?.workingDir) {
+        const { homedir } = await import('node:os');
+        const escapedDir = session.workingDir.replace(/\//g, '-');
+        const candidate = join(homedir(), '.claude', 'projects', escapedDir, `${id}.jsonl`);
+        if (existsSync(candidate)) transcriptPath = candidate;
+      }
+    }
     if (!transcriptPath) {
       return reply.send([]);
     }
