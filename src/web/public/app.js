@@ -3825,6 +3825,32 @@ class CodemanApp {
         }
 
         // ── Normal Mode (echo disabled) ──
+
+        // Paste detection: multi-char string starting with a printable character.
+        // If the pasted text contains newlines, route through sendInput() with
+        // useMux:true so TmuxManager converts \n → C-j (Ink line break) instead
+        // of sending raw \n to the PTY which would trigger premature submission.
+        if (data.length > 1 && data.charCodeAt(0) >= 32 && /[\r\n]/.test(data)) {
+          // Flush any buffered input first so ordering is preserved
+          if (this._pendingInput) {
+            if (this._inputFlushTimeout) {
+              clearTimeout(this._inputFlushTimeout);
+              this._inputFlushTimeout = null;
+            }
+            flushInput();
+          }
+          // Route pasted multi-line text through useMux path (TmuxManager).
+          // Append \r only if the paste itself ends with a newline (user intent
+          // to submit); otherwise leave it in the input buffer awaiting Enter.
+          const pasteEndsWithNewline = /[\r\n]$/.test(data);
+          // Normalize line endings to \n; TmuxManager will convert to C-j
+          const pasteText = data.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          // Append \r to submit if the paste ends with a newline (user intent to submit);
+          // otherwise the text lands in the input buffer awaiting an explicit Enter.
+          this.sendInput(pasteText + (pasteEndsWithNewline ? '\r' : '')).catch(() => {});
+          return;
+        }
+
         this._pendingInput += data;
 
         // Control chars (Enter, Ctrl+C, escape sequences) — flush immediately
