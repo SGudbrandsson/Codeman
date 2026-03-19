@@ -165,6 +165,9 @@ vi.mock('../src/utils/git-utils.js', () => ({
 // ---------------------------------------------------------------------------
 // Mock Session class
 // ---------------------------------------------------------------------------
+// Captures all Session constructor calls so tests can inspect which opts were passed
+const sessionConstructorCalls: Array<Record<string, unknown>> = [];
+
 vi.mock('../src/session.js', async () => {
   const { EventEmitter } = await import('node:events');
 
@@ -174,11 +177,18 @@ vi.mock('../src/session.js', async () => {
     mode: string;
     name: string;
     claudeResumeId: string | null = null;
+    flickerFilterEnabled: boolean | undefined = undefined;
+    draft: string | undefined = undefined;
+    mcpServers: unknown = undefined;
     ptyProcess = null;
     ralphTracker = {
       enabled: false,
+      autoEnableDisabled: false,
       loopState: { completionPhrase: null },
       startLoop: vi.fn(),
+      enable: vi.fn(),
+      disableAutoEnable: vi.fn(),
+      enableAutoEnable: vi.fn(),
     };
 
     constructor(opts: {
@@ -195,12 +205,17 @@ vi.mock('../src/session.js', async () => {
       this.mode = opts.mode ?? 'claude';
       this.name = opts.name ?? 'unnamed';
       this.claudeResumeId = opts.claudeResumeId ?? null;
+      // Record constructor arguments for test assertions (Gap 3)
+      sessionConstructorCalls.push({ ...opts });
     }
 
     startInteractive = mocks.startInteractiveImpl;
     setAutoCompact = vi.fn();
     setAutoClear = vi.fn();
+    setNice = vi.fn();
+    setSafeMode = vi.fn();
     restoreTokens = vi.fn();
+    restoreContextWindow = vi.fn();
     getState = vi.fn(function (this: MockSession) {
       return { id: this.id };
     });
@@ -386,6 +401,7 @@ describe('WebServer.restoreMuxSessions() — auto-reconnect on restart', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
 
     // Reset shared mock state
     mocks.startInteractiveImpl.mockResolvedValue(undefined);
@@ -469,6 +485,7 @@ describe('WebServer.restoreMuxSessions() — eager transcript watcher', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
 
     // Reset shared mock state
     mocks.startInteractiveImpl.mockResolvedValue(undefined);
@@ -590,5 +607,526 @@ describe('WebServer.restoreMuxSessions() — eager transcript watcher', () => {
     // No transcript:clear must have been emitted from the second call
     // (the watcher already has the path set, so updatePath() is a no-op)
     expect(transcriptClearCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 3 — worktreeNotes / assignedPort fix in the mux recovery path
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — mux path passes worktreeNotes and assignedPort', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('passes worktreeNotes and assignedPort from savedState to the mux-path Session constructor', async () => {
+    const muxSession = makeMuxSession({
+      sessionId: 'sess-mux-notes',
+      muxName: 'codeman-muxnotes1',
+      workingDir: '/tmp',
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: ['sess-mux-notes'], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    (getStore() as any).getSession.mockReturnValue({
+      status: 'idle',
+      worktreeNotes: 'My notes here',
+      assignedPort: 4321,
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const call = sessionConstructorCalls.find((c) => c.id === 'sess-mux-notes');
+    expect(call).toBeDefined();
+    expect(call!.worktreeNotes).toBe('My notes here');
+    expect(call!.assignedPort).toBe(4321);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 1 — Non-mux restore pass (primary crash-recovery logic)
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux restore pass', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    // No alive mux sessions — simulates the "tmux is dead" scenario
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('creates a Session for a state.json entry with no surviving tmux pane and adds it to this.sessions', async () => {
+    // existsSync returns true so workingDir check passes
+    mocks.existsSync.mockReturnValue(true);
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-nonmux-1': {
+        id: 'sess-nonmux-1',
+        workingDir: '/tmp/project1',
+        mode: 'claude',
+        name: 'My Session',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-nonmux-1')).toBe(true);
+    expect((server as any).setupSessionListeners).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a state.json entry whose workingDir does not exist on disk', async () => {
+    mocks.existsSync.mockReturnValue(false);
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-missing-dir': {
+        id: 'sess-missing-dir',
+        workingDir: '/nonexistent/path',
+        mode: 'claude',
+        name: 'Gone Session',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-missing-dir')).toBe(false);
+  });
+
+  it('skips archived sessions in state.json', async () => {
+    mocks.existsSync.mockReturnValue(true);
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-archived': {
+        id: 'sess-archived',
+        workingDir: '/tmp/archived',
+        mode: 'claude',
+        name: 'Archived Session',
+        status: 'archived',
+        createdAt: 1000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-archived')).toBe(false);
+  });
+
+  it('adds parent sessions (no worktreeOriginId) before child sessions', async () => {
+    mocks.existsSync.mockReturnValue(true);
+
+    // Child is listed first in the object to ensure sorting is not order-dependent
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-child': {
+        id: 'sess-child',
+        workingDir: '/tmp/child',
+        mode: 'claude',
+        name: 'Child',
+        status: 'stopped',
+        createdAt: 2000,
+        worktreeOriginId: 'sess-parent',
+      },
+      'sess-parent': {
+        id: 'sess-parent',
+        workingDir: '/tmp/parent',
+        mode: 'claude',
+        name: 'Parent',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    // Parent constructor call must appear before child constructor call
+    const parentIdx = sessionConstructorCalls.findIndex((c) => c.id === 'sess-parent');
+    const childIdx = sessionConstructorCalls.findIndex((c) => c.id === 'sess-child');
+    expect(parentIdx).toBeGreaterThanOrEqual(0);
+    expect(childIdx).toBeGreaterThanOrEqual(0);
+    expect(parentIdx).toBeLessThan(childIdx);
+  });
+
+  it('passes worktreeNotes and assignedPort to the non-mux Session constructor', async () => {
+    mocks.existsSync.mockReturnValue(true);
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-with-meta': {
+        id: 'sess-with-meta',
+        workingDir: '/tmp/meta',
+        mode: 'claude',
+        name: 'Meta Session',
+        status: 'stopped',
+        createdAt: 1000,
+        worktreeNotes: 'Important notes',
+        assignedPort: 5678,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const call = sessionConstructorCalls.find((c) => c.id === 'sess-with-meta');
+    expect(call).toBeDefined();
+    expect(call!.worktreeNotes).toBe('Important notes');
+    expect(call!.assignedPort).toBe(5678);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 2 — Auto-resume for sessions that were running
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux auto-resume', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    // existsSync always returns true so workingDir check passes
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('calls startInteractive() for an idle session with a claudeResumeId in claude mode', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-idle-resume': {
+        id: 'sess-idle-resume',
+        workingDir: '/tmp/proj',
+        mode: 'claude',
+        name: 'Resumable',
+        status: 'idle',
+        createdAt: 1000,
+        claudeResumeId: 'aaaa-bbbb-cccc',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    // Fire-and-forget: let the microtask queue drain
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call startInteractive() for a stopped session even with claudeResumeId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-stopped-resume': {
+        id: 'sess-stopped-resume',
+        workingDir: '/tmp/proj',
+        mode: 'claude',
+        name: 'Stopped',
+        status: 'stopped',
+        createdAt: 1000,
+        claudeResumeId: 'dddd-eeee-ffff',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call startInteractive() for an idle session with no claudeResumeId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-idle-noresume': {
+        id: 'sess-idle-noresume',
+        workingDir: '/tmp/proj',
+        mode: 'claude',
+        name: 'Idle No Resume',
+        status: 'idle',
+        createdAt: 1000,
+        // No claudeResumeId
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call startInteractive() for an idle opencode session with claudeResumeId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-opencode-resume': {
+        id: 'sess-opencode-resume',
+        workingDir: '/tmp/proj',
+        mode: 'opencode',
+        name: 'Opencode',
+        status: 'idle',
+        createdAt: 1000,
+        claudeResumeId: 'gggg-hhhh-iiii',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('swallows startInteractive() rejection and continues processing remaining sessions', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-fail-resume': {
+        id: 'sess-fail-resume',
+        workingDir: '/tmp/fail',
+        mode: 'claude',
+        name: 'Fail',
+        status: 'idle',
+        createdAt: 1000,
+        claudeResumeId: 'fail-resume-id',
+      },
+      'sess-ok-resume': {
+        id: 'sess-ok-resume',
+        workingDir: '/tmp/ok',
+        mode: 'claude',
+        name: 'OK',
+        status: 'idle',
+        createdAt: 2000,
+        claudeResumeId: 'ok-resume-id',
+      },
+    });
+
+    let callCount = 0;
+    mocks.startInteractiveImpl.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return Promise.reject(new Error('auto-resume failed'));
+      return Promise.resolve();
+    });
+
+    // Must not throw
+    await expect((server as any).restoreMuxSessions()).resolves.not.toThrow();
+
+    // Let fire-and-forget promises settle
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Both sessions had startInteractive() attempted
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(2);
+    // Both sessions must still appear in this.sessions
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-fail-resume')).toBe(true);
+    expect(sessions.has('sess-ok-resume')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gap 4 — _restoreSessionConfig() helper
+// ---------------------------------------------------------------------------
+
+describe('WebServer._restoreSessionConfig()', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  function makeSession(opts: { mode?: string } = {}): {
+    id: string;
+    workingDir: string;
+    mode: string;
+    claudeResumeId: string | null;
+    flickerFilterEnabled: boolean | undefined;
+    draft: string | undefined;
+    mcpServers: unknown;
+    setAutoCompact: ReturnType<typeof vi.fn>;
+    setAutoClear: ReturnType<typeof vi.fn>;
+    setNice: ReturnType<typeof vi.fn>;
+    setSafeMode: ReturnType<typeof vi.fn>;
+    restoreTokens: ReturnType<typeof vi.fn>;
+    restoreContextWindow: ReturnType<typeof vi.fn>;
+    ralphTracker: {
+      enabled: boolean;
+      autoEnableDisabled: boolean;
+      loopState: { completionPhrase: null };
+      startLoop: ReturnType<typeof vi.fn>;
+      enable: ReturnType<typeof vi.fn>;
+      disableAutoEnable: ReturnType<typeof vi.fn>;
+      enableAutoEnable: ReturnType<typeof vi.fn>;
+    };
+    emit: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      id: 'test-session',
+      workingDir: '/tmp',
+      mode: opts.mode ?? 'claude',
+      claudeResumeId: null,
+      flickerFilterEnabled: undefined,
+      draft: undefined,
+      mcpServers: undefined,
+      setAutoCompact: vi.fn(),
+      setAutoClear: vi.fn(),
+      setNice: vi.fn(),
+      setSafeMode: vi.fn(),
+      restoreTokens: vi.fn(),
+      restoreContextWindow: vi.fn(),
+      ralphTracker: {
+        enabled: false,
+        autoEnableDisabled: false,
+        loopState: { completionPhrase: null },
+        startLoop: vi.fn(),
+        enable: vi.fn(),
+        disableAutoEnable: vi.fn(),
+        enableAutoEnable: vi.fn(),
+      },
+      emit: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+  }
+
+  it('calls setAutoCompact() when autoCompactEnabled is present in savedState', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, {
+      autoCompactEnabled: true,
+      autoCompactThreshold: 80000,
+      autoCompactPrompt: 'compact now',
+    });
+    expect(session.setAutoCompact).toHaveBeenCalledWith(true, 80000, 'compact now');
+  });
+
+  it('calls setAutoClear() when autoClearEnabled is present in savedState', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, {
+      autoClearEnabled: true,
+      autoClearThreshold: 5000,
+    });
+    expect(session.setAutoClear).toHaveBeenCalledWith(true, 5000);
+  });
+
+  it('restores claudeResumeId onto the session object', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, {
+      claudeResumeId: 'my-resume-id',
+    });
+    expect(session.claudeResumeId).toBe('my-resume-id');
+  });
+
+  it('skips Ralph restore when session.mode is opencode', () => {
+    const session = makeSession({ mode: 'opencode' });
+    (server as any)._restoreSessionConfig(session, {
+      ralphEnabled: true,
+      ralphCompletionPhrase: 'DONE',
+    });
+    expect(session.ralphTracker.enable).not.toHaveBeenCalled();
+    expect(session.ralphTracker.startLoop).not.toHaveBeenCalled();
+  });
+
+  it('skips respawn restore when session.mode is opencode', () => {
+    const restoreRespawnSpy = vi.spyOn(server as any, 'restoreRespawnController').mockImplementation(() => {});
+    const session = makeSession({ mode: 'opencode' });
+    (server as any)._restoreSessionConfig(session, {
+      respawnEnabled: true,
+      respawnConfig: { enabled: true, intervalMs: 5000 },
+    });
+    expect(restoreRespawnSpy).not.toHaveBeenCalled();
   });
 });

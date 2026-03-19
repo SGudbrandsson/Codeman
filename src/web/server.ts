@@ -2896,6 +2896,104 @@ export class WebServer extends EventEmitter {
     return false;
   }
 
+  /**
+   * Restores persisted config fields (autoCompact, tokens, Ralph, nice, respawn, etc.)
+   * from a `SessionState` snapshot onto a freshly-created `Session` object.
+   * Called from both the mux recovery path and the non-mux (stopped session) restore path
+   * so both share identical restoration logic.
+   */
+  private _restoreSessionConfig(session: Session, savedState: SessionState): void {
+    // Auto-compact
+    if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
+      session.setAutoCompact(
+        savedState.autoCompactEnabled ?? false,
+        savedState.autoCompactThreshold,
+        savedState.autoCompactPrompt
+      );
+    }
+    // Auto-clear
+    if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
+      session.setAutoClear(savedState.autoClearEnabled ?? false, savedState.autoClearThreshold);
+    }
+    // Token tracking
+    if (
+      savedState.inputTokens !== undefined ||
+      savedState.outputTokens !== undefined ||
+      savedState.totalCost !== undefined
+    ) {
+      session.restoreTokens(savedState.inputTokens ?? 0, savedState.outputTokens ?? 0, savedState.totalCost ?? 0);
+      if (savedState.contextWindowTokens) {
+        session.restoreContextWindow(
+          savedState.contextWindowTokens,
+          savedState.contextWindowMax ?? 200000,
+          savedState.contextWindowSystem,
+          savedState.contextWindowConversation
+        );
+      }
+      // Initialize lastRecordedTokens to prevent re-counting restored tokens as new daily usage
+      this.lastRecordedTokens.set(session.id, {
+        input: savedState.inputTokens ?? 0,
+        output: savedState.outputTokens ?? 0,
+      });
+      const totalTokens = (savedState.inputTokens ?? 0) + (savedState.outputTokens ?? 0);
+      if (totalTokens > 0) {
+        console.log(
+          `[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`
+        );
+      }
+    }
+    // Ralph / Todo tracker (not supported for opencode sessions)
+    if (session.mode !== 'opencode') {
+      if (savedState.ralphAutoEnableDisabled) {
+        session.ralphTracker.disableAutoEnable();
+        console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
+      } else if (savedState.ralphEnabled) {
+        // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
+        session.ralphTracker.enableAutoEnable();
+      }
+      if (savedState.ralphEnabled) {
+        session.ralphTracker.enable();
+        if (savedState.ralphCompletionPhrase) {
+          session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
+        }
+        console.log(
+          `[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`
+        );
+      }
+    }
+    // Nice priority config
+    if (savedState.niceEnabled !== undefined) {
+      session.setNice({
+        enabled: savedState.niceEnabled,
+        niceValue: savedState.niceValue,
+      });
+    }
+    // Flicker filter (frontend-applied but persisted)
+    if (savedState.flickerFilterEnabled !== undefined) {
+      session.flickerFilterEnabled = savedState.flickerFilterEnabled;
+    }
+    if (savedState.draft) {
+      session.draft = savedState.draft;
+    }
+    if (savedState.mcpServers !== undefined) {
+      session.mcpServers = savedState.mcpServers;
+    }
+    if (savedState.claudeResumeId !== undefined) {
+      session.claudeResumeId = savedState.claudeResumeId;
+    }
+    if (savedState.safeMode) {
+      session.setSafeMode(true);
+    }
+    // Respawn controller (not supported for opencode sessions)
+    if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
+      try {
+        this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
+      } catch (err) {
+        console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
+      }
+    }
+  }
+
   private async restoreMuxSessions(): Promise<void> {
     try {
       // Reconcile mux sessions to find which ones are still alive (also discovers unknown ones)
@@ -2965,6 +3063,8 @@ export class WebServer extends EventEmitter {
               worktreePath,
               worktreeBranch,
               worktreeOriginId,
+              worktreeNotes: savedState?.worktreeNotes, // FIX: was missing from mux recovery path
+              assignedPort: savedState?.assignedPort, // FIX: was missing from mux recovery path
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
@@ -2974,99 +3074,7 @@ export class WebServer extends EventEmitter {
               this.mux.updateSessionName(muxSession.sessionId, effectiveName);
             }
             if (savedState) {
-              // Auto-compact
-              if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
-                session.setAutoCompact(
-                  savedState.autoCompactEnabled ?? false,
-                  savedState.autoCompactThreshold,
-                  savedState.autoCompactPrompt
-                );
-              }
-              // Auto-clear
-              if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
-                session.setAutoClear(savedState.autoClearEnabled ?? false, savedState.autoClearThreshold);
-              }
-              // Token tracking
-              if (
-                savedState.inputTokens !== undefined ||
-                savedState.outputTokens !== undefined ||
-                savedState.totalCost !== undefined
-              ) {
-                session.restoreTokens(
-                  savedState.inputTokens ?? 0,
-                  savedState.outputTokens ?? 0,
-                  savedState.totalCost ?? 0
-                );
-                if (savedState.contextWindowTokens) {
-                  session.restoreContextWindow(
-                    savedState.contextWindowTokens,
-                    savedState.contextWindowMax ?? 200000,
-                    savedState.contextWindowSystem,
-                    savedState.contextWindowConversation
-                  );
-                }
-                // Initialize lastRecordedTokens to prevent re-counting restored tokens as new daily usage
-                this.lastRecordedTokens.set(session.id, {
-                  input: savedState.inputTokens ?? 0,
-                  output: savedState.outputTokens ?? 0,
-                });
-                const totalTokens = (savedState.inputTokens ?? 0) + (savedState.outputTokens ?? 0);
-                if (totalTokens > 0) {
-                  console.log(
-                    `[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`
-                  );
-                }
-              }
-              // Ralph / Todo tracker (not supported for opencode sessions)
-              if (session.mode !== 'opencode') {
-                if (savedState.ralphAutoEnableDisabled) {
-                  session.ralphTracker.disableAutoEnable();
-                  console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
-                } else if (savedState.ralphEnabled) {
-                  // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
-                  session.ralphTracker.enableAutoEnable();
-                }
-                if (savedState.ralphEnabled) {
-                  session.ralphTracker.enable();
-                  if (savedState.ralphCompletionPhrase) {
-                    session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
-                  }
-                  console.log(
-                    `[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`
-                  );
-                }
-              }
-              // Nice priority config
-              if (savedState.niceEnabled !== undefined) {
-                session.setNice({
-                  enabled: savedState.niceEnabled,
-                  niceValue: savedState.niceValue,
-                });
-              }
-              // Flicker filter (frontend-applied but persisted)
-              if (savedState.flickerFilterEnabled !== undefined) {
-                session.flickerFilterEnabled = savedState.flickerFilterEnabled;
-              }
-              if (savedState.draft) {
-                session.draft = savedState.draft;
-              }
-              if (savedState.mcpServers !== undefined) {
-                session.mcpServers = savedState.mcpServers;
-              }
-              if (savedState.claudeResumeId !== undefined) {
-                session.claudeResumeId = savedState.claudeResumeId;
-              }
-              if (savedState.safeMode) {
-                session.setSafeMode(true);
-              }
-              // Respawn controller (not supported for opencode sessions)
-              if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
-                try {
-                  this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
-                } catch (err) {
-                  console.error(`[Server] Failed to restore respawn for session ${session.id}:`, err);
-                }
-              }
+              this._restoreSessionConfig(session, savedState);
             }
 
             // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (not supported for opencode)
@@ -3192,6 +3200,94 @@ export class WebServer extends EventEmitter {
 
       if (dead.length > 0) {
         console.log(`[Server] Cleaned up ${dead.length} dead mux session(s)`);
+      }
+
+      // Non-mux restore pass: recover sessions from state.json that have no surviving tmux pane.
+      // This handles the case where tmux died (hard crash, reboot, tmux kill-server) but
+      // state.json still holds all session metadata. Without this pass, cleanupStaleSessions()
+      // would purge those entries and the user would have to recreate everything manually.
+      //
+      // Sessions are sorted parents-first so the UI can correctly group worktree children.
+      const storedSessions = this.store.getSessions();
+      const nonMuxSessions = Object.values(storedSessions)
+        .filter((s) => !this.sessions.has(s.id) && shouldAttemptReattach(s))
+        .sort((a, b) => {
+          // Parents (no worktreeOriginId) first, then by creation time
+          if (!a.worktreeOriginId && b.worktreeOriginId) return -1;
+          if (a.worktreeOriginId && !b.worktreeOriginId) return 1;
+          return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+        });
+
+      if (nonMuxSessions.length > 0) {
+        console.log(
+          `[Server] Restoring ${nonMuxSessions.length} stopped session(s) from state.json (no tmux pane found)`
+        );
+        const nonMuxClaudeMode = await this.getClaudeModeConfig();
+
+        for (const savedState of nonMuxSessions) {
+          // Skip sessions whose working directory no longer exists on disk
+          // (e.g. deleted/merged worktrees)
+          if (!existsSync(savedState.workingDir)) {
+            console.log(
+              `[Server] Skipping stopped session ${savedState.id}: workingDir missing (${savedState.workingDir})`
+            );
+            continue;
+          }
+
+          const session = new Session({
+            id: savedState.id,
+            workingDir: savedState.workingDir,
+            mode: savedState.mode ?? 'claude',
+            name: savedState.name,
+            mux: this.mux,
+            useMux: true,
+            claudeMode: nonMuxClaudeMode.claudeMode,
+            allowedTools: nonMuxClaudeMode.allowedTools,
+            // Full worktree metadata so the UI shows correct grouping and merge actions
+            worktreePath: savedState.worktreePath,
+            worktreeBranch: savedState.worktreeBranch,
+            worktreeOriginId: savedState.worktreeOriginId,
+            worktreeNotes: savedState.worktreeNotes,
+            assignedPort: savedState.assignedPort,
+          });
+
+          // Restore all persisted config (autoCompact, tokens, ralph, nice, respawn, etc.)
+          this._restoreSessionConfig(session, savedState);
+
+          // Determine whether Claude was running when the server last persisted this session.
+          // If so and a resumable conversation ID exists, auto-restart Claude with --resume.
+          const wasRunning = savedState.status === 'idle' || savedState.status === 'busy';
+
+          this.sessions.set(session.id, session);
+          await this.setupSessionListeners(session);
+          this.persistSessionState(session);
+
+          // Start transcript watcher if we have a known conversation ID
+          if (session.claudeResumeId && session.workingDir) {
+            const escapedDir = session.workingDir.replace(/\//g, '-');
+            const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+            const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
+            this.startTranscriptWatcher(session.id, transcriptPath);
+          }
+
+          if (wasRunning && session.claudeResumeId && session.mode !== 'opencode') {
+            // Auto-resume: restart Claude with --resume so the user sees a live session
+            session.startInteractive().catch((err) => {
+              console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);
+            });
+            console.log(
+              `[Server] Auto-resuming session ${session.id} (was running, claudeResumeId=${session.claudeResumeId})`
+            );
+          } else {
+            console.log(`[Server] Restored stopped session ${session.id} from state.json`);
+          }
+
+          getLifecycleLog().log({
+            event: 'recovered',
+            sessionId: session.id,
+            name: session.name,
+          });
+        }
       }
     } catch (err) {
       console.error('[Server] Failed to restore mux sessions:', err);
