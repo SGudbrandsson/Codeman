@@ -7769,6 +7769,10 @@ class CodemanApp {
       }
     }
 
+    // Close the session drawer before showing the modal so it doesn't
+    // remain visible alongside the confirmation dialog on desktop.
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+
     document.getElementById('closeConfirmModal').classList.add('active');
   }
 

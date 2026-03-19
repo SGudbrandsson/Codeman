@@ -134,4 +134,46 @@ describe('Desktop close-session dialog: z-index above session drawer', () => {
 
     expect(zIndices.modalZ).toBeGreaterThan(zIndices.drawerZ);
   });
+
+  it('session drawer and overlay are dismissed when requestCloseSession is called', async () => {
+    // Regression: clicking × in the open session drawer must close the drawer before
+    // showing the confirmation modal — so the two are never visible simultaneously.
+    const result = await page.evaluate(() => {
+      const drawer = document.getElementById('sessionDrawer');
+      const overlay = document.getElementById('sessionDrawerOverlay');
+      if (!drawer) return { drawerOpen: null, overlayOpen: null, modalActive: null };
+
+      // Simulate the drawer being open
+      drawer.classList.add('open');
+      if (overlay) overlay.classList.add('open');
+
+      // Inject a minimal fake session so requestCloseSession proceeds past the guard
+      const fakeId = '__test_close_dialog__';
+      window.app.sessions.set(fakeId, {
+        id: fakeId,
+        name: 'test',
+        mode: 'claude',
+        worktreeBranch: null,
+        worktreeOriginId: null,
+      } as any);
+
+      window.app.requestCloseSession(fakeId);
+
+      const drawerOpen = drawer.classList.contains('open');
+      const overlayOpen = overlay ? overlay.classList.contains('open') : false;
+      const modalActive = document.getElementById('closeConfirmModal')?.classList.contains('active') ?? false;
+
+      // Clean up
+      window.app?.cancelCloseSession?.();
+      window.app.sessions.delete(fakeId);
+
+      return { drawerOpen, overlayOpen, modalActive };
+    });
+
+    // Drawer and overlay must be closed before the modal appears
+    expect(result.drawerOpen).toBe(false);
+    expect(result.overlayOpen).toBe(false);
+    // Modal must have been shown
+    expect(result.modalActive).toBe(true);
+  });
 });
