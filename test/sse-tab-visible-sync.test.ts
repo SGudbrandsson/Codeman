@@ -112,11 +112,11 @@ describe('Fix 1: _lastSseEventTime updated on named SSE event', () => {
   });
 
   it('_lastSseEventTime is updated for other named events (session:deleted)', async () => {
-    // Set an artificially old timestamp again
-    await page.evaluate(() => {
+    // Capture tsBefore from the browser clock (same domain as tsAfter) for a valid comparison
+    const tsBefore: number = await page.evaluate(() => {
       (window as any).app._lastSseEventTime = Date.now() - 20_000;
+      return (window as any).app._lastSseEventTime;
     });
-    const tsBefore = Date.now() - 20_000;
 
     await page.evaluate(() => {
       const app = (window as any).app;
@@ -227,6 +227,71 @@ describe('Fix 2: _onTabVisible() calls loadState() when SSE is OPEN and not stal
 
     // Remove the route intercept
     await page.unroute('**/api/status');
+  });
+});
+
+// ─── Fix 2 stale branch: loadState() NOT called when reconnect fires ─────────
+
+describe('Fix 2 stale branch: loadState() NOT called after stale-triggered reconnect', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('loadState() is NOT called when _lastSseEventTime is stale (return guards new code)', async () => {
+    // Instrument loadState to count invocations
+    await page.evaluate(() => {
+      const app = (window as any).app;
+      app._loadStateCallCountStale = 0;
+      const original = app.loadState.bind(app);
+      app.loadState = async function (...args: unknown[]) {
+        app._loadStateCallCountStale++;
+        return original(...args);
+      };
+      // Also stub connectSSE so it doesn't actually reconnect during the test
+      app._connectSseCallCount = 0;
+      const origConnectSSE = app.connectSSE.bind(app);
+      app._origConnectSSE = origConnectSSE;
+      app.connectSSE = function () {
+        app._connectSseCallCount++;
+        // Don't actually reconnect — just record the call
+      };
+    });
+
+    // Make _lastSseEventTime appear stale (> STALE_THRESHOLD_MS ago)
+    await page.evaluate(() => {
+      const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+      (window as any).app._lastSseEventTime = Date.now() - STALE_THRESHOLD_MS - 1000;
+    });
+
+    await page.evaluate(() => {
+      (window as any).app._onTabVisible();
+    });
+
+    await page.waitForTimeout(200);
+
+    const connectCalls: number = await page.evaluate(() => (window as any).app._connectSseCallCount);
+    const loadStateCalls: number = await page.evaluate(() => (window as any).app._loadStateCallCountStale);
+
+    // The stale branch must call connectSSE (reconnect) but NOT loadState (the `return` prevents it)
+    expect(connectCalls).toBe(1);
+    expect(loadStateCalls).toBe(0);
+
+    // Restore original connectSSE
+    await page.evaluate(() => {
+      const app = (window as any).app;
+      if (app._origConnectSSE) {
+        app.connectSSE = app._origConnectSSE;
+        delete app._origConnectSSE;
+      }
+    });
   });
 });
 
