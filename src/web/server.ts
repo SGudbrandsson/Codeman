@@ -2984,6 +2984,10 @@ export class WebServer extends EventEmitter {
     if (savedState.safeMode) {
       session.setSafeMode(true);
     }
+    // Color — must be set before persistSessionState() overwrites it
+    if (savedState.color && savedState.color !== 'default') {
+      session.setColor(savedState.color);
+    }
     // Respawn controller (not supported for opencode sessions)
     if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
       try {
@@ -3059,6 +3063,8 @@ export class WebServer extends EventEmitter {
               muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
               claudeMode: recoveryClaudeMode.claudeMode,
               allowedTools: recoveryClaudeMode.allowedTools,
+              // Preserve original creation timestamp so parent-before-child sort remains stable
+              createdAt: savedState?.createdAt,
               // Restored/auto-detected worktree metadata so drawer grouping and merge actions survive restarts
               worktreePath,
               worktreeBranch,
@@ -3225,68 +3231,87 @@ export class WebServer extends EventEmitter {
         const nonMuxClaudeMode = await this.getClaudeModeConfig();
 
         for (const savedState of nonMuxSessions) {
-          // Skip sessions whose working directory no longer exists on disk
-          // (e.g. deleted/merged worktrees)
-          if (!existsSync(savedState.workingDir)) {
-            console.log(
-              `[Server] Skipping stopped session ${savedState.id}: workingDir missing (${savedState.workingDir})`
-            );
-            continue;
-          }
+          try {
+            // Skip sessions with no workingDir (malformed state.json entries)
+            if (!savedState.workingDir) {
+              console.log(`[Server] Skipping session ${savedState.id}: no workingDir`);
+              continue;
+            }
+            // Skip sessions whose working directory no longer exists on disk
+            // (e.g. deleted/merged worktrees)
+            if (!existsSync(savedState.workingDir)) {
+              console.log(
+                `[Server] Skipping stopped session ${savedState.id}: workingDir missing (${savedState.workingDir})`
+              );
+              continue;
+            }
 
-          const session = new Session({
-            id: savedState.id,
-            workingDir: savedState.workingDir,
-            mode: savedState.mode ?? 'claude',
-            name: savedState.name,
-            mux: this.mux,
-            useMux: true,
-            claudeMode: nonMuxClaudeMode.claudeMode,
-            allowedTools: nonMuxClaudeMode.allowedTools,
-            // Full worktree metadata so the UI shows correct grouping and merge actions
-            worktreePath: savedState.worktreePath,
-            worktreeBranch: savedState.worktreeBranch,
-            worktreeOriginId: savedState.worktreeOriginId,
-            worktreeNotes: savedState.worktreeNotes,
-            assignedPort: savedState.assignedPort,
-          });
-
-          // Restore all persisted config (autoCompact, tokens, ralph, nice, respawn, etc.)
-          this._restoreSessionConfig(session, savedState);
-
-          // Determine whether Claude was running when the server last persisted this session.
-          // If so and a resumable conversation ID exists, auto-restart Claude with --resume.
-          const wasRunning = savedState.status === 'idle' || savedState.status === 'busy';
-
-          this.sessions.set(session.id, session);
-          await this.setupSessionListeners(session);
-          this.persistSessionState(session);
-
-          // Start transcript watcher if we have a known conversation ID
-          if (session.claudeResumeId && session.workingDir) {
-            const escapedDir = session.workingDir.replace(/\//g, '-');
-            const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
-            const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
-            this.startTranscriptWatcher(session.id, transcriptPath);
-          }
-
-          if (wasRunning && session.claudeResumeId && session.mode !== 'opencode') {
-            // Auto-resume: restart Claude with --resume so the user sees a live session
-            session.startInteractive().catch((err) => {
-              console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);
+            const session = new Session({
+              id: savedState.id,
+              workingDir: savedState.workingDir,
+              mode: savedState.mode ?? 'claude',
+              name: savedState.name,
+              mux: this.mux,
+              useMux: true,
+              claudeMode: nonMuxClaudeMode.claudeMode,
+              allowedTools: nonMuxClaudeMode.allowedTools,
+              // Preserve original creation timestamp so parent-before-child sort remains stable
+              createdAt: savedState.createdAt,
+              // Full worktree metadata so the UI shows correct grouping and merge actions
+              worktreePath: savedState.worktreePath,
+              worktreeBranch: savedState.worktreeBranch,
+              worktreeOriginId: savedState.worktreeOriginId,
+              worktreeNotes: savedState.worktreeNotes,
+              assignedPort: savedState.assignedPort,
             });
-            console.log(
-              `[Server] Auto-resuming session ${session.id} (was running, claudeResumeId=${session.claudeResumeId})`
-            );
-          } else {
-            console.log(`[Server] Restored stopped session ${session.id} from state.json`);
-          }
 
-          getLifecycleLog().log({
-            event: 'recovered',
-            sessionId: session.id,
-            name: session.name,
-          });
+            // Restore all persisted config (autoCompact, tokens, ralph, nice, respawn, etc.)
+            this._restoreSessionConfig(session, savedState);
+
+            // If the session was stopped before the crash, mark it stopped so persistSessionState()
+            // writes the correct status back to state.json instead of defaulting to idle.
+            if (savedState.status === 'stopped') {
+              session.markStopped();
+            }
+
+            // Determine whether Claude was running when the server last persisted this session.
+            // If so and a resumable conversation ID exists, auto-restart Claude with --resume.
+            const wasRunning = savedState.status === 'idle' || savedState.status === 'busy';
+
+            this.sessions.set(session.id, session);
+            await this.setupSessionListeners(session);
+            this.persistSessionState(session);
+
+            // Start transcript watcher if we have a known conversation ID
+            if (session.claudeResumeId && session.workingDir) {
+              const escapedDir = session.workingDir.replace(/\//g, '-');
+              const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+              const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
+              this.startTranscriptWatcher(session.id, transcriptPath);
+            }
+
+            if (wasRunning && session.claudeResumeId && session.mode !== 'opencode') {
+              // Auto-resume: restart Claude with --resume so the user sees a live session
+              session.startInteractive().catch((err) => {
+                console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);
+              });
+              console.log(
+                `[Server] Auto-resuming session ${session.id} (was running, claudeResumeId=${session.claudeResumeId})`
+              );
+            } else {
+              console.log(`[Server] Restored stopped session ${session.id} from state.json`);
+            }
+
+            getLifecycleLog().log({
+              event: 'recovered',
+              sessionId: session.id,
+              name: session.name,
+            });
+          } catch (err) {
+            console.error(`[Server] Failed to restore session ${savedState.id}:`, err);
+            // Remove from map if partially added — avoids a zombie session with no listeners
+            this.sessions.delete(savedState.id);
+          }
         }
       }
     } catch (err) {

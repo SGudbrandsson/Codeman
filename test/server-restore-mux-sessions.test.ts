@@ -176,6 +176,7 @@ vi.mock('../src/session.js', async () => {
     workingDir: string;
     mode: string;
     name: string;
+    status: string = 'idle';
     claudeResumeId: string | null = null;
     flickerFilterEnabled: boolean | undefined = undefined;
     draft: string | undefined = undefined;
@@ -209,18 +210,22 @@ vi.mock('../src/session.js', async () => {
       sessionConstructorCalls.push({ ...opts });
     }
 
+    markStopped = vi.fn(function (this: MockSession) {
+      this.status = 'stopped';
+    });
     startInteractive = mocks.startInteractiveImpl;
     setAutoCompact = vi.fn();
     setAutoClear = vi.fn();
     setNice = vi.fn();
     setSafeMode = vi.fn();
+    setColor = vi.fn();
     restoreTokens = vi.fn();
     restoreContextWindow = vi.fn();
     getState = vi.fn(function (this: MockSession) {
       return { id: this.id };
     });
     toState = vi.fn(function (this: MockSession) {
-      return { id: this.id, workingDir: this.workingDir, status: 'idle', pid: null };
+      return { id: this.id, workingDir: this.workingDir, status: this.status, pid: null };
     });
   }
 
@@ -830,6 +835,135 @@ describe('WebServer.restoreMuxSessions() — non-mux restore pass', () => {
     expect(call!.worktreeNotes).toBe('Important notes');
     expect(call!.assignedPort).toBe(5678);
   });
+
+  it('preserves createdAt from savedState in the Session constructor', async () => {
+    mocks.existsSync.mockReturnValue(true);
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-createdat': {
+        id: 'sess-createdat',
+        workingDir: '/tmp/createdat',
+        mode: 'claude',
+        name: 'CreatedAt Session',
+        status: 'stopped',
+        createdAt: 1234567890,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const call = sessionConstructorCalls.find((c) => c.id === 'sess-createdat');
+    expect(call).toBeDefined();
+    expect(call!.createdAt).toBe(1234567890);
+  });
+
+  it('marks stopped sessions with stopped status after restore', async () => {
+    mocks.existsSync.mockReturnValue(true);
+
+    // Track sessions added to this.sessions so we can inspect them
+    const capturedSessions: unknown[] = [];
+    const originalSet = (server as any).sessions.set.bind((server as any).sessions);
+    (server as any).sessions.set = (id: string, sess: unknown) => {
+      capturedSessions.push(sess);
+      return originalSet(id, sess);
+    };
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-stopped-status': {
+        id: 'sess-stopped-status',
+        workingDir: '/tmp/stopped',
+        mode: 'claude',
+        name: 'Stopped Session',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    // The session object in this.sessions must have status 'stopped'
+    const sess = capturedSessions.find((s: any) => s.id === 'sess-stopped-status') as any;
+    expect(sess).toBeDefined();
+    expect(sess.status).toBe('stopped');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-mux error isolation — per-session try/catch
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux error isolation', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('continues processing remaining sessions when one fails setupSessionListeners', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-err-first': {
+        id: 'sess-err-first',
+        workingDir: '/tmp/err-first',
+        mode: 'claude',
+        name: 'Error First',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+      'sess-ok-second': {
+        id: 'sess-ok-second',
+        workingDir: '/tmp/ok-second',
+        mode: 'claude',
+        name: 'OK Second',
+        status: 'stopped',
+        createdAt: 2000,
+      },
+    });
+
+    let callCount = 0;
+    (server as any).setupSessionListeners = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) throw new Error('setupSessionListeners failed for first session');
+      return Promise.resolve();
+    });
+
+    // Must not throw
+    await expect((server as any).restoreMuxSessions()).resolves.not.toThrow();
+
+    // The second session must have been added to this.sessions despite the first failing
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-ok-second')).toBe(true);
+    // The failed session must be removed from the map (no zombie with missing listeners)
+    expect(sessions.has('sess-err-first')).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1039,6 +1173,7 @@ describe('WebServer._restoreSessionConfig()', () => {
     setAutoClear: ReturnType<typeof vi.fn>;
     setNice: ReturnType<typeof vi.fn>;
     setSafeMode: ReturnType<typeof vi.fn>;
+    setColor: ReturnType<typeof vi.fn>;
     restoreTokens: ReturnType<typeof vi.fn>;
     restoreContextWindow: ReturnType<typeof vi.fn>;
     ralphTracker: {
@@ -1066,6 +1201,7 @@ describe('WebServer._restoreSessionConfig()', () => {
       setAutoClear: vi.fn(),
       setNice: vi.fn(),
       setSafeMode: vi.fn(),
+      setColor: vi.fn(),
       restoreTokens: vi.fn(),
       restoreContextWindow: vi.fn(),
       ralphTracker: {
@@ -1128,5 +1264,358 @@ describe('WebServer._restoreSessionConfig()', () => {
       respawnConfig: { enabled: true, intervalMs: 5000 },
     });
     expect(restoreRespawnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test group 1 — Color restoration in _restoreSessionConfig()
+// ---------------------------------------------------------------------------
+
+describe('WebServer._restoreSessionConfig() — color restoration', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  function makeColorSession(opts: { mode?: string } = {}) {
+    return {
+      id: 'test-color-session',
+      workingDir: '/tmp',
+      mode: opts.mode ?? 'claude',
+      claudeResumeId: null,
+      flickerFilterEnabled: undefined,
+      draft: undefined,
+      mcpServers: undefined,
+      setAutoCompact: vi.fn(),
+      setAutoClear: vi.fn(),
+      setNice: vi.fn(),
+      setSafeMode: vi.fn(),
+      setColor: vi.fn(),
+      restoreTokens: vi.fn(),
+      restoreContextWindow: vi.fn(),
+      ralphTracker: {
+        enabled: false,
+        autoEnableDisabled: false,
+        loopState: { completionPhrase: null },
+        startLoop: vi.fn(),
+        enable: vi.fn(),
+        disableAutoEnable: vi.fn(),
+        enableAutoEnable: vi.fn(),
+      },
+      emit: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+  }
+
+  it('restores session color when savedState.color is non-default', () => {
+    const session = makeColorSession();
+    (server as any)._restoreSessionConfig(session, { color: 'blue' });
+    expect(session.setColor).toHaveBeenCalledWith('blue');
+  });
+
+  it('does not call setColor when savedState.color is default', () => {
+    const session = makeColorSession();
+    (server as any)._restoreSessionConfig(session, { color: 'default' });
+    expect(session.setColor).not.toHaveBeenCalled();
+  });
+
+  it('does not call setColor when savedState.color is missing', () => {
+    const session = makeColorSession();
+    (server as any)._restoreSessionConfig(session, {});
+    expect(session.setColor).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test group 2 (additional) — busy session auto-resume + undefined workingDir guard
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux auto-resume (busy status)', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('calls startInteractive() for a busy session with a claudeResumeId in claude mode', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-busy-resume': {
+        id: 'sess-busy-resume',
+        workingDir: '/tmp/proj',
+        mode: 'claude',
+        name: 'Busy',
+        status: 'busy',
+        createdAt: 1000,
+        claudeResumeId: 'busy-resume-id',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WebServer.restoreMuxSessions() — non-mux restore pass (undefined workingDir)', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('skips sessions with undefined workingDir gracefully', async () => {
+    // existsSync would throw if called with undefined — this test ensures we never reach it
+    mocks.existsSync.mockImplementation((p: unknown) => {
+      if (p === undefined || p === null) throw new TypeError('existsSync called with undefined');
+      return false;
+    });
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-no-workdir': {
+        id: 'sess-no-workdir',
+        // workingDir intentionally omitted — simulates malformed state.json entry
+        mode: 'claude',
+        name: 'No WorkDir',
+        status: 'stopped',
+        createdAt: 1000,
+      },
+    });
+
+    // Must not throw
+    await expect((server as any).restoreMuxSessions()).resolves.not.toThrow();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-no-workdir')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test group 3 — Mixed scenario: mux + non-mux sessions restored together
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — mixed mux and non-mux restore', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('restores non-mux sessions while also keeping sessions already restored from tmux', async () => {
+    const muxSessionId = 'sess-alive-mux';
+    const nonMuxSessionId = 'sess-nonmux-crash';
+
+    // One alive mux session
+    const muxSession = makeMuxSession({
+      sessionId: muxSessionId,
+      muxName: 'codeman-alivemux1',
+      workingDir: '/tmp/mux-project',
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: [muxSessionId], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    // state.json contains both sessions — one with tmux, one without
+    (getStore() as any).getSessions.mockReturnValue({
+      [muxSessionId]: {
+        id: muxSessionId,
+        workingDir: '/tmp/mux-project',
+        mode: 'claude',
+        name: 'Mux Session',
+        status: 'idle',
+        createdAt: 1000,
+      },
+      [nonMuxSessionId]: {
+        id: nonMuxSessionId,
+        workingDir: '/tmp/crash-project',
+        mode: 'claude',
+        name: 'Crashed Session',
+        status: 'stopped',
+        createdAt: 2000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    // Both sessions must be present
+    expect(sessions.has(muxSessionId)).toBe(true);
+    expect(sessions.has(nonMuxSessionId)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test group 4 — Transcript watcher for non-mux sessions
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux transcript watcher', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+    mocks.transcriptWatcherInstances = [];
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('starts transcript watcher for non-mux session with claudeResumeId', async () => {
+    const resumeId = 'ccccdddd-eeee-ffff-0000-111122223333';
+    const workingDir = '/home/user/nonmux-project';
+
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-nonmux-watcher': {
+        id: 'sess-nonmux-watcher',
+        workingDir,
+        mode: 'claude',
+        name: 'Non-mux With Resume',
+        status: 'idle',
+        createdAt: 1000,
+        claudeResumeId: resumeId,
+      },
+    });
+
+    const startWatcherSpy = vi.spyOn(server as any, 'startTranscriptWatcher');
+
+    await (server as any).restoreMuxSessions();
+
+    const escapedDir = workingDir.replace(/\//g, '-');
+    const expectedPath = join(homedir(), '.claude', 'projects', escapedDir, `${resumeId}.jsonl`);
+
+    expect(startWatcherSpy).toHaveBeenCalledWith('sess-nonmux-watcher', expectedPath);
   });
 });

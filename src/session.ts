@@ -840,6 +840,14 @@ export class Session extends EventEmitter {
     return this._status === 'idle' || this._status === 'busy';
   }
 
+  /**
+   * Marks a recovered session as stopped without starting a process.
+   * Used during crash-recovery to restore the persisted stopped status.
+   */
+  markStopped(): void {
+    this._status = 'stopped';
+  }
+
   toState(): SessionState {
     return {
       id: this.id,
