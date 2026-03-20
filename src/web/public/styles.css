@@ -9959,12 +9959,15 @@ kbd {
   border-collapse: collapse;
   font-size: 0.875rem;
   color: #e2e8f0;
-  width: 100%;
+  min-width: 100%;
+  width: max-content;
 }
 .tv-table th,
 .tv-table td {
   padding: 6px 12px;
   border: 1px solid rgba(255,255,255,0.12);
+  text-align: left;
+  vertical-align: top;
 }
 .tv-table thead tr {
   background: rgba(255,255,255,0.06);
@@ -9972,12 +9975,32 @@ kbd {
 .tv-table th {
   font-weight: 600;
   color: #f1f5f9;
+  white-space: nowrap;
+}
+.tv-table td {
+  min-width: 80px;
 }
 .tv-table tbody tr:nth-child(even) {
   background: rgba(255,255,255,0.03);
 }
 .tv-table tbody tr:hover {
   background: rgba(255,255,255,0.06);
+}
+.tv-table th code,
+.tv-table td code {
+  font-size: 0.85em;
+  padding: 1px 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+}
+@media (max-width: 600px) {
+  .tv-table {
+    font-size: 0.8rem;
+  }
+  .tv-table th,
+  .tv-table td {
+    padding: 4px 8px;
+  }
 }
 
 /* Tool use row (collapsed by default) */
