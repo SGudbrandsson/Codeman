@@ -7404,8 +7404,11 @@ class CodemanApp {
 
     // Restore transcript vs terminal view for this session and update the accessory button.
     // Hide the previous session's transcript view first, then apply this session's preference.
+    // Non-Claude sessions (shell, opencode) never show the transcript view.
+    const _tvSession = this.sessions.get(sessionId);
+    const _tvIsClaude = !_tvSession?.mode || _tvSession.mode === 'claude';
     const _tvMode = TranscriptView.getViewMode(sessionId);
-    if (_tvMode === 'web') {
+    if (_tvIsClaude && _tvMode === 'web') {
       TranscriptView.show(sessionId);
     } else {
       TranscriptView.hide(sessionId);
@@ -8370,9 +8373,9 @@ class CodemanApp {
         ));
       }
 
-      // Switch to first session
+      // Switch to first session (don't pre-set activeSessionId — selectSession
+      // early-returns when IDs match, skipping buffer load and sendResize)
       if (sessionIds.length > 0) {
-        this.activeSessionId = sessionIds[0];
         await this.selectSession(sessionIds[0]);
       }
 
