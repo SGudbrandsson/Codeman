@@ -317,6 +317,8 @@ export const WorktreeSessionEnded = 'worktree:sessionEnded' as const;
 export const CaseCreated = 'case:created' as const;
 /** Existing directory linked as a case. */
 export const CaseLinked = 'case:linked' as const;
+/** Case removed (untracked or deleted from disk). */
+export const CaseDeleted = 'case:deleted' as const;
 
 // ─── Update notifications ─────────────────────────────────────────────────────
 
@@ -491,6 +493,7 @@ export const SseEvent = {
   // Cases
   CaseCreated,
   CaseLinked,
+  CaseDeleted,
 
   // Update notifications
   UpdateAvailable,

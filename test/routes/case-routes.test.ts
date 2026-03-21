@@ -18,6 +18,7 @@ vi.mock('node:fs', async (importOriginal) => {
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
+    rmSync: vi.fn(),
   };
 });
 
@@ -42,12 +43,13 @@ vi.mock('../../src/hooks-config.js', () => ({
 }));
 
 // Import mocked modules for test control
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedReaddirSync = vi.mocked(readdirSync);
+const mockedRmSync = vi.mocked(rmSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 
@@ -104,9 +106,7 @@ describe('case-routes', () => {
     });
 
     it('includes hasClaudeMd flag', async () => {
-      mockedReaddir.mockResolvedValue([
-        { name: 'case-with-md', isDirectory: () => true },
-      ] as never);
+      mockedReaddir.mockResolvedValue([{ name: 'case-with-md', isDirectory: () => true }] as never);
       mockedExistsSync.mockReturnValue(true);
 
       const res = await harness.app.inject({
@@ -120,9 +120,7 @@ describe('case-routes', () => {
 
     it('includes linked cases from linked-cases.json', async () => {
       // CASES_DIR readdir returns one case
-      mockedReaddir.mockResolvedValue([
-        { name: 'regular-case', isDirectory: () => true },
-      ] as never);
+      mockedReaddir.mockResolvedValue([{ name: 'regular-case', isDirectory: () => true }] as never);
       // linked-cases.json is read second (after CASES_DIR readdir)
       let readCallCount = 0;
       mockedReadFile.mockImplementation(async () => {
@@ -146,6 +144,10 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       // Should have both regular and linked cases
       expect(body.length).toBeGreaterThanOrEqual(1);
+      // The linked case should have linked: true
+      const linkedCase = body.find((c: { name: string }) => c.name === 'linked-project');
+      expect(linkedCase).toBeDefined();
+      expect(linkedCase.linked).toBe(true);
     });
   });
 
@@ -218,6 +220,211 @@ describe('case-routes', () => {
 
       // Verify broadcast
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('case:created', expect.objectContaining({ name: 'new-case' }));
+    });
+
+    it('creates case at customPath when path does not exist', async () => {
+      mockedExistsSync.mockReturnValue(false);
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: '/home/user/projects/custom-case' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.case.name).toBe('custom-case');
+      expect(body.data.case.path).toBe('/home/user/projects/custom-case');
+
+      // Should create directory at the custom path (no src/ subdir)
+      expect(mockedMkdirSync).toHaveBeenCalledWith('/home/user/projects/custom-case', { recursive: true });
+
+      // Should broadcast case:created
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+        'case:created',
+        expect.objectContaining({ name: 'custom-case' })
+      );
+    });
+
+    it('rejects customPath when path already exists', async () => {
+      mockedExistsSync.mockReturnValue(true);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: '/home/user/projects/existing' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('already exists');
+    });
+
+    it('rejects customPath with relative path', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: 'relative/path/project' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('rejects customPath containing path traversal', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: '/home/user/../../../etc/passwd' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('rejects customPath containing shell metacharacters', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: '/home/user/projects/$(evil)' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+  });
+
+  // ========== DELETE /api/cases/:name ==========
+
+  describe('DELETE /api/cases/:name', () => {
+    it('mode=untrack on a linked case removes entry and broadcasts case:deleted', async () => {
+      mockedReadFile.mockResolvedValue(JSON.stringify({ 'my-project': '/home/user/projects/my-project' }) as never);
+      mockedExistsSync.mockReturnValue(false); // native path does not exist
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/my-project?mode=untrack',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.name).toBe('my-project');
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+        'case:deleted',
+        expect.objectContaining({ name: 'my-project', mode: 'untrack' })
+      );
+    });
+
+    it('mode=untrack on a native case returns error', async () => {
+      // Not in linked-cases.json
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      // Exists natively
+      mockedExistsSync.mockReturnValue(true);
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/native-project?mode=untrack',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('mode=delete');
+    });
+
+    it('mode=delete on a linked case calls rmSync on the linked path and broadcasts case:deleted', async () => {
+      mockedReadFile.mockResolvedValue(JSON.stringify({ 'linked-proj': '/home/user/projects/linked-proj' }) as never);
+      mockedExistsSync.mockReturnValue(false); // not in CASES_DIR
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/linked-proj?mode=delete',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(mockedRmSync).toHaveBeenCalledWith(
+        '/home/user/projects/linked-proj',
+        expect.objectContaining({ recursive: true })
+      );
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+        'case:deleted',
+        expect.objectContaining({ name: 'linked-proj', mode: 'delete' })
+      );
+    });
+
+    it('mode=delete on a native case calls rmSync on the CASES_DIR path and broadcasts case:deleted', async () => {
+      // Not in linked-cases.json
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      // Exists natively
+      mockedExistsSync.mockReturnValue(true);
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/native-proj?mode=delete',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(mockedRmSync).toHaveBeenCalled();
+      const rmCall = mockedRmSync.mock.calls[0][0] as string;
+      expect(rmCall).toContain('native-proj');
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+        'case:deleted',
+        expect.objectContaining({ name: 'native-proj', mode: 'delete' })
+      );
+    });
+
+    it('returns NOT_FOUND when case is neither linked nor native', async () => {
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedExistsSync.mockReturnValue(false);
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/nonexistent',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('not found');
+    });
+
+    it('returns INVALID_INPUT for an invalid mode value', async () => {
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/some-project?mode=obliterate',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('mode');
+    });
+
+    it('returns INVALID_INPUT for path traversal in case name', async () => {
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/..%2F..%2Fetc',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('returns OPERATION_FAILED when rmSync throws', async () => {
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedExistsSync.mockReturnValue(true);
+      mockedRmSync.mockImplementation(() => {
+        throw new Error('Permission denied');
+      });
+
+      const res = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/cases/locked-proj?mode=delete',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Permission denied');
     });
   });
 
@@ -294,7 +501,10 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       expect(body.data.case.name).toBe('linked-project');
-      expect(harness.ctx.broadcast).toHaveBeenCalledWith('case:linked', expect.objectContaining({ name: 'linked-project' }));
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+        'case:linked',
+        expect.objectContaining({ name: 'linked-project' })
+      );
     });
   });
 

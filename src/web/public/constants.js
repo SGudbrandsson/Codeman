@@ -298,6 +298,11 @@ const SSE_EVENTS = {
   // Session archive/clear
   SESSION_CLEARED: 'session:cleared',
 
+  // Cases
+  CASE_CREATED: 'case:created',
+  CASE_LINKED: 'case:linked',
+  CASE_DELETED: 'case:deleted',
+
   // Worktree
   WORKTREE_SESSION_ENDED: 'worktree:sessionEnded',
 
