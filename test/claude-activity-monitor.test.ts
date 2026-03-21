@@ -1,4 +1,4 @@
-import { describe, it, expect, test } from 'vitest';
+import { describe, it, expect, test, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -200,6 +200,74 @@ describe('runtime event detection', () => {
     await p;
     m.stop();
     expect(events).toEqual(['working', 'idle']);
+  });
+});
+
+describe('file creation poller', () => {
+  it('test 1: file missing at start — no events, stop() cleans up', async () => {
+    const f = '/tmp/does-not-exist-' + Date.now() + '.jsonl';
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('working', () => events.push('working'));
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    expect(events).toEqual([]);
+    m.stop(); // must not throw
+    expect((m as any)._creationPoller).toBeNull();
+  });
+
+  it('test 12: stop() during creation poll — no interval leak', async () => {
+    const f = '/tmp/never-created-' + Date.now() + '.jsonl';
+    const m = monitorOn(f);
+    await m.start();
+    expect((m as any)._creationPoller).not.toBeNull();
+    m.stop();
+    expect((m as any)._creationPoller).toBeNull();
+    expect((m as any)._watcher).toBeNull();
+  });
+
+  it('test 11: file created after monitor start → creation poll clears, then detects runtime events', async () => {
+    const f = '/tmp/late-create-' + Date.now() + '.jsonl';
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('working', () => events.push('working'));
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    expect((m as any)._creationPoller).not.toBeNull();
+
+    // Create the file with no content (new session — no prior turns)
+    fs.writeFileSync(f, '');
+    // Trigger _onFileCreated directly (avoids 2s poll delay in tests)
+    (m as any)._onFileCreated();
+    // Creation poll must be cleared
+    expect((m as any)._creationPoller).toBeNull();
+    // Watcher is now armed — write runtime events and verify detection
+    writeLine(f, userLine());
+    await waitForEvent(m, 'working');
+    writeLine(f, turnDurationLine());
+    await waitForEvent(m, 'idle');
+    m.stop();
+    expect(events).toEqual(['working', 'idle']);
+    fs.unlinkSync(f);
+  });
+});
+
+describe('crash recovery', () => {
+  it('test 10: busy state with no writes for 5 minutes → emits idle', async () => {
+    vi.useFakeTimers();
+    const f = tmpFile();
+    writeLine(f, userLine()); // start busy
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    expect((m as any)._isBusy).toBe(true);
+    vi.advanceTimersByTime(5 * 60 * 1000 + 100);
+    expect(events).toEqual(['idle']);
+    expect((m as any)._isBusy).toBe(false);
+    expect((m as any)._crashRecoveryTimer).toBeNull();
+    m.stop();
+    vi.useRealTimers();
   });
 });
 

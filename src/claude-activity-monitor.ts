@@ -171,6 +171,7 @@ export class ClaudeActivityMonitor extends EventEmitter {
     if (this._crashRecoveryTimer) clearTimeout(this._crashRecoveryTimer);
     this._crashRecoveryTimer = setTimeout(
       () => {
+        this._crashRecoveryTimer = null;
         if (this._isBusy && !this._stopped) {
           this._isBusy = false;
           this.emit('idle');
