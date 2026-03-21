@@ -1487,7 +1487,7 @@
             <div class="form-row">
               <label>Custom folder (optional)</label>
               <input type="text" id="newCaseCustomPath" placeholder="/home/you/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-              <span class="form-hint">Leave blank to use ~/codeman-cases/. Must be an absolute path.</span>
+              <span class="form-hint">Leave blank to use ~/codeman-cases/. Parent folder (e.g. ~/sources) or full path (e.g. ~/sources/my-project).</span>
             </div>
           </div>
           <!-- Link Existing Tab -->
@@ -1545,7 +1545,7 @@
                 <input class="case-picker-input" type="text" id="pickerNewCaseCustomPath"
                        placeholder="/home/you/projects/my-project"
                        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-                <span class="case-picker-form-hint">Leave blank to use ~/codeman-cases/</span>
+                <span class="case-picker-form-hint">Leave blank to use ~/codeman-cases/. Parent folder (e.g. ~/sources) or full path (e.g. ~/sources/my-project).</span>
               </div>
               <button class="case-picker-submit" onclick="app.createCaseFromPicker()">Create Project</button>
             </div>

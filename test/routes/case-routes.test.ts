@@ -19,6 +19,7 @@ vi.mock('node:fs', async (importOriginal) => {
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
     rmSync: vi.fn(),
+    statSync: vi.fn(() => ({ isDirectory: () => false })),
   };
 });
 
@@ -43,13 +44,14 @@ vi.mock('../../src/hooks-config.js', () => ({
 }));
 
 // Import mocked modules for test control
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedMkdirSync = vi.mocked(mkdirSync);
 const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedRmSync = vi.mocked(rmSync);
+const mockedStatSync = vi.mocked(statSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 
@@ -247,18 +249,41 @@ describe('case-routes', () => {
       );
     });
 
-    it('rejects customPath when path already exists', async () => {
-      mockedExistsSync.mockReturnValue(true);
+    it('rejects customPath when the fully-resolved path (parent + name) already exists', async () => {
+      // customPath is an existing directory (becomes parent), but parent/name also already exists
+      mockedExistsSync.mockImplementation((p) => {
+        // Both /home/user/projects (parent) and /home/user/projects/custom-case (resolved) exist
+        return p === '/home/user/projects' || p === '/home/user/projects/custom-case';
+      });
+      mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
 
       const res = await harness.app.inject({
         method: 'POST',
         url: '/api/cases',
-        payload: { name: 'custom-case', customPath: '/home/user/projects/existing' },
+        payload: { name: 'custom-case', customPath: '/home/user/projects' },
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
       expect(body.error).toContain('already exists');
+    });
+
+    it('treats existing directory customPath as parent and creates project inside it', async () => {
+      // customPath exists and is a directory → resolve to parent/name
+      mockedExistsSync.mockImplementation((p) => p === '/home/user/projects');
+      mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'custom-case', customPath: '/home/user/projects' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.case.path).toBe('/home/user/projects/custom-case');
+      expect(mockedMkdirSync).toHaveBeenCalledWith('/home/user/projects/custom-case', { recursive: true });
     });
 
     it('rejects customPath with relative path', async () => {
@@ -291,6 +316,53 @@ describe('case-routes', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('expands tilde-prefixed customPath (~/sources) to absolute path and accepts it', async () => {
+      // customPath does not exist — treat as exact target (no parent-dir logic)
+      mockedExistsSync.mockReturnValue(false);
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'tilde-case', customPath: '~/my-new-dir' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Schema expands ~/my-new-dir to an absolute path — validation succeeds
+      expect(body.success).toBe(true);
+      // The returned path must be absolute (tilde was expanded) and end with the expanded dir name
+      expect(body.data.case.path).toMatch(/^\/.*my-new-dir$/);
+    });
+
+    it('expands bare tilde customPath (~) to homedir and accepts it', async () => {
+      // customPath does not exist — treat as exact target (no parent-dir logic)
+      mockedExistsSync.mockReturnValue(false);
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'tilde-bare-case', customPath: '~' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Schema expands ~ to homedir() — validation succeeds and path is absolute
+      expect(body.success).toBe(true);
+      expect(body.data.case.path).toMatch(/^\//);
+    });
+
+    it('rejects customPath with traversal after tilde expansion (~/../../etc/passwd)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases',
+        payload: { name: 'traversal-case', customPath: '~/../../etc/passwd' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // After tilde expansion the path contains '..' — isValidWorkingDir rejects it
       expect(body.success).toBe(false);
     });
   });
