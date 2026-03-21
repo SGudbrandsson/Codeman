@@ -1892,6 +1892,8 @@ const TranscriptView = {
   _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
   _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
   _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
+  _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
+  _animateNextScroll: false,     // when true, _scrollToBottom uses 'smooth' behavior
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -1982,6 +1984,7 @@ const TranscriptView = {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
     this._lastSkillLaunch = null;
+    this._thinkingBubbleEl = null;
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
     // NOTE: do NOT clear state.blocks here — caller (clear()) does it when needed.
@@ -2140,7 +2143,7 @@ const TranscriptView = {
     clearTimeout(this._clearFallbackTimer);
     this._clearFallbackTimer = null;
     this._pendingOptimisticText = text;  // persist as text so it survives DOM wipes in clear()
-    const el = this._renderTextBlock({ type: 'text', role: 'user', text });
+    const el = this._renderTextBlock({ type: 'text', role: 'user', text, timestamp: new Date().toISOString() });
     if (el) {
       el.dataset.optimistic = 'true';
       const placeholder = this._container.querySelector('.tv-placeholder');
@@ -2226,6 +2229,7 @@ const TranscriptView = {
       if (optimistic) optimistic.remove();
       this._pendingOptimisticText = null;  // real block arrived — no longer needed
     }
+    this._animateNextScroll = true;
     this._appendBlock(block, true);
   },
 
@@ -2244,6 +2248,7 @@ const TranscriptView = {
 
     this._pendingToolUses = {};
     this._lastSkillLaunch = null;
+    this._thinkingBubbleEl = null;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
       state.blocks = [];
@@ -2381,14 +2386,16 @@ const TranscriptView = {
     if (!this._container) return;
     const state = this._sessionId ? this._getState(this._sessionId) : null;
     if (!force && state?.scrolledUp) return;
-    // Use 'instant' to bypass CSS scroll-behavior: smooth so programmatic scroll is immediate
-    this._container.scrollTo({ top: this._container.scrollHeight, behavior: 'instant' });
+    const behavior = this._animateNextScroll ? 'smooth' : 'instant';
+    this._animateNextScroll = false;
+    this._container.scrollTo({ top: this._container.scrollHeight, behavior });
   },
 
-  /** Show or hide the "Claude is thinking" typing indicator (fixed overlay, not in scroll flow) */
+  /** Show or hide the "Claude is thinking" typing indicator (in-flow bubble) */
   setWorking(isWorking) {
+    // Keep the overlay hidden — we use the in-flow bubble instead
     const overlay = document.getElementById('tvTypingIndicator');
-    if (!overlay) return;
+    if (overlay) overlay.style.display = 'none';
     if (isWorking) {
       // Cancel any pending hide — session is still active
       clearTimeout(this._workingHideTimer);
@@ -2398,7 +2405,10 @@ const TranscriptView = {
         this._workingDebounce = setTimeout(() => {
           this._workingDebounce = null;
           const isTranscriptVisible = this._container && this._container.style.display !== 'none';
-          if (isTranscriptVisible) overlay.style.display = 'flex';
+          if (isTranscriptVisible) {
+            this._showThinkingBubble();
+            this._scrollToBottom(false);
+          }
         }, 300);
       }
     } else {
@@ -2409,8 +2419,30 @@ const TranscriptView = {
       clearTimeout(this._workingHideTimer);
       this._workingHideTimer = setTimeout(() => {
         this._workingHideTimer = null;
-        overlay.style.display = 'none';
+        this._hideThinkingBubble();
       }, 4000);
+    }
+  },
+
+  _showThinkingBubble() {
+    if (!this._container) return;
+    if (this._thinkingBubbleEl) return; // guard against double-show
+    const bubble = document.createElement('div');
+    bubble.className = 'tv-thinking-bubble';
+    const dots = document.createElement('span');
+    dots.className = 'tv-compacting-dots tv-thinking-dots';
+    for (let i = 0; i < 3; i++) {
+      dots.appendChild(document.createElement('span'));
+    }
+    bubble.appendChild(dots);
+    this._thinkingBubbleEl = bubble;
+    this._container.appendChild(bubble);
+  },
+
+  _hideThinkingBubble() {
+    if (this._thinkingBubbleEl) {
+      this._thinkingBubbleEl.remove();
+      this._thinkingBubbleEl = null;
     }
   },
 
@@ -2516,7 +2548,21 @@ const TranscriptView = {
       if (block.type === 'tool_use' || block.type === 'tool_result') {
         this._appendToToolGroup(el);
       } else {
-        this._container.appendChild(el);
+        // Apply reveal animation for live assistant text blocks only
+        if (scroll && block.type === 'text' && block.role === 'assistant' && el.classList.contains('tv-block--assistant')) {
+          el.classList.add('tv-block--reveal');
+          this._container.appendChild(el);
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              el.classList.add('tv-block--reveal-active');
+              el.addEventListener('transitionend', () => {
+                el.classList.remove('tv-block--reveal', 'tv-block--reveal-active');
+              }, { once: true });
+            });
+          });
+        } else {
+          this._container.appendChild(el);
+        }
       }
       if (scroll) this._scrollToBottom(false);
     }
@@ -2566,7 +2612,19 @@ const TranscriptView = {
     if (!group) return;
     const n = group.querySelectorAll('.tv-tool-group-body > [data-tool-id], .tv-tool-group-body > .tv-block').length;
     const label = group.querySelector('.tv-tool-group-label');
-    if (label) label.textContent = n + (n === 1 ? ' tool call' : ' tool calls');
+    if (!label) return;
+    if (n === 1) {
+      // Show just the tool name for single tool
+      const toolName = group.querySelector('.tv-tool-name');
+      label.textContent = toolName ? toolName.textContent : '1 tool call';
+    } else if (n > 1) {
+      // Show first tool name + count of remaining
+      const firstToolName = group.querySelector('.tv-tool-name');
+      const firstName = firstToolName ? firstToolName.textContent : '';
+      label.textContent = firstName ? firstName + ' \u00B7 ' + (n - 1) + ' more' : n + ' tool calls';
+    } else {
+      label.textContent = n + (n === 1 ? ' tool call' : ' tool calls');
+    }
   },
 
   _renderTextBlock(block) {
@@ -2675,6 +2733,13 @@ const TranscriptView = {
       bubble.textContent = _bubbleText || block.text; // fallback to original if stripping empties it
       div.appendChild(label);
       div.appendChild(bubble);
+      const tsText = this._formatTimestamp(block.timestamp);
+      if (tsText) {
+        const ts = document.createElement('span');
+        ts.className = 'tv-ts';
+        ts.textContent = tsText;
+        div.appendChild(ts);
+      }
     } else {
       const dot = document.createElement('span');
       dot.className = 'tv-assistant-dot';
@@ -2688,8 +2753,30 @@ const TranscriptView = {
       content.innerHTML = renderMarkdown(block.text);
       div.appendChild(label);
       div.appendChild(content);
+      const tsText = this._formatTimestamp(block.timestamp);
+      if (tsText) {
+        const ts = document.createElement('span');
+        ts.className = 'tv-ts';
+        ts.textContent = tsText;
+        div.appendChild(ts);
+      }
     }
     return div;
+  },
+
+  _formatTimestamp(isoString) {
+    if (!isoString) return '';
+    const d = new Date(isoString);
+    const now = Date.now();
+    const diff = now - d.getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    const today = new Date();
+    if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()) {
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    }
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
   },
 
   _renderSkillPill(skillName) {
@@ -2697,6 +2784,36 @@ const TranscriptView = {
     pill.className = 'tv-skill-pill';
     pill.textContent = '/' + skillName;
     return pill;
+  },
+
+  _toolIcon(name) {
+    if (name === 'Bash') return '\u2699';
+    if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'MultiEdit') return '\uD83D\uDCC4';
+    if (name === 'Grep' || name === 'Glob') return '\uD83D\uDD0D';
+    if (name === 'WebFetch' || name === 'WebSearch') return '\uD83C\uDF10';
+    return '';
+  },
+
+  _toolSummary(name, input) {
+    if (!input) return name;
+    if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'MultiEdit') {
+      const path = input.file_path || input.path || '';
+      return path ? name + ': ' + path : name;
+    }
+    if (name === 'Bash') {
+      const cmd = typeof input.command === 'string' ? input.command.slice(0, 60) : '';
+      return cmd ? 'Run: ' + cmd : name;
+    }
+    if (name === 'Grep' || name === 'Glob') {
+      const pat = input.pattern || input.query || '';
+      return pat ? 'Search: ' + pat : name;
+    }
+    if (name === 'WebFetch' || name === 'WebSearch') {
+      const target = input.url || input.query || '';
+      return target ? 'Web: ' + target : name;
+    }
+    const vals = Object.values(input);
+    return name + (vals.length ? ': ' + String(vals[0]).slice(0, 60) : '');
   },
 
   _renderToolWrapper(toolUse, toolResult) {
@@ -2714,13 +2831,21 @@ const TranscriptView = {
 
     const nameSp = document.createElement('span');
     nameSp.className = 'tv-tool-name';
-    nameSp.textContent = name; // tool names are internal, but still use textContent
+    const icon = this._toolIcon(name);
+    if (icon) {
+      const iconSp = document.createElement('span');
+      iconSp.className = 'tv-tool-icon';
+      iconSp.textContent = icon;
+      nameSp.appendChild(iconSp);
+    }
+    nameSp.appendChild(document.createTextNode(name));
 
     const argSp = document.createElement('span');
     argSp.className = 'tv-tool-arg';
     if (toolUse?.input) {
-      const vals = Object.values(toolUse.input);
-      argSp.textContent = vals.length ? String(vals[0]).slice(0, 80) : '';
+      argSp.textContent = this._toolSummary(name, toolUse.input).slice(0, 80);
+    } else {
+      argSp.textContent = name;
     }
 
     const status = document.createElement('span');
