@@ -112,9 +112,59 @@ export class ClaudeActivityMonitor extends EventEmitter {
   }
 
   private _onFileChange(): void {
-    // TODO — Task 3
-    void this._offset;
-    void this._pendingBuffer;
+    if (this._stopped) return;
+    let newBytes: Buffer;
+    try {
+      const fd = fs.openSync(this._filePath, 'r');
+      const stat = fs.fstatSync(fd);
+      const toRead = stat.size - this._offset;
+      if (toRead <= 0) {
+        fs.closeSync(fd);
+        return;
+      }
+      newBytes = Buffer.alloc(toRead);
+      const bytesRead = fs.readSync(fd, newBytes, 0, toRead, this._offset);
+      fs.closeSync(fd);
+      this._offset += bytesRead;
+    } catch {
+      return;
+    }
+
+    this._pendingBuffer += newBytes.toString('utf8');
+
+    // Reset crash-recovery timer on every write while busy
+    if (this._isBusy) this._startCrashRecoveryTimer();
+
+    const lines = this._pendingBuffer.split('\n');
+    this._pendingBuffer = lines.pop() ?? ''; // keep incomplete last line
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+
+      if (obj.type === 'user' && obj.isSidechain === false && this._isHumanTurn(obj)) {
+        if (!this._isBusy) {
+          this._isBusy = true;
+          this.emit('working');
+          this._startCrashRecoveryTimer();
+        }
+      } else if (obj.type === 'system' && obj.subtype === 'turn_duration') {
+        if (this._isBusy) {
+          this._isBusy = false;
+          if (this._crashRecoveryTimer) {
+            clearTimeout(this._crashRecoveryTimer);
+            this._crashRecoveryTimer = null;
+          }
+          this.emit('idle');
+        }
+      }
+    }
   }
 
   private _startCrashRecoveryTimer(): void {
