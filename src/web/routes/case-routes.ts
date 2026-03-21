@@ -115,7 +115,10 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
     }
-    const { url } = result.data;
+    // Normalize SCP-style SSH URLs (git@host:user/repo.git → ssh://git@host/user/repo.git)
+    const rawUrl = result.data.url;
+    const scpMatch = rawUrl.match(/^([\w.-]+@[\w.-]+):(.+)$/);
+    const url = scpMatch ? `ssh://${scpMatch[1]}/${scpMatch[2]}` : rawUrl;
 
     // Derive name from URL if not provided
     const urlName =

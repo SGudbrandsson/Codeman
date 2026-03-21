@@ -418,8 +418,22 @@ export const LinkCaseSchema = z.object({
 });
 
 /** POST /api/cases/clone */
+const gitUrlSchema = z.string().refine(
+  (v) => {
+    try {
+      new URL(v);
+      return true;
+    } catch {
+      /* not a standard URL */
+    }
+    // Accept SCP-style SSH: git@host:path or user@host:path
+    return /^[\w.-]+@[\w.-]+:.+/.test(v);
+  },
+  { message: 'Invalid git URL' }
+);
+
 export const CloneCaseSchema = z.object({
-  url: z.string().url('Invalid git URL'),
+  url: gitUrlSchema,
   name: z
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid project name')
