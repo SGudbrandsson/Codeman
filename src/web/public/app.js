@@ -2985,6 +2985,9 @@ const _SSE_HANDLER_MAP = [
   // Context usage
   [SSE_EVENTS.SESSION_CONTEXT_USAGE, '_onSessionContextUsage'],
 
+  // Cases
+  [SSE_EVENTS.CASE_DELETED, '_onCaseDeleted'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -16563,6 +16566,7 @@ class CodemanApp {
   async createCase() {
     const name = document.getElementById('newCaseName').value.trim();
     const description = document.getElementById('newCaseDescription').value.trim();
+    const customPath = document.getElementById('newCaseCustomPath')?.value.trim() || '';
 
     if (!name) {
       this.showToast('Please enter a project name', 'error');
@@ -16574,11 +16578,14 @@ class CodemanApp {
       return;
     }
 
+    const body = { name, description };
+    if (customPath) body.customPath = customPath;
+
     try {
       const res = await fetch('/api/cases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description })
+        body: JSON.stringify(body)
       });
 
       const data = await res.json();
@@ -16661,21 +16668,31 @@ class CodemanApp {
 
     for (const c of allCases) {
       const isSelected = c.name === currentCase;
+      const isLinked = Boolean(c.linked);
+      const escapedName = escapeHtml(c.name);
       html += `
-        <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
-                onclick="app.selectMobileCase('${escapeHtml(c.name)}')">
-          <span class="mobile-case-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        <div class="mobile-case-item-row">
+          <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
+                  onclick="app.selectMobileCase('${escapedName}')">
+            <span class="mobile-case-item-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </span>
+            <span class="mobile-case-item-name">${escapedName}</span>
+            <span class="mobile-case-item-check">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </span>
+          </button>
+          <button class="mobile-case-item-delete" title="${isLinked ? 'Untrack project' : 'Delete project'}"
+                  onclick="app.deleteCase('${escapedName}', ${isLinked})">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
             </svg>
-          </span>
-          <span class="mobile-case-item-name">${escapeHtml(c.name)}</span>
-          <span class="mobile-case-item-check">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-          </span>
-        </button>
+          </button>
+        </div>
       `;
     }
 
@@ -16764,13 +16781,16 @@ class CodemanApp {
     const nameEl = document.getElementById('pickerNewCaseName');
     const name = nameEl?.value.trim();
     if (!name) { this.showToast('Enter a project name', 'error'); nameEl?.focus(); return; }
+    const customPath = document.getElementById('pickerNewCaseCustomPath')?.value.trim() || '';
     const btn = document.querySelector('#casePickerTab-new .case-picker-submit');
     if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    const body = { name };
+    if (customPath) body.customPath = customPath;
     try {
       const res = await fetch('/api/cases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success) {
@@ -16814,6 +16834,44 @@ class CodemanApp {
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Clone & Open'; }
     }
+  }
+
+  /**
+   * Delete or untrack a project.
+   * @param {string} name - Case name
+   * @param {boolean} isLinked - True if this is a linked case (untrack), false for native (delete)
+   */
+  async deleteCase(name, isLinked) {
+    const mode = isLinked ? 'untrack' : 'delete';
+    const confirmMsg = isLinked
+      ? `Remove project "${name}" from Codeman?\n\nThe folder on disk will NOT be deleted.`
+      : `Delete project "${name}" and all its files from disk?\n\nThis cannot be undone.`;
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(name)}?mode=${mode}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(
+          isLinked ? `Project "${name}" removed from Codeman` : `Project "${name}" deleted`,
+          'success'
+        );
+        await this.loadQuickStartCases();
+      } else {
+        this.showToast(data.error || 'Failed to remove project', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to remove project: ' + err.message, 'error');
+    }
+  }
+
+  /** SSE handler: case:deleted — reload case list */
+  _onCaseDeleted(data) {
+    console.log('[SSE] case:deleted', data);
+    this.loadQuickStartCases();
   }
 
   renderMuxSessions() {
@@ -18082,6 +18140,21 @@ const SessionDrawer = {
       });
 
       header.appendChild(nameSpan);
+
+      // Delete/untrack button — only for known (non-ungrouped) cases
+      if (group.caseObj && groupKey !== '__ungrouped__') {
+        const isLinked = Boolean(group.caseObj.linked);
+        const delBtn = document.createElement('button');
+        delBtn.className = 'drawer-delete-case-btn';
+        delBtn.title = isLinked ? 'Untrack project' : 'Delete project';
+        delBtn.textContent = '\u{1F5D1}'; // 🗑 trash icon via Unicode
+        delBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          app.deleteCase(groupKey, isLinked);
+        });
+        header.appendChild(delBtn);
+      }
+
       header.appendChild(addBtn);
       groupEl.appendChild(header);
 

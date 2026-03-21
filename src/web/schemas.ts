@@ -165,6 +165,7 @@ export const CreateCaseSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
   description: z.string().max(1000).optional(),
+  customPath: safePathSchema.optional(),
 });
 
 // ========== Quick Start ==========

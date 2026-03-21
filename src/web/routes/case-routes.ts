@@ -5,7 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -56,6 +56,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
             name,
             path,
             hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+            linked: true,
           });
         }
       }
@@ -73,16 +74,25 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
     }
-    const { name, description } = result.data;
+    const { name, description, customPath } = result.data;
 
-    const casePath = join(CASES_DIR, name);
+    let casePath: string;
+    let isCustomPath = false;
 
-    // Security: Path traversal protection - use relative path check
-    const resolvedPath = resolve(casePath);
-    const resolvedBase = resolve(CASES_DIR);
-    const relPath = relative(resolvedBase, resolvedPath);
-    if (relPath.startsWith('..') || isAbsolute(relPath)) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+    if (customPath) {
+      // Use the caller-supplied absolute path
+      casePath = customPath;
+      isCustomPath = true;
+    } else {
+      casePath = join(CASES_DIR, name);
+
+      // Security: Path traversal protection - use relative path check
+      const resolvedPath = resolve(casePath);
+      const resolvedBase = resolve(CASES_DIR);
+      const relPath = relative(resolvedBase, resolvedPath);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
     }
 
     if (existsSync(casePath)) {
@@ -91,7 +101,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     try {
       mkdirSync(casePath, { recursive: true });
-      mkdirSync(join(casePath, 'src'), { recursive: true });
+      if (!isCustomPath) {
+        mkdirSync(join(casePath, 'src'), { recursive: true });
+      }
 
       // Read settings to get custom template path
       const templatePath = await ctx.getDefaultClaudeMdPath();
@@ -100,6 +112,23 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
       // Write .claude/settings.local.json with hooks for desktop notifications
       await writeHooksConfig(casePath);
+
+      if (isCustomPath) {
+        // Register as a linked case so the custom path is tracked
+        const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+        let linkedCases: Record<string, string> = {};
+        try {
+          linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+        } catch {
+          /* no file yet */
+        }
+        linkedCases[name] = casePath;
+        const codemanDir = join(homedir(), '.codeman');
+        if (!existsSync(codemanDir)) {
+          mkdirSync(codemanDir, { recursive: true });
+        }
+        await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+      }
 
       ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
 
@@ -250,6 +279,79 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       path: casePath,
       hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
     };
+  });
+
+  // Delete or untrack a case
+  // Query param: ?mode=untrack (default) | delete
+  //   untrack — removes from linked-cases.json only; native cases cannot be untracked
+  //   delete  — rm -rf the resolved path; also removes from linked-cases.json if present
+  app.delete('/api/cases/:name', async (req): Promise<ApiResponse<{ name: string }>> => {
+    const { name } = req.params as { name: string };
+    const { mode = 'untrack' } = req.query as { mode?: string };
+
+    if (mode !== 'untrack' && mode !== 'delete') {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'mode must be "untrack" or "delete"');
+    }
+
+    // Security: validate name (same guard as GET /api/cases/:name)
+    const resolvedPath = resolve(join(CASES_DIR, name));
+    const resolvedBase = resolve(CASES_DIR);
+    const relPath = relative(resolvedBase, resolvedPath);
+    if (relPath.startsWith('..') || isAbsolute(relPath)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+
+    const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+    let linkedCases: Record<string, string> = {};
+    try {
+      linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+    } catch {
+      /* no file yet */
+    }
+
+    const isLinked = Boolean(linkedCases[name]);
+    const linkedPath = linkedCases[name] as string | undefined;
+    const nativePath = join(CASES_DIR, name);
+    const isNative = existsSync(nativePath);
+
+    if (!isLinked && !isNative) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Case "${name}" not found`);
+    }
+
+    if (mode === 'untrack') {
+      if (!isLinked) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `"${name}" is a native case. Use mode=delete to remove it from disk.`
+        );
+      }
+      // Remove from linked-cases.json
+      delete linkedCases[name];
+      await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+      ctx.broadcast(SseEvent.CaseDeleted, { name, mode: 'untrack' });
+      return { success: true, data: { name } };
+    }
+
+    // mode === 'delete'
+    const targetPath = isLinked ? (linkedPath as string) : nativePath;
+    try {
+      rmSync(targetPath, { recursive: true, force: true });
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to delete: ${getErrorMessage(err)}`);
+    }
+
+    // Remove from linked-cases.json if present
+    if (isLinked) {
+      delete linkedCases[name];
+      try {
+        await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    ctx.broadcast(SseEvent.CaseDeleted, { name, mode: 'delete' });
+    return { success: true, data: { name } };
   });
 
   // Read @fix_plan.md from a case directory (for wizard to detect existing plans)

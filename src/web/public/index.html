@@ -1484,6 +1484,11 @@
               <label>Description (optional)</label>
               <input type="text" id="newCaseDescription" placeholder="A brief description..." autocomplete="off">
             </div>
+            <div class="form-row">
+              <label>Custom folder (optional)</label>
+              <input type="text" id="newCaseCustomPath" placeholder="/home/you/projects/my-project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <span class="form-hint">Leave blank to use ~/codeman-cases/. Must be an absolute path.</span>
+            </div>
           </div>
           <!-- Link Existing Tab -->
           <div class="modal-tab-content hidden" id="case-link">
@@ -1534,6 +1539,13 @@
                 <label class="case-picker-form-label">Project name</label>
                 <input class="case-picker-input" type="text" id="pickerNewCaseName" placeholder="my-project"
                        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <div class="case-picker-form-group">
+                <label class="case-picker-form-label">Custom folder (optional)</label>
+                <input class="case-picker-input" type="text" id="pickerNewCaseCustomPath"
+                       placeholder="/home/you/projects/my-project"
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+                <span class="case-picker-form-hint">Leave blank to use ~/codeman-cases/</span>
               </div>
               <button class="case-picker-submit" onclick="app.createCaseFromPicker()">Create Project</button>
             </div>

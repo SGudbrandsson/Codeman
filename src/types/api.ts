@@ -109,6 +109,8 @@ export interface CaseInfo {
   path: string;
   /** Whether CLAUDE.md exists */
   hasClaudeMd?: boolean;
+  /** Whether this is a linked case (arbitrary path registered in linked-cases.json) */
+  linked?: boolean;
 }
 
 // ========== Error Handling Utilities ==========
