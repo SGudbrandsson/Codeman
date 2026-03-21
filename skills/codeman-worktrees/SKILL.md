@@ -45,7 +45,25 @@ Returns array of session objects. Find the best match for each project:
 
 If multiple candidates, pick the most likely one. If none found, ask the user which session ID to use.
 
-## Step 3 — Create Worktree
+## Step 3 — Sync Repo to Origin Master
+
+For each repo, before creating the worktree, ensure the local master (or main) branch is up to date with origin. Run from the repo's working directory:
+
+```bash
+git -C "<workingDir>" fetch origin
+git -C "<workingDir>" merge --ff-only origin/master 2>/dev/null || \
+  git -C "<workingDir>" merge --ff-only origin/main 2>/dev/null || \
+  echo "SYNC_SKIPPED"
+```
+
+- `Already up to date` → fine, continue
+- Fast-forward succeeds → continue
+- `SYNC_SKIPPED` (no origin/master or origin/main) → skip silently, continue
+- `fatal: Not possible to fast-forward` → **stop and report:** "Local master has commits not in origin — manual rebase required before creating this worktree."
+
+Do not create the worktree if fast-forward fails. This ensures the new branch always starts from the latest upstream commit.
+
+## Step 4 — Create Worktree
 
 For each project × branch pair:
 
@@ -73,11 +91,11 @@ Common errors:
 - `NOT_FOUND` → wrong session ID, re-fetch sessions
 - `INVALID_INPUT` → branch name invalid (no spaces, valid git ref)
 
-## Step 4 — Multiple Repos in Parallel
+## Step 5 — Multiple Repos in Parallel
 
-When creating worktrees across multiple repos, run all `curl` calls in a single Bash command with `&` and `wait`, or sequentially if you need error handling per repo.
+When creating worktrees across multiple repos, run all sync + curl operations sequentially per repo (sync must complete before the worktree is created for that repo).
 
-## Step 5 — Report Results
+## Step 6 — Report Results
 
 After all calls complete, summarize:
 - ✓ Created: branch name, worktree path, new session name
@@ -95,3 +113,5 @@ To merge or close worktrees, use the **codeman-merge-worktree** skill.
 | Branch name with spaces | Use hyphens/slashes only |
 | `isNew: true` on existing branch | Set `isNew: false` |
 | Wrong port | Codeman runs on port **3001**, not 3000 |
+| Skipping the sync step | Always sync before creating — branching from stale master means missing upstream commits |
+| Creating worktree when fast-forward fails | Stop and tell the user — do not force-create on a diverged master |
