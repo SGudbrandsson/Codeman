@@ -1893,6 +1893,7 @@ const TranscriptView = {
   _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
   _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
   _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
+  _thinkingPhrases: ['Thinking...','Processing...','Germinating...','Reasoning...','Contemplating...','Synthesizing...','Deliberating...','Cogitating...','Extrapolating...','Formulating...','Consulting the oracle...','Parsing neural patterns...','Reticulating splines...','Traversing thought-space...','Engaging cortex...','Quantum-tunneling...'],
   _animateNextScroll: false,     // when true, _scrollToBottom uses 'smooth' behavior
 
   init() {
@@ -2458,24 +2459,40 @@ const TranscriptView = {
 
   _showThinkingBubble() {
     if (!this._container) return;
-    if (this._thinkingBubbleEl) return; // guard against double-show
+    const phrase = this._thinkingPhrases[Math.floor(Math.random() * this._thinkingPhrases.length)];
+    if (this._thinkingBubbleEl) {
+      // Already in DOM — just update phrase and un-hide
+      this._thinkingBubbleEl.classList.remove('tv-thinking-bubble--hidden');
+      const p = this._thinkingBubbleEl.querySelector('.tv-thinking-phrase');
+      if (p) p.textContent = phrase;
+      return;
+    }
     const bubble = document.createElement('div');
     bubble.className = 'tv-thinking-bubble';
-    const dots = document.createElement('span');
-    dots.className = 'tv-compacting-dots tv-thinking-dots';
-    for (let i = 0; i < 3; i++) {
-      dots.appendChild(document.createElement('span'));
-    }
-    bubble.appendChild(dots);
+    const spinner = document.createElement('span');
+    spinner.className = 'tv-thinking-spinner';
+    const label = document.createElement('span');
+    label.className = 'tv-thinking-phrase';
+    label.textContent = phrase;
+    bubble.appendChild(spinner);
+    bubble.appendChild(label);
     this._thinkingBubbleEl = bubble;
     this._container.appendChild(bubble);
   },
 
   _hideThinkingBubble() {
-    if (this._thinkingBubbleEl) {
-      this._thinkingBubbleEl.remove();
-      this._thinkingBubbleEl = null;
-    }
+    if (!this._thinkingBubbleEl) return;
+    const bubble = this._thinkingBubbleEl;
+    bubble.classList.add('tv-thinking-bubble--hidden');
+    const cleanup = () => {
+      if (this._thinkingBubbleEl === bubble) {
+        this._thinkingBubbleEl = null;
+      }
+      bubble.remove();
+    };
+    bubble.addEventListener('transitionend', cleanup, { once: true });
+    // Safety fallback in case transitionend doesn't fire
+    setTimeout(cleanup, 500);
   },
 
   /** Insert an animated "Compacting context..." pill at the bottom of the transcript.

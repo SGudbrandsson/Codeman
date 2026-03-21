@@ -295,7 +295,8 @@ describe('Thinking bubble — setWorking(false) removes .tv-thinking-bubble afte
         window as unknown as { TranscriptView: { _hideThinkingBubble: () => void } }
       ).TranscriptView._hideThinkingBubble();
     });
-    await page.waitForTimeout(100);
+    // Wait for the 280ms CSS transition + 500ms safety timeout to complete
+    await page.waitForTimeout(700);
   });
 
   afterAll(async () => {
@@ -303,7 +304,7 @@ describe('Thinking bubble — setWorking(false) removes .tv-thinking-bubble afte
     await context?.close();
   });
 
-  it('.tv-thinking-bubble is removed after _hideThinkingBubble()', async () => {
+  it('.tv-thinking-bubble is removed after _hideThinkingBubble() and transition completes', async () => {
     const count = await page.locator('#transcriptView .tv-thinking-bubble').count();
     expect(count).toBe(0);
   });
