@@ -8373,9 +8373,9 @@ class CodemanApp {
         ));
       }
 
-      // Switch to first session
+      // Switch to first session (don't pre-set activeSessionId — selectSession
+      // early-returns when IDs match, skipping buffer load and sendResize)
       if (sessionIds.length > 0) {
-        this.activeSessionId = sessionIds[0];
         await this.selectSession(sessionIds[0]);
       }
 
