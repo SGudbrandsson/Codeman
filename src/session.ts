@@ -76,6 +76,7 @@ import {
 } from './session-cli-builder.js';
 import { SessionAutoOps } from './session-auto-ops.js';
 import { SessionTaskCache } from './session-task-cache.js';
+import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -292,7 +293,7 @@ export class Session extends EventEmitter {
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
   private _isWorking: boolean = false;
-  private _isLoadingScrollback: boolean = false; // Guard: skip busy detection during scrollback replay
+  private _activityMonitor: ClaudeActivityMonitor | null = null;
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
   private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
@@ -1071,13 +1072,23 @@ export class Session extends EventEmitter {
           // No extra sleep — createSession() already waits for tmux readiness
         }
 
-        // Attach to the mux session via PTY
-        // Mark scrollback loading so spinner/keyword detection is suppressed until
-        // the initial scrollback replay completes (cleared when ❯ prompt first seen).
-        // Only applies to claude mode — opencode uses Bubble Tea TUI (no ❯ prompt ever)
-        // so setting this flag would permanently suppress busy detection.
+        // Start activity monitor for claude-mode (replaces PTY-based detection)
         if (this.mode === 'claude') {
-          this._isLoadingScrollback = true;
+          this._activityMonitor = new ClaudeActivityMonitor(this.id, this.workingDir);
+          this._activityMonitor.on('working', () => {
+            if (this._isStopped) return;
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          });
+          this._activityMonitor.on('idle', () => {
+            if (this._isStopped) return;
+            this._isWorking = false;
+            this._status = 'idle';
+            this._lastPromptTime = Date.now();
+            this.emit('idle');
+          });
+          void this._activityMonitor.start();
         }
         try {
           this.ptyProcess = pty.spawn(
@@ -1221,16 +1232,9 @@ export class Session extends EventEmitter {
       this.emit('output', data);
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
-      // Detect if Claude is working or at prompt
-      // The prompt line contains "❯" when waiting for input
-      if (data.includes('❯') || data.includes('\u276f')) {
-        if (this._isLoadingScrollback) {
-          // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
-          // Fall through to start the idle timer below: isInitialReady handles the
-          // busy→idle transition since _status was set to 'busy' on startup but no
-          // real working state was detected (spinners were suppressed).
-          this._isLoadingScrollback = false;
-        }
+      // When activity monitor is active, it handles working/idle via JSONL.
+      // Fall back to PTY-based ❯ prompt detection only when no monitor is present.
+      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
         // Only start a new timeout if we're not already awaiting idle confirmation
         // This prevents status bar redraws (which include ❯) from resetting the timer
         if (!this._awaitingIdleConfirmation) {
@@ -1255,16 +1259,18 @@ export class Session extends EventEmitter {
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      // Skip during scrollback replay to avoid false-positive busy state.
-      const hasSpinner = !this._isLoadingScrollback && SPINNER_PATTERN.test(data);
-      if (hasSpinner) {
-        if (!this._isWorking) {
-          this._isWorking = true;
-          this._status = 'busy';
-          this.emit('working');
+      // Skip when activity monitor handles detection.
+      if (!this._activityMonitor) {
+        const hasSpinner = SPINNER_PATTERN.test(data);
+        if (hasSpinner) {
+          if (!this._isWorking) {
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          }
+          this._awaitingIdleConfirmation = false;
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
         }
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
       }
 
       // === Expensive processing (ANSI strip, Ralph, bash parser) is throttled ===
@@ -1384,8 +1390,8 @@ export class Session extends EventEmitter {
     }
 
     // Work keyword detection (text-based, needs clean data)
-    // Only check if spinner didn't already trigger working state, and skip during scrollback replay.
-    if (!this._isWorking && !this._isLoadingScrollback) {
+    // Only check if spinner didn't already trigger working state, and skip when monitor handles detection.
+    if (!this._isWorking && !this._activityMonitor) {
       const cleanData = getCleanData();
       if (
         cleanData.includes('Thinking') ||
@@ -1512,8 +1518,6 @@ export class Session extends EventEmitter {
         }
 
         // Attach to the mux session via PTY
-        // Note: _isLoadingScrollback is NOT set here — the shell onData handler has no
-        // spinner/keyword detection, so the flag would be set but never read or cleared.
         try {
           this.ptyProcess = pty.spawn(
             this._mux.getAttachCommand(),
@@ -2383,6 +2387,10 @@ export class Session extends EventEmitter {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
 
+    // Stop activity monitor
+    this._activityMonitor?.stop();
+    this._activityMonitor = null;
+
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
@@ -2646,8 +2654,6 @@ export class Session extends EventEmitter {
     }
 
     // Step 5: Re-spawn PTY attached to new tmux session
-    // Mark scrollback loading to suppress busy detection during scrollback replay.
-    this._isLoadingScrollback = true;
     try {
       this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(newMuxName), {
         name: 'xterm-256color',
@@ -2679,12 +2685,7 @@ export class Session extends EventEmitter {
       }
       this.emit('output', data);
 
-      if (data.includes('❯') || data.includes('\u276f')) {
-        if (this._isLoadingScrollback) {
-          // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
-          // Fall through to start the idle timer: isInitialReady handles busy→idle.
-          this._isLoadingScrollback = false;
-        }
+      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
         if (!this._awaitingIdleConfirmation) {
           if (this.activityTimeout) clearTimeout(this.activityTimeout);
           this._awaitingIdleConfirmation = true;
@@ -2702,15 +2703,17 @@ export class Session extends EventEmitter {
         }
       }
 
-      const hasSpinner = !this._isLoadingScrollback && SPINNER_PATTERN.test(data);
-      if (hasSpinner) {
-        if (!this._isWorking) {
-          this._isWorking = true;
-          this._status = 'busy';
-          this.emit('working');
+      if (!this._activityMonitor) {
+        const hasSpinner = SPINNER_PATTERN.test(data);
+        if (hasSpinner) {
+          if (!this._isWorking) {
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          }
+          this._awaitingIdleConfirmation = false;
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
         }
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
       }
 
       const now = Date.now();
