@@ -4944,6 +4944,7 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'idle';
+      session.isWorking = false;
       this._updateTabStatusDebounced(data.id, 'idle');
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
@@ -4975,6 +4976,7 @@ class CodemanApp {
     const session = this.sessions.get(data.id);
     if (session) {
       session.status = 'busy';
+      session.isWorking = true;
       // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
       if (!this.pendingHooks.has(data.id)) {
         this.tabAlerts.delete(data.id);

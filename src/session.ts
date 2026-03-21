@@ -292,6 +292,7 @@ export class Session extends EventEmitter {
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
   private _isWorking: boolean = false;
+  private _isLoadingScrollback: boolean = false; // Guard: skip busy detection during scrollback replay
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
   private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
@@ -1071,6 +1072,13 @@ export class Session extends EventEmitter {
         }
 
         // Attach to the mux session via PTY
+        // Mark scrollback loading so spinner/keyword detection is suppressed until
+        // the initial scrollback replay completes (cleared when ❯ prompt first seen).
+        // Only applies to claude mode — opencode uses Bubble Tea TUI (no ❯ prompt ever)
+        // so setting this flag would permanently suppress busy detection.
+        if (this.mode === 'claude') {
+          this._isLoadingScrollback = true;
+        }
         try {
           this.ptyProcess = pty.spawn(
             this._mux.getAttachCommand(),
@@ -1216,31 +1224,38 @@ export class Session extends EventEmitter {
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
       if (data.includes('❯') || data.includes('\u276f')) {
-        // Only start a new timeout if we're not already awaiting idle confirmation
-        // This prevents status bar redraws (which include ❯) from resetting the timer
-        if (!this._awaitingIdleConfirmation) {
-          if (this.activityTimeout) clearTimeout(this.activityTimeout);
-          this._awaitingIdleConfirmation = true;
-          this.activityTimeout = setTimeout(() => {
-            this._awaitingIdleConfirmation = false;
-            // Emit idle if either:
-            // 1. Claude was working and is now at prompt (normal case)
-            // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
-            const wasWorking = this._isWorking;
-            const isInitialReady = this._status === 'busy' && !this._isWorking;
-            if (wasWorking || isInitialReady) {
-              this._isWorking = false;
-              this._status = 'idle';
-              this._lastPromptTime = Date.now();
-              this.emit('idle');
-            }
-          }, IDLE_DETECTION_DELAY_MS);
+        if (this._isLoadingScrollback) {
+          // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
+          // Do NOT emit idle here: we haven't seen any working state yet in this session.
+          this._isLoadingScrollback = false;
+        } else {
+          // Only start a new timeout if we're not already awaiting idle confirmation
+          // This prevents status bar redraws (which include ❯) from resetting the timer
+          if (!this._awaitingIdleConfirmation) {
+            if (this.activityTimeout) clearTimeout(this.activityTimeout);
+            this._awaitingIdleConfirmation = true;
+            this.activityTimeout = setTimeout(() => {
+              this._awaitingIdleConfirmation = false;
+              // Emit idle if either:
+              // 1. Claude was working and is now at prompt (normal case)
+              // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
+              const wasWorking = this._isWorking;
+              const isInitialReady = this._status === 'busy' && !this._isWorking;
+              if (wasWorking || isInitialReady) {
+                this._isWorking = false;
+                this._status = 'idle';
+                this._lastPromptTime = Date.now();
+                this.emit('idle');
+              }
+            }, IDLE_DETECTION_DELAY_MS);
+          }
         }
       }
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      const hasSpinner = SPINNER_PATTERN.test(data);
+      // Skip during scrollback replay to avoid false-positive busy state.
+      const hasSpinner = !this._isLoadingScrollback && SPINNER_PATTERN.test(data);
       if (hasSpinner) {
         if (!this._isWorking) {
           this._isWorking = true;
@@ -1368,8 +1383,8 @@ export class Session extends EventEmitter {
     }
 
     // Work keyword detection (text-based, needs clean data)
-    // Only check if spinner didn't already trigger working state
-    if (!this._isWorking) {
+    // Only check if spinner didn't already trigger working state, and skip during scrollback replay.
+    if (!this._isWorking && !this._isLoadingScrollback) {
       const cleanData = getCleanData();
       if (
         cleanData.includes('Thinking') ||
@@ -1496,6 +1511,8 @@ export class Session extends EventEmitter {
         }
 
         // Attach to the mux session via PTY
+        // Note: _isLoadingScrollback is NOT set here — the shell onData handler has no
+        // spinner/keyword detection, so the flag would be set but never read or cleared.
         try {
           this.ptyProcess = pty.spawn(
             this._mux.getAttachCommand(),
@@ -2628,6 +2645,8 @@ export class Session extends EventEmitter {
     }
 
     // Step 5: Re-spawn PTY attached to new tmux session
+    // Mark scrollback loading to suppress busy detection during scrollback replay.
+    this._isLoadingScrollback = true;
     try {
       this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(newMuxName), {
         name: 'xterm-256color',
@@ -2660,24 +2679,29 @@ export class Session extends EventEmitter {
       this.emit('output', data);
 
       if (data.includes('❯') || data.includes('\u276f')) {
-        if (!this._awaitingIdleConfirmation) {
-          if (this.activityTimeout) clearTimeout(this.activityTimeout);
-          this._awaitingIdleConfirmation = true;
-          this.activityTimeout = setTimeout(() => {
-            this._awaitingIdleConfirmation = false;
-            const wasWorking = this._isWorking;
-            const isInitialReady = this._status === 'busy' && !this._isWorking;
-            if (wasWorking || isInitialReady) {
-              this._isWorking = false;
-              this._status = 'idle';
-              this._lastPromptTime = Date.now();
-              this.emit('idle');
-            }
-          }, IDLE_DETECTION_DELAY_MS);
+        if (this._isLoadingScrollback) {
+          // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
+          this._isLoadingScrollback = false;
+        } else {
+          if (!this._awaitingIdleConfirmation) {
+            if (this.activityTimeout) clearTimeout(this.activityTimeout);
+            this._awaitingIdleConfirmation = true;
+            this.activityTimeout = setTimeout(() => {
+              this._awaitingIdleConfirmation = false;
+              const wasWorking = this._isWorking;
+              const isInitialReady = this._status === 'busy' && !this._isWorking;
+              if (wasWorking || isInitialReady) {
+                this._isWorking = false;
+                this._status = 'idle';
+                this._lastPromptTime = Date.now();
+                this.emit('idle');
+              }
+            }, IDLE_DETECTION_DELAY_MS);
+          }
         }
       }
 
-      const hasSpinner = SPINNER_PATTERN.test(data);
+      const hasSpinner = !this._isLoadingScrollback && SPINNER_PATTERN.test(data);
       if (hasSpinner) {
         if (!this._isWorking) {
           this._isWorking = true;
