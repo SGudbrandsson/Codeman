@@ -9660,7 +9660,7 @@ kbd {
   inset: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 16px calc(var(--desktop-compose-height, 60px) + 16px);
+  padding: 16px 16px calc(var(--desktop-compose-height, 60px) + 4px);
   background: #0d0d0d;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 0.9rem;
@@ -9671,7 +9671,7 @@ kbd {
 /* Inline pill for skipped command messages (e.g. /compact) */
 .tv-command-pill {
   display: block;
-  margin: 4px auto;
+  margin: 10px auto;
   max-width: 860px;
   padding: 2px 10px;
   background: rgba(255,255,255,0.05);
@@ -9686,7 +9686,7 @@ kbd {
 /* Completed background task summary pill */
 .tv-task-pill {
   display: block;
-  margin: 4px auto;
+  margin: 10px auto;
   max-width: 860px;
   padding: 3px 12px;
   background: rgba(34,197,94,0.08);
@@ -9730,7 +9730,7 @@ kbd {
 }
 
 /* Tool call group — collapses consecutive tool calls under a single header */
-.tv-tool-group { max-width: 860px; margin: 4px auto; }
+.tv-tool-group { max-width: 860px; margin: 10px auto; }
 .tv-tool-group-header {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 8px;
@@ -9766,7 +9766,7 @@ kbd {
 .tv-auq-custom-send:hover { background: #2563eb; }
 
 /* Context-continuation compaction summary — collapsed pill with expandable markdown */
-.tv-compact-block { max-width: 860px; margin: 4px auto; border: 1px solid rgba(251,191,36,0.2); border-radius: 6px; overflow: hidden; }
+.tv-compact-block { max-width: 860px; margin: 10px auto; border: 1px solid rgba(251,191,36,0.2); border-radius: 6px; overflow: hidden; }
 .tv-compact-header {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 10px;
@@ -9900,7 +9900,7 @@ kbd {
   align-items: center;
   gap: 10px;
   max-width: 860px;
-  margin: 4px auto 8px;
+  margin: 12px auto 10px;
   padding: 10px 16px;
   background: rgba(6,182,212,0.06);
   border: 1px solid rgba(6,182,212,0.15);
