@@ -2425,6 +2425,29 @@ const TranscriptView = {
     }
   },
 
+  /** Typewriter reveal for live assistant blocks: types plain text char-by-char, then renders markdown. */
+  _typewriterReveal(el, text) {
+    const content = el.querySelector('.tv-content');
+    if (!content) return;
+    content.textContent = '';
+    let i = 0;
+    // Target ~600ms total regardless of message length; at least 1 char/tick
+    const charsPerTick = Math.max(1, Math.ceil(text.length / 40));
+    const tick = () => {
+      i = Math.min(i + charsPerTick, text.length);
+      content.textContent = text.slice(0, i);
+      this._scrollToBottom(false);
+      if (i < text.length) {
+        requestAnimationFrame(tick);
+      } else {
+        // Final pass: render full markdown
+        content.innerHTML = renderMarkdown(text);
+        this._scrollToBottom(false);
+      }
+    };
+    requestAnimationFrame(tick);
+  },
+
   /** Re-append the thinking bubble to the container so it stays the last element. */
   _ensureThinkingBubbleLast() {
     if (this._thinkingBubbleEl && this._container) {
@@ -2557,22 +2580,11 @@ const TranscriptView = {
         this._appendToToolGroup(el);
         this._ensureThinkingBubbleLast();
       } else {
-        // Apply reveal animation for live assistant text blocks only
+        this._container.appendChild(el);
+        this._ensureThinkingBubbleLast();
+        // Apply typewriter reveal for live assistant text blocks only
         if (scroll && block.type === 'text' && block.role === 'assistant' && el.classList.contains('tv-block--assistant')) {
-          el.classList.add('tv-block--reveal');
-          this._container.appendChild(el);
-          this._ensureThinkingBubbleLast();
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              el.classList.add('tv-block--reveal-active');
-              el.addEventListener('transitionend', () => {
-                el.classList.remove('tv-block--reveal', 'tv-block--reveal-active');
-              }, { once: true });
-            });
-          });
-        } else {
-          this._container.appendChild(el);
-          this._ensureThinkingBubbleLast();
+          this._typewriterReveal(el, block.text);
         }
       }
       if (scroll) this._scrollToBottom(false);

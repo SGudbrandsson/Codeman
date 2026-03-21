@@ -9891,10 +9891,6 @@ kbd {
   padding-left: 2px;
 }
 
-/* Fade-in-slide reveal animation for live assistant blocks */
-.tv-block--reveal { opacity: 0; transform: translateY(6px); }
-.tv-block--reveal.tv-block--reveal-active { opacity: 1; transform: translateY(0); transition: opacity 180ms ease-out, transform 180ms ease-out; }
-
 /* Timestamp span under user/assistant messages */
 .tv-ts { font-size: 0.65rem; color: #334155; margin-top: 3px; display: block; }
 

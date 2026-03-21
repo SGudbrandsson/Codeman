@@ -602,9 +602,9 @@ describe('_animateNextScroll — flag is NOT set during history load', () => {
   });
 });
 
-// ─── Gap 5: .tv-block--reveal / .tv-block--reveal-active ─────────────────────
+// ─── Gap 5: typewriter reveal ─────────────────────────────────────────────────
 
-describe('Reveal animation — live assistant block gets .tv-block--reveal class', () => {
+describe('Typewriter reveal — live assistant block starts with partial text', () => {
   let context: BrowserContext;
   let page: Page;
   let sessionId: string;
@@ -623,50 +623,64 @@ describe('Reveal animation — live assistant block gets .tv-block--reveal class
     await context?.close();
   });
 
-  it('.tv-block--reveal class is present immediately after live assistant block is appended', async () => {
-    // We need to check the class before the rAF fires; inject a MutationObserver to capture it
-    const hadRevealClass = await page.evaluate((sid) => {
-      return new Promise<boolean>((resolve) => {
-        const container = document.getElementById('transcriptView');
-        if (!container) return resolve(false);
-        const observer = new MutationObserver((mutations) => {
-          for (const m of mutations) {
-            for (const node of Array.from(m.addedNodes)) {
-              if (node instanceof HTMLElement && node.classList.contains('tv-block--assistant')) {
-                observer.disconnect();
-                resolve(node.classList.contains('tv-block--reveal'));
-                return;
+  it('.tv-content starts empty immediately after live assistant block is appended', async () => {
+    const fullText = 'Hello from Claude, this is a longer message to type out';
+    const contentTextAtInsert = await page.evaluate(
+      ({ sid, text }) => {
+        return new Promise<string>((resolve) => {
+          const container = document.getElementById('transcriptView');
+          if (!container) return resolve('ERROR: no container');
+          const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+              for (const node of Array.from(m.addedNodes)) {
+                if (node instanceof HTMLElement && node.classList.contains('tv-block--assistant')) {
+                  const content = node.querySelector('.tv-content');
+                  observer.disconnect();
+                  resolve(content?.textContent ?? '');
+                  return;
+                }
               }
             }
-          }
+          });
+          observer.observe(container, { childList: true });
+          (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
+            sessionId: sid,
+            block: { type: 'text', role: 'assistant', text, timestamp: new Date().toISOString() },
+          });
+          setTimeout(() => {
+            observer.disconnect();
+            resolve('TIMEOUT');
+          }, 2000);
         });
-        observer.observe(container, { childList: true });
+      },
+      { sid: sessionId, text: fullText }
+    );
+    // At insertion time the typewriter starts empty
+    expect(contentTextAtInsert.length).toBeLessThan(fullText.length);
+  });
 
-        (window as unknown as { app: { _onTranscriptBlock: (d: unknown) => void } }).app._onTranscriptBlock({
-          sessionId: sid,
-          block: {
-            type: 'text',
-            role: 'assistant',
-            text: 'Hello from Claude',
-            timestamp: new Date().toISOString(),
-          },
-        });
-
-        // Safety timeout
-        setTimeout(() => {
-          observer.disconnect();
-          resolve(false);
-        }, 2000);
-      });
-    }, sessionId);
-    expect(hadRevealClass).toBe(true);
+  it('.tv-content contains full text after typewriter completes', async () => {
+    const fullText = 'Hello from Claude, this is a longer message to type out';
+    await sendBlock(page, sessionId, {
+      type: 'text',
+      role: 'assistant',
+      text: fullText,
+      timestamp: new Date().toISOString(),
+    });
+    // Wait enough time for all ~40 rAF ticks (~800ms) plus margin
+    await page.waitForTimeout(1200);
+    const blocks = await page.locator('#transcriptView .tv-block--assistant .tv-content').all();
+    const lastBlock = blocks[blocks.length - 1];
+    const text = await lastBlock.textContent();
+    expect(text).toContain('Hello from Claude');
   });
 });
 
-describe('Reveal animation — history-loaded assistant block does NOT get .tv-block--reveal class', () => {
+describe('Typewriter reveal — history-loaded assistant block shows full text immediately', () => {
   let context: BrowserContext;
   let page: Page;
   let sessionId: string;
+  const fullText = 'History assistant message with full content';
 
   beforeAll(async () => {
     ({ context, page } = await freshPage());
@@ -674,12 +688,7 @@ describe('Reveal animation — history-loaded assistant block does NOT get .tv-b
     sessionId = await createClaudeSession(page);
     await clearViewModeStorage(page, sessionId);
     await mockTranscript(page, sessionId, [
-      {
-        type: 'text',
-        role: 'assistant',
-        text: 'History assistant message',
-        timestamp: '2026-01-01T10:00:00.000Z',
-      },
+      { type: 'text', role: 'assistant', text: fullText, timestamp: '2026-01-01T10:00:00.000Z' },
     ]);
     await selectSession(page, sessionId);
     await page.waitForTimeout(800);
@@ -690,13 +699,8 @@ describe('Reveal animation — history-loaded assistant block does NOT get .tv-b
     await context?.close();
   });
 
-  it('.tv-block--assistant from history load has no .tv-block--reveal class', async () => {
-    // After load the transition may have already removed the class, but for history
-    // blocks the class should never have been added in the first place.
-    const hasReveal = await page.evaluate(() => {
-      const block = document.querySelector('#transcriptView .tv-block--assistant');
-      return block?.classList.contains('tv-block--reveal') ?? false;
-    });
-    expect(hasReveal).toBe(false);
+  it('history-loaded .tv-content contains full text without waiting', async () => {
+    const text = await page.locator('#transcriptView .tv-block--assistant .tv-content').first().textContent();
+    expect(text).toContain('History assistant message');
   });
 });
