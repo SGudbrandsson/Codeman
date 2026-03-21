@@ -1226,29 +1226,30 @@ export class Session extends EventEmitter {
       if (data.includes('❯') || data.includes('\u276f')) {
         if (this._isLoadingScrollback) {
           // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
-          // Do NOT emit idle here: we haven't seen any working state yet in this session.
+          // Fall through to start the idle timer below: isInitialReady handles the
+          // busy→idle transition since _status was set to 'busy' on startup but no
+          // real working state was detected (spinners were suppressed).
           this._isLoadingScrollback = false;
-        } else {
-          // Only start a new timeout if we're not already awaiting idle confirmation
-          // This prevents status bar redraws (which include ❯) from resetting the timer
-          if (!this._awaitingIdleConfirmation) {
-            if (this.activityTimeout) clearTimeout(this.activityTimeout);
-            this._awaitingIdleConfirmation = true;
-            this.activityTimeout = setTimeout(() => {
-              this._awaitingIdleConfirmation = false;
-              // Emit idle if either:
-              // 1. Claude was working and is now at prompt (normal case)
-              // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
-              const wasWorking = this._isWorking;
-              const isInitialReady = this._status === 'busy' && !this._isWorking;
-              if (wasWorking || isInitialReady) {
-                this._isWorking = false;
-                this._status = 'idle';
-                this._lastPromptTime = Date.now();
-                this.emit('idle');
-              }
-            }, IDLE_DETECTION_DELAY_MS);
-          }
+        }
+        // Only start a new timeout if we're not already awaiting idle confirmation
+        // This prevents status bar redraws (which include ❯) from resetting the timer
+        if (!this._awaitingIdleConfirmation) {
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          this._awaitingIdleConfirmation = true;
+          this.activityTimeout = setTimeout(() => {
+            this._awaitingIdleConfirmation = false;
+            // Emit idle if either:
+            // 1. Claude was working and is now at prompt (normal case)
+            // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
+            const wasWorking = this._isWorking;
+            const isInitialReady = this._status === 'busy' && !this._isWorking;
+            if (wasWorking || isInitialReady) {
+              this._isWorking = false;
+              this._status = 'idle';
+              this._lastPromptTime = Date.now();
+              this.emit('idle');
+            }
+          }, IDLE_DETECTION_DELAY_MS);
         }
       }
 
@@ -2681,23 +2682,23 @@ export class Session extends EventEmitter {
       if (data.includes('❯') || data.includes('\u276f')) {
         if (this._isLoadingScrollback) {
           // First ❯ seen during scrollback replay — scrollback is done, clear the guard.
+          // Fall through to start the idle timer: isInitialReady handles busy→idle.
           this._isLoadingScrollback = false;
-        } else {
-          if (!this._awaitingIdleConfirmation) {
-            if (this.activityTimeout) clearTimeout(this.activityTimeout);
-            this._awaitingIdleConfirmation = true;
-            this.activityTimeout = setTimeout(() => {
-              this._awaitingIdleConfirmation = false;
-              const wasWorking = this._isWorking;
-              const isInitialReady = this._status === 'busy' && !this._isWorking;
-              if (wasWorking || isInitialReady) {
-                this._isWorking = false;
-                this._status = 'idle';
-                this._lastPromptTime = Date.now();
-                this.emit('idle');
-              }
-            }, IDLE_DETECTION_DELAY_MS);
-          }
+        }
+        if (!this._awaitingIdleConfirmation) {
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          this._awaitingIdleConfirmation = true;
+          this.activityTimeout = setTimeout(() => {
+            this._awaitingIdleConfirmation = false;
+            const wasWorking = this._isWorking;
+            const isInitialReady = this._status === 'busy' && !this._isWorking;
+            if (wasWorking || isInitialReady) {
+              this._isWorking = false;
+              this._status = 'idle';
+              this._lastPromptTime = Date.now();
+              this.emit('idle');
+            }
+          }, IDLE_DETECTION_DELAY_MS);
         }
       }
 
