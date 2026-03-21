@@ -318,14 +318,14 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const isNative = existsSync(nativePath);
 
     if (!isLinked && !isNative) {
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Case "${name}" not found`);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Project "${name}" not found`);
     }
 
     if (mode === 'untrack') {
       if (!isLinked) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          `"${name}" is a native case. Use mode=delete to remove it from disk.`
+          `"${name}" is a local project. Use mode=delete to remove it from disk.`
         );
       }
       // Remove from linked-cases.json

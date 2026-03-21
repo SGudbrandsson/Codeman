@@ -7980,6 +7980,8 @@ class CodemanApp {
       this.cases = cases;
       // Re-render drawer if open so project groups appear even if drawer was opened before cases loaded
       if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+      // Re-render mobile picker if open so deleted/added projects appear immediately
+      if (document.getElementById('mobileCasePickerModal')?.classList.contains('active')) this.showMobileCasePicker();
       console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name), 'lastUsedCase:', lastUsedCase);
 
       const select = document.getElementById('quickStartCase');
