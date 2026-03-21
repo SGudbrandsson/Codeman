@@ -151,7 +151,7 @@ describe('OpenCode session initial resize', () => {
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir: '/tmp', name: 'oc-earlyret-test' }),
+        body: JSON.stringify({ workingDir: '/tmp', name: 'oc-earlyret-test', mode: 'opencode' }),
       });
       const data = await res.json();
       return data.id ?? data.session?.id;
@@ -180,6 +180,10 @@ describe('OpenCode session initial resize', () => {
     });
 
     expect(activeAfterSelect).toBe(sessionId);
+
+    // Verify transcript view is hidden for opencode sessions (mode guard)
+    const transcriptVisible = await page.locator('#transcriptView').isVisible();
+    expect(transcriptVisible).toBe(false);
 
     // Cleanup
     await page.evaluate(async (sid: string) => {
