@@ -2149,6 +2149,7 @@ const TranscriptView = {
       const placeholder = this._container.querySelector('.tv-placeholder');
       if (placeholder) placeholder.remove();
       this._container.appendChild(el);
+      this._ensureThinkingBubbleLast();
       this._scrollToBottom(true);
     }
   },
@@ -2424,6 +2425,13 @@ const TranscriptView = {
     }
   },
 
+  /** Re-append the thinking bubble to the container so it stays the last element. */
+  _ensureThinkingBubbleLast() {
+    if (this._thinkingBubbleEl && this._container) {
+      this._container.appendChild(this._thinkingBubbleEl);
+    }
+  },
+
   _showThinkingBubble() {
     if (!this._container) return;
     if (this._thinkingBubbleEl) return; // guard against double-show
@@ -2547,11 +2555,13 @@ const TranscriptView = {
     if (el) {
       if (block.type === 'tool_use' || block.type === 'tool_result') {
         this._appendToToolGroup(el);
+        this._ensureThinkingBubbleLast();
       } else {
         // Apply reveal animation for live assistant text blocks only
         if (scroll && block.type === 'text' && block.role === 'assistant' && el.classList.contains('tv-block--assistant')) {
           el.classList.add('tv-block--reveal');
           this._container.appendChild(el);
+          this._ensureThinkingBubbleLast();
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               el.classList.add('tv-block--reveal-active');
@@ -2562,6 +2572,7 @@ const TranscriptView = {
           });
         } else {
           this._container.appendChild(el);
+          this._ensureThinkingBubbleLast();
         }
       }
       if (scroll) this._scrollToBottom(false);
