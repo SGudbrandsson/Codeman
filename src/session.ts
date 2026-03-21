@@ -1074,6 +1074,10 @@ export class Session extends EventEmitter {
 
         // Start activity monitor for claude-mode (replaces PTY-based detection)
         if (this.mode === 'claude') {
+          // Reset to idle before monitor starts — JSONL is authoritative for claude-mode.
+          // The monitor will emit 'working' immediately if the session is mid-turn.
+          this._isWorking = false;
+          this._status = 'idle';
           this._activityMonitor = new ClaudeActivityMonitor(this.id, this.workingDir);
           this._activityMonitor.on('working', () => {
             if (this._isStopped) return;
