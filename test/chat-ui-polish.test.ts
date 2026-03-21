@@ -478,11 +478,10 @@ describe('Tool group label — single tool shows tool name (not generic "1 tool 
     await context?.close();
   });
 
-  it('.tv-tool-group-label shows the tool name for a single tool (not "1 tool call")', async () => {
+  it('.tv-tool-group-label shows just the tool name (no icon prefix, not "1 tool call")', async () => {
     const text = await page.locator('#transcriptView .tv-tool-group-label').first().textContent();
-    // Should contain the tool name (possibly with icon prefix), not generic "1 tool call"
-    expect(text).not.toBe('1 tool call');
-    expect(text).toContain('Read');
+    // Should be exactly the tool name — icon glyph must NOT appear in the label
+    expect(text).toBe('Read');
   });
 });
 
@@ -524,6 +523,65 @@ describe('Tool group label — multiple tools shows "N more" summary', () => {
   it('.tv-tool-group-label shows "· N more" pattern for multiple tools', async () => {
     const text = await page.locator('#transcriptView .tv-tool-group-label').first().textContent();
     expect(text).toMatch(/\u00B7\s*\d+\s*more/); // "· N more"
+  });
+});
+
+describe('Timestamps — invalid timestamp string produces no .tv-ts span', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, [{ type: 'text', role: 'user', text: 'Bad ts', timestamp: 'not-a-date' }]);
+    await selectSession(page, sessionId);
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('no .tv-ts span for unparseable timestamp string', async () => {
+    const count = await page.locator('#transcriptView .tv-block--user .tv-ts').count();
+    expect(count).toBe(0);
+  });
+});
+
+describe('Tool row — .tv-tool-arg shows "Agent: <description>" for Agent tool', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, []);
+    await selectSession(page, sessionId);
+
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_agent',
+      name: 'Agent',
+      input: { description: 'Explore the codebase', prompt: '...' },
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('.tv-tool-arg shows "Agent: Explore the codebase" not raw prompt', async () => {
+    const text = await page.locator('#transcriptView .tv-tool-arg').first().textContent();
+    expect(text).toMatch(/^Agent: Explore/);
   });
 });
 

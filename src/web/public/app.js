@@ -2434,6 +2434,7 @@ const TranscriptView = {
     // Target ~600ms total regardless of message length; at least 1 char/tick
     const charsPerTick = Math.max(1, Math.ceil(text.length / 40));
     const tick = () => {
+      if (!el.isConnected) return; // element removed mid-animation — stop silently
       i = Math.min(i + charsPerTick, text.length);
       content.textContent = text.slice(0, i);
       this._scrollToBottom(false);
@@ -2501,6 +2502,7 @@ const TranscriptView = {
     pill.appendChild(lbl);
     this._compactingEl = pill;
     this._container.appendChild(pill);
+    this._ensureThinkingBubbleLast();
     this._scrollToBottom(false);
   },
 
@@ -2556,6 +2558,7 @@ const TranscriptView = {
           }
         }
         this._container.appendChild(pill);
+        this._ensureThinkingBubbleLast();
         if (scroll) this._scrollToBottom(false);
         return;
       }
@@ -2636,17 +2639,20 @@ const TranscriptView = {
     const n = group.querySelectorAll('.tv-tool-group-body > [data-tool-id], .tv-tool-group-body > .tv-block').length;
     const label = group.querySelector('.tv-tool-group-label');
     if (!label) return;
+    // Read tool name from the text node only (last child), not textContent which includes icon glyph
+    const getToolName = (el) => {
+      if (!el) return '';
+      const lastChild = el.lastChild;
+      return lastChild && lastChild.nodeType === Node.TEXT_NODE ? lastChild.textContent.trim() : el.textContent.trim();
+    };
     if (n === 1) {
-      // Show just the tool name for single tool
-      const toolName = group.querySelector('.tv-tool-name');
-      label.textContent = toolName ? toolName.textContent : '1 tool call';
+      const firstName = getToolName(group.querySelector('.tv-tool-name'));
+      label.textContent = firstName || '1 tool call';
     } else if (n > 1) {
-      // Show first tool name + count of remaining
-      const firstToolName = group.querySelector('.tv-tool-name');
-      const firstName = firstToolName ? firstToolName.textContent : '';
+      const firstName = getToolName(group.querySelector('.tv-tool-name'));
       label.textContent = firstName ? firstName + ' \u00B7 ' + (n - 1) + ' more' : n + ' tool calls';
     } else {
-      label.textContent = n + (n === 1 ? ' tool call' : ' tool calls');
+      label.textContent = '0 tool calls';
     }
   },
 
@@ -2790,6 +2796,7 @@ const TranscriptView = {
   _formatTimestamp(isoString) {
     if (!isoString) return '';
     const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
     const now = Date.now();
     const diff = now - d.getTime();
     if (diff < 60000) return 'just now';
@@ -2834,6 +2841,10 @@ const TranscriptView = {
     if (name === 'WebFetch' || name === 'WebSearch') {
       const target = input.url || input.query || '';
       return target ? 'Web: ' + target : name;
+    }
+    if (name === 'Agent') {
+      const desc = typeof input.description === 'string' ? input.description.slice(0, 60) : '';
+      return desc ? 'Agent: ' + desc : 'Agent';
     }
     const vals = Object.values(input);
     return name + (vals.length ? ': ' + String(vals[0]).slice(0, 60) : '');

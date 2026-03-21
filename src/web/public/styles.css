@@ -9892,7 +9892,7 @@ kbd {
 }
 
 /* Timestamp span under user/assistant messages */
-.tv-ts { font-size: 0.65rem; color: #334155; margin-top: 3px; display: block; }
+.tv-ts { font-size: 0.65rem; color: #64748b; margin-top: 3px; display: block; }
 
 /* In-flow thinking indicator bubble */
 .tv-thinking-bubble {
