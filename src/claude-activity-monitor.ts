@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 export class ClaudeActivityMonitor extends EventEmitter {
-  readonly _filePath: string;
+  private readonly _filePath: string;
   private _offset: number = 0;
   private _pendingBuffer: string = '';
   private _isBusy: boolean = false;
@@ -22,6 +22,7 @@ export class ClaudeActivityMonitor extends EventEmitter {
   async start(): Promise<void> {
     if (this._stopped) return;
     // TODO: file tail, event parsing (_offset, _pendingBuffer, _isBusy used in subsequent tasks)
+    void this._filePath;
     void this._offset;
     void this._pendingBuffer;
     void this._isBusy;
