@@ -247,6 +247,14 @@ export class MockSession extends EventEmitter {
 
   /** Stub for getMessages */
   getMessages = vi.fn(() => []);
+
+  /** Auto-compact-and-continue enabled state */
+  autoCompactAndContinue: boolean = false;
+
+  /** Stub for setAutoCompactAndContinue */
+  setAutoCompactAndContinue = vi.fn((enabled: boolean) => {
+    this.autoCompactAndContinue = enabled;
+  });
 }
 
 /**

@@ -75,6 +75,7 @@ import {
   buildShellEnv,
 } from './session-cli-builder.js';
 import { SessionAutoOps } from './session-auto-ops.js';
+import { SessionCompactContinue } from './session-compact-continue.js';
 import { SessionTaskCache } from './session-task-cache.js';
 import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
 
@@ -187,6 +188,10 @@ export interface SessionEvents {
   autoClear: (data: { tokens: number; threshold: number }) => void;
   /** Auto-compact triggered due to token threshold */
   autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => void;
+  /** Auto-compact-and-continue: /compact command sent after detecting compaction request */
+  compactSent: () => void;
+  /** Auto-compact-and-continue: 'continue' command sent after compaction completed */
+  continueSent: () => void;
   /** Ralph loop state changed */
   ralphLoopUpdate: (state: RalphTrackerState) => void;
   /** Ralph todo list updated */
@@ -307,6 +312,9 @@ export class Session extends EventEmitter {
 
   // Auto-compact/auto-clear automation (extracted to SessionAutoOps)
   private _autoOps!: SessionAutoOps;
+
+  // Auto-compact-and-continue automation (detects compaction request, sends /compact then continue)
+  private _compactContinue!: SessionCompactContinue;
 
   // Image watcher setting (per-session toggle)
   private _imageWatcherEnabled: boolean = false;
@@ -437,7 +445,7 @@ export class Session extends EventEmitter {
     }
   ) {
     super();
-    this.setMaxListeners(25);
+    this.setMaxListeners(35);
 
     // Default error handler prevents unhandled 'error' events from crashing the process.
     // Server attaches its own handler after construction — this is a safety net for the gap.
@@ -549,6 +557,14 @@ export class Session extends EventEmitter {
       this._totalOutputTokens = 0;
       this.emit('autoClear', data);
     });
+
+    // Initialize auto-compact-and-continue automation and forward events
+    this._compactContinue = new SessionCompactContinue({
+      writeCommand: (cmd) => this.writeViaMux(cmd),
+      isStopped: () => this._isStopped,
+    });
+    this._compactContinue.on('compactSent', () => this.emit('compactSent'));
+    this._compactContinue.on('continueSent', () => this.emit('continueSent'));
   }
 
   get status(): SessionStatus {
@@ -725,6 +741,21 @@ export class Session extends EventEmitter {
     this._safeMode = enabled;
   }
 
+  /** Auto-compact-and-continue getter */
+  get autoCompactAndContinue(): boolean {
+    return this._compactContinue.enabled;
+  }
+
+  /** Enable or disable auto-compact-and-continue. */
+  setAutoCompactAndContinue(enabled: boolean): void {
+    this._compactContinue.setEnabled(enabled);
+  }
+
+  /** Returns the SessionCompactContinue instance (for server-side onIdle calls). */
+  get compactContinue(): SessionCompactContinue {
+    return this._compactContinue;
+  }
+
   // Token tracking getters and setters
   get totalTokens(): number {
     return this._totalInputTokens + this._totalOutputTokens;
@@ -897,6 +928,7 @@ export class Session extends EventEmitter {
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
       safeMode: this._safeMode || undefined,
+      autoCompactAndContinue: this._compactContinue.enabled || undefined,
     };
   }
 
@@ -2409,6 +2441,9 @@ export class Session extends EventEmitter {
 
     // Destroy auto-compact/auto-clear automation (clears its timers)
     this._autoOps.destroy();
+
+    // Destroy auto-compact-and-continue automation (resets state)
+    this._compactContinue.destroy();
 
     // Clear prompt check timers
     if (this._promptCheckInterval) {

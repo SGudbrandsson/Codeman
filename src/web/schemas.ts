@@ -412,6 +412,11 @@ export const ImageWatcherSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** POST /api/sessions/:id/auto-compact-continue */
+export const AutoCompactAndContinueSchema = z.object({
+  enabled: z.boolean(),
+});
+
 /** POST /api/sessions/:id/flicker-filter */
 export const FlickerFilterSchema = z.object({
   enabled: z.boolean(),
@@ -612,6 +617,7 @@ export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
 export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
 export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
 export type SafeModeInput = z.infer<typeof SafeModeSchema>;
+export type AutoCompactAndContinueInput = z.infer<typeof AutoCompactAndContinueSchema>;
 
 // ========== MCP Routes ==========
 

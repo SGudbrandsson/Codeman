@@ -216,6 +216,8 @@ interface SessionListenerRefs {
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
   contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
   conversationId: (uuid: string) => void;
+  compactSent: () => void;
+  continueSent: () => void;
 }
 
 /** Returns false for sessions that must never have tmux reattachment attempted. */
@@ -1118,6 +1120,8 @@ export class WebServer extends EventEmitter {
         session.off('taskFailed', listeners.taskFailed);
         session.off('autoClear', listeners.autoClear);
         session.off('autoCompact', listeners.autoCompact);
+        session.off('compactSent', listeners.compactSent);
+        session.off('continueSent', listeners.continueSent);
         session.off('cliInfoUpdated', listeners.cliInfoUpdated);
         session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
         session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
@@ -1228,6 +1232,8 @@ export class WebServer extends EventEmitter {
         session.off('taskFailed', listeners.taskFailed);
         session.off('autoClear', listeners.autoClear);
         session.off('autoCompact', listeners.autoCompact);
+        session.off('compactSent', listeners.compactSent);
+        session.off('continueSent', listeners.continueSent);
         session.off('cliInfoUpdated', listeners.cliInfoUpdated);
         session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
         session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);
@@ -1539,6 +1545,10 @@ export class WebServer extends EventEmitter {
           tracker.recordIdle();
           tracker.recordTokens(session.inputTokens, session.outputTokens);
         }
+        // Auto-compact-and-continue: detect compaction request and send /compact then continue
+        if (session.autoCompactAndContinue) {
+          void session.compactContinue.onIdle(session.workingDir, session.textOutput);
+        }
       },
 
       // ─── Background Task Events ──────────────────────────────
@@ -1583,6 +1593,16 @@ export class WebServer extends EventEmitter {
         this.broadcastSessionStateDebounced(session.id);
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
+      },
+
+      /** Broadcasts `session:compactSent` — auto-compact-and-continue sent /compact */
+      compactSent: () => {
+        this.broadcast(SseEvent.SessionCompactSent, { sessionId: session.id });
+      },
+
+      /** Broadcasts `session:continueSent` — auto-compact-and-continue sent continue */
+      continueSent: () => {
+        this.broadcast(SseEvent.SessionContinueSent, { sessionId: session.id });
       },
 
       // ─── CLI Info ────────────────────────────────────────────
@@ -1727,6 +1747,8 @@ export class WebServer extends EventEmitter {
     session.on('taskFailed', listeners.taskFailed);
     session.on('autoClear', listeners.autoClear);
     session.on('autoCompact', listeners.autoCompact);
+    session.on('compactSent', listeners.compactSent);
+    session.on('continueSent', listeners.continueSent);
     session.on('cliInfoUpdated', listeners.cliInfoUpdated);
     session.on('ralphLoopUpdate', listeners.ralphLoopUpdate);
     session.on('ralphTodoUpdate', listeners.ralphTodoUpdate);
@@ -3015,6 +3037,10 @@ export class WebServer extends EventEmitter {
     if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
       session.setAutoClear(savedState.autoClearEnabled ?? false, savedState.autoClearThreshold);
     }
+    // Auto-compact-and-continue
+    if (savedState.autoCompactAndContinue) {
+      session.setAutoCompactAndContinue(true);
+    }
     // Token tracking
     if (
       savedState.inputTokens !== undefined ||
@@ -3531,6 +3557,8 @@ export class WebServer extends EventEmitter {
         session.off('taskFailed', listeners.taskFailed);
         session.off('autoClear', listeners.autoClear);
         session.off('autoCompact', listeners.autoCompact);
+        session.off('compactSent', listeners.compactSent);
+        session.off('continueSent', listeners.continueSent);
         session.off('cliInfoUpdated', listeners.cliInfoUpdated);
         session.off('ralphLoopUpdate', listeners.ralphLoopUpdate);
         session.off('ralphTodoUpdate', listeners.ralphTodoUpdate);

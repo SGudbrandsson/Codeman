@@ -747,6 +747,16 @@
                 </div>
                 <span class="form-hint">Full context reset at threshold (use higher than compact)</span>
               </div>
+
+              <div class="context-setting">
+                <div class="context-setting-header">
+                  <label class="checkbox-inline">
+                    <input type="checkbox" id="modalAutoCompactAndContinue" onchange="app.autoSaveAutoCompactAndContinue()">
+                    <span>Auto-compact &amp; Continue</span>
+                  </label>
+                </div>
+                <span class="form-hint">Detects compaction request (COMPACT.md or phrase) and automatically sends /compact then 'continue'</span>
+              </div>
             </div>
 
             <div class="form-section-header">File Watching</div>

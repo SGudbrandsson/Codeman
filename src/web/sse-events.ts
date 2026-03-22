@@ -339,6 +339,13 @@ export const SessionMcpRestarted = 'session:mcpRestarted' as const;
 /** Session context window usage update */
 export const SessionContextUsage = 'session:contextUsage' as const;
 
+// ─── Session: Compact-and-Continue ────────────────────────────────────────────
+
+/** Auto-compact-and-continue: /compact command sent after detecting compaction request. */
+export const SessionCompactSent = 'session:compactSent' as const;
+/** Auto-compact-and-continue: 'continue' command sent after compaction completed. */
+export const SessionContinueSent = 'session:continueSent' as const;
+
 // ─── Namespace Re-export ─────────────────────────────────────────────────────
 
 /**
@@ -506,6 +513,10 @@ export const SseEvent = {
 
   // Context
   SessionContextUsage,
+
+  // Compact-and-Continue
+  SessionCompactSent,
+  SessionContinueSent,
 } as const;
 
 // ─── Payload Types ────────────────────────────────────────────────────────────

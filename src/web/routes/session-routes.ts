@@ -27,6 +27,7 @@ import {
   ResizeSchema,
   AutoClearSchema,
   AutoCompactSchema,
+  AutoCompactAndContinueSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
   QuickRunSchema,
@@ -827,6 +828,28 @@ export function registerSessionRoutes(
     ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
 
     return { success: true, data: { safeMode: body.enabled } };
+  });
+
+  // ========== Auto-Compact-and-Continue ==========
+
+  app.post('/api/sessions/:id/auto-compact-continue', async (req) => {
+    const { id } = req.params as { id: string };
+    const accResult = AutoCompactAndContinueSchema.safeParse(req.body);
+    if (!accResult.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
+    }
+    const body = accResult.data;
+    const session = ctx.sessions.get(id);
+
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    session.setAutoCompactAndContinue(body.enabled);
+    ctx.persistSessionState(session);
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
+
+    return { success: true, data: { autoCompactAndContinue: session.autoCompactAndContinue } };
   });
 
   // ═══════════════════════════════════════════════════════════════

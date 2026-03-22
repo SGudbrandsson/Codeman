@@ -193,6 +193,8 @@ export interface SessionState {
   claudeResumeId?: string;
   /** When true, session launches with stripped CLI args: no --resume, no MCP config */
   safeMode?: boolean;
+  /** Auto-compact-and-continue enabled: detects compaction request and sends /compact then continue */
+  autoCompactAndContinue?: boolean;
   /** ID of the session that was cleared to create this one (archive chain) */
   parentSessionId?: string;
   /** ID of the child session created when this session was cleared */

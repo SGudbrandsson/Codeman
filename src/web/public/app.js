@@ -3164,6 +3164,8 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_CLEARED, '_onSessionCleared'],
   [SSE_EVENTS.SESSION_AUTO_CLEAR, '_onSessionAutoClear'],
   [SSE_EVENTS.SESSION_AUTO_COMPACT, '_onSessionAutoCompact'],
+  [SSE_EVENTS.SESSION_COMPACT_SENT, '_onSessionCompactSent'],
+  [SSE_EVENTS.SESSION_CONTINUE_SENT, '_onSessionContinueSent'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
 
   // Scheduled runs
@@ -5426,6 +5428,18 @@ class CodemanApp {
     });
     if (TranscriptView._sessionId === data.sessionId) {
       TranscriptView.showCompacting();
+    }
+  }
+
+  _onSessionCompactSent(data) {
+    if (data.sessionId === this.activeSessionId) {
+      this.showToast('Auto-compact triggered — sending /compact...', 'info');
+    }
+  }
+
+  _onSessionContinueSent(data) {
+    if (data.sessionId === this.activeSessionId) {
+      this.showToast('Compaction complete — resuming...', 'info');
     }
   }
 
@@ -9472,6 +9486,7 @@ class CodemanApp {
     document.getElementById('modalAutoCompactPrompt').value = session.autoCompactPrompt ?? '';
     document.getElementById('modalAutoClearEnabled').checked = session.autoClearEnabled ?? false;
     document.getElementById('modalAutoClearThreshold').value = session.autoClearThreshold ?? 140000;
+    document.getElementById('modalAutoCompactAndContinue').checked = session.autoCompactAndContinue ?? false;
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
     document.getElementById('modalSafeMode').checked = session.safeMode ?? false;
@@ -10053,6 +10068,15 @@ class CodemanApp {
       await this._apiPost(`/api/sessions/${this.editingSessionId}/auto-clear`, {
         enabled: document.getElementById('modalAutoClearEnabled').checked,
         threshold: parseInt(document.getElementById('modalAutoClearThreshold').value) || 140000
+      });
+    } catch { /* silent */ }
+  }
+
+  async autoSaveAutoCompactAndContinue() {
+    if (!this.editingSessionId) return;
+    try {
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/auto-compact-continue`, {
+        enabled: document.getElementById('modalAutoCompactAndContinue').checked
       });
     } catch { /* silent */ }
   }
