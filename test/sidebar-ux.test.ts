@@ -333,3 +333,62 @@ describe('MCP-type panels: panelBackdrop closes panels (bug 2)', () => {
     await page.evaluate(() => (window as any).McpPanel.close());
   });
 });
+
+// ─── Bug 3: Mobile sidebar auto-focus suppression ─────────────────────────
+//
+// SessionDrawer is a script-scope const in app.js (declared with `const` at
+// the top level of a non-module script). Top-level `const` does NOT become a
+// property of `window`, so `window.SessionDrawer` is undefined. However, the
+// binding IS in the page's global declarative environment and is reachable by
+// passing a string expression to page.evaluate(), which the browser evaluates
+// in the page's own script scope.
+
+describe('Session drawer: search input focus on open (mobile vs desktop)', () => {
+  it('mobile viewport: search input is NOT focused after drawer opens', async () => {
+    // Mobile viewport (≤430px) → MobileDetection.getDeviceType() returns 'mobile'
+    const { context, page } = await freshPage(400, 800);
+    await navigateTo(page);
+
+    // Pass a string so Playwright evaluates it in the page scope where
+    // SessionDrawer (a script-scope const) is accessible.
+    await page.evaluate('SessionDrawer.open()');
+    await page.waitForSelector('#sessionDrawer.open', { timeout: 3000 });
+
+    // Wait longer than the 350ms focus timer to let it fire if it were going to
+    await page.waitForTimeout(500);
+
+    const activeIsSearch = await page.evaluate(() => {
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      return document.activeElement === searchEl;
+    });
+    expect(activeIsSearch).toBe(false);
+
+    // Clean up
+    await page.evaluate('SessionDrawer.close()');
+    await context.close();
+  });
+
+  it('desktop viewport: search input IS focused after drawer opens', async () => {
+    // Desktop viewport (≥1024px) → MobileDetection.getDeviceType() returns 'desktop'
+    const { context, page } = await freshPage(1280, 800);
+    await navigateTo(page);
+
+    // Pass a string so Playwright evaluates it in the page scope where
+    // SessionDrawer (a script-scope const) is accessible.
+    await page.evaluate('SessionDrawer.open()');
+    await page.waitForSelector('#sessionDrawer.open', { timeout: 3000 });
+
+    // Wait for the 350ms focus timer to fire
+    await page.waitForTimeout(500);
+
+    const activeIsSearch = await page.evaluate(() => {
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      return document.activeElement === searchEl;
+    });
+    expect(activeIsSearch).toBe(true);
+
+    // Clean up
+    await page.evaluate('SessionDrawer.close()');
+    await context.close();
+  });
+});
