@@ -17530,8 +17530,16 @@ const InputPanel = {
   async _loadDraft(sessionId) {
     const ta = this._getTextarea();
     if (!ta) return;
-    // Always clear first so the previous session's text never leaks into a new session
-    ta.value = '';
+    // If the user is mid-type, treat their in-progress text as authoritative for this
+    // session and skip any draft restoration. This prevents background session switches
+    // (e.g. auto-clear / SSE reconnect) from clobbering what the user is composing.
+    const inProgress = ta.value;
+    if (inProgress) {
+      this._drafts.set(sessionId, { text: inProgress, imagePaths: this._images.map(i => i.path).filter(Boolean) });
+      return;
+    }
+    // Textarea is empty — safe to restore the stored draft.
+    // Clear images from any previous session first.
     this._restoreImages([]);
     this._autoGrow(ta);
     // Apply local cache immediately (fast path)
@@ -17541,13 +17549,16 @@ const InputPanel = {
       this._restoreImages(local.imagePaths || []);
       this._autoGrow(ta);
     }
+    // Snapshot what we just set so we can detect user edits after the async gap.
+    const valueAfterLocal = ta.value;
     // Then fetch from server (handles cross-device case)
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/draft`);
       if (!res.ok) return;
       const data = await res.json();
-      // Only apply if server draft is newer than what we have (or local was empty)
-      if (!local && (data.text || data.imagePaths?.length)) {
+      // Only apply server draft if the textarea hasn't been modified since we set it
+      // above (i.e. the user hasn't started typing while we were waiting for the fetch).
+      if (!local && (data.text || data.imagePaths?.length) && ta.value === valueAfterLocal) {
         ta.value = data.text || '';
         this._restoreImages(data.imagePaths || []);
         this._autoGrow(ta);
@@ -18945,3 +18956,4 @@ const app = new CodemanApp();
 window.app = app;
 window.MobileDetection = MobileDetection;
 window.TranscriptView = TranscriptView;
+window.InputPanel = InputPanel;
