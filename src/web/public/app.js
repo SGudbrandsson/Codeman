@@ -18073,7 +18073,10 @@ const SessionDrawer = {
         this._searchInputListener = (e) => this._filterSessions(e.target.value);
         searchEl.addEventListener('input', this._searchInputListener);
         // Focus after animation completes; iOS needs ~350ms delay
-        setTimeout(() => { try { searchEl.focus(); } catch(e) {} }, 350);
+        // Skip auto-focus on mobile — keyboard would pop up immediately on open
+        if (MobileDetection.getDeviceType() !== 'mobile') {
+          setTimeout(() => { try { searchEl.focus(); } catch(e) {} }, 350);
+        }
       }
       this._render();
       // Attach swipe-down-to-dismiss on touch devices
