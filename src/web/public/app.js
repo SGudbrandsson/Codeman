@@ -17644,16 +17644,21 @@ const InputPanel = {
       }
     });
 
-    // Paste images — intercept clipboard image data on both desktop and mobile
+    // Paste images and non-image files — intercept clipboard file data on both desktop and mobile
     ta.addEventListener('paste', (e) => {
       const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
       const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
-      if (!imageItems.length) return; // No images — let default text paste proceed
+      const nonImageItems = items.filter(it => it.kind === 'file' && it.type && !it.type.startsWith('image/'));
+      if (!imageItems.length && !nonImageItems.length) return; // No files — let default text paste proceed
       e.preventDefault();
-      const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
-      if (!files.length) return;
-      // Reuse existing file-handling logic by creating a synthetic input-like object
-      this._onFilesFromPaste(files);
+      if (imageItems.length) {
+        const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
+        if (files.length) this._onFilesFromPaste(files);
+      }
+      if (nonImageItems.length) {
+        const files = nonImageItems.map(it => it.getAsFile()).filter(Boolean);
+        if (files.length) this._handleNonImageFiles(files);
+      }
     });
 
     // Plus button — on desktop skip the mobile action sheet, open file picker directly
@@ -17862,7 +17867,20 @@ const InputPanel = {
     const files = Array.from(input.files || []);
     input.value = '';
     if (!files.length) return;
-    await this._uploadFiles(files);
+    const imageFiles = files.filter(f => f.type.startsWith('image/'));
+    const nonImageFiles = files.filter(f => !f.type.startsWith('image/'));
+    if (imageFiles.length) await this._uploadFiles(imageFiles);
+    if (nonImageFiles.length) this._handleNonImageFiles(nonImageFiles);
+  },
+
+  /** Handle non-image files by inserting filenames as plain text in the textarea */
+  _handleNonImageFiles(files) {
+    const ta = this._getTextarea();
+    if (!ta) return;
+    const names = files.map(f => f.name).join('\n');
+    const existing = ta.value;
+    ta.value = existing ? existing + '\n' + names : names;
+    this._autoGrow(ta);
   },
 
   /** Update Send button disabled state based on pending upload count */
