@@ -330,6 +330,7 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
       expect(body.error).toContain('mode=delete');
+      expect(body.error).toContain('local project');
     });
 
     it('mode=delete on a linked case calls rmSync on the linked path and broadcasts case:deleted', async () => {
@@ -387,6 +388,7 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
       expect(body.error).toContain('not found');
+      expect(body.error).toContain('Project');
     });
 
     it('returns INVALID_INPUT for an invalid mode value', async () => {
