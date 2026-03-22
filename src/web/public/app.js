@@ -2619,9 +2619,12 @@ const TranscriptView = {
    */
   _appendToToolGroup(toolEl, isLive) {
     const lastChild = this._container.lastElementChild;
+    // Skip the thinking bubble so consecutive tool calls from different tools
+    // still land in the same group during live streaming.
+    const lastMeaningful = lastChild === this._thinkingBubbleEl ? lastChild.previousElementSibling : lastChild;
     let group;
-    if (lastChild?.classList.contains('tv-tool-group')) {
-      group = lastChild;
+    if (lastMeaningful?.classList.contains('tv-tool-group')) {
+      group = lastMeaningful;
     } else {
       group = document.createElement('div');
       group.className = 'tv-tool-group';
