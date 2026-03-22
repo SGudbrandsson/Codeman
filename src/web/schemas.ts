@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { homedir } from 'node:os';
 import { SAFE_PATH_PATTERN } from '../utils/regex-patterns.js';
 
 // ========== Path Validation ==========
@@ -42,6 +43,23 @@ export function isValidWorkingDir(p: string): boolean {
 const safePathSchema = z.string().max(1000).refine(isValidWorkingDir, {
   message: 'Invalid path: must be absolute, no shell metacharacters or traversal',
 });
+
+/**
+ * Like safePathSchema but also accepts tilde-prefixed paths (~/...).
+ * The tilde is expanded to homedir() before the safety check so that
+ * the validated value is always an absolute path.
+ */
+const safePathOrTildeSchema = z
+  .string()
+  .max(1000)
+  .transform((p) => {
+    if (p === '~') return homedir();
+    if (p.startsWith('~/')) return homedir() + p.slice(1);
+    return p;
+  })
+  .refine(isValidWorkingDir, {
+    message: 'Invalid path: must be absolute or start with ~/, no shell metacharacters or traversal',
+  });
 
 // ========== Env Var Allowlist ==========
 
@@ -165,7 +183,7 @@ export const CreateCaseSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
   description: z.string().max(1000).optional(),
-  customPath: safePathSchema.optional(),
+  customPath: safePathOrTildeSchema.optional(),
 });
 
 // ========== Quick Start ==========

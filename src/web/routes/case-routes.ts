@@ -5,7 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -80,8 +80,21 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     let isCustomPath = false;
 
     if (customPath) {
-      // Use the caller-supplied absolute path
-      casePath = customPath;
+      // customPath has already had tilde expanded by safePathOrTildeSchema.
+      // If the caller supplied an existing directory, treat it as a parent folder
+      // and append the project name so the project is created inside it.
+      let resolvedCustomPath = customPath;
+      if (existsSync(customPath)) {
+        try {
+          if (statSync(customPath).isDirectory()) {
+            resolvedCustomPath = join(customPath, name);
+          }
+        } catch {
+          // statSync failed — fall through and let the existsSync check handle it
+        }
+      }
+
+      casePath = resolvedCustomPath;
       isCustomPath = true;
     } else {
       casePath = join(CASES_DIR, name);
