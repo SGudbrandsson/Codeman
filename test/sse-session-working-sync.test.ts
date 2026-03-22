@@ -198,6 +198,75 @@ describe('session:idle SSE sets session.isWorking to false', () => {
   });
 });
 
+// ─── Gap 1: session:idle for background session calls TranscriptView.setWorking(false) ──
+
+describe('session:idle for background session calls TranscriptView.setWorking(false)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  const SESSION_ID = 'test-idle-background-' + Date.now();
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+    await injectFakeSession(page, SESSION_ID);
+
+    // Start in working state
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      const session = app.sessions.get(id);
+      if (session) {
+        session.isWorking = true;
+        session.status = 'busy';
+      }
+    }, SESSION_ID);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('TranscriptView.setWorking(false) is called when session:idle fires for a non-active session that TranscriptView is rendering', async () => {
+    // Arrange: set activeSessionId to a DIFFERENT session so this is a background session,
+    // but set TranscriptView._sessionId to our session (it is being rendered in transcript view).
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      // Point activeSessionId away from the test session
+      app.activeSessionId = 'some-other-session-id';
+
+      const tv = (window as any).TranscriptView;
+      if (!tv) return;
+      tv._testSetWorkingCalls = [];
+      const orig = tv.setWorking.bind(tv);
+      tv.setWorking = (val: boolean) => {
+        tv._testSetWorkingCalls.push(val);
+        orig(val);
+      };
+      // TranscriptView is rendering our background session
+      tv._sessionId = id;
+    }, SESSION_ID);
+
+    // Act: dispatch session:idle for the background session
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      if (app.eventSource) {
+        const event = new MessageEvent('session:idle', {
+          data: JSON.stringify({ id }),
+        });
+        app.eventSource.dispatchEvent(event);
+      }
+    }, SESSION_ID);
+
+    await page.waitForTimeout(100);
+
+    // Assert: setWorking must have been called with false even though this is not the active session
+    const calls = await page.evaluate(() => {
+      return (window as any).TranscriptView?._testSetWorkingCalls ?? [];
+    });
+
+    expect(calls).toContain(false);
+  });
+});
+
 // ─── isWorking toggles correctly through working → idle → working cycle ───────
 
 describe('session.isWorking tracks full working/idle cycle', () => {

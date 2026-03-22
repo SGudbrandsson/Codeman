@@ -188,6 +188,77 @@ describe('RC-1: session:updated during 4s hide-timer preserves busy displayStatu
   });
 });
 
+// ─── Gap 2: switchToSession uses isWorking (not displayStatus) to determine busy state ──
+
+describe('RC-2b: switchToSession uses session.isWorking rather than displayStatus', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('switching to session with isWorking=false but displayStatus=busy calls setWorking(false)', async () => {
+    // Create a real session to switch to
+    const targetId = await page.evaluate(async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: '/tmp', name: 'rc2b-isworking' }),
+      });
+      const data = await res.json();
+      return (data.id ?? data.session?.id) as string;
+    });
+
+    // Patch the session to simulate the debounce-lag race:
+    // SESSION_IDLE has arrived (isWorking=false) but the 4s hide-timer hasn't fired yet
+    // so displayStatus is still 'busy'.
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      const s = app.sessions.get(id);
+      if (s) {
+        s.isWorking = false; // Fix 2 reads this — session is actually idle
+        s.status = 'idle';
+        s.displayStatus = 'busy'; // debounce timer still pending — stale 'busy'
+      }
+    }, targetId);
+
+    // Track setWorking calls on TranscriptView
+    await page.evaluate((id: string) => {
+      const tv = (window as any).TranscriptView;
+      if (!tv) return;
+      tv._testSetWorkingCalls = [];
+      const orig = tv.setWorking.bind(tv);
+      tv.setWorking = (val: boolean) => {
+        tv._testSetWorkingCalls.push(val);
+        orig(val);
+      };
+      tv._sessionId = id;
+    }, targetId);
+
+    // Switch to the target session
+    await page.evaluate((id: string) => {
+      (window as any).app.selectSession(id);
+    }, targetId);
+
+    await page.waitForTimeout(300);
+
+    // Fix 2: because isWorking=false, setWorking must be called with false even
+    // though displayStatus is still 'busy' (debounce lag).
+    const calls = await page.evaluate(() => {
+      return (window as any).TranscriptView?._testSetWorkingCalls ?? [];
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[0]).toBe(false);
+  });
+});
+
 // ─── RC-2: selectSession uses displayStatus ?? status ─────────────────────────
 
 describe('RC-2: selectSession reads displayStatus rather than raw status', () => {

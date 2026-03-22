@@ -5217,10 +5217,13 @@ class CodemanApp {
       session.isWorking = false;
       this._updateTabStatusDebounced(data.id, 'idle');
       this.sendPendingCtrlL(data.id);
+      // Fix: setWorking(false) must fire for any session the TranscriptView is rendering,
+      // not just the currently active (terminal-view) session. TranscriptView._sessionId
+      // tracks the transcript being displayed and is independent of activeSessionId.
+      if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(false);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
         this._updateSendBtn(false);
-        if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(false);
       }
     }
     // Start stuck detection timer (only if no respawn running)
@@ -7638,9 +7641,10 @@ class CodemanApp {
     this.renderSessionTabs();
     this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
-    // RC-2 fix: use displayStatus (debounce-settled) rather than raw status, which may be stale
-    // when only OSC-133 has fired but SESSION_IDLE SSE has not yet arrived.
-    const _switchedWorking = (_switchedSession?.displayStatus ?? _switchedSession?.status) === 'busy';
+    // Fix: use session.isWorking (set synchronously by _onSessionIdle/_onSessionWorking) rather
+    // than displayStatus (debounce-settled). displayStatus may still read 'busy' if the debounce
+    // timer hasn't fired yet after SESSION_IDLE arrived, causing a stuck thinking indicator.
+    const _switchedWorking = _switchedSession?.isWorking ?? false;
     this._updateSendBtn(_switchedWorking);
     if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(_switchedWorking);
 
