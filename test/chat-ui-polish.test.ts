@@ -663,6 +663,100 @@ describe('_animateNextScroll — flag is NOT set during history load', () => {
 
 // ─── Gap 5: typewriter reveal ─────────────────────────────────────────────────
 
+// ─── Tool group open/collapsed state ────────────────────────────────────────
+
+describe('Tool group — live tool_use block auto-opens the group (header and body have "open" class)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, []);
+    await selectSession(page, sessionId);
+
+    // Send a single live tool_use block
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_live_open',
+      name: 'Read',
+      input: { file_path: 'src/index.ts' },
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('.tv-tool-group-header has "open" class after live tool_use block', async () => {
+    const hasOpen = await page.evaluate(() => {
+      const header = document.querySelector('#transcriptView .tv-tool-group-header');
+      return header?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(true);
+  });
+
+  it('.tv-tool-group-body has "open" class after live tool_use block', async () => {
+    const hasOpen = await page.evaluate(() => {
+      const body = document.querySelector('#transcriptView .tv-tool-group-body');
+      return body?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(true);
+  });
+});
+
+describe('Tool group — history-loaded tool_use block keeps group collapsed (no "open" class)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, [
+      {
+        type: 'tool_use',
+        id: 'tu_history_collapsed',
+        name: 'Read',
+        input: { file_path: 'src/index.ts' },
+        timestamp: '2026-01-01T10:00:00.000Z',
+      },
+    ]);
+    await selectSession(page, sessionId);
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('.tv-tool-group-header does NOT have "open" class after history load', async () => {
+    const hasOpen = await page.evaluate(() => {
+      const header = document.querySelector('#transcriptView .tv-tool-group-header');
+      return header?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(false);
+  });
+
+  it('.tv-tool-group-body does NOT have "open" class after history load', async () => {
+    const hasOpen = await page.evaluate(() => {
+      const body = document.querySelector('#transcriptView .tv-tool-group-body');
+      return body?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(false);
+  });
+});
+
+// ─── Gap 5: typewriter reveal ─────────────────────────────────────────────────
+
 describe('Typewriter reveal — live assistant block starts with partial text', () => {
   let context: BrowserContext;
   let page: Page;

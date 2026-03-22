@@ -2597,7 +2597,7 @@ const TranscriptView = {
     }
     if (el) {
       if (block.type === 'tool_use' || block.type === 'tool_result') {
-        this._appendToToolGroup(el);
+        this._appendToToolGroup(el, scroll);
         this._ensureThinkingBubbleLast();
       } else {
         this._container.appendChild(el);
@@ -2611,8 +2611,13 @@ const TranscriptView = {
     }
   },
 
-  /** Add a tool wrapper element to the current tool group, creating one if needed. */
-  _appendToToolGroup(toolEl) {
+  /** Add a tool wrapper element to the current tool group, creating one if needed.
+   * @param {HTMLElement} toolEl - The tool wrapper element to add.
+   * @param {boolean} [isLive=false] - True when appending during a live session (scroll=true).
+   *   Live groups auto-open so the user can see tool calls as they stream in.
+   *   History renders (isLive=false) always start collapsed for a clean view.
+   */
+  _appendToToolGroup(toolEl, isLive) {
     const lastChild = this._container.lastElementChild;
     let group;
     if (lastChild?.classList.contains('tv-tool-group')) {
@@ -2648,6 +2653,16 @@ const TranscriptView = {
     }
     group.querySelector('.tv-tool-group-body').appendChild(toolEl);
     this._updateToolGroupLabel(group);
+    // Auto-open the group while streaming live tool calls so the user sees
+    // what's happening. History renders stay collapsed for a clean view.
+    if (isLive) {
+      const header = group.querySelector('.tv-tool-group-header');
+      const body = group.querySelector('.tv-tool-group-body');
+      if (header && body) {
+        header.classList.add('open');
+        body.classList.add('open');
+      }
+    }
   },
 
   /** Recount tool wrappers in a group and update the header label. */
