@@ -75,6 +75,13 @@ export const MAX_CONSECUTIVE_ERRORS = 5;
 export const ERROR_RESET_MS = 60_000;
 
 // ============================================================================
+// Dead Pane Recovery
+// ============================================================================
+
+/** Dead-pane health check interval — check for crashed Claude processes (ms) */
+export const DEAD_PANE_CHECK_INTERVAL_MS = 30 * 1000;
+
+// ============================================================================
 // Common Cleanup Intervals
 // ============================================================================
 

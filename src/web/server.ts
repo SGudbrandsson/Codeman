@@ -135,6 +135,7 @@ import {
   BATCH_FLUSH_THRESHOLD,
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
+  DEAD_PANE_CHECK_INTERVAL_MS,
 } from '../config/server-timing.js';
 
 // DEC mode 2026 - Synchronized Output
@@ -950,6 +951,9 @@ export class WebServer extends EventEmitter {
   // Clean up all resources associated with a session
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
+
+  // Track sessions currently undergoing auto-recovery to prevent concurrent recovery races
+  private _recoveringSessionIds: Set<string> = new Set();
 
   private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
@@ -2244,6 +2248,81 @@ export class WebServer extends EventEmitter {
     return data;
   }
 
+  /**
+   * Periodically checks for dead Claude panes in worktree sessions and auto-recovers them.
+   *
+   * A worktree session that is `busy` but whose tmux pane has exited (pane_dead=1) is safe
+   * to restart — CLAUDE.md + TASK.md on disk carry the full resumable state. Non-worktree
+   * interactive sessions are excluded by default to avoid interrupting mid-conversations.
+   *
+   * Future: a per-session `autoRecoverEnabled` flag could relax the worktree-only restriction.
+   */
+  private checkAndRecoverDeadPanes(): void {
+    const recoveryTasks: Promise<void>[] = [];
+
+    for (const session of this.sessions.values()) {
+      // Only recover busy sessions (idle/stopped need no recovery)
+      if (!session.isBusy()) continue;
+
+      // Only auto-recover worktree sessions by default (they have TASK.md resume state on disk)
+      // Non-worktree interactive sessions are excluded to avoid interrupting live conversations.
+      // Future: check session.autoRecoverEnabled here to allow opt-in for non-worktree sessions.
+      if (!session.worktreePath) continue;
+
+      // Skip if already recovering or being deleted
+      if (this._recoveringSessionIds.has(session.id)) continue;
+      if (this.cleaningUp.has(session.id)) continue;
+
+      // Compute the mux session name — matches TmuxManager.createSession pattern
+      const muxName = `codeman-${session.id}`;
+
+      recoveryTasks.push(
+        (async () => {
+          const isDead = this.mux.isPaneDead(muxName);
+          if (!isDead) return;
+
+          // Guard against concurrent recoveries triggered by close timer ticks
+          if (this._recoveringSessionIds.has(session.id)) return;
+          this._recoveringSessionIds.add(session.id);
+
+          console.log(
+            `[Server] Dead pane detected for session ${session.id} (${session.name}), triggering auto-recovery`
+          );
+          this.broadcast(SseEvent.SessionMessage, {
+            id: session.id,
+            message: `Auto-recovering dead pane for session "${session.name}"...`,
+          });
+
+          try {
+            // prepareForRestart() tears down the dead PTY + mux session without setting _isStopped,
+            // so startInteractive() can immediately create a fresh mux session.
+            // Claude re-reads TASK.md from disk and resumes from the current phase.
+            await session.prepareForRestart();
+            await session.startInteractive();
+            console.log(`[Server] Auto-recovery complete for session ${session.id} (${session.name})`);
+            this.broadcast(SseEvent.SessionInteractive, { id: session.id });
+            this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
+            this.broadcast(SseEvent.SessionMessage, {
+              id: session.id,
+              message: `Session "${session.name}" auto-recovered successfully.`,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[Server] Auto-recovery failed for session ${session.id}: ${msg}`);
+            this.broadcast(SseEvent.SessionError, { id: session.id, message: `Auto-recovery failed: ${msg}` });
+          } finally {
+            this._recoveringSessionIds.delete(session.id);
+          }
+        })()
+      );
+    }
+
+    // Fire all per-session checks concurrently; failures are handled individually above
+    Promise.allSettled(recoveryTasks).catch(() => {
+      /* already handled per-task */
+    });
+  }
+
   // Clean up old completed scheduled runs
   private cleanupScheduledRuns(): void {
     const now = Date.now();
@@ -2817,6 +2896,15 @@ export class WebServer extends EventEmitter {
       },
       INACTIVITY_TIMEOUT_MS,
       { description: 'periodic token recording' }
+    );
+
+    // Start dead-pane auto-recovery check (worktree sessions only, every 30 seconds)
+    this.cleanup.setInterval(
+      () => {
+        this.checkAndRecoverDeadPanes();
+      },
+      DEAD_PANE_CHECK_INTERVAL_MS,
+      { description: 'dead pane auto-recovery check' }
     );
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
@@ -3525,6 +3613,7 @@ export class WebServer extends EventEmitter {
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
+    this._recoveringSessionIds.clear();
 
     // Dispose push store (flush pending saves)
     this.pushStore.dispose();
