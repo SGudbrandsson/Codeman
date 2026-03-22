@@ -2426,24 +2426,32 @@ const TranscriptView = {
     }
   },
 
-  /** Typewriter reveal for live assistant blocks: types plain text char-by-char, then renders markdown. */
+  /** Typewriter reveal for live assistant blocks: eased time-based reveal, then renders markdown. */
   _typewriterReveal(el, text) {
     const content = el.querySelector('.tv-content');
     if (!content) return;
     content.textContent = '';
-    let i = 0;
-    // Target ~600ms total regardless of message length; at least 1 char/tick
-    const charsPerTick = Math.max(1, Math.ceil(text.length / 40));
+    // Scale duration with message length, capped 300-800ms. Display-rate independent.
+    const targetDuration = Math.min(800, Math.max(300, text.length * 4));
+    const startTime = performance.now();
+    let lastCharsShown = 0;
     const tick = () => {
-      if (!el.isConnected) return; // element removed mid-animation — stop silently
-      i = Math.min(i + charsPerTick, text.length);
-      content.textContent = text.slice(0, i);
-      this._scrollToBottom(false);
-      if (i < text.length) {
+      if (!el.isConnected) return; // element removed mid-animation - stop silently
+      const elapsed = performance.now() - startTime;
+      const t = Math.min(elapsed / targetDuration, 1);
+      // Cubic ease-out: starts fast, decelerates toward end
+      const eased = 1 - Math.pow(1 - t, 3);
+      const charsToShow = Math.floor(eased * text.length);
+      if (charsToShow > lastCharsShown) {
+        content.textContent = text.slice(0, charsToShow);
+        this._scrollToBottom(false);
+        lastCharsShown = charsToShow;
+      }
+      if (t < 1) {
         requestAnimationFrame(tick);
       } else {
-        // Final pass: render full markdown
-        content.innerHTML = renderMarkdown(text);
+        // Final pass: render full markdown (same as original pattern)
+        content.innerHTML = renderMarkdown(text); // eslint-disable-line no-unsanitized/property
         this._scrollToBottom(false);
       }
     };
