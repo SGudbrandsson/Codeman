@@ -280,6 +280,11 @@ const KeyboardAccessoryBar = {
         TranscriptView.setViewMode(sessionId, mode);
         if (mode === 'web') {
           TranscriptView.show(sessionId);
+          // Restore busy indicator — show() clears it unconditionally, so re-apply
+          // the current session's working state after switching to transcript view.
+          const _kSession = typeof app !== 'undefined' ? app.sessions?.get(sessionId) : null;
+          const _kWorking = (_kSession?.displayStatus ?? _kSession?.status) === 'busy';
+          TranscriptView.setWorking(_kWorking);
         } else {
           TranscriptView.hide(sessionId);
         }

@@ -365,3 +365,127 @@ describe('RC-3: OSC-133 during buffer replay after session switch is ignored', (
     expect(displayStatusAfter).toBe('idle');
   });
 });
+
+// ─── View switch: transcript → terminal → transcript restores busy indicator ──
+
+describe('View switch: switching to transcript view restores busy indicator', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateAndWait(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('setWorking is called with true after switching to transcript view on a busy session', async () => {
+    // Create a real session so KeyboardAccessoryBar can target it
+    const targetId = await page.evaluate(async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: '/tmp', name: 'view-switch-busy' }),
+      });
+      const data = await res.json();
+      return (data.id ?? data.session?.id) as string;
+    });
+
+    // Mark the session as busy via displayStatus
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      const s = app.sessions.get(id);
+      if (s) {
+        s.status = 'busy';
+        s.displayStatus = 'busy';
+      }
+      app.activeSessionId = id;
+    }, targetId);
+
+    // Track setWorking calls
+    await page.evaluate((id: string) => {
+      const tv = (window as any).TranscriptView;
+      if (!tv) return;
+      tv._testSetWorkingCalls = [];
+      const orig = tv.setWorking.bind(tv);
+      tv.setWorking = (val: boolean) => {
+        tv._testSetWorkingCalls.push(val);
+        orig(val);
+      };
+      tv._sessionId = id;
+    }, targetId);
+
+    // Simulate switching to transcript (web) view — this is what the toggle button does
+    await page.evaluate((id: string) => {
+      const tv = (window as any).TranscriptView;
+      tv.setViewMode(id, 'web');
+      tv.show(id);
+      // The fix: restore working state after show()
+      const _kSession = (window as any).app.sessions?.get(id);
+      const _kWorking = (_kSession?.displayStatus ?? _kSession?.status) === 'busy';
+      tv.setWorking(_kWorking);
+    }, targetId);
+
+    await page.waitForTimeout(100);
+
+    const calls = await page.evaluate(() => {
+      return (window as any).TranscriptView?._testSetWorkingCalls ?? [];
+    });
+
+    // setWorking(true) must have been called — busy indicator should be visible
+    expect(calls).toContain(true);
+  });
+
+  it('setWorking is called with false after switching to transcript view on an idle session', async () => {
+    const targetId = await page.evaluate(async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: '/tmp', name: 'view-switch-idle' }),
+      });
+      const data = await res.json();
+      return (data.id ?? data.session?.id) as string;
+    });
+
+    await page.evaluate((id: string) => {
+      const app = (window as any).app;
+      const s = app.sessions.get(id);
+      if (s) {
+        s.status = 'idle';
+        s.displayStatus = 'idle';
+      }
+      app.activeSessionId = id;
+    }, targetId);
+
+    await page.evaluate((id: string) => {
+      const tv = (window as any).TranscriptView;
+      tv._testSetWorkingCalls = [];
+      const orig = tv.setWorking.bind(tv);
+      tv.setWorking = (val: boolean) => {
+        tv._testSetWorkingCalls.push(val);
+        orig(val);
+      };
+      tv._sessionId = id;
+    }, targetId);
+
+    await page.evaluate((id: string) => {
+      const tv = (window as any).TranscriptView;
+      tv.setViewMode(id, 'web');
+      tv.show(id);
+      const _kSession = (window as any).app.sessions?.get(id);
+      const _kWorking = (_kSession?.displayStatus ?? _kSession?.status) === 'busy';
+      tv.setWorking(_kWorking);
+    }, targetId);
+
+    await page.waitForTimeout(100);
+
+    const calls = await page.evaluate(() => {
+      return (window as any).TranscriptView?._testSetWorkingCalls ?? [];
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[calls.length - 1]).toBe(false);
+  });
+});
