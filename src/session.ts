@@ -76,6 +76,7 @@ import {
 } from './session-cli-builder.js';
 import { SessionAutoOps } from './session-auto-ops.js';
 import { SessionTaskCache } from './session-task-cache.js';
+import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -292,6 +293,7 @@ export class Session extends EventEmitter {
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
   private _isWorking: boolean = false;
+  private _activityMonitor: ClaudeActivityMonitor | null = null;
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
   private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
@@ -1070,7 +1072,28 @@ export class Session extends EventEmitter {
           // No extra sleep — createSession() already waits for tmux readiness
         }
 
-        // Attach to the mux session via PTY
+        // Start activity monitor for claude-mode (replaces PTY-based detection)
+        if (this.mode === 'claude') {
+          // Reset to idle before monitor starts — JSONL is authoritative for claude-mode.
+          // The monitor will emit 'working' immediately if the session is mid-turn.
+          this._isWorking = false;
+          this._status = 'idle';
+          this._activityMonitor = new ClaudeActivityMonitor(this.id, this.workingDir);
+          this._activityMonitor.on('working', () => {
+            if (this._isStopped) return;
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          });
+          this._activityMonitor.on('idle', () => {
+            if (this._isStopped) return;
+            this._isWorking = false;
+            this._status = 'idle';
+            this._lastPromptTime = Date.now();
+            this.emit('idle');
+          });
+          void this._activityMonitor.start();
+        }
         try {
           this.ptyProcess = pty.spawn(
             this._mux.getAttachCommand(),
@@ -1213,9 +1236,9 @@ export class Session extends EventEmitter {
       this.emit('output', data);
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
-      // Detect if Claude is working or at prompt
-      // The prompt line contains "❯" when waiting for input
-      if (data.includes('❯') || data.includes('\u276f')) {
+      // When activity monitor is active, it handles working/idle via JSONL.
+      // Fall back to PTY-based ❯ prompt detection only when no monitor is present.
+      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
         // Only start a new timeout if we're not already awaiting idle confirmation
         // This prevents status bar redraws (which include ❯) from resetting the timer
         if (!this._awaitingIdleConfirmation) {
@@ -1240,15 +1263,18 @@ export class Session extends EventEmitter {
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      const hasSpinner = SPINNER_PATTERN.test(data);
-      if (hasSpinner) {
-        if (!this._isWorking) {
-          this._isWorking = true;
-          this._status = 'busy';
-          this.emit('working');
+      // Skip when activity monitor handles detection.
+      if (!this._activityMonitor) {
+        const hasSpinner = SPINNER_PATTERN.test(data);
+        if (hasSpinner) {
+          if (!this._isWorking) {
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          }
+          this._awaitingIdleConfirmation = false;
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
         }
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
       }
 
       // === Expensive processing (ANSI strip, Ralph, bash parser) is throttled ===
@@ -1368,8 +1394,8 @@ export class Session extends EventEmitter {
     }
 
     // Work keyword detection (text-based, needs clean data)
-    // Only check if spinner didn't already trigger working state
-    if (!this._isWorking) {
+    // Only check if spinner didn't already trigger working state, and skip when monitor handles detection.
+    if (!this._isWorking && !this._activityMonitor) {
       const cleanData = getCleanData();
       if (
         cleanData.includes('Thinking') ||
@@ -2365,6 +2391,10 @@ export class Session extends EventEmitter {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
 
+    // Stop activity monitor
+    this._activityMonitor?.stop();
+    this._activityMonitor = null;
+
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
@@ -2659,7 +2689,7 @@ export class Session extends EventEmitter {
       }
       this.emit('output', data);
 
-      if (data.includes('❯') || data.includes('\u276f')) {
+      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
         if (!this._awaitingIdleConfirmation) {
           if (this.activityTimeout) clearTimeout(this.activityTimeout);
           this._awaitingIdleConfirmation = true;
@@ -2677,15 +2707,17 @@ export class Session extends EventEmitter {
         }
       }
 
-      const hasSpinner = SPINNER_PATTERN.test(data);
-      if (hasSpinner) {
-        if (!this._isWorking) {
-          this._isWorking = true;
-          this._status = 'busy';
-          this.emit('working');
+      if (!this._activityMonitor) {
+        const hasSpinner = SPINNER_PATTERN.test(data);
+        if (hasSpinner) {
+          if (!this._isWorking) {
+            this._isWorking = true;
+            this._status = 'busy';
+            this.emit('working');
+          }
+          this._awaitingIdleConfirmation = false;
+          if (this.activityTimeout) clearTimeout(this.activityTimeout);
         }
-        this._awaitingIdleConfirmation = false;
-        if (this.activityTimeout) clearTimeout(this.activityTimeout);
       }
 
       const now = Date.now();
