@@ -213,6 +213,58 @@ describe('session-routes', () => {
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
     });
+
+    it('useMux:true happy path — calls writeViaMux, does not call write', async () => {
+      const session = harness.ctx._session;
+      const writeViaMuxSpy = vi.spyOn(session, 'writeViaMux').mockResolvedValue(true);
+      const writeSpy = vi.spyOn(session, 'write');
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: 'hello\nworld\r', useMux: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      expect(writeViaMuxSpy).toHaveBeenCalledWith('hello\nworld\r');
+      // Allow the fire-and-forget promise to settle before asserting write was not called
+      await new Promise((r) => setTimeout(r, 10));
+      expect(writeSpy).not.toHaveBeenCalled();
+    });
+
+    it('useMux:true, writeViaMux returns false — falls back to write with \\n replaced by spaces', async () => {
+      const session = harness.ctx._session;
+      vi.spyOn(session, 'writeViaMux').mockResolvedValue(false);
+      const writeSpy = vi.spyOn(session, 'write');
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: 'line1\nline2\r', useMux: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      // Allow the fire-and-forget promise to settle
+      await new Promise((r) => setTimeout(r, 10));
+      expect(writeSpy).toHaveBeenCalledWith('line1 line2\r');
+    });
+
+    it('useMux:true, writeViaMux throws — falls back to write with \\n replaced by spaces', async () => {
+      const session = harness.ctx._session;
+      vi.spyOn(session, 'writeViaMux').mockRejectedValue(new Error('tmux unavailable'));
+      const writeSpy = vi.spyOn(session, 'write');
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: 'line1\nline2\r', useMux: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      // Allow the fire-and-forget promise to settle
+      await new Promise((r) => setTimeout(r, 10));
+      expect(writeSpy).toHaveBeenCalledWith('line1 line2\r');
+    });
   });
 
   // ========== POST /api/sessions/:id/resize ==========

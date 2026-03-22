@@ -6520,7 +6520,7 @@ class CodemanApp {
       const fetchPromise = fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input, useMux: true }),
         keepalive: input.length < 65536,
       });
 
@@ -17716,7 +17716,9 @@ const InputPanel = {
     const parts = [...images.map(img => img.path), ...(text ? [text] : [])];
     app.sendInput(parts.join('\n') + '\r');
 
-    // Verify Enter was received: poll session status every 100ms for 500ms.
+    // Verify Enter was received: poll session status every 150ms for 1200ms.
+    // Multi-part messages (images + text) can take ~250ms to fully deliver via tmux,
+    // so give extra headroom before deciding a retry is needed.
     // If session never goes busy, send a bare \r to retry the Enter key.
     const _sendSessionId = app.activeSessionId;
     let _sendChecks = 0;
@@ -17724,12 +17726,12 @@ const InputPanel = {
       _sendChecks++;
       const s = app.sessions?.get(_sendSessionId);
       if (s?.status === 'busy') { clearInterval(_sendCheckTimer); return; }
-      if (_sendChecks >= 5) {
+      if (_sendChecks >= 8) {
         clearInterval(_sendCheckTimer);
         // Session still idle — resend Enter in case it was lost
         if (s?.status !== 'busy') app.sendInput('\r').catch(() => {});
       }
-    }, 100);
+    }, 150);
 
     // Show user message immediately in transcript view (optimistic UI)
     if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {

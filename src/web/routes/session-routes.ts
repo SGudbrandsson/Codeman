@@ -590,11 +590,16 @@ export function registerSessionRoutes(
         .then((ok) => {
           if (!ok) {
             console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
-            session.write(inputStr);
+            // Strip \n to avoid premature submit on the PTY line discipline.
+            // Preserve trailing \r so the input is actually submitted.
+            const safeStr = inputStr.replace(/\n/g, ' ');
+            session.write(safeStr);
           }
         })
         .catch(() => {
-          session.write(inputStr);
+          // Same safety: strip \n to avoid premature submit in fallback path.
+          const safeStr = inputStr.replace(/\n/g, ' ');
+          session.write(safeStr);
         });
     } else {
       session.write(inputStr);
