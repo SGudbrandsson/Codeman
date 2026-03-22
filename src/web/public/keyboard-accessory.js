@@ -663,9 +663,21 @@ const KeyboardAccessoryBar = {
 
     const textarea = overlay.querySelector('.paste-textarea');
     const send = () => {
-      const text = textarea.value;
+      let text = textarea.value;
       overlay.remove();
-      if (text) app.sendInput(text);
+      if (!text) return;
+      if (typeof SecretDetector !== 'undefined' && SecretDetector.isEnabled()) {
+        const result = SecretDetector.scan(app.activeSessionId, text);
+        if (result.count > 0) {
+          text = result.redacted;
+          const typeList = result.types.map(t => t.replace(/_/g, ' ').toLowerCase()).join(', ');
+          app.showToast(
+            `${result.count} secret${result.count > 1 ? 's' : ''} detected and redacted before sending (${typeList}). Originals held in memory for this session only.`,
+            'warning'
+          );
+        }
+      }
+      app.sendInput(text);
     };
     overlay.querySelector('.paste-cancel').addEventListener('click', () => overlay.remove());
     overlay.querySelector('.paste-send').addEventListener('click', send);

@@ -940,6 +940,16 @@
                   <span class="slider"></span>
                 </label>
               </div>
+              <div class="settings-item settings-item-multiline" title="Scan messages for API keys, tokens, and other secrets before sending. Detected secrets are replaced with named placeholders ([SECRET_TYPE_N]) and held in memory for this session only — never stored on disk or sent over the wire.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Redact Secrets Before Sending</span>
+                  <span class="settings-item-desc">Replace detected API keys and tokens with placeholders</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsSecretRedaction" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
               <div class="settings-item settings-item-multiline" title="Automatically close the session tab when the shell or Claude exits cleanly (exit code 0). Disable to keep the tab open after typing 'exit'.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Close on Clean Exit</span>
@@ -2130,6 +2140,7 @@
   <script defer src="mobile-handlers.js"></script>
   <script defer src="voice-input.js"></script>
   <script defer src="notification-manager.js"></script>
+  <script defer src="secret-detector.js"></script>
   <script defer src="keyboard-accessory.js"></script>
   <script defer src="app.js"></script>
   <script defer src="ralph-wizard.js"></script>
