@@ -2652,77 +2652,7 @@ html.mobile-init .file-browser-panel {
     touch-action: manipulation;
   }
 
-  /* AskUserQuestion panel — structured question with labeled options + descriptions */
-  .auq-panel {
-    background: #111;
-    border-top: 1px solid rgba(255,255,255,0.12);
-    padding: 8px 8px 6px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 52px;   /* above the fixed keyboard accessory bar */
-    z-index: 200;   /* above terminal, below modals */
-    max-width: 100vw;
-    box-sizing: border-box;
-    overflow-x: hidden;
-  }
-
-  .auq-panel[style*="display:none"] {
-    display: none !important;
-  }
-
-  .auq-header {
-    font-size: 11px;
-    font-weight: 600;
-    color: #3b82f6;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 2px 2px;
-  }
-
-  .auq-options {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .auq-option-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    padding: 8px 10px;
-    background: #1e1e1e;
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 8px;
-    color: #fff;
-    font-family: inherit;
-    cursor: pointer;
-    text-align: left;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-    width: 100%;
-  }
-
-  .auq-option-btn:active {
-    background: #2a2a2a;
-    border-color: rgba(255,255,255,0.3);
-  }
-
-  .auq-option-label {
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .auq-option-desc {
-    font-size: 11px;
-    color: rgba(255,255,255,0.45);
-    line-height: 1.3;
-  }
+  /* AskUserQuestion panel CSS removed — questions are now rendered inline in tv-auq-block only */
 }
 
 .touch-device .btn-hamburger { display: none; }
