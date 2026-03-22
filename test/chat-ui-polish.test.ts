@@ -521,9 +521,85 @@ describe('Tool group label — multiple tools shows "N more" summary', () => {
     await context?.close();
   });
 
+  it('exactly one .tv-tool-group exists for consecutive tool_use blocks', async () => {
+    const count = await page.evaluate(() => {
+      return document.querySelectorAll('#transcriptView .tv-tool-group').length;
+    });
+    expect(count).toBe(1);
+  });
+
   it('.tv-tool-group-label shows "· N more" pattern for multiple tools', async () => {
     const text = await page.locator('#transcriptView .tv-tool-group-label').first().textContent();
     expect(text).toMatch(/\u00B7\s*\d+\s*more/); // "· N more"
+  });
+});
+
+describe('Tool group — live streaming with thinking bubble: mixed tool names land in one group', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createClaudeSession(page);
+    await clearViewModeStorage(page, sessionId);
+    await mockTranscript(page, sessionId, []);
+    await selectSession(page, sessionId);
+
+    // Activate the thinking bubble (simulates live streaming — setWorking(true) is called
+    // when the user submits input). Wait for the 300ms show-debounce to fire.
+    await page.evaluate(() => {
+      (window as unknown as { TranscriptView: { setWorking: (v: boolean) => void } }).TranscriptView.setWorking(true);
+    });
+    await page.waitForTimeout(600);
+
+    // Send four tool_use blocks with different names — the bug caused each to create a new group
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_live_bubble_1',
+      name: 'Bash',
+      input: { command: 'npm run build' },
+      timestamp: new Date().toISOString(),
+    });
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_live_bubble_2',
+      name: 'Write',
+      input: { file_path: 'out.txt', content: 'hello' },
+      timestamp: new Date().toISOString(),
+    });
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_live_bubble_3',
+      name: 'Read',
+      input: { file_path: 'src/index.ts' },
+      timestamp: new Date().toISOString(),
+    });
+    await sendBlock(page, sessionId, {
+      type: 'tool_use',
+      id: 'tu_live_bubble_4',
+      name: 'Grep',
+      input: { pattern: 'TODO', path: '.' },
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('exactly one .tv-tool-group exists for four mixed-name tool_use blocks sent during live streaming', async () => {
+    const count = await page.evaluate(() => {
+      return document.querySelectorAll('#transcriptView .tv-tool-group').length;
+    });
+    expect(count).toBe(1);
+  });
+
+  it('.tv-tool-group-label shows "Bash · 3 more" for four consecutive mixed-name tool calls', async () => {
+    const text = await page.locator('#transcriptView .tv-tool-group-label').first().textContent();
+    expect(text).toBe('Bash · 3 more');
   });
 });
 
