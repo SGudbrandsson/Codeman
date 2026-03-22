@@ -9643,14 +9643,76 @@ class CodemanApp {
 
   /** Start a session in a specific case from the drawer quick-add popover */
   async startSessionInCase(caseName, mode) {
-    const caseSelect = document.getElementById('quickStartCase');
-    if (caseSelect) caseSelect.value = caseName;
-    if (mode === 'opencode') {
-      await this.runOpenCode();
-    } else if (mode === 'shell') {
-      await this.runShell();
+    // Resolve workingDir from app.cases; fall back to the cases API if not loaded yet
+    let workingDir = null;
+    const caseObj = (this.cases || []).find(c => c.name === caseName);
+    if (caseObj && caseObj.path) {
+      workingDir = caseObj.path;
     } else {
-      await this.runClaude();
+      // Fetch the case directly from the API
+      try {
+        const caseRes = await fetch(`/api/cases/${encodeURIComponent(caseName)}`);
+        const caseData = await caseRes.json();
+        workingDir = caseData.path || null;
+      } catch (_) {}
+    }
+
+    if (!workingDir) {
+      console.error('startSessionInCase: could not resolve workingDir for case', caseName);
+      return;
+    }
+
+    if (mode === 'opencode') {
+      // OpenCode uses its own quick-start route
+      try {
+        const statusRes = await fetch('/api/opencode/status');
+        const status = await statusRes.json();
+        if (!status.available) {
+          console.error('OpenCode CLI not found.');
+          return;
+        }
+        const res = await fetch('/api/quick-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caseName, mode: 'opencode', openCodeConfig: { autoAllowTools: true } }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
+        if (data.sessionId) await this.selectSession(data.sessionId);
+      } catch (err) {
+        console.error('startSessionInCase opencode error:', err);
+      }
+      return;
+    }
+
+    // claude / shell — call POST /api/sessions directly
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir, mode }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to create session');
+      const sessionId = data.session?.id;
+      if (!sessionId) throw new Error('No session id returned');
+
+      if (mode === 'shell') {
+        await fetch(`/api/sessions/${sessionId}/shell`, { method: 'POST' });
+        const dims = this.getTerminalDimensions();
+        if (dims) {
+          await fetch(`/api/sessions/${sessionId}/resize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(dims),
+          });
+        }
+      }
+
+      await this.selectSession(sessionId);
+      this.terminal?.focus();
+    } catch (err) {
+      console.error('startSessionInCase error:', err);
     }
   }
 
