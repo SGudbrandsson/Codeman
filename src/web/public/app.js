@@ -3558,6 +3558,7 @@ class CodemanApp {
     // Restore desktop sidebar pin state
     if (MobileDetection.getDeviceType() !== 'mobile' && localStorage.getItem('sidebarPinned') === 'true') {
       document.body.classList.add('sidebar-pinned');
+      requestAnimationFrame(() => SessionDrawer._openPinned());
     }
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
@@ -18124,6 +18125,33 @@ const SessionDrawer = {
   _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
   _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
   _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
+  _openPinned() {
+    // Opens the drawer silently for pinned mode: no overlay, no search focus.
+    const drawer = this._getEl();
+    if (drawer) {
+      drawer.classList.add('open');
+      this._render();
+    }
+    // Inject pin button if not already present
+    if (window.innerWidth >= 1024) {
+      const titleEl = document.querySelector('.session-drawer-title');
+      if (titleEl && !titleEl.querySelector('.drawer-pin-btn')) {
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'drawer-pin-btn';
+        pinBtn.textContent = '\u21a4';
+        pinBtn.title = 'Unpin sidebar';
+        pinBtn.addEventListener('click', () => {
+          const nowPinned = !document.body.classList.contains('sidebar-pinned');
+          document.body.classList.toggle('sidebar-pinned', nowPinned);
+          localStorage.setItem('sidebarPinned', String(nowPinned));
+          pinBtn.textContent = nowPinned ? '\u21a4' : '\u21a6';
+          pinBtn.title = nowPinned ? 'Unpin sidebar' : 'Pin sidebar';
+          if (!nowPinned) SessionDrawer.close();
+        });
+        titleEl.appendChild(pinBtn);
+      }
+    }
+  },
   open() {
     this._getOverlay()?.classList.add('open');
     const drawer = this._getEl();
@@ -18171,6 +18199,7 @@ const SessionDrawer = {
     }
   },
   close() {
+    if (document.body.classList.contains('sidebar-pinned')) return;
     this._getOverlay()?.classList.remove('open');
     const drawer = this._getEl();
     if (drawer) {
@@ -18288,7 +18317,9 @@ const SessionDrawer = {
 
     row.addEventListener('click', () => {
       app.selectSession(s.id);
-      SessionDrawer.close();
+      if (!document.body.classList.contains('sidebar-pinned')) {
+        SessionDrawer.close();
+      }
     });
 
     return row;

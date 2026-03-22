@@ -1549,7 +1549,12 @@ body {
 @media (min-width: 1024px) {
   body.sidebar-pinned .session-drawer { transform: translateX(0) !important; }
   body.sidebar-pinned .session-drawer-overlay { display: none; }
-  body.sidebar-pinned .main-content { margin-right: 300px; }
+  body.sidebar-pinned .main { margin-right: 300px; }
+  body.sidebar-pinned .keyboard-accessory-bar { right: 300px; }
+  body.sidebar-pinned .mobile-input-panel { right: 300px; }
+  .main { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .keyboard-accessory-bar { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .mobile-input-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .drawer-pin-btn {
     background: none;
     border: none;
