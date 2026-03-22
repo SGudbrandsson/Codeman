@@ -11350,6 +11350,7 @@ class CodemanApp {
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
+    document.getElementById('appSettingsSecretRedaction').checked = settings.secretRedactionEnabled !== false;
     document.getElementById('appSettingsStopOnCleanExit').checked = settings.stopOnCleanExit ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Mobile hotbar buttons
@@ -12172,6 +12173,7 @@ class CodemanApp {
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
+      secretRedactionEnabled: document.getElementById('appSettingsSecretRedaction').checked,
       stopOnCleanExit: document.getElementById('appSettingsStopOnCleanExit').checked,
       hotbarButtons: [...document.querySelectorAll('input[name="hotbarBtn"]:checked')].map(cb => cb.value),
       hotbarCustomCommands: this._collectHotbarCustomCmds(),
@@ -12293,7 +12295,8 @@ class CodemanApp {
 
     // Save to server (includes notification prefs for cross-browser persistence)
     // Strip device-specific keys — localEchoEnabled is per-platform (touch default differs)
-    const { localEchoEnabled: _leo, ...serverSettings } = settings;
+    // Strip secretRedactionEnabled — client-only preference, never sent to server
+    const { localEchoEnabled: _leo, secretRedactionEnabled: _sre, ...serverSettings } = settings;
     try {
       await this._apiPut('/api/settings', { ...serverSettings, notificationPreferences: notifPrefsToSave, voiceSettings });
 
@@ -12676,7 +12679,7 @@ class CodemanApp {
         const displayKeys = new Set([
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled',
+          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'secretRedactionEnabled',
         ]);
         // Merge settings: non-display keys always sync from server,
         // display keys only seed from server when localStorage has no value
@@ -17561,7 +17564,10 @@ const InputPanel = {
 
   /** Called by selectSession when the active session changes. Saves old draft, loads new one. */
   onSessionChange(oldId, newId) {
-    if (oldId) this._saveDraftLocal(oldId);
+    if (oldId) {
+      this._saveDraftLocal(oldId);
+      if (typeof SecretDetector !== 'undefined') SecretDetector.clearSession(oldId);
+    }
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
@@ -17794,7 +17800,20 @@ const InputPanel = {
     // This sends everything as a single Claude prompt so the Enter at the end submits
     // it all together — avoids the race where text+Enter arrive while Claude is still
     // processing the image path submission from a prior Enter.
-    const parts = [...images.map(img => img.path), ...(text ? [text] : [])];
+    let sendText = text;
+    if (sendText && typeof SecretDetector !== 'undefined' && SecretDetector.isEnabled()) {
+      const result = SecretDetector.scan(app.activeSessionId, sendText);
+      if (result.count > 0) {
+        sendText = result.redacted;
+        ta.value = sendText;
+        const typeList = result.types.map(t => t.replace(/_/g, ' ').toLowerCase()).join(', ');
+        app.showToast(
+          `${result.count} secret${result.count > 1 ? 's' : ''} detected and redacted before sending (${typeList}). Originals held in memory for this session only.`,
+          'warning'
+        );
+      }
+    }
+    const parts = [...images.map(img => img.path), ...(sendText ? [sendText] : [])];
     app.sendInput(parts.join('\n') + '\r');
 
     // Verify Enter was received: poll session status every 150ms for 1200ms.
