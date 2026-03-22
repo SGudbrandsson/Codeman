@@ -4929,8 +4929,17 @@ class CodemanApp {
     const session = data.session || data;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
-    // Preserve displayStatus from previous session so debounce is not reset by server updates
-    session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
+    // Preserve displayStatus from previous session so debounce is not reset by server updates.
+    // RC-1 fix: if a show-timer is pending, force 'busy' so the in-flight debounce is not lost.
+    // If a hide-timer is pending and old displayStatus was 'busy', preserve 'busy' to prevent
+    // premature idle stamp while the 4s hide-delay is still counting down.
+    if (this._tabStatusTimers.has(session.id)) {
+      session.displayStatus = 'busy';
+    } else if (this._tabStatusHideTimers.has(session.id) && oldSession?.displayStatus === 'busy') {
+      session.displayStatus = 'busy';
+    } else {
+      session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
+    }
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
     this.updateCost();
@@ -7567,6 +7576,11 @@ class CodemanApp {
     }
     const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
+    // RC-3 fix: raise the buffer-load guard immediately after activeSessionId is updated.
+    // Any OSC-133 sequences from the old session's replayed buffer that fire before the
+    // guard was previously set (further down) would be attributed to the new session ID.
+    this._isLoadingBuffer = true;
+    this._loadBufferQueue = [];
     SessionIndicatorBar.update(sessionId);
     // Save draft for old session, load draft for new session
     if (typeof InputPanel !== 'undefined') InputPanel.onSessionChange(_prevSessionId, sessionId);
@@ -7604,7 +7618,9 @@ class CodemanApp {
     this.renderSessionTabs();
     this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
-    const _switchedWorking = _switchedSession?.status === 'busy';
+    // RC-2 fix: use displayStatus (debounce-settled) rather than raw status, which may be stale
+    // when only OSC-133 has fired but SESSION_IDLE SSE has not yet arrived.
+    const _switchedWorking = (_switchedSession?.displayStatus ?? _switchedSession?.status) === 'busy';
     this._updateSendBtn(_switchedWorking);
     if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(_switchedWorking);
 
