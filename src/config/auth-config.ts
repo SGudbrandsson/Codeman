@@ -33,7 +33,3 @@ export const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 
 /** Timeout for Claude Code hook curl commands (ms) */
 export const HOOK_TIMEOUT_MS = 10000;
-
-/** Timeout for AskUserQuestion PreToolUse hook — longer because the hook
- *  blocks while waiting for the user to answer via the web UI (ms). */
-export const AUQ_HOOK_TIMEOUT_MS = 5 * 60 * 1000;
