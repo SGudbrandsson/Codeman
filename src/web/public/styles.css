@@ -1545,14 +1545,47 @@ body {
 }
 .close-sheet-cancel:hover { color: #64748b; }
 
+/* ── Session drawer search input (desktop & mobile) ──────── */
+.session-drawer-search-wrap {
+  padding: 8px 14px 6px;
+  flex-shrink: 0;
+}
+.session-drawer-search {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  color: #e2e8f0;
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+.session-drawer-search::placeholder { color: #4b5563; }
+.session-drawer-search:focus { background: rgba(255,255,255,0.09); border-color: rgba(96,165,250,0.4); }
+
 /* ── Desktop pinned sidebar ───────────────────────────────── */
 @media (min-width: 1024px) {
   body.sidebar-pinned .session-drawer { transform: translateX(0) !important; }
   body.sidebar-pinned .session-drawer-overlay { display: none; }
   body.sidebar-pinned .main { margin-right: 300px; }
+  body.sidebar-pinned .header { margin-right: 300px; }
+  body.sidebar-pinned .session-indicator-bar { margin-right: 300px; }
+  body.sidebar-pinned .timer-banner { margin-right: 300px; }
+  body.sidebar-pinned .respawn-banner { margin-right: 300px; }
+  body.sidebar-pinned .ralph-panel:not(.detached) { margin-right: 300px; }
+  body.sidebar-pinned .ctx-banner { margin-right: 300px; }
   body.sidebar-pinned .keyboard-accessory-bar { right: 300px; }
   body.sidebar-pinned .mobile-input-panel { right: 300px; }
   .main { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .header { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .session-indicator-bar { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .timer-banner { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .respawn-banner { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .ralph-panel { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .ctx-banner { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .keyboard-accessory-bar { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .mobile-input-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .drawer-pin-btn {
@@ -9026,6 +9059,12 @@ kbd {
     padding-bottom: calc(var(--desktop-compose-height, 60px) + 40px);
   }
 
+  /* Transcript view: override base padding-bottom to account for both the
+     compose bar and the 40px accessory bar beneath it. */
+  .transcript-view {
+    padding-bottom: calc(var(--desktop-compose-height, 60px) + 40px + 8px);
+  }
+
   /* ── Accessory bar ─────────────────────────────────────────── */
   .keyboard-accessory-bar {
     display: flex !important;   /* Always visible on desktop */
@@ -9620,6 +9659,14 @@ kbd {
   font-size: 0.9rem;
   line-height: 1.6;
   color: #e2e8f0;
+}
+/* Desktop: override padding-bottom to account for compose bar + 40px accessory bar.
+   This must be placed after the base .transcript-view rule above so that the
+   padding shorthand above does not win by source order. */
+@media (min-width: 1024px) {
+  .transcript-view {
+    padding-bottom: calc(var(--desktop-compose-height, 60px) + 40px + 8px);
+  }
 }
 
 /* ── Transcript Live Status Blocks ── */

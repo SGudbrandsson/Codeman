@@ -249,7 +249,26 @@ const KeyboardAccessoryBar = {
       hamburgerBtn.appendChild(hSvg);
     }
     hamburgerBtn.addEventListener('click', () => {
-      if (typeof SessionDrawer !== 'undefined') SessionDrawer.toggle();
+      if (typeof SessionDrawer === 'undefined') return;
+      if (window.innerWidth >= 1024) {
+        // Desktop: hamburger toggles pinned state directly.
+        // First click pins the sidebar open; second click unpins and closes it.
+        const isPinned = document.body.classList.contains('sidebar-pinned');
+        if (isPinned) {
+          document.body.classList.remove('sidebar-pinned');
+          localStorage.setItem('sidebarPinned', 'false');
+          // Update pin button icon if present
+          const pinBtn = document.querySelector('.drawer-pin-btn');
+          if (pinBtn) { pinBtn.textContent = '\u21a6'; pinBtn.title = 'Pin sidebar'; }
+          SessionDrawer.close();
+        } else {
+          document.body.classList.add('sidebar-pinned');
+          localStorage.setItem('sidebarPinned', 'true');
+          SessionDrawer._openPinned();
+        }
+      } else {
+        SessionDrawer.toggle();
+      }
     });
     this.element.appendChild(hamburgerBtn);
 

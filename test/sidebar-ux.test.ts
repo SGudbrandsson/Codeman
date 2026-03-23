@@ -334,6 +334,95 @@ describe('MCP-type panels: panelBackdrop closes panels (bug 2)', () => {
   });
 });
 
+// ─── Gap 1: Hamburger toggles pin on desktop ──────────────────────────────
+
+describe('Session drawer: hamburger toggles sidebar-pinned on desktop (Gap 1)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    // Desktop viewport >= 1024px — hamburger uses the pin-toggle path
+    ({ context, page } = await freshPage(1280, 800));
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('first hamburger click adds sidebar-pinned to body and opens drawer', async () => {
+    // The hamburger is the button with title "Sessions" inside .keyboard-accessory-bar
+    const hamburger = page.locator('.keyboard-accessory-bar button[title="Sessions"]');
+    await hamburger.click();
+    await page.waitForTimeout(400); // allow pin + CSS transition
+
+    const hasPinned = await page.evaluate(() => document.body.classList.contains('sidebar-pinned'));
+    expect(hasPinned).toBe(true);
+
+    await page.waitForFunction(() => document.getElementById('sessionDrawer')?.classList.contains('open'), {
+      timeout: 5000,
+    });
+    const drawerOpen = await page.evaluate(
+      () => document.getElementById('sessionDrawer')?.classList.contains('open') ?? false
+    );
+    expect(drawerOpen).toBe(true);
+  });
+
+  it('second hamburger click removes sidebar-pinned and closes drawer', async () => {
+    const hamburger = page.locator('.keyboard-accessory-bar button[title="Sessions"]');
+    await hamburger.click();
+    await page.waitForTimeout(400); // allow unpin + CSS transition
+
+    const hasPinned = await page.evaluate(() => document.body.classList.contains('sidebar-pinned'));
+    expect(hasPinned).toBe(false);
+
+    const drawerOpen = await page.evaluate(
+      () => document.getElementById('sessionDrawer')?.classList.contains('open') ?? false
+    );
+    expect(drawerOpen).toBe(false);
+  });
+});
+
+// ─── Gap 2: Search input is styled on desktop ──────────────────────────────
+
+describe('Session drawer: search input has visible styling on desktop (Gap 2)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    // Desktop viewport >= 1024px — styles.css (not mobile.css) must supply the styles
+    ({ context, page } = await freshPage(1280, 800));
+    await navigateTo(page);
+    // Open the drawer so the search input is visible
+    await page.evaluate('SessionDrawer.open()');
+    await page.waitForSelector('#sessionDrawer.open', { timeout: 3000 });
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('search input has a non-transparent background on desktop', async () => {
+    const background = await page.evaluate(() => {
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      return searchEl ? getComputedStyle(searchEl).background : '';
+    });
+    // The rule sets background: rgba(255,255,255,0.06) — should not be transparent/none
+    expect(background).not.toBe('');
+    expect(background.toLowerCase()).not.toContain('rgba(0, 0, 0, 0)');
+  });
+
+  it('search input has a non-zero border-radius on desktop', async () => {
+    const borderRadius = await page.evaluate(() => {
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      return searchEl ? getComputedStyle(searchEl).borderRadius : '';
+    });
+    // The rule sets border-radius: 10px — should be non-empty
+    expect(borderRadius).not.toBe('');
+    expect(borderRadius).not.toBe('0px');
+  });
+});
+
 // ─── Bug 3: Mobile sidebar auto-focus suppression ─────────────────────────
 //
 // SessionDrawer is a script-scope const in app.js (declared with `const` at

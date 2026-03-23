@@ -13543,7 +13543,7 @@ class CodemanApp {
     // Attach ResizeObserver to keep container padding in sync
     if (!wrapper._resizeObs) {
       wrapper._resizeObs = new ResizeObserver(() => {
-        container.style.paddingBottom = wrapper.offsetHeight + 'px';
+        container.style.paddingBottom = wrapper.offsetHeight > 0 ? wrapper.offsetHeight + 'px' : '';
       });
       wrapper._resizeObs.observe(wrapper);
     }

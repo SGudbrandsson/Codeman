@@ -303,6 +303,82 @@ describe('G6 — CSS layout: body.sidebar-pinned applies margin-right: 300px to 
   });
 });
 
+// ─── G6b: CSS layout — .header and other full-width elements get margin-right: 300px ──
+
+describe('G6b — CSS layout: body.sidebar-pinned applies margin-right: 300px to full-width elements', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPageWithPinnedState(1280, 800));
+    await navigateTo(page);
+    await page.waitForFunction(() => document.getElementById('sessionDrawer')?.classList.contains('open'), {
+      timeout: 5000,
+    });
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('.header element has margin-right of 300px when body has sidebar-pinned class', async () => {
+    const marginRight = await page.evaluate(() => {
+      const el = document.querySelector('.header') as HTMLElement | null;
+      if (!el) return null;
+      return getComputedStyle(el).marginRight;
+    });
+    expect(marginRight).toBe('300px');
+  });
+
+  it('.session-indicator-bar has margin-right of 300px when pinned (if present in DOM)', async () => {
+    const result = await page.evaluate(() => {
+      const el = document.querySelector('.session-indicator-bar') as HTMLElement | null;
+      if (!el) return 'not-present';
+      return getComputedStyle(el).marginRight;
+    });
+    // Element may not be visible in testMode, but if present it must be shifted
+    if (result !== 'not-present') {
+      expect(result).toBe('300px');
+    } else {
+      // Element not in DOM — skip gracefully
+      expect(result).toBe('not-present');
+    }
+  });
+});
+
+// ─── G8: Transcript view has sufficient bottom padding on desktop ──────────
+
+describe('G8 — CSS layout: .transcript-view has enough bottom padding on desktop (Gap 4)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPageWithPinnedState(1280, 800));
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('.transcript-view padding-bottom is greater than 100px on desktop (covers compose bar + accessory bar)', async () => {
+    // .transcript-view is always in the DOM (display:none when no session is selected).
+    // The desktop @media rule adds padding-bottom: calc(60px + 40px + 8px) = 108px minimum.
+    // NOTE: the live-status ResizeObserver in app.js (line ~13546) may set an inline
+    // style "padding-bottom: 0px" on this element when no live status block is present.
+    // This test will fail if that inline override is not accounted for in the implementation.
+    const paddingBottom = await page.evaluate(() => {
+      const el = document.getElementById('transcriptView') as HTMLElement | null;
+      if (!el) return null;
+      return getComputedStyle(el).paddingBottom;
+    });
+    expect(paddingBottom).not.toBeNull();
+    // Parse the pixel value and assert it is greater than 100px
+    const px = parseFloat(paddingBottom as string);
+    expect(px).toBeGreaterThan(100);
+  });
+});
+
 // ─── G7: Mobile isolation ─────────────────────────────────────────────────
 
 describe('G7 — Mobile isolation: <1024px viewport does not auto-open pinned sidebar', () => {
