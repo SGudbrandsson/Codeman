@@ -321,6 +321,13 @@ const SSE_EVENTS = {
   AGENT_CREATED: 'agent:created',
   AGENT_UPDATED: 'agent:updated',
   AGENT_DELETED: 'agent:deleted',
+
+  // Work items
+  WORK_ITEM_CREATED: 'workItem:created',
+  WORK_ITEM_UPDATED: 'workItem:updated',
+  WORK_ITEM_CLAIMED: 'workItem:claimed',
+  WORK_ITEM_STATUS_CHANGED: 'workItem:statusChanged',
+  WORK_ITEM_COMPLETED: 'workItem:completed',
 };
 
 // ═══════════════════════════════════════════════════════════════
