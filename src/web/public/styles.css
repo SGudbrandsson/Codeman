@@ -9622,6 +9622,61 @@ kbd {
   color: #e2e8f0;
 }
 
+/* ── Transcript Live Status Blocks ── */
+#tv-live-status-wrapper {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+.tv-live-gradient {
+  height: 48px;
+  background: linear-gradient(transparent, #0d0d0d 28%);
+  pointer-events: none;
+}
+.tv-live-block {
+  margin: 0 0 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: monospace;
+  line-height: 1.4;
+}
+.tv-live-block--tasks {
+  background: rgba(5, 25, 39, 0.95);
+  border-color: #0e4a6e;
+}
+.tv-live-block--agents {
+  background: rgba(14, 5, 32, 0.95);
+  border-color: #3b1d6e;
+}
+.tv-live-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.tv-live-block--tasks .tv-live-header { color: #38bdf8; }
+.tv-live-block--agents .tv-live-header { color: #a78bfa; }
+.tv-live-header span { color: #6b7280; font-weight: 400; }
+.tv-live-rows { display: flex; flex-direction: column; gap: 2px; }
+.tv-live-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #d1d5db;
+  overflow: hidden;
+}
+.tv-live-row span { color: #6b7280; margin-left: 8px; flex-shrink: 0; }
+.tv-live-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-live-row--running { color: #f59e0b; }
+.tv-live-row--done { color: #22c55e; text-decoration: line-through; }
+.tv-live-row--done span:not(.tv-live-row-name) { text-decoration: none; }
+.tv-live-row--failed { color: #ef4444; text-decoration: line-through; }
+.tv-live-row--failed span:not(.tv-live-row-name) { text-decoration: none; }
+
 /* Inline pill for skipped command messages (e.g. /compact) */
 .tv-command-pill {
   display: block;
