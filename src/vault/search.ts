@@ -8,7 +8,7 @@
  * Performance target: <500ms for 1000 notes (actual: ~5-15ms build + ~1-2ms query).
  */
 
-// @ts-expect-error — flexsearch types are incomplete; using runtime API
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import FlexSearch from 'flexsearch';
 import { listAllNotes } from './store.js';
 import type { VaultNote, VaultQueryResult } from './types.js';
