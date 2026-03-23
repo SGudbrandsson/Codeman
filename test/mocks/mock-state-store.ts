@@ -39,6 +39,12 @@ export class MockStateStore {
   setTask = vi.fn();
   removeTask = vi.fn();
 
+  // Agent profile methods
+  getAgent = vi.fn((_agentId: string) => undefined);
+  setAgent = vi.fn();
+  listAgents = vi.fn(() => []);
+  removeAgent = vi.fn();
+
   // Settings methods
   getSettings = vi.fn(() => ({}));
   setSettings = vi.fn();

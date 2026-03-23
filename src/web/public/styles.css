@@ -1032,6 +1032,107 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Sidebar view toggle (Sessions / Agents) ──────────────── */
+.sidebar-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
+}
+.sidebar-toggle-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b7280;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.sidebar-toggle-btn:hover {
+  color: #9ca3af;
+  background: rgba(255,255,255,0.04);
+}
+.sidebar-toggle-btn.active {
+  color: #93c5fd;
+  background: rgba(59,130,246,0.12);
+  border-color: rgba(59,130,246,0.3);
+}
+
+/* ── Agent view elements ──────────────────────────────────── */
+.drawer-agent-group {
+  padding: 2px 0;
+}
+.drawer-agent-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #475569;
+}
+.drawer-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 0 6px 2px;
+  transition: background 0.1s;
+}
+.drawer-agent-row:hover {
+  background: rgba(255,255,255,0.04);
+}
+.drawer-agent-row.active {
+  background: rgba(59,130,246,0.12);
+}
+.drawer-agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #374151;
+}
+.drawer-agent-dot.running { background: #22c55e; }
+.drawer-agent-dot.idle    { background: #374151; }
+.drawer-agent-name {
+  flex: 1;
+  font-size: 0.8rem;
+  color: #d1d5db;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drawer-agent-role-badge {
+  font-size: 0.62rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(99,102,241,0.18);
+  color: #a5b4fc;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.drawer-plain-sessions-header {
+  padding: 8px 12px 4px;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #374151;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-top: 4px;
+}
+
 /* ── List area ────────────────────────────────────────────── */
 .session-drawer-list {
   overflow-y: auto;

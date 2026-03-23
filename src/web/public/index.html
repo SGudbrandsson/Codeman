@@ -1911,6 +1911,12 @@
        aria-label="Session list" aria-modal="true">
     <div class="session-drawer-handle" aria-hidden="true"></div>
     <div class="session-drawer-title">Sessions</div>
+    <div class="sidebar-view-toggle" id="sidebarViewToggle">
+      <button class="sidebar-toggle-btn active" id="sidebarToggleSessions"
+              onclick="SessionDrawer.setViewMode('sessions')">Sessions</button>
+      <button class="sidebar-toggle-btn" id="sidebarToggleAgents"
+              onclick="SessionDrawer.setViewMode('agents')">Agents</button>
+    </div>
     <div class="session-drawer-search-wrap">
       <input
         type="search"

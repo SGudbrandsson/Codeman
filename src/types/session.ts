@@ -26,6 +26,56 @@
 
 import type { RespawnConfig } from './respawn.js';
 
+// ─── Agent Profile Types ──────────────────────────────────────────────────────
+
+/**
+ * Role identifier for an agent profile.
+ * Determines the agent's default capabilities and system prompt style.
+ */
+export type AgentRole = 'keeps-engineer' | 'codeman-dev' | 'deployment-agent' | 'orchestrator' | 'analyst';
+
+/**
+ * A single capability (MCP server or skill) attached to an agent profile.
+ */
+export interface AgentCapability {
+  name: string;
+  type: 'mcp' | 'skill';
+  ref: string;
+  enabled: boolean;
+}
+
+/**
+ * Persistent agent profile — stored in AppState.agents and optionally
+ * referenced from SessionState.agentProfile.
+ */
+export interface AgentProfile {
+  /** Unique identifier for this agent (UUID) */
+  agentId: string;
+  /** Role of this agent */
+  role: AgentRole;
+  /** Human-readable display name */
+  displayName: string;
+  /** Path to the agent's memory vault (e.g. ~/.codeman/vaults/<agentId>) */
+  vaultPath: string;
+  /** Capabilities attached to this agent */
+  capabilities: AgentCapability[];
+  /** Optional role-specific system prompt override */
+  rolePrompt?: string;
+  /** ISO timestamp of last memory consolidation */
+  lastConsolidatedAt?: string;
+  /** Number of notes added since last consolidation */
+  notesSinceConsolidation: number;
+  /** Memory decay configuration */
+  decay: {
+    notesTtlDays: number;
+    patternsTtlDays: number;
+  };
+  /** ISO timestamp when this profile was created */
+  createdAt: string;
+  /** ISO timestamp of the last session activity for this agent */
+  lastActiveAt?: string;
+}
+
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error' | 'archived';
 
@@ -167,6 +217,8 @@ export interface SessionState {
   parentAgentId?: string;
   /** Child agent IDs spawned by this session */
   childAgentIds?: string[];
+  /** Agent profile bound to this session (optional — sessions without a profile work unchanged) */
+  agentProfile?: AgentProfile;
   /** Nice priority enabled */
   niceEnabled?: boolean;
   /** Nice value (-20 to 19) */

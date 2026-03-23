@@ -311,6 +311,15 @@ export const HookTaskCompleted = 'hook:task_completed' as const;
 /** Emitted when a worktree session exits — triggers cleanup modal on frontend */
 export const WorktreeSessionEnded = 'worktree:sessionEnded' as const;
 
+// ─── Agent Profiles ───────────────────────────────────────────────────────────
+
+/** New agent profile created. */
+export const AgentCreated = 'agent:created' as const;
+/** Agent profile updated. */
+export const AgentUpdated = 'agent:updated' as const;
+/** Agent profile deleted. */
+export const AgentDeleted = 'agent:deleted' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -496,6 +505,11 @@ export const SseEvent = {
 
   // Worktree
   WorktreeSessionEnded,
+
+  // Agent profiles
+  AgentCreated,
+  AgentUpdated,
+  AgentDeleted,
 
   // Cases
   CaseCreated,

@@ -116,6 +116,7 @@ import {
   registerWorktreeRoutes,
   registerMcpRoutes,
   registerPluginRoutes,
+  registerAgentRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -764,6 +765,7 @@ export class WebServer extends EventEmitter {
     registerWorktreeSessionRoutes(this.app, ctx);
     registerWorktreeRoutes(this.app, ctx);
     registerMcpRoutes(this.app, ctx);
+    registerAgentRoutes(this.app, ctx);
     await registerPluginRoutes(this.app);
   }
 
@@ -2447,6 +2449,7 @@ export class WebServer extends EventEmitter {
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
       subagents: subagentWatcher.getRecentSubagents(15), // 15 min to avoid stale agents
+      agents: this.store.getState().agents ?? {},
       timestamp: now,
     };
 

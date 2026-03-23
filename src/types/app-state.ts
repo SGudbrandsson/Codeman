@@ -20,6 +20,7 @@
  */
 
 import type { SessionState } from './session.js';
+import type { AgentProfile } from './session.js';
 import type { TaskState } from './task.js';
 import type { RalphLoopState } from './ralph.js';
 import type { RespawnConfig } from './respawn.js';
@@ -111,6 +112,8 @@ export interface AppState {
   tokenStats?: TokenStats;
   /** The session ID last explicitly selected by the user. Used by resolve-active. */
   activeSessionId?: string | null;
+  /** Map of agentId to AgentProfile — stores standalone agent profiles (design spec §7 Phase 1) */
+  agents?: Record<string, AgentProfile>;
 }
 
 // ========== Default Configuration ==========
@@ -154,6 +157,7 @@ export function createInitialState(): AppState {
     config: { ...DEFAULT_CONFIG },
     globalStats: createInitialGlobalStats(),
     activeSessionId: null,
+    agents: {},
   };
 }
 

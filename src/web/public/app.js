@@ -3370,6 +3370,11 @@ const _SSE_HANDLER_MAP = [
   // Cases
   [SSE_EVENTS.CASE_DELETED, '_onCaseDeleted'],
 
+  // Agent profiles
+  [SSE_EVENTS.AGENT_CREATED, '_onAgentCreated'],
+  [SSE_EVENTS.AGENT_UPDATED, '_onAgentUpdated'],
+  [SSE_EVENTS.AGENT_DELETED, '_onAgentDeleted'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -3400,6 +3405,7 @@ class CodemanApp {
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
     this.draggedTabId = null; // Currently dragged tab session ID
     this.cases = [];
+    this.agents = new Map(); // Map<agentId, AgentProfile>
     this.currentRun = null;
     this.totalTokens = 0;
     this.globalStats = null; // Global token/cost stats across all sessions
@@ -6948,6 +6954,21 @@ class CodemanApp {
     // Store global stats for aggregate tracking
     if (data.globalStats) {
       this.globalStats = data.globalStats;
+    }
+
+    // Load agent profiles
+    this.agents.clear();
+    if (data.agents) {
+      for (const [agentId, profile] of Object.entries(data.agents)) {
+        this.agents.set(agentId, profile);
+      }
+    }
+
+    // Auto-select agents view if any session has an agentProfile bound
+    const storedViewMode = (() => { try { return localStorage.getItem('sidebarViewMode'); } catch(e) { return null; } })();
+    if (!storedViewMode) {
+      const hasAgentSession = [...this.sessions.values()].some(s => s.agentProfile);
+      if (hasAgentSession) SessionDrawer._viewMode = 'agents';
     }
 
     this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
@@ -17366,6 +17387,38 @@ class CodemanApp {
     this.loadQuickStartCases();
   }
 
+  // ─── Agent Profile SSE handlers ───────────────────────────────────────────
+
+  /** SSE handler: agent:created — add profile to local map and re-render drawer */
+  _onAgentCreated(data) {
+    if (data && data.agentId) {
+      this.agents.set(data.agentId, data);
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
+        SessionDrawer._render();
+      }
+    }
+  }
+
+  /** SSE handler: agent:updated — update profile in local map and re-render drawer */
+  _onAgentUpdated(data) {
+    if (data && data.agentId) {
+      this.agents.set(data.agentId, data);
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
+        SessionDrawer._render();
+      }
+    }
+  }
+
+  /** SSE handler: agent:deleted — remove profile from local map and re-render drawer */
+  _onAgentDeleted(data) {
+    if (data && data.agentId) {
+      this.agents.delete(data.agentId);
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
+        SessionDrawer._render();
+      }
+    }
+  }
+
   renderMuxSessions() {
     // Debounce renders at 100ms to prevent excessive DOM updates
     if (this.renderMuxSessionsTimeout) {
@@ -18386,6 +18439,8 @@ const SessionDrawer = {
   _swipeStartY: 0,
   _swipeStartTime: 0,
   _swiping: false,
+  /** 'sessions' | 'agents' — which view is currently active in the sidebar */
+  _viewMode: localStorage.getItem('sidebarViewMode') || 'sessions',
   _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
   _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
   _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
@@ -18486,6 +18541,19 @@ const SessionDrawer = {
     this._searchQuery = (query || '').trim().toLowerCase();
     this._render();
   },
+
+  /** Switch between 'sessions' and 'agents' views and persist preference. */
+  setViewMode(mode) {
+    this._viewMode = mode;
+    try { localStorage.setItem('sidebarViewMode', mode); } catch(e) {}
+    // Update toggle button active state
+    const sessBtn = document.getElementById('sidebarToggleSessions');
+    const agentBtn = document.getElementById('sidebarToggleAgents');
+    if (sessBtn) sessBtn.classList.toggle('active', mode === 'sessions');
+    if (agentBtn) agentBtn.classList.toggle('active', mode === 'agents');
+    this._render();
+  },
+
   _attachSwipeHandlers(drawer) {
     this._detachSwipeHandlers(drawer); // clean up any prior handlers
     this._onTouchStart = (e) => {
@@ -18589,9 +18657,130 @@ const SessionDrawer = {
     return row;
   },
 
+  /**
+   * Renders the agents view: groups sessions by agentProfile.displayName,
+   * then lists plain (no profile) sessions at the bottom.
+   */
+  _renderAgentsView(list) {
+    list.replaceChildren();
+
+    const allSessions = [];
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (s) allSessions.push(s);
+    }
+
+    // Collect agent groups from app.agents (standalone profiles)
+    const agents = app.agents || new Map();
+    const agentSessionMap = new Map(); // agentId -> Session[]
+    const plainSessions = [];
+
+    for (const s of allSessions) {
+      if (s.agentProfile && s.agentProfile.agentId) {
+        const aid = s.agentProfile.agentId;
+        if (!agentSessionMap.has(aid)) agentSessionMap.set(aid, []);
+        agentSessionMap.get(aid).push(s);
+      } else {
+        plainSessions.push(s);
+      }
+    }
+
+    // Render each agent group
+    // Merge known agents from app.agents with session-derived agent profiles
+    const renderedAgentIds = new Set();
+    for (const [agentId, profile] of agents) {
+      renderedAgentIds.add(agentId);
+      const sessions = agentSessionMap.get(agentId) || [];
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'drawer-agent-group';
+
+      const header = document.createElement('div');
+      header.className = 'drawer-agent-header';
+      header.textContent = profile.displayName.toUpperCase();
+
+      groupEl.appendChild(header);
+      for (const s of sessions) groupEl.appendChild(this._renderAgentRow(s, profile));
+      list.appendChild(groupEl);
+    }
+
+    // Render session-only agent groups (profile on session but not in app.agents)
+    for (const [agentId, sessions] of agentSessionMap) {
+      if (renderedAgentIds.has(agentId)) continue;
+      const profile = sessions[0].agentProfile;
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'drawer-agent-group';
+
+      const header = document.createElement('div');
+      header.className = 'drawer-agent-header';
+      header.textContent = (profile.displayName || agentId).toUpperCase();
+
+      groupEl.appendChild(header);
+      for (const s of sessions) groupEl.appendChild(this._renderAgentRow(s, profile));
+      list.appendChild(groupEl);
+    }
+
+    // Plain sessions (no agent profile) — grouped at bottom
+    if (plainSessions.length > 0) {
+      const plainHeader = document.createElement('div');
+      plainHeader.className = 'drawer-plain-sessions-header';
+      plainHeader.textContent = 'Plain Sessions';
+      list.appendChild(plainHeader);
+
+      for (const s of plainSessions) list.appendChild(this._renderSessionRow(s));
+    }
+  },
+
+  /** Renders a single session row in the agents view. */
+  _renderAgentRow(s, profile) {
+    const isActive = s.id === app.activeSessionId;
+    const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
+
+    const row = document.createElement('div');
+    row.className = 'drawer-agent-row' + (isActive ? ' active' : '');
+    row.dataset.sessionId = s.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'drawer-agent-dot' + (isRunning ? ' running' : ' idle');
+
+    const name = document.createElement('span');
+    name.className = 'drawer-agent-name';
+    name.textContent = app.getSessionName(s);
+
+    const roleBadge = document.createElement('span');
+    roleBadge.className = 'drawer-agent-role-badge';
+    roleBadge.textContent = (profile && profile.role) ? profile.role : '';
+
+    row.appendChild(dot);
+    row.appendChild(name);
+    if (profile && profile.role) row.appendChild(roleBadge);
+
+    row.addEventListener('click', () => {
+      app.selectSession(s.id);
+      if (!document.body.classList.contains('sidebar-pinned')) {
+        SessionDrawer.close();
+      }
+    });
+
+    return row;
+  },
+
   _render() {
     const list = this._getList();
     if (!list || typeof app === 'undefined') return;
+
+    // Sync toggle button state with current view mode
+    const sessBtn = document.getElementById('sidebarToggleSessions');
+    const agentBtn = document.getElementById('sidebarToggleAgents');
+    if (sessBtn) sessBtn.classList.toggle('active', this._viewMode === 'sessions');
+    if (agentBtn) agentBtn.classList.toggle('active', this._viewMode === 'agents');
+
+    if (this._viewMode === 'agents') {
+      this._renderAgentsView(list);
+      return;
+    }
+
     list.replaceChildren();
 
     // Build groups: caseName -> { caseObj, worktrees: Map(branch -> Session[]), sessions: Session[] }

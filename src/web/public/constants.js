@@ -316,6 +316,11 @@ const SSE_EVENTS = {
   // Compact-and-Continue
   SESSION_COMPACT_SENT: 'session:compactSent',
   SESSION_CONTINUE_SENT: 'session:continueSent',
+
+  // Agent profiles
+  AGENT_CREATED: 'agent:created',
+  AGENT_UPDATED: 'agent:updated',
+  AGENT_DELETED: 'agent:deleted',
 };
 
 // ═══════════════════════════════════════════════════════════════

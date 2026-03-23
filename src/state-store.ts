@@ -37,6 +37,7 @@ import {
   createInitialGlobalStats,
   TokenStats,
   TokenUsageEntry,
+  AgentProfile,
 } from './types.js';
 import { Debouncer, MAX_SESSION_TOKENS } from './utils/index.js';
 
@@ -140,6 +141,8 @@ export class StateStore {
             tasks: { ...parsed.tasks },
             ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
             config: { ...initial.config, ...parsed.config },
+            // Migration guard: ensure agents map is present for pre-agent-profiles state files
+            agents: { ...initial.agents, ...parsed.agents },
           };
           if (path !== this.filePath) {
             console.warn(`[StateStore] Recovered state from backup: ${path}`);
@@ -248,6 +251,7 @@ export class StateStore {
     if (this.state.activeSessionId !== undefined) {
       parts.push(`"activeSessionId":${JSON.stringify(this.state.activeSessionId)}`);
     }
+    parts.push(`"agents":${JSON.stringify(this.state.agents ?? {})}`);
 
     return `{${parts.join(',')}}`;
   }
@@ -901,6 +905,39 @@ export class StateStore {
   /** Returns a copy of all inner states as a Map. */
   getAllRalphStates(): Map<string, RalphSessionState> {
     return new Map(this.ralphStates);
+  }
+
+  // ========== Agent Profile Methods ==========
+
+  /** Ensures agents map is initialized (migration safety). */
+  private ensureAgents(): Record<string, AgentProfile> {
+    if (!this.state.agents) {
+      this.state.agents = {};
+    }
+    return this.state.agents;
+  }
+
+  /** Returns an agent profile by ID, or undefined if not found. */
+  getAgent(agentId: string): AgentProfile | undefined {
+    return this.ensureAgents()[agentId];
+  }
+
+  /** Stores or replaces an agent profile and triggers a debounced save. */
+  setAgent(agentId: string, profile: AgentProfile): void {
+    this.ensureAgents()[agentId] = profile;
+    this.save();
+  }
+
+  /** Returns all agent profiles as an array. */
+  listAgents(): AgentProfile[] {
+    return Object.values(this.ensureAgents());
+  }
+
+  /** Removes an agent profile and triggers a debounced save. */
+  removeAgent(agentId: string): void {
+    const agents = this.ensureAgents();
+    delete agents[agentId];
+    this.save();
   }
 
   /** Flushes all pending saves (main and inner state). Call before shutdown. */

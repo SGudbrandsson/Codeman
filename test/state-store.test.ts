@@ -6,12 +6,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, unlinkSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, unlinkSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // Import types before mocking
 import type { AppState, SessionState, TaskState, RalphSessionState } from '../src/types.js';
+import type { AgentProfile } from '../src/types/session.js';
 
 // We need to import without mocking to test the actual implementation
 import { StateStore, getStore } from '../src/state-store.js';
@@ -543,6 +544,79 @@ describe('StateStore', () => {
       expect(persisted.sessions['rapid'].pid).toBe(99); // Last value wins
     });
   });
+
+  describe('agent operations', () => {
+    it('should set and get an agent profile', () => {
+      const store = new StateStore(testFilePath);
+      const profile = createMockAgentProfile('agent-1');
+
+      store.setAgent('agent-1', profile);
+
+      expect(store.getAgent('agent-1')).toEqual(profile);
+    });
+
+    it('should return undefined for a non-existent agent', () => {
+      const store = new StateStore(testFilePath);
+
+      expect(store.getAgent('unknown-agent')).toBeUndefined();
+    });
+
+    it('should list all agent profiles', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent('agent-1', createMockAgentProfile('agent-1'));
+      store.setAgent('agent-2', createMockAgentProfile('agent-2'));
+
+      const list = store.listAgents();
+
+      expect(list).toHaveLength(2);
+      const ids = list.map((p) => p.agentId);
+      expect(ids).toContain('agent-1');
+      expect(ids).toContain('agent-2');
+    });
+
+    it('should return empty array when no agents exist', () => {
+      const store = new StateStore(testFilePath);
+
+      expect(store.listAgents()).toEqual([]);
+    });
+
+    it('should remove an agent profile', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent('agent-1', createMockAgentProfile('agent-1'));
+
+      store.removeAgent('agent-1');
+
+      expect(store.getAgent('agent-1')).toBeUndefined();
+      expect(store.listAgents()).toHaveLength(0);
+    });
+
+    it('initializes agents to {} when loading state without agents field (migration guard)', () => {
+      // Write a state file that has no agents field (pre-migration format)
+      const legacyState = {
+        sessions: {},
+        tasks: {},
+        config: {},
+        ralphLoop: {},
+        globalStats: {
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCost: 0,
+          totalSessionsCreated: 0,
+          firstRecordedAt: new Date().toISOString(),
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        // agents field intentionally omitted
+      };
+      writeFileSync(testFilePath, JSON.stringify(legacyState), 'utf-8');
+
+      const store = new StateStore(testFilePath);
+
+      // getAgent must not throw and must return undefined (not crash)
+      expect(store.getAgent('anything')).toBeUndefined();
+      // listAgents must return an empty array (not throw)
+      expect(store.listAgents()).toEqual([]);
+    });
+  });
 });
 
 // Helper functions to create mock state objects
@@ -587,5 +661,18 @@ function createMockRalphState(sessionId: string): RalphSessionState {
     todoItems: [],
     lastUpdated: Date.now(),
     messageId: null,
+  };
+}
+
+function createMockAgentProfile(agentId: string): AgentProfile {
+  return {
+    agentId,
+    role: 'codeman-dev',
+    displayName: `Agent ${agentId}`,
+    vaultPath: `/home/user/.codeman/vaults/${agentId}`,
+    capabilities: [],
+    notesSinceConsolidation: 0,
+    decay: { notesTtlDays: 90, patternsTtlDays: 365 },
+    createdAt: new Date().toISOString(),
   };
 }
