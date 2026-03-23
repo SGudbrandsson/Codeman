@@ -22,3 +22,4 @@ export { registerWorktreeRoutes } from './worktree-routes.js';
 export { registerMcpRoutes } from './mcp-routes.js';
 export { registerPluginRoutes } from './plugin-routes.js';
 export { registerAgentRoutes } from './agent-routes.js';
+export { registerVaultRoutes } from './vault-routes.js';

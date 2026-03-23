@@ -1,0 +1,100 @@
+<h2>Tasks and agents — one block or two?</h2>
+<p class="subtitle">The inline block can combine both, or split them into separate cards</p>
+
+<div class="cards">
+
+  <!-- Option A: Combined -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:monospace;font-size:11px;background:#0f172a;border-radius:8px;overflow:hidden;border:1px solid #0e4a6e;padding:10px;margin:4px">
+        <div style="color:#38bdf8;font-size:9px;font-weight:bold;margin-bottom:7px;display:flex;justify-content:space-between">
+          <span>&#x25A3; WORKING</span>
+          <span style="color:#475569">3 tasks · 2 agents</span>
+        </div>
+        <!-- tasks -->
+        <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px">
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#f59e0b;font-size:9px">●</span>
+            <span style="color:#94a3b8;font-size:9px">Write auth middleware</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">12s…</span>
+          </div>
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#f59e0b;font-size:9px">●</span>
+            <span style="color:#94a3b8;font-size:9px">Create user model</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">8s…</span>
+          </div>
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#22c55e;font-size:9px">✓</span>
+            <span style="color:#64748b;font-size:9px;text-decoration:line-through">Setup DB schema</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">4.2s</span>
+          </div>
+        </div>
+        <!-- divider -->
+        <div style="border-top:1px solid #1e293b;margin-bottom:7px"></div>
+        <!-- agents -->
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#a78bfa;font-size:9px">⬡</span>
+            <span style="color:#94a3b8;font-size:9px">Agent: code-writer</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">reading files…</span>
+          </div>
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#a78bfa;font-size:9px">⬡</span>
+            <span style="color:#94a3b8;font-size:9px">Agent: test-runner</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">running tests…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — One combined block</h3>
+      <p>Tasks on top, agents below a divider. One card per work session. Compact and unified.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Separate blocks -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:monospace;font-size:11px;background:#0f172a;border-radius:8px;overflow:hidden;padding:6px;display:flex;flex-direction:column;gap:6px">
+        <!-- tasks block -->
+        <div style="border:1px solid #0e4a6e;border-radius:6px;padding:8px 10px">
+          <div style="color:#38bdf8;font-size:9px;font-weight:bold;margin-bottom:5px">&#x25A3; TASKS · 3 running</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#f59e0b;font-size:9px">●</span>
+              <span style="color:#94a3b8;font-size:9px">Write auth middleware</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">12s…</span>
+            </div>
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#22c55e;font-size:9px">✓</span>
+              <span style="color:#64748b;font-size:9px;text-decoration:line-through">Setup DB schema</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">4.2s</span>
+            </div>
+          </div>
+        </div>
+        <!-- agents block -->
+        <div style="border:1px solid #3b1d6e;border-radius:6px;padding:8px 10px">
+          <div style="color:#a78bfa;font-size:9px;font-weight:bold;margin-bottom:5px">⬡ AGENTS · 2 active</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#a78bfa;font-size:9px">⬡</span>
+              <span style="color:#94a3b8;font-size:9px">code-writer</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">reading files…</span>
+            </div>
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#a78bfa;font-size:9px">⬡</span>
+              <span style="color:#94a3b8;font-size:9px">test-runner</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">running tests…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Separate blocks</h3>
+      <p>Task card and agent card appear/disappear independently. Color-coded blue vs purple. Cleaner separation of concerns.</p>
+    </div>
+  </div>
+
+</div>
+<p class="subtitle" style="margin-top:16px">Click or reply in the terminal.</p>

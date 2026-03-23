@@ -71,7 +71,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AgentRoutesCtx): 
       createdAt: new Date().toISOString(),
     };
 
-    ctx.store.setAgent(agentId, profile);
+    ctx.store.setAgent(profile);
     ctx.broadcast(SseEvent.AgentCreated, profile);
 
     reply.code(201);
@@ -105,7 +105,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AgentRoutesCtx): 
       },
     };
 
-    ctx.store.setAgent(agentId, updated);
+    ctx.store.setAgent(updated);
     ctx.broadcast(SseEvent.AgentUpdated, updated);
 
     return { success: true, data: updated };

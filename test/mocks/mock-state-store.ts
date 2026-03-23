@@ -8,6 +8,7 @@
  * use vi.mock('../src/state-store.js') keep their inline definitions.
  */
 import { vi } from 'vitest';
+import type { AgentProfile } from '../../src/types/session.js';
 
 export class MockStateStore {
   state: Record<string, unknown> = {
@@ -15,6 +16,7 @@ export class MockStateStore {
     config: { maxConcurrentSessions: 5 },
     ralphLoop: { status: 'stopped' },
     tasks: {} as Record<string, unknown>,
+    agents: {} as Record<string, AgentProfile>,
   };
 
   // Session methods
@@ -53,6 +55,23 @@ export class MockStateStore {
   save = vi.fn();
   load = vi.fn();
 
+  // State accessor (used by hook-event-routes)
+  getState = vi.fn(() => this.state);
+
+  // Agent methods
+  getAgent = vi.fn((agentId: string): AgentProfile | undefined => {
+    return (this.state.agents as Record<string, AgentProfile>)[agentId];
+  });
+  setAgent = vi.fn((profile: AgentProfile): void => {
+    (this.state.agents as Record<string, AgentProfile>)[profile.agentId] = profile;
+  });
+  listAgents = vi.fn((): AgentProfile[] => {
+    return Object.values(this.state.agents as Record<string, AgentProfile>);
+  });
+  deleteAgent = vi.fn((agentId: string): void => {
+    delete (this.state.agents as Record<string, AgentProfile>)[agentId];
+  });
+
   /** Reset all state and mocks for clean test isolation */
   reset(): void {
     this.state = {
@@ -60,6 +79,7 @@ export class MockStateStore {
       config: { maxConcurrentSessions: 5 },
       ralphLoop: { status: 'stopped' },
       tasks: {},
+      agents: {},
     };
     vi.clearAllMocks();
   }

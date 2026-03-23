@@ -117,6 +117,7 @@ import {
   registerMcpRoutes,
   registerPluginRoutes,
   registerAgentRoutes,
+  registerVaultRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -767,6 +768,7 @@ export class WebServer extends EventEmitter {
     registerMcpRoutes(this.app, ctx);
     registerAgentRoutes(this.app, ctx);
     await registerPluginRoutes(this.app);
+    registerVaultRoutes(this.app, ctx);
   }
 
   /**

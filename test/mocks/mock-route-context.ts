@@ -9,7 +9,7 @@
  */
 import { vi } from 'vitest';
 import { MockSession, createMockSession } from './mock-session.js';
-import type { SessionState } from '../../src/types/session.js';
+import type { SessionState, AgentProfile } from '../../src/types/session.js';
 
 /**
  * Creates a mock context that satisfies all port interfaces.
@@ -64,32 +64,46 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     saveRespawnConfig: vi.fn(),
 
     // -- ConfigPort --
-    store: {
-      getConfig: vi.fn(() => ({ ralphEnabled: false, maxConcurrentSessions: 5 })),
-      getSessions: vi.fn(() => ({})),
-      getSession: vi.fn(),
-      setSession: vi.fn(),
-      removeSession: vi.fn(),
-      getSettings: vi.fn(() => ({})),
-      setSettings: vi.fn(),
-      getRalphLoopState: vi.fn(() => ({})),
-      setRalphLoopState: vi.fn(),
-      getTasks: vi.fn(() => ({})),
-      save: vi.fn(),
-      load: vi.fn(),
-      incrementSessionsCreated: vi.fn(),
-      setConfig: vi.fn(),
-      getAggregateStats: vi.fn(() => ({ totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 })),
-      getGlobalStats: vi.fn(() => ({ sessionsCreated: 0 })),
-      getDailyStats: vi.fn(() => []),
-      cleanupStaleSessions: vi.fn(() => ({ count: 0, cleaned: [] })),
-      getActiveSessionId: vi.fn(() => null),
-      setActiveSessionId: vi.fn(),
-      getAgent: vi.fn(() => undefined),
-      setAgent: vi.fn(),
-      listAgents: vi.fn(() => []),
-      removeAgent: vi.fn(),
-    },
+    store: (() => {
+      const _agents: Record<string, AgentProfile> = {};
+      const _sessions: Record<string, unknown> = {};
+      return {
+        getConfig: vi.fn(() => ({ ralphEnabled: false, maxConcurrentSessions: 5 })),
+        getSessions: vi.fn(() => _sessions),
+        getSession: vi.fn(),
+        setSession: vi.fn(),
+        removeSession: vi.fn(),
+        getSettings: vi.fn(() => ({})),
+        setSettings: vi.fn(),
+        getRalphLoopState: vi.fn(() => ({})),
+        setRalphLoopState: vi.fn(),
+        getTasks: vi.fn(() => ({})),
+        save: vi.fn(),
+        load: vi.fn(),
+        incrementSessionsCreated: vi.fn(),
+        setConfig: vi.fn(),
+        getAggregateStats: vi.fn(() => ({ totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 })),
+        getGlobalStats: vi.fn(() => ({ sessionsCreated: 0 })),
+        getDailyStats: vi.fn(() => []),
+        cleanupStaleSessions: vi.fn(() => ({ count: 0, cleaned: [] })),
+        getActiveSessionId: vi.fn(() => null),
+        setActiveSessionId: vi.fn(),
+        // State accessor (used by hook-event-routes vault capture)
+        getState: vi.fn(() => ({ sessions: _sessions, agents: _agents })),
+        // Agent methods (used by vault-routes, agent-routes, and hook-event-routes)
+        getAgent: vi.fn((agentId: string): AgentProfile | undefined => _agents[agentId]),
+        setAgent: vi.fn((profile: AgentProfile): void => {
+          _agents[profile.agentId] = profile;
+        }),
+        listAgents: vi.fn((): AgentProfile[] => Object.values(_agents)),
+        deleteAgent: vi.fn((agentId: string): void => {
+          delete _agents[agentId];
+        }),
+        removeAgent: vi.fn((agentId: string): void => {
+          delete _agents[agentId];
+        }),
+      };
+    })(),
     port: 3000,
     https: false,
     testMode: true,

@@ -26,17 +26,14 @@
 
 import type { RespawnConfig } from './respawn.js';
 
-// ─── Agent Profile Types ──────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// Agent types
+// ────────────────────────────────────────────────────────────────────────────
 
-/**
- * Role identifier for an agent profile.
- * Determines the agent's default capabilities and system prompt style.
- */
+/** Role of a persistent agent */
 export type AgentRole = 'keeps-engineer' | 'codeman-dev' | 'deployment-agent' | 'orchestrator' | 'analyst';
 
-/**
- * A single capability (MCP server or skill) attached to an agent profile.
- */
+/** A capability (MCP server or skill) enabled for an agent */
 export interface AgentCapability {
   name: string;
   type: 'mcp' | 'skill';
@@ -44,35 +41,18 @@ export interface AgentCapability {
   enabled: boolean;
 }
 
-/**
- * Persistent agent profile — stored in AppState.agents and optionally
- * referenced from SessionState.agentProfile.
- */
+/** Persistent agent profile with vault config and capabilities */
 export interface AgentProfile {
-  /** Unique identifier for this agent (UUID) */
   agentId: string;
-  /** Role of this agent */
   role: AgentRole;
-  /** Human-readable display name */
   displayName: string;
-  /** Path to the agent's memory vault (e.g. ~/.codeman/vaults/<agentId>) */
   vaultPath: string;
-  /** Capabilities attached to this agent */
   capabilities: AgentCapability[];
-  /** Optional role-specific system prompt override */
   rolePrompt?: string;
-  /** ISO timestamp of last memory consolidation */
   lastConsolidatedAt?: string;
-  /** Number of notes added since last consolidation */
   notesSinceConsolidation: number;
-  /** Memory decay configuration */
-  decay: {
-    notesTtlDays: number;
-    patternsTtlDays: number;
-  };
-  /** ISO timestamp when this profile was created */
+  decay: { notesTtlDays: number; patternsTtlDays: number };
   createdAt: string;
-  /** ISO timestamp of the last session activity for this agent */
   lastActiveAt?: string;
 }
 
@@ -255,6 +235,8 @@ export interface SessionState {
   clearedAt?: string;
   /** Absolute path to Claude transcript file; captured at archive time for reliable serving */
   transcriptPath?: string;
+  /** Current work item ID being worked on (for vault capture metadata) */
+  currentWorkItemId?: string | null;
 }
 
 /**

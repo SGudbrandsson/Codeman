@@ -1,0 +1,128 @@
+<h2>Where should the task/agent status live in the transcript view?</h2>
+<p class="subtitle">Three placement approaches — pick the one that feels right</p>
+
+<div class="cards">
+
+  <!-- Option A: Sticky HUD at top of transcript -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:monospace;font-size:11px;background:#0f172a;border-radius:8px;overflow:hidden;border:1px solid #1e293b">
+        <!-- HUD bar -->
+        <div style="background:#1e293b;padding:6px 10px;display:flex;gap:10px;align-items:center;border-bottom:1px solid #334155;position:sticky;top:0">
+          <span style="color:#06b6d4;font-size:10px">&#x25CF; 3 tasks running</span>
+          <span style="color:#94a3b8;font-size:10px">2 agents active</span>
+          <span style="color:#475569;font-size:10px;margin-left:auto">▾ expand</span>
+        </div>
+        <!-- transcript messages below -->
+        <div style="padding:10px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <span style="color:#64748b;font-size:9px;margin-top:1px">You</span>
+            <div style="background:#1e293b;border-radius:6px;padding:5px 8px;color:#e2e8f0;font-size:10px;flex:1">Implement the auth flow</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <span style="color:#06b6d4;font-size:9px;margin-top:1px">●</span>
+            <div style="color:#cbd5e1;font-size:10px;flex:1">I'll break this into subtasks...</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <span style="color:#64748b;font-size:9px;margin-top:1px">You</span>
+            <div style="background:#1e293b;border-radius:6px;padding:5px 8px;color:#e2e8f0;font-size:10px;flex:1">Also add tests</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Sticky HUD bar</h3>
+      <p>A slim bar pinned to the top of the transcript area. Always visible when tasks are running. Tap to expand for detail. Disappears when idle.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Inline block injected into transcript stream -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:monospace;font-size:11px;background:#0f172a;border-radius:8px;overflow:hidden;border:1px solid #1e293b;padding:10px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;gap:6px;align-items:flex-start">
+          <span style="color:#64748b;font-size:9px;margin-top:1px">You</span>
+          <div style="background:#1e293b;border-radius:6px;padding:5px 8px;color:#e2e8f0;font-size:10px;flex:1">Implement the auth flow</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:flex-start">
+          <span style="color:#06b6d4;font-size:9px;margin-top:1px">●</span>
+          <div style="color:#cbd5e1;font-size:10px;flex:1">Spawning 3 subtasks...</div>
+        </div>
+        <!-- Inline task block -->
+        <div style="background:#0f2133;border:1px solid #0e4a6e;border-radius:6px;padding:8px 10px;margin-left:14px">
+          <div style="color:#38bdf8;font-size:9px;font-weight:bold;margin-bottom:5px;display:flex;justify-content:space-between">
+            <span>&#x25A3; TASKS</span>
+            <span style="color:#475569">3 running</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#f59e0b;font-size:9px">●</span>
+              <span style="color:#94a3b8;font-size:9px">Write auth middleware</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">12s…</span>
+            </div>
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#f59e0b;font-size:9px">●</span>
+              <span style="color:#94a3b8;font-size:9px">Create user model</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">8s…</span>
+            </div>
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="color:#22c55e;font-size:9px">✓</span>
+              <span style="color:#64748b;font-size:9px;text-decoration:line-through">Setup DB schema</span>
+              <span style="color:#475569;font-size:8px;margin-left:auto">4.2s</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:flex-start">
+          <span style="color:#64748b;font-size:9px;margin-top:1px">You</span>
+          <div style="background:#1e293b;border-radius:6px;padding:5px 8px;color:#e2e8f0;font-size:10px;flex:1">Also add tests</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Inline live block</h3>
+      <p>A live-updating card injected into the transcript stream alongside messages. Updates in place as tasks progress. Scrolls with history.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Collapsible panel docked above input -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family:monospace;font-size:11px;background:#0f172a;border-radius:8px;overflow:hidden;border:1px solid #1e293b;display:flex;flex-direction:column;height:160px">
+        <!-- transcript (scrollable) -->
+        <div style="flex:1;padding:10px;display:flex;flex-direction:column;gap:8px;overflow:hidden">
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <span style="color:#06b6d4;font-size:9px;margin-top:1px">●</span>
+            <div style="color:#cbd5e1;font-size:10px;flex:1">I'll break this into subtasks...</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <span style="color:#64748b;font-size:9px;margin-top:1px">You</span>
+            <div style="background:#1e293b;border-radius:6px;padding:5px 8px;color:#e2e8f0;font-size:10px;flex:1">Also add tests</div>
+          </div>
+        </div>
+        <!-- docked panel above input -->
+        <div style="background:#0f2133;border-top:1px solid #0e4a6e;padding:6px 10px">
+          <div style="color:#38bdf8;font-size:9px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center">
+            <span>&#x25A3; 3 running · 2 agents</span>
+            <span style="color:#475569;cursor:pointer">▾</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <div style="display:flex;gap:3px;align-items:center"><span style="color:#f59e0b;font-size:8px">●</span><span style="color:#94a3b8;font-size:8px">auth middleware</span></div>
+            <div style="display:flex;gap:3px;align-items:center"><span style="color:#f59e0b;font-size:8px">●</span><span style="color:#94a3b8;font-size:8px">user model</span></div>
+            <div style="display:flex;gap:3px;align-items:center"><span style="color:#22c55e;font-size:8px">✓</span><span style="color:#64748b;font-size:8px">DB schema</span></div>
+          </div>
+        </div>
+        <!-- input bar -->
+        <div style="background:#1e293b;padding:6px 10px;border-top:1px solid #334155">
+          <div style="background:#0f172a;border-radius:4px;padding:4px 8px;color:#475569;font-size:9px">Type a message...</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Docked panel above input</h3>
+      <p>A compact panel docked between the transcript and the input bar. Always at the bottom of your view. Collapses to a single line when minimised.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px">Click a card to select it, or reply in the terminal with your thoughts.</p>

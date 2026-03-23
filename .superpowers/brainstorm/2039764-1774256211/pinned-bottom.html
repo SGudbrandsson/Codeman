@@ -1,0 +1,125 @@
+<h2>Pinned to bottom of transcript viewport</h2>
+<p class="subtitle">Messages scroll above — blocks stay fixed at the bottom of the transcript area (not the input bar)</p>
+
+<div class="section">
+  <div class="label">Layout — blocks pinned inside transcript scroll area</div>
+  <div class="mockup">
+    <div class="mockup-header">Full view</div>
+    <div class="mockup-body" style="background:#0a0f1a;padding:0;border-radius:6px;overflow:hidden;display:flex;flex-direction:column;height:320px;font-family:monospace;font-size:11px">
+
+      <!-- transcript scroll area -->
+      <div style="flex:1;overflow:hidden;padding:12px;display:flex;flex-direction:column;gap:9px;position:relative">
+
+        <!-- older messages (scrolled above) -->
+        <div style="display:flex;gap:7px;align-items:flex-start;opacity:0.5">
+          <span style="color:#64748b;font-size:10px">You</span>
+          <div style="background:#1e293b;border-radius:6px;padding:5px 9px;color:#e2e8f0;font-size:10px">Implement the auth flow</div>
+        </div>
+        <div style="display:flex;gap:7px;align-items:flex-start;opacity:0.5">
+          <span style="color:#06b6d4;font-size:10px">●</span>
+          <div style="color:#cbd5e1;font-size:10px">I'll split this into parallel subtasks…</div>
+        </div>
+        <div style="display:flex;gap:7px;align-items:flex-start;opacity:0.7">
+          <span style="color:#64748b;font-size:10px">You</span>
+          <div style="background:#1e293b;border-radius:6px;padding:5px 9px;color:#e2e8f0;font-size:10px">Also add rate limiting</div>
+        </div>
+        <div style="display:flex;gap:7px;align-items:flex-start">
+          <span style="color:#06b6d4;font-size:10px">●</span>
+          <div style="color:#cbd5e1;font-size:10px">Sure, adding rate limiting now…</div>
+        </div>
+
+        <!-- pinned blocks — sticky bottom of scroll container -->
+        <div style="position:absolute;bottom:0;left:0;right:0;padding:8px 12px;display:flex;flex-direction:column;gap:6px;background:linear-gradient(transparent, #0a0f1a 28%)">
+
+          <!-- TASK BLOCK -->
+          <div style="border:1px solid #0e4a6e;border-radius:7px;padding:8px 11px;background:#051927cc;backdrop-filter:blur(4px)">
+            <div style="color:#38bdf8;font-size:9px;font-weight:700;letter-spacing:.04em;margin-bottom:5px;display:flex;justify-content:space-between">
+              <span>▣ TASKS</span>
+              <span style="color:#475569;font-weight:400">2 running · 1 done</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="color:#f59e0b;font-size:10px">●</span>
+                <span style="color:#94a3b8;font-size:10px">Write auth middleware</span>
+                <span style="color:#475569;font-size:9px;margin-left:auto">14s…</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="color:#f59e0b;font-size:10px">●</span>
+                <span style="color:#94a3b8;font-size:10px">Add rate limiting</span>
+                <span style="color:#475569;font-size:9px;margin-left:auto">3s…</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="color:#22c55e;font-size:10px">✓</span>
+                <span style="color:#475569;font-size:10px;text-decoration:line-through">Setup DB schema</span>
+                <span style="color:#475569;font-size:9px;margin-left:auto">4.2s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- AGENT BLOCK -->
+          <div style="border:1px solid #3b1d6e;border-radius:7px;padding:8px 11px;background:#0e052099;backdrop-filter:blur(4px)">
+            <div style="color:#a78bfa;font-size:9px;font-weight:700;letter-spacing:.04em;margin-bottom:5px;display:flex;justify-content:space-between">
+              <span>⬡ AGENTS</span>
+              <span style="color:#475569;font-weight:400">2 active</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="color:#a78bfa;font-size:10px">⬡</span>
+                <span style="color:#94a3b8;font-size:10px">code-writer</span>
+                <span style="color:#475569;font-size:9px;margin-left:auto">reading files…</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="color:#a78bfa;font-size:10px">⬡</span>
+                <span style="color:#94a3b8;font-size:10px">test-runner</span>
+                <span style="color:#475569;font-size:9px;margin-left:auto">running bash…</span>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- end pinned -->
+      </div><!-- end transcript scroll area -->
+
+      <!-- input bar (separate, below) -->
+      <div style="background:#1e293b;padding:8px 12px;border-top:1px solid #334155;flex-shrink:0">
+        <div style="background:#0f172a;border-radius:5px;padding:5px 9px;color:#475569;font-size:10px">Type a message…</div>
+      </div>
+
+    </div>
+  </div>
+  <p class="subtitle" style="margin-top:8px">The blocks float over the bottom of the transcript scroll area with a subtle gradient fade. New messages appear above them. Input bar is separate below as always.</p>
+</div>
+
+<div class="section">
+  <div class="label">When new messages arrive — they stack above the pinned blocks</div>
+  <div class="mockup">
+    <div class="mockup-header">New message pushes up content, blocks stay put</div>
+    <div class="mockup-body" style="background:#0a0f1a;padding:12px;display:flex;flex-direction:column;gap:9px;position:relative;font-family:monospace;font-size:11px;height:220px;overflow:hidden">
+      <div style="display:flex;gap:7px;opacity:0.4">
+        <span style="color:#06b6d4;font-size:10px">●</span>
+        <div style="color:#cbd5e1;font-size:10px">I'll split this into parallel subtasks…</div>
+      </div>
+      <div style="display:flex;gap:7px;opacity:0.7">
+        <span style="color:#64748b;font-size:10px">You</span>
+        <div style="background:#1e293b;border-radius:6px;padding:5px 9px;color:#e2e8f0;font-size:10px">Also add rate limiting</div>
+      </div>
+      <!-- new message just arrived -->
+      <div style="display:flex;gap:7px">
+        <span style="color:#06b6d4;font-size:10px">●</span>
+        <div style="color:#cbd5e1;font-size:10px;border-left:2px solid #06b6d4;padding-left:6px">Sure, adding rate limiting now… ← new message</div>
+      </div>
+      <!-- pinned blocks at bottom -->
+      <div style="position:absolute;bottom:0;left:0;right:0;padding:8px 12px;background:linear-gradient(transparent,#0a0f1a 30%)">
+        <div style="border:1px solid #0e4a6e;border-radius:6px;padding:7px 10px;background:#051927dd;margin-bottom:6px">
+          <div style="color:#38bdf8;font-size:8px;font-weight:700;margin-bottom:3px">▣ TASKS · 1 running</div>
+          <div style="display:flex;gap:5px;align-items:center">
+            <span style="color:#f59e0b;font-size:9px">●</span>
+            <span style="color:#94a3b8;font-size:9px">Add rate limiting</span>
+            <span style="color:#475569;font-size:8px;margin-left:auto">2s…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:16px">Does this match what you had in mind? Reply in the terminal.</p>
