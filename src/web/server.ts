@@ -76,6 +76,7 @@ import { runOrphanCleanup } from './routes/worktree-session-routes.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { UpdateChecker } from '../update-checker.js';
+import { decay as workItemDecay } from '../work-items/index.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -118,6 +119,7 @@ import {
   registerPluginRoutes,
   registerAgentRoutes,
   registerVaultRoutes,
+  registerWorkItemRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -769,6 +771,7 @@ export class WebServer extends EventEmitter {
     registerAgentRoutes(this.app, ctx);
     await registerPluginRoutes(this.app);
     registerVaultRoutes(this.app, ctx);
+    registerWorkItemRoutes(this.app, ctx);
   }
 
   /**
@@ -2932,6 +2935,16 @@ export class WebServer extends EventEmitter {
       },
       DEAD_PANE_CHECK_INTERVAL_MS,
       { description: 'dead pane auto-recovery check' }
+    );
+
+    // Memory decay for work items (run once at startup, then daily)
+    workItemDecay();
+    this.cleanup.setInterval(
+      () => {
+        workItemDecay();
+      },
+      24 * 60 * 60 * 1000,
+      { description: 'work item memory decay' }
     );
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)

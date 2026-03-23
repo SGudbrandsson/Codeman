@@ -320,6 +320,17 @@ export const AgentUpdated = 'agent:updated' as const;
 /** Agent profile deleted. */
 export const AgentDeleted = 'agent:deleted' as const;
 
+// ─── Work Items ───────────────────────────────────────────────────────────────
+
+/** New work item created. */
+export const WorkItemCreated = 'workItem:created' as const;
+/** Work item fields updated. */
+export const WorkItemUpdated = 'workItem:updated' as const;
+/** Work item claimed by an agent. */
+export const WorkItemClaimed = 'workItem:claimed' as const;
+/** Work item status transitioned. */
+export const WorkItemStatusChanged = 'workItem:statusChanged' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -510,6 +521,12 @@ export const SseEvent = {
   AgentCreated,
   AgentUpdated,
   AgentDeleted,
+
+  // Work Items
+  WorkItemCreated,
+  WorkItemUpdated,
+  WorkItemClaimed,
+  WorkItemStatusChanged,
 
   // Cases
   CaseCreated,
