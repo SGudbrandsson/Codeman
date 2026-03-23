@@ -581,27 +581,24 @@ export function registerSessionRoutes(
       return { success: true };
     }
 
-    // Write input to PTY. Direct write is synchronous; writeViaMux
-    // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
+    // Write input to PTY. Await writeViaMux so the HTTP response only returns
+    // after tmux has fully dispatched the text + Enter key. This gives the client
+    // a deterministic signal that Enter has been sent, so client-side retry
+    // timers can start counting from a meaningful baseline.
     if (useMux) {
-      // Fire-and-forget: don't block HTTP response on tmux child process.
-      // Fallback to direct write on failure.
-      session
-        .writeViaMux(inputStr)
-        .then((ok) => {
-          if (!ok) {
-            console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
-            // Strip \n to avoid premature submit on the PTY line discipline.
-            // Preserve trailing \r so the input is actually submitted.
-            const safeStr = inputStr.replace(/\n/g, ' ');
-            session.write(safeStr);
-          }
-        })
-        .catch(() => {
-          // Same safety: strip \n to avoid premature submit in fallback path.
-          const safeStr = inputStr.replace(/\n/g, ' ');
-          session.write(safeStr);
-        });
+      let ok = false;
+      try {
+        ok = await session.writeViaMux(inputStr);
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+        // Strip \n to avoid premature submit on the PTY line discipline.
+        // Preserve trailing \r so the input is actually submitted.
+        const safeStr = inputStr.replace(/\n/g, ' ');
+        session.write(safeStr);
+      }
     } else {
       session.write(inputStr);
     }

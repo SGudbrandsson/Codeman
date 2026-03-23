@@ -265,6 +265,40 @@ describe('session-routes', () => {
       await new Promise((r) => setTimeout(r, 10));
       expect(writeSpy).toHaveBeenCalledWith('line1 line2\r');
     });
+
+    it('useMux:true — HTTP response is withheld until writeViaMux resolves (await-before-response)', async () => {
+      // This test verifies that the route awaits writeViaMux before returning the HTTP 200.
+      // Previously, the route used fire-and-forget (.then().catch()) and returned immediately.
+      // Now it awaits, so inject() must not return until after writeViaMux has resolved.
+      const DELAY_MS = 60;
+      const session = harness.ctx._session;
+
+      let muxResolveTime = 0;
+      vi.spyOn(session, 'writeViaMux').mockImplementation(() => {
+        return new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            muxResolveTime = Date.now();
+            resolve(true);
+          }, DELAY_MS);
+        });
+      });
+
+      const requestStartTime = Date.now();
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: 'hello\r', useMux: true },
+      });
+      const responseTime = Date.now();
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      // writeViaMux must have resolved before the response arrived
+      expect(muxResolveTime).toBeGreaterThan(0);
+      expect(responseTime).toBeGreaterThanOrEqual(muxResolveTime);
+      // The response must have been delayed by at least the mock delay
+      expect(responseTime - requestStartTime).toBeGreaterThanOrEqual(DELAY_MS);
+    });
   });
 
   // ========== POST /api/sessions/:id/resize ==========

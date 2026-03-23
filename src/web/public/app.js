@@ -17839,24 +17839,29 @@ const InputPanel = {
       }
     }
     const parts = [...images.map(img => img.path), ...(sendText ? [sendText] : [])];
-    app.sendInput(parts.join('\n') + '\r');
-
-    // Verify Enter was received: poll session status every 150ms for 1200ms.
-    // Multi-part messages (images + text) can take ~250ms to fully deliver via tmux,
-    // so give extra headroom before deciding a retry is needed.
-    // If session never goes busy, send a bare \r to retry the Enter key.
     const _sendSessionId = app.activeSessionId;
-    let _sendChecks = 0;
-    const _sendCheckTimer = setInterval(() => {
-      _sendChecks++;
-      const s = app.sessions?.get(_sendSessionId);
-      if (s?.status === 'busy') { clearInterval(_sendCheckTimer); return; }
-      if (_sendChecks >= 8) {
-        clearInterval(_sendCheckTimer);
-        // Session still idle — resend Enter in case it was lost
-        if (s?.status !== 'busy') app.sendInput('\r').catch(() => {});
-      }
-    }, 150);
+    app.sendInput(parts.join('\n') + '\r').then(() => {
+      // Backend now awaits tmux completion before responding, so we know Enter
+      // has been dispatched by the time this .then() fires.
+      // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
+      // actually received the input. Check both server-SSE status AND optimistic
+      // displayStatus so the timer stops as soon as any busy signal arrives.
+      let _sendChecks = 0;
+      const _sendCheckTimer = setInterval(() => {
+        _sendChecks++;
+        const s = app.sessions?.get(_sendSessionId);
+        const isBusy = s?.status === 'busy' || s?.isWorking || s?.displayStatus === 'busy';
+        if (isBusy) { clearInterval(_sendCheckTimer); return; }
+        if (_sendChecks >= 20) {
+          clearInterval(_sendCheckTimer);
+          // Session still idle 3 s after tmux confirmed Enter was sent —
+          // Enter was likely dropped; resend it once as a fallback.
+          const sNow = app.sessions?.get(_sendSessionId);
+          const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking || sNow?.displayStatus === 'busy';
+          if (!isNowBusy) app.sendInput('\r').catch(() => {});
+        }
+      }, 150);
+    }).catch(() => {});
 
     // Show user message immediately in transcript view (optimistic UI)
     if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
