@@ -59,6 +59,7 @@
       <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
       </div>
       <div class="header-right">
+        <button class="btn-board-view" id="boardViewBtn" onclick="app.showBoard()" title="Board view" aria-label="Open board view">Board</button>
         <button class="tunnel-indicator" id="tunnelIndicator" style="display: none;" onclick="app.toggleTunnelPanel()" title="Cloudflare Tunnel" aria-label="Tunnel status">
           <span class="tunnel-dot"></span>
         </button>
@@ -290,6 +291,26 @@
       <div class="elicitation-panel" id="elicitationPanel" style="display:none;" aria-label="Quick reply"></div>
 
 
+      <!-- Board View -->
+      <div class="board-view" id="boardView" style="display:none;" aria-label="Work item board">
+        <div class="board-header">
+          <h2 class="board-title">Codeman Board</h2>
+          <div class="board-header-actions">
+            <button class="board-btn-refresh" onclick="app.boardView.refresh()">Refresh</button>
+            <button class="board-btn-new" onclick="app.boardView.openNewItemDialog()">+ New Work Item</button>
+          </div>
+        </div>
+        <div class="board-kanban" id="boardKanban">
+          <!-- Columns rendered by BoardView.render() -->
+        </div>
+        <div class="board-timeline" id="boardTimeline">
+          <div class="board-timeline-header">Timeline</div>
+          <div class="board-timeline-feed" id="boardTimelineFeed">
+            <!-- Events rendered by BoardView._renderTimeline() -->
+          </div>
+        </div>
+      </div>
+
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
         <div class="welcome-content">
@@ -316,6 +337,13 @@
           <p class="welcome-hint">Select a project above and press Run to start</p>
           <button class="welcome-ralph-link" onclick="app.showRalphWizard()">Start Ralph Loop &rarr;</button>
         </div>
+      </div>
+
+      <!-- Work item detail panel overlay -->
+      <div class="work-item-panel-overlay" id="workItemPanelOverlay" onclick="app.boardView.closeDetailPanel()"></div>
+      <!-- Work item detail panel (slide-in from right) -->
+      <div class="work-item-panel" id="workItemPanel" role="dialog" aria-label="Work item detail">
+        <!-- Content rendered by BoardView._renderDetailPanel() -->
       </div>
     </main>
 

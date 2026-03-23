@@ -3375,6 +3375,13 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.AGENT_UPDATED, '_onAgentUpdated'],
   [SSE_EVENTS.AGENT_DELETED, '_onAgentDeleted'],
 
+  // Work items
+  [SSE_EVENTS.WORK_ITEM_CREATED, '_onWorkItemCreated'],
+  [SSE_EVENTS.WORK_ITEM_UPDATED, '_onWorkItemUpdated'],
+  [SSE_EVENTS.WORK_ITEM_CLAIMED, '_onWorkItemClaimed'],
+  [SSE_EVENTS.WORK_ITEM_STATUS_CHANGED, '_onWorkItemStatusChanged'],
+  [SSE_EVENTS.WORK_ITEM_COMPLETED, '_onWorkItemCompleted'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -3568,6 +3575,11 @@ class CodemanApp {
     // In-memory stale-while-revalidate cache for /api/sessions/:id/state
     // Map<sessionId, { data: object, fetchedAt: number }>
     this._sessionStateCache = new Map();
+
+    // Board view singleton and flag
+    this._boardVisible = false;
+    this.boardView = BoardView;
+    BoardView.init();
 
     this.init();
   }
@@ -7666,6 +7678,8 @@ class CodemanApp {
 
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
+    // Hide board view when switching to a session
+    if (this._boardVisible) this.hideBoard();
     const _selStart = performance.now();
     const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
     _crashDiag.log(`SELECT: ${_selName}`);
@@ -8302,6 +8316,26 @@ class CodemanApp {
     this.showWelcome();
     this.renderSessionTabs();
     this.renderRalphStatePanel();
+  }
+
+  showBoard() {
+    this.hideWelcome();
+    const boardEl = document.getElementById('boardView');
+    const termEl = document.getElementById('terminalContainer');
+    const transEl = document.getElementById('transcriptView');
+    if (boardEl) boardEl.style.display = 'flex';
+    if (termEl) termEl.style.display = 'none';
+    if (transEl) transEl.style.display = 'none';
+    this._boardVisible = true;
+    document.getElementById('boardViewBtn')?.classList.add('active');
+    this.boardView.refresh();
+  }
+
+  hideBoard() {
+    const boardEl = document.getElementById('boardView');
+    if (boardEl) boardEl.style.display = 'none';
+    this._boardVisible = false;
+    document.getElementById('boardViewBtn')?.classList.remove('active');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -17419,6 +17453,37 @@ class CodemanApp {
     }
   }
 
+  // ─── Work Item SSE handlers ────────────────────────────────────────────────
+
+  /** SSE handler: workItem:created */
+  _onWorkItemCreated(data) {
+    this.boardView.onWorkItemCreated(data);
+    this.boardView.addTimelineEvent({ type: 'workItem:created', ...data });
+  }
+
+  /** SSE handler: workItem:updated */
+  _onWorkItemUpdated(data) {
+    this.boardView.onWorkItemUpdated(data);
+  }
+
+  /** SSE handler: workItem:claimed */
+  _onWorkItemClaimed(data) {
+    this.boardView.onWorkItemClaimed(data);
+    this.boardView.addTimelineEvent({ type: 'workItem:claimed', ...data });
+  }
+
+  /** SSE handler: workItem:statusChanged */
+  _onWorkItemStatusChanged(data) {
+    this.boardView.onWorkItemStatusChanged(data);
+    this.boardView.addTimelineEvent({ type: 'workItem:statusChanged', ...data });
+  }
+
+  /** SSE handler: workItem:completed */
+  _onWorkItemCompleted(data) {
+    this.boardView.onWorkItemCompleted(data);
+    this.boardView.addTimelineEvent({ type: 'workItem:completed', ...data });
+  }
+
   renderMuxSessions() {
     // Debounce renders at 100ms to prevent excessive DOM updates
     if (this.renderMuxSessionsTimeout) {
@@ -19528,6 +19593,480 @@ const HistoryModal = {
       btn.disabled = false;
       btn.textContent = 'Resume';
     }
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// BoardView — kanban board + timeline feed + work item detail
+// ═══════════════════════════════════════════════════════════════
+const BoardView = {
+  _workItems: [],      // WorkItem[]
+  _agents: new Map(),  // agentId -> AgentProfile (mirror of app.agents)
+  _timeline: [],       // BoardEvent[] (last 50)
+  _detailItem: null,   // WorkItem | null
+  _initialized: false,
+
+  // Column definitions — maps API status values to display columns
+  COLUMNS: [
+    { key: 'queued',      label: 'Queued',  statuses: ['queued', 'blocked'] },
+    { key: 'working',     label: 'Working', statuses: ['assigned', 'in_progress'] },
+    { key: 'review',      label: 'Review',  statuses: ['review'] },
+    { key: 'done',        label: 'Done',    statuses: ['done', 'cancelled'] },
+  ],
+
+  // Status dot colors
+  STATUS_COLORS: {
+    queued:      '#60a5fa',
+    blocked:     '#ef4444',
+    assigned:    '#f59e0b',
+    in_progress: '#22c55e',
+    review:      '#a78bfa',
+    done:        '#475569',
+    cancelled:   '#374151',
+  },
+
+  // Mock data — used when GET /api/work-items returns 404 or fails
+  MOCK_ITEMS: [
+    { id: 'wi-mock0001', title: 'Auth redesign', description: 'Implement OAuth2 flow', status: 'queued', source: 'manual', assignedAgentId: null, createdAt: new Date(Date.now() - 7200000).toISOString(), assignedAt: null, startedAt: null, completedAt: null, worktreePath: null, branchName: null, taskMdPath: null, externalRef: null, externalUrl: null, metadata: {}, compactSummary: null },
+    { id: 'wi-mock0002', title: 'Search sessions feature', description: 'BM25 full-text search across transcripts', status: 'in_progress', source: 'clockwork', assignedAgentId: null, createdAt: new Date(Date.now() - 9000000).toISOString(), assignedAt: new Date(Date.now() - 8000000).toISOString(), startedAt: new Date(Date.now() - 7500000).toISOString(), completedAt: null, worktreePath: '/home/siggi/sources/Codeman-feat-search-sessions', branchName: 'feat/search-sessions', taskMdPath: null, externalRef: 'ASANA-4521', externalUrl: null, metadata: {}, compactSummary: null },
+    { id: 'wi-mock0003', title: 'MCP plugin integration', description: 'Integrate MCP servers as plugins', status: 'review', source: 'manual', assignedAgentId: null, createdAt: new Date(Date.now() - 18000000).toISOString(), assignedAt: new Date(Date.now() - 14400000).toISOString(), startedAt: new Date(Date.now() - 14000000).toISOString(), completedAt: null, worktreePath: null, branchName: null, taskMdPath: null, externalRef: null, externalUrl: null, metadata: {}, compactSummary: null },
+    { id: 'wi-mock0004', title: 'Activity indicators v2', description: 'Fix busy state for all sessions', status: 'done', source: 'manual', assignedAgentId: null, createdAt: new Date(Date.now() - 86400000).toISOString(), assignedAt: new Date(Date.now() - 80000000).toISOString(), startedAt: new Date(Date.now() - 75000000).toISOString(), completedAt: new Date(Date.now() - 3600000).toISOString(), worktreePath: null, branchName: null, taskMdPath: null, externalRef: null, externalUrl: null, metadata: {}, compactSummary: null },
+  ],
+
+  init() {
+    if (this._initialized) return;
+    this._initialized = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this._detailItem) {
+        this.closeDetailPanel();
+      }
+    });
+  },
+
+  async refresh() {
+    // Mirror agents from app at render time
+    if (typeof app !== 'undefined' && app.agents) {
+      this._agents = app.agents;
+    }
+
+    let useMock = false;
+    try {
+      const res = await fetch('/api/work-items');
+      if (res.ok) {
+        const data = await res.json();
+        this._workItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+      } else {
+        useMock = true;
+      }
+    } catch (e) {
+      useMock = true;
+    }
+
+    if (useMock) {
+      this._workItems = this.MOCK_ITEMS.slice();
+      this._showMockBanner();
+    } else {
+      this._hideMockBanner();
+    }
+
+    // Seed timeline with mock events if empty
+    if (this._timeline.length === 0) {
+      this._timeline = [
+        { type: 'workItem:statusChanged', id: 'wi-mock0003', title: 'MCP plugin integration', status: 'review', agentName: 'System', ts: new Date(Date.now() - 600000).toISOString() },
+        { type: 'workItem:created', id: 'wi-mock0001', title: 'Auth redesign', agentName: 'System', ts: new Date(Date.now() - 7200000).toISOString() },
+      ];
+    }
+
+    this.render();
+    this._renderTimeline();
+  },
+
+  _showMockBanner() {
+    const board = document.getElementById('boardView');
+    if (!board) return;
+    let banner = board.querySelector('.board-mock-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.className = 'board-mock-banner';
+      const msg = document.createElement('span');
+      msg.textContent = 'Using mock data — work-item-graph backend not connected';
+      const close = document.createElement('button');
+      close.className = 'board-mock-banner-close';
+      close.textContent = '×';
+      close.addEventListener('click', () => banner.remove());
+      banner.appendChild(msg);
+      banner.appendChild(close);
+      board.insertBefore(banner, board.firstChild);
+    }
+  },
+
+  _hideMockBanner() {
+    document.querySelector('.board-mock-banner')?.remove();
+  },
+
+  render() {
+    const kanban = document.getElementById('boardKanban');
+    if (!kanban) return;
+    kanban.textContent = '';
+
+    // Mirror agents from app at render time
+    if (typeof app !== 'undefined' && app.agents) {
+      this._agents = app.agents;
+    }
+
+    for (const col of this.COLUMNS) {
+      const items = this._workItems
+        .filter(item => col.statuses.includes(item.status))
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      kanban.appendChild(this._renderColumn(col, items));
+    }
+  },
+
+  _renderColumn(col, items) {
+    const colEl = document.createElement('div');
+    colEl.className = 'board-col';
+    colEl.dataset.col = col.key;
+
+    const header = document.createElement('div');
+    header.className = 'board-col-header';
+
+    const label = document.createElement('span');
+    label.className = 'board-col-label';
+    label.textContent = col.label;
+
+    const count = document.createElement('span');
+    count.className = 'board-col-count';
+    count.textContent = String(items.length);
+
+    header.appendChild(label);
+    header.appendChild(count);
+
+    const body = document.createElement('div');
+    body.className = 'board-col-body';
+
+    for (const item of items) {
+      body.appendChild(this._renderCard(item));
+    }
+
+    colEl.appendChild(header);
+    colEl.appendChild(body);
+    return colEl;
+  },
+
+  _renderCard(item) {
+    const card = document.createElement('div');
+    card.className = 'board-card';
+    card.dataset.id = item.id;
+
+    const title = document.createElement('div');
+    title.className = 'board-card-title';
+    title.textContent = item.title || item.id;
+
+    const meta = document.createElement('div');
+    meta.className = 'board-card-meta';
+
+    const dot = document.createElement('span');
+    dot.className = 'board-card-dot';
+    dot.style.background = this.STATUS_COLORS[item.status] || '#475569';
+
+    const agent = this._agents.get(item.assignedAgentId);
+    const agentEl = document.createElement('span');
+    agentEl.className = 'board-card-agent';
+    agentEl.textContent = agent ? (agent.name || agent.agentId) : 'Unassigned';
+
+    meta.appendChild(dot);
+    meta.appendChild(agentEl);
+
+    if (agent && agent.role) {
+      const role = document.createElement('span');
+      role.className = 'board-card-role';
+      role.textContent = agent.role;
+      meta.appendChild(role);
+    }
+
+    const elapsed = document.createElement('span');
+    elapsed.className = 'board-card-elapsed';
+    elapsed.textContent = this._timeAgo(item.startedAt || item.assignedAt || item.createdAt);
+    meta.appendChild(elapsed);
+
+    const nextAction = document.createElement('div');
+    nextAction.className = 'board-card-next-action';
+    nextAction.textContent = this._nextAction(item);
+
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(nextAction);
+
+    card.addEventListener('click', () => this.openDetailPanel(item));
+    return card;
+  },
+
+  _renderTimeline() {
+    const feed = document.getElementById('boardTimelineFeed');
+    if (!feed) return;
+    feed.textContent = '';
+
+    if (this._timeline.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'board-timeline-entry';
+      empty.textContent = 'No recent events.';
+      feed.appendChild(empty);
+      return;
+    }
+
+    for (const ev of this._timeline) {
+      const entry = document.createElement('div');
+      entry.className = 'board-timeline-entry';
+
+      const ts = document.createElement('span');
+      ts.className = 'board-timeline-ts';
+      ts.textContent = this._timeAgo(ev.ts || ev.createdAt || new Date().toISOString());
+
+      const actor = document.createElement('span');
+      actor.className = 'board-timeline-actor';
+      actor.textContent = ev.agentName || 'System';
+
+      const desc = document.createElement('span');
+      desc.className = 'board-timeline-desc';
+      const typeLabel = {
+        'workItem:created': 'created',
+        'workItem:updated': 'updated',
+        'workItem:claimed': 'claimed',
+        'workItem:statusChanged': 'changed status of',
+        'workItem:completed': 'completed',
+      }[ev.type] || ev.type;
+      desc.textContent = `${typeLabel} "${ev.title || ev.id || ''}"`;
+
+      entry.appendChild(ts);
+      entry.appendChild(actor);
+      entry.appendChild(desc);
+      feed.appendChild(entry);
+    }
+  },
+
+  async openDetailPanel(item) {
+    this._detailItem = item;
+    let agent = null;
+    if (item.assignedAgentId) {
+      agent = this._agents.get(item.assignedAgentId) || null;
+      if (!agent) {
+        try {
+          const res = await fetch(`/api/agents/${item.assignedAgentId}`);
+          if (res.ok) {
+            const data = await res.json();
+            agent = data.agent || data || null;
+          }
+        } catch (_) { /* ignore */ }
+      }
+    }
+    this._renderDetailPanel(item, agent);
+    document.getElementById('workItemPanel')?.classList.add('open');
+    document.getElementById('workItemPanelOverlay')?.classList.add('open');
+  },
+
+  closeDetailPanel() {
+    this._detailItem = null;
+    document.getElementById('workItemPanel')?.classList.remove('open');
+    document.getElementById('workItemPanelOverlay')?.classList.remove('open');
+  },
+
+  _renderDetailPanel(item, agent) {
+    const panel = document.getElementById('workItemPanel');
+    if (!panel) return;
+
+    const statusColor = this.STATUS_COLORS[item.status] || '#475569';
+
+    let html = `<div class="wip-header">
+      <div style="display:flex;align-items:flex-start;">
+        <div style="flex:1;">
+          <div class="wip-id">${this._esc(item.id)}</div>
+          <div class="wip-title">${this._esc(item.title || item.id)}</div>
+          <div class="wip-status-row">
+            <span class="board-card-dot" style="background:${statusColor};display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
+            <span class="wip-status-badge" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}44;">${this._esc(item.status)}</span>
+            ${item.branchName ? `<span style="font-size:0.68rem;color:#475569;">${this._esc(item.branchName)}</span>` : ''}
+          </div>
+        </div>
+        <button class="wip-close btn-icon-sm" onclick="app.boardView.closeDetailPanel()" title="Close">&times;</button>
+      </div>
+    </div>`;
+
+    // Description
+    html += `<div class="wip-section">
+      <div class="wip-section-label">Description</div>
+      <div class="wip-description">${this._esc(item.description || 'No description.')}</div>
+    </div>`;
+
+    // Assigned agent activity
+    html += `<div class="wip-section">
+      <div class="wip-section-label">Assigned Agent</div>`;
+    if (agent) {
+      html += `<div style="font-size:0.8rem;color:#94a3b8;margin-bottom:6px;">${this._esc(agent.name || agent.agentId || '')}`;
+      if (agent.role) html += ` <span style="font-size:0.65rem;color:#475569;background:rgba(255,255,255,0.05);border-radius:3px;padding:1px 4px;">${this._esc(agent.role)}</span>`;
+      html += `</div>`;
+      if (agent.recentActivity && agent.recentActivity.length > 0) {
+        html += `<ul class="wip-activity-list">`;
+        for (const act of agent.recentActivity.slice(0, 5)) {
+          html += `<li>${this._esc(typeof act === 'string' ? act : JSON.stringify(act))}</li>`;
+        }
+        html += `</ul>`;
+      } else {
+        html += `<div style="font-size:0.75rem;color:#475569;">No recent activity recorded.</div>`;
+      }
+    } else {
+      html += `<div style="font-size:0.75rem;color:#475569;">Unassigned</div>`;
+    }
+    html += `</div>`;
+
+    // Vault memory snippets placeholder
+    html += `<div class="wip-section">
+      <div class="wip-section-label">Memory Vault</div>
+      <div class="wip-vault-snippet">Vault snippets will appear here when the agent has memory entries. (Phase 3)</div>
+    </div>`;
+
+    // Message thread placeholder
+    html += `<div class="wip-section">
+      <div class="wip-section-label">Message Thread</div>
+      <div style="font-size:0.75rem;color:#475569;">Message thread coming in Phase 3.</div>
+    </div>`;
+
+    // Git log if branchName present
+    if (item.branchName) {
+      html += `<div class="wip-section">
+        <div class="wip-section-label">Git Branch</div>
+        <div class="wip-git-log">${this._esc(item.branchName)}</div>
+      </div>`;
+    }
+
+    // Timestamps
+    html += `<div class="wip-section">
+      <div class="wip-section-label">Timestamps</div>
+      <div style="font-size:0.72rem;color:#475569;display:flex;flex-direction:column;gap:3px;">
+        <div>Created: ${this._timeAgo(item.createdAt)}</div>
+        ${item.assignedAt ? `<div>Assigned: ${this._timeAgo(item.assignedAt)}</div>` : ''}
+        ${item.startedAt ? `<div>Started: ${this._timeAgo(item.startedAt)}</div>` : ''}
+        ${item.completedAt ? `<div>Completed: ${this._timeAgo(item.completedAt)}</div>` : ''}
+      </div>
+    </div>`;
+
+    // Action buttons
+    html += `<div class="wip-actions">
+      <button class="board-btn-refresh" onclick="app.boardView.closeDetailPanel()">Close</button>
+      <button class="board-btn-new">Claim</button>
+      <button class="board-btn-new">Change Status</button>
+      <button class="board-btn-refresh">Add Dependency</button>
+    </div>`;
+
+    panel.innerHTML = html;
+  },
+
+  _esc(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  },
+
+  _timeAgo(isoStr) {
+    if (!isoStr) return '';
+    const ms = Date.now() - new Date(isoStr).getTime();
+    if (ms < 0) return 'just now';
+    const secs = Math.floor(ms / 1000);
+    if (secs < 60) return 'just now';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) {
+      const remMins = mins % 60;
+      return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h ago`;
+    }
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  },
+
+  _nextAction(item) {
+    switch (item.status) {
+      case 'queued':   return 'Waiting to be assigned';
+      case 'blocked':  return 'Blocked — resolve dependency';
+      case 'assigned': return 'Agent assigned — starting soon';
+      case 'in_progress': return 'In progress — check transcript';
+      case 'review':   return 'Ready for review';
+      case 'done':     return 'Completed';
+      case 'cancelled': return 'Cancelled';
+      default:         return '';
+    }
+  },
+
+  openNewItemDialog() {
+    // Placeholder — full implementation in Phase 3
+    if (typeof app !== 'undefined') {
+      app.showToast('New work item creation coming in Phase 3', 'info');
+    }
+  },
+
+  // SSE handlers called by CodemanApp
+  onWorkItemCreated(data) {
+    if (!data || !data.id) return;
+    const exists = this._workItems.find(w => w.id === data.id);
+    if (!exists) this._workItems.push(data);
+    this.render();
+  },
+
+  onWorkItemUpdated(data) {
+    if (!data || !data.id) return;
+    const idx = this._workItems.findIndex(w => w.id === data.id);
+    if (idx >= 0) {
+      this._workItems[idx] = { ...this._workItems[idx], ...data };
+    } else {
+      this._workItems.push(data);
+    }
+    this.render();
+  },
+
+  onWorkItemClaimed(data) {
+    if (!data || !data.id) return;
+    const item = this._workItems.find(w => w.id === data.id);
+    if (item) {
+      item.assignedAgentId = data.assignedAgentId || data.agentId || null;
+      if (data.assignedAt) item.assignedAt = data.assignedAt;
+    }
+    this.render();
+  },
+
+  onWorkItemStatusChanged(data) {
+    if (!data || !data.id) return;
+    const item = this._workItems.find(w => w.id === data.id);
+    if (item) {
+      item.status = data.status;
+      if (data.updatedAt) item.updatedAt = data.updatedAt;
+    }
+    this.render();
+  },
+
+  onWorkItemCompleted(data) {
+    if (!data || !data.id) return;
+    const item = this._workItems.find(w => w.id === data.id);
+    if (item) {
+      item.status = 'done';
+      if (data.completedAt) item.completedAt = data.completedAt;
+    }
+    this.render();
+  },
+
+  addTimelineEvent(event) {
+    if (!event) return;
+    // Add agent name from agents map if possible
+    if (event.assignedAgentId || event.agentId) {
+      const agentId = event.assignedAgentId || event.agentId;
+      const agent = this._agents.get(agentId);
+      if (agent) event.agentName = agent.name || agent.agentId;
+    }
+    if (!event.ts) event.ts = new Date().toISOString();
+    this._timeline.unshift(event);
+    if (this._timeline.length > 50) this._timeline.length = 50;
+    this._renderTimeline();
   },
 };
 
