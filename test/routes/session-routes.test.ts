@@ -652,6 +652,75 @@ describe('session-routes', () => {
     });
   });
 
+  // ========== POST /api/sessions/:id/auto-compact-continue ==========
+
+  describe('POST /api/sessions/:id/auto-compact-continue', () => {
+    it('enables auto-compact-continue and returns updated state', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+        payload: { enabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.autoCompactAndContinue).toBe(true);
+      expect(harness.ctx._session.setAutoCompactAndContinue).toHaveBeenCalledWith(true);
+      expect(harness.ctx.persistSessionState).toHaveBeenCalled();
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
+    });
+
+    it('disables auto-compact-continue and returns updated state', async () => {
+      // First enable it
+      harness.ctx._session.autoCompactAndContinue = true;
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+        payload: { enabled: false },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.autoCompactAndContinue).toBe(false);
+      expect(harness.ctx._session.setAutoCompactAndContinue).toHaveBeenCalledWith(false);
+    });
+
+    it('returns error for invalid body (missing enabled field)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(harness.ctx._session.setAutoCompactAndContinue).not.toHaveBeenCalled();
+    });
+
+    it('returns error for invalid body (non-boolean enabled)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+        payload: { enabled: 'yes' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(harness.ctx._session.setAutoCompactAndContinue).not.toHaveBeenCalled();
+    });
+
+    it('returns error for unknown session', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions/nonexistent/auto-compact-continue',
+        payload: { enabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+  });
+
   // ========== POST /api/sessions/:id/input with /clear command ==========
 
   describe('POST /api/sessions/:id/input with /clear command', () => {
