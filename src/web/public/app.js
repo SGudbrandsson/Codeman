@@ -2435,9 +2435,15 @@ const TranscriptView = {
     // On a same-session tab toggle (terminal → transcript), this preserves the user's
     // message bubble through the tab switch even when _clearPending is active.
     this.load(sessionId, { pendingOptimisticText: this._pendingOptimisticText });
+    app.renderTranscriptStatusBlocks(sessionId);
   },
 
   hide(sessionId) {
+    const _wrapper = document.getElementById('tv-live-status-wrapper');
+    if (_wrapper) { _wrapper._resizeObs?.disconnect(); _wrapper.remove(); }
+    if (this._container) this._container.style.paddingBottom = '';
+    clearInterval(app._liveStatusInterval);
+    app._liveStatusInterval = null;
     if (this._container) this._container.style.display = 'none';
     const overlay = document.getElementById('tvTypingIndicator');
     if (overlay) overlay.style.display = 'none';
@@ -5049,6 +5055,7 @@ class CodemanApp {
         this.updateConnectionLines();
       });
     }
+    this.renderTranscriptStatusBlocks(session.id);
   }
 
   _onSessionDeleted(data) {
@@ -5624,6 +5631,7 @@ class CodemanApp {
     if (data.sessionId === this.activeSessionId) {
       this.renderTaskPanel();
     }
+    this.renderTranscriptStatusBlocks(data.sessionId);
   }
 
   _onTaskCompleted(data) {
@@ -5631,6 +5639,7 @@ class CodemanApp {
     if (data.sessionId === this.activeSessionId) {
       this.renderTaskPanel();
     }
+    this.renderTranscriptStatusBlocks(data.sessionId);
   }
 
   _onTaskFailed(data) {
@@ -5638,12 +5647,14 @@ class CodemanApp {
     if (data.sessionId === this.activeSessionId) {
       this.renderTaskPanel();
     }
+    this.renderTranscriptStatusBlocks(data.sessionId);
   }
 
   _onTaskUpdated(data) {
     if (data.sessionId === this.activeSessionId) {
       this.renderTaskPanel();
     }
+    this.renderTranscriptStatusBlocks(data.sessionId);
   }
 
   // Mux (tmux)
@@ -6211,6 +6222,8 @@ class CodemanApp {
       this.subagents.set(data.agentId, data);
     }
     this.renderSubagentPanel();
+    const _subParent = this.subagentParentMap.get(data.agentId);
+    if (_subParent) this.renderTranscriptStatusBlocks(_subParent);
     // Update floating window if open (content + header/title)
     if (this.subagentWindows.has(data.agentId)) {
       this.renderSubagentWindowContent(data.agentId);
@@ -6296,6 +6309,8 @@ class CodemanApp {
     }
     this.renderSubagentPanel();
     this.updateSubagentWindows();
+    const _compParent = this.subagentParentMap.get(data.agentId);
+    if (_compParent) this.renderTranscriptStatusBlocks(_compParent);
 
     // Auto-minimize completed subagent windows
     if (this.subagentWindows.has(data.agentId)) {
@@ -13344,6 +13359,126 @@ class CodemanApp {
       // The task tree from server already has the structure we need
     }
     return result;
+  }
+
+  renderTranscriptStatusBlocks(sessionId) {
+    // Guard: only render for the session currently shown in TranscriptView.
+    // Do NOT touch the DOM here — the wrapper belongs to the visible session, not this caller.
+    if (sessionId !== TranscriptView._sessionId) return;
+
+    const container = TranscriptView._container;
+    if (!container) return;
+
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // Evaluate task state
+    const taskStats = session.taskStats || {};
+    const hasTasks = (taskStats.running || 0) > 0;
+
+    // Evaluate agent state — use subagentParentMap (not agent.parentSessionId)
+    const activeAgents = [...this.subagents.values()].filter(
+      a => this.subagentParentMap.get(a.agentId) === sessionId && a.status !== 'completed'
+    );
+
+    const needsWrapper = hasTasks || activeAgents.length > 0;
+
+    if (!needsWrapper) {
+      const _wrapper = document.getElementById('tv-live-status-wrapper');
+      if (_wrapper) {
+        _wrapper._resizeObs?.disconnect();
+        _wrapper.remove();
+        container.style.paddingBottom = '';
+      }
+      clearInterval(this._liveStatusInterval);
+      this._liveStatusInterval = null;
+      return;
+    }
+
+    // Start interval for elapsed time ticking
+    if (!this._liveStatusInterval) {
+      this._liveStatusInterval = setInterval(() => {
+        if (TranscriptView._sessionId) this.renderTranscriptStatusBlocks(TranscriptView._sessionId);
+      }, 1000);
+    }
+
+    // Get or create wrapper as last child of container
+    let wrapper = document.getElementById('tv-live-status-wrapper');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'tv-live-status-wrapper';
+      container.appendChild(wrapper);
+    } else if (wrapper.parentNode !== container) {
+      // Re-parent if somehow in wrong container
+      container.appendChild(wrapper);
+    } else if (wrapper !== container.lastChild) {
+      // Ensure it stays last child
+      container.appendChild(wrapper);
+    }
+
+    // Attach ResizeObserver to keep container padding in sync
+    if (!wrapper._resizeObs) {
+      wrapper._resizeObs = new ResizeObserver(() => {
+        container.style.paddingBottom = wrapper.offsetHeight + 'px';
+      });
+      wrapper._resizeObs.observe(wrapper);
+    }
+
+    // Build tasks block HTML
+    let tasksHtml = '';
+    if (hasTasks && session.taskTree && session.taskTree.length > 0) {
+      const allTasks = this.flattenTaskTree(session.taskTree);
+      const runningTasks = allTasks.filter(t => t.status === 'running');
+      const doneTasks = allTasks.filter(t => t.status === 'completed' || t.status === 'failed');
+      const totalDone = doneTasks.length;
+      const summaryParts = [];
+      if (runningTasks.length > 0) summaryParts.push(`${runningTasks.length} running`);
+      if (totalDone > 0) summaryParts.push(`${totalDone} done`);
+      const summary = summaryParts.join(' \u00b7 ');
+
+      let rowsHtml = '';
+      for (const task of runningTasks) {
+        const duration = `${((Date.now() - task.startTime) / 1000).toFixed(0)}s\u2026`;
+        rowsHtml += `<div class="tv-live-row tv-live-row--running"><span class="tv-live-row-name">\u25cf ${escapeHtml(task.description)}</span><span>${escapeHtml(duration)}</span></div>`;
+      }
+      for (const task of doneTasks) {
+        const duration = task.endTime
+          ? `${((task.endTime - task.startTime) / 1000).toFixed(1)}s`
+          : `${((Date.now() - task.startTime) / 1000).toFixed(0)}s`;
+        const rowClass = task.status === 'failed' ? 'tv-live-row--failed' : 'tv-live-row--done';
+        const icon = task.status === 'failed' ? '\u2717' : '\u2713';
+        rowsHtml += `<div class="tv-live-row ${rowClass}"><span class="tv-live-row-name">${icon} ${escapeHtml(task.description)}</span><span>${escapeHtml(duration)}</span></div>`;
+      }
+
+      tasksHtml = `<div id="tv-live-tasks" class="tv-live-block tv-live-block--tasks">` +
+        `<div class="tv-live-header">\u25a3 TASKS <span>${escapeHtml(summary)}</span></div>` +
+        `<div class="tv-live-rows">${rowsHtml}</div>` +
+        `</div>`;
+    }
+
+    // Build agents block HTML
+    let agentsHtml = '';
+    if (activeAgents.length > 0) {
+      let rowsHtml = '';
+      for (const agent of activeAgents) {
+        const displayName = agent.description || agent.agentId.substring(0, 7);
+        const activity = this.subagentActivity.get(agent.agentId) || [];
+        const lastActivity = activity[activity.length - 1];
+        const lastTool = lastActivity?.tool || lastActivity?.text || '';
+        rowsHtml += `<div class="tv-live-row"><span class="tv-live-row-name">\u2b21 ${escapeHtml(displayName)}</span><span>${escapeHtml(lastTool)}</span></div>`;
+      }
+      agentsHtml = `<div id="tv-live-agents" class="tv-live-block tv-live-block--agents">` +
+        `<div class="tv-live-header">\u2b21 AGENTS <span>${activeAgents.length} active</span></div>` +
+        `<div class="tv-live-rows">${rowsHtml}</div>` +
+        `</div>`;
+    }
+
+    // Rebuild wrapper content (gradient + blocks)
+    const wrapperContent = `<div class="tv-live-gradient"></div>${tasksHtml}${agentsHtml}`;
+    // Use DOM to avoid hook warnings — build content safely
+    const tmp = document.createElement('template');
+    tmp.innerHTML = wrapperContent;
+    wrapper.replaceChildren(...tmp.content.childNodes);
   }
 
   // ═══════════════════════════════════════════════════════════════
