@@ -130,7 +130,8 @@ Agents are rendered in Map insertion order (the order they were first seen via S
 
 ## Edge Cases
 
-- **Session switch:** On session switch, remove both blocks immediately (they belong to the previous session).
+- **Session switch (away):** When switching away from a session, remove both blocks immediately from the DOM (they belong to the transcript scroll container which is about to be replaced/hidden).
+- **Session switch (back):** When switching back to a session, call `renderTranscriptStatusBlocks` immediately as part of the session load. Because `session.taskTree` and `app.subagents` are always kept in sync via SSE regardless of which session is visible, the blocks will be re-injected correctly if tasks/agents are still active. This means switching away and back while tasks are running restores the full live view.
 - **TranscriptView hidden:** Skip rendering when `TranscriptView._sessionId` doesn't match the updated session.
 - **Zero tasks, zero agents:** Both blocks absent — no wrapper element injected at all.
 - **Task tree with only completed tasks:** `taskStats.running === 0` → task block removed immediately.
