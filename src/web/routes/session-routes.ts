@@ -49,6 +49,7 @@ import { RunSummaryTracker } from '../../run-summary.js';
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { parseTranscriptJSONL } from '../../types/transcript-blocks.js';
 import type { SessionState } from '../../types/session.js';
+import { injectVaultBriefing } from '../../vault/index.js';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -498,6 +499,15 @@ export function registerSessionRoutes(
         if (!session.ralphTracker.enabled) {
           session.ralphTracker.enable();
         }
+      }
+
+      // Inject vault briefing for agent sessions before starting Claude
+      const sessionState = ctx.store.getState().sessions[id];
+      if (sessionState?.agentProfile && sessionState.worktreePath) {
+        const claudeMdPath = join(sessionState.worktreePath, 'CLAUDE.md');
+        await injectVaultBriefing(sessionState, claudeMdPath).catch((err: unknown) =>
+          console.error('[vault] briefing injection failed:', err)
+        );
       }
 
       await session.startInteractive();

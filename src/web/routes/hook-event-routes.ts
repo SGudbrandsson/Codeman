@@ -10,6 +10,7 @@ import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
 import { sanitizeHookData } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
+import { capture } from '../../vault/index.js';
 
 export function registerHookEventRoutes(
   app: FastifyInstance,
@@ -61,6 +62,45 @@ export function registerHookEventRoutes(
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
     if (summaryTracker) {
       summaryTracker.recordHookEvent(event, safeData);
+    }
+
+    // Vault capture — fire-and-forget on stop hook for agent sessions
+    if (event === 'stop') {
+      const sessionState = ctx.store.getState().sessions[sessionId];
+      if (sessionState?.agentProfile) {
+        const { agentId, vaultPath } = sessionState.agentProfile;
+
+        // Extract content: prefer hook summary field, else last 2000 chars of terminal buffer
+        let content: string;
+        if (data && typeof (data as Record<string, unknown>)['summary'] === 'string') {
+          content = String((data as Record<string, unknown>)['summary']);
+        } else if (data && typeof (data as Record<string, unknown>)['transcript_summary'] === 'string') {
+          content = String((data as Record<string, unknown>)['transcript_summary']);
+        } else {
+          const buf = session?.getTerminalBuffer() ?? '';
+          content = buf.length > 2000 ? buf.slice(-2000) : buf;
+        }
+
+        if (content.trim()) {
+          capture(agentId, vaultPath, {
+            sessionId,
+            workItemId: sessionState.currentWorkItemId ?? null,
+            content,
+          })
+            .then(() => {
+              // Update notesSinceConsolidation in state
+              const agentProfile = ctx.store.getAgent(agentId);
+              if (agentProfile) {
+                ctx.store.setAgent({
+                  ...agentProfile,
+                  notesSinceConsolidation: agentProfile.notesSinceConsolidation + 1,
+                  lastActiveAt: new Date().toISOString(),
+                });
+              }
+            })
+            .catch((err: unknown) => console.error('[vault] capture failed:', err));
+        }
+      }
     }
 
     return { success: true };

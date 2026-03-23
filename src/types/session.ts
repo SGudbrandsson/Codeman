@@ -26,6 +26,36 @@
 
 import type { RespawnConfig } from './respawn.js';
 
+// ────────────────────────────────────────────────────────────────────────────
+// Agent types
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Role of a persistent agent */
+export type AgentRole = 'keeps-engineer' | 'codeman-dev' | 'deployment-agent' | 'orchestrator' | 'analyst';
+
+/** A capability (MCP server or skill) enabled for an agent */
+export interface AgentCapability {
+  name: string;
+  type: 'mcp' | 'skill';
+  ref: string;
+  enabled: boolean;
+}
+
+/** Persistent agent profile with vault config and capabilities */
+export interface AgentProfile {
+  agentId: string;
+  role: AgentRole;
+  displayName: string;
+  vaultPath: string;
+  capabilities: AgentCapability[];
+  rolePrompt?: string;
+  lastConsolidatedAt?: string;
+  notesSinceConsolidation: number;
+  decay: { notesTtlDays: number; patternsTtlDays: number };
+  createdAt: string;
+  lastActiveAt?: string;
+}
+
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error' | 'archived';
 
@@ -203,6 +233,10 @@ export interface SessionState {
   clearedAt?: string;
   /** Absolute path to Claude transcript file; captured at archive time for reliable serving */
   transcriptPath?: string;
+  /** Agent profile if this session is running as a persistent agent */
+  agentProfile?: AgentProfile;
+  /** Current work item ID being worked on (for vault capture metadata) */
+  currentWorkItemId?: string | null;
 }
 
 /**

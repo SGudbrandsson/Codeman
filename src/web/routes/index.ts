@@ -21,3 +21,4 @@ export { registerWorktreeSessionRoutes } from './worktree-session-routes.js';
 export { registerWorktreeRoutes } from './worktree-routes.js';
 export { registerMcpRoutes } from './mcp-routes.js';
 export { registerPluginRoutes } from './plugin-routes.js';
+export { registerVaultRoutes } from './vault-routes.js';

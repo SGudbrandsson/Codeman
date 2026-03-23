@@ -245,6 +245,9 @@ export class MockSession extends EventEmitter {
   /** Stub for getTextOutput */
   getTextOutput = vi.fn(() => '');
 
+  /** Stub for getTerminalBuffer — returns the raw terminal buffer string */
+  getTerminalBuffer = vi.fn(() => this.terminalBuffer);
+
   /** Stub for getMessages */
   getMessages = vi.fn(() => []);
 

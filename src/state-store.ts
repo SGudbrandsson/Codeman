@@ -37,6 +37,7 @@ import {
   createInitialGlobalStats,
   TokenStats,
   TokenUsageEntry,
+  AgentProfile,
 } from './types.js';
 import { Debouncer, MAX_SESSION_TOKENS } from './utils/index.js';
 
@@ -247,6 +248,9 @@ export class StateStore {
     }
     if (this.state.activeSessionId !== undefined) {
       parts.push(`"activeSessionId":${JSON.stringify(this.state.activeSessionId)}`);
+    }
+    if (this.state.agents !== undefined) {
+      parts.push(`"agents":${JSON.stringify(this.state.agents)}`);
     }
 
     return `{${parts.join(',')}}`;
@@ -594,6 +598,36 @@ export class StateStore {
   setActiveSessionId(id: string | null): void {
     this.getState().activeSessionId = id;
     this.save();
+  }
+
+  // ========== Agent Methods ==========
+
+  /** Returns an agent profile by ID, or undefined if not found. */
+  getAgent(agentId: string): AgentProfile | undefined {
+    return this.state.agents?.[agentId];
+  }
+
+  /** Upserts an agent profile and triggers a debounced save. */
+  setAgent(profile: AgentProfile): void {
+    if (!this.state.agents) {
+      this.state.agents = {};
+    }
+    this.state.agents[profile.agentId] = profile;
+    this.save();
+  }
+
+  /** Returns all agent profiles as an array. */
+  listAgents(): AgentProfile[] {
+    if (!this.state.agents) return [];
+    return Object.values(this.state.agents);
+  }
+
+  /** Removes an agent profile and triggers a debounced save. */
+  deleteAgent(agentId: string): void {
+    if (this.state.agents) {
+      delete this.state.agents[agentId];
+      this.save();
+    }
   }
 
   /** Resets all state to initial values and saves immediately. */

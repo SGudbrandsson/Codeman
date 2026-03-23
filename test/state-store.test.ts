@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 
 // Import types before mocking
 import type { AppState, SessionState, TaskState, RalphSessionState } from '../src/types.js';
+import type { AgentProfile } from '../src/types/session.js';
 
 // We need to import without mocking to test the actual implementation
 import { StateStore, getStore } from '../src/state-store.js';
@@ -543,6 +544,73 @@ describe('StateStore', () => {
       expect(persisted.sessions['rapid'].pid).toBe(99); // Last value wins
     });
   });
+
+  describe('agent operations', () => {
+    it('getAgent returns undefined for unknown agentId', () => {
+      const store = new StateStore(testFilePath);
+      expect(store.getAgent('no-such-agent')).toBeUndefined();
+    });
+
+    it('setAgent and getAgent round-trip', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent(createMockAgentProfile('agent-1'));
+      const got = store.getAgent('agent-1');
+      expect(got).toBeDefined();
+      expect(got!.agentId).toBe('agent-1');
+      expect(got!.displayName).toBe('Agent agent-1');
+    });
+
+    it('listAgents returns all stored agents', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent(createMockAgentProfile('a1'));
+      store.setAgent(createMockAgentProfile('a2'));
+      store.setAgent(createMockAgentProfile('a3'));
+      const all = store.listAgents();
+      expect(all).toHaveLength(3);
+      const ids = all.map((a) => a.agentId);
+      expect(ids).toContain('a1');
+      expect(ids).toContain('a2');
+      expect(ids).toContain('a3');
+    });
+
+    it('listAgents returns empty array when no agents exist', () => {
+      const store = new StateStore(testFilePath);
+      expect(store.listAgents()).toEqual([]);
+    });
+
+    it('deleteAgent removes the agent', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent(createMockAgentProfile('del-me'));
+      store.deleteAgent('del-me');
+      expect(store.getAgent('del-me')).toBeUndefined();
+      expect(store.listAgents()).toHaveLength(0);
+    });
+
+    it('deleteAgent is a no-op for unknown agentId', () => {
+      const store = new StateStore(testFilePath);
+      expect(() => store.deleteAgent('no-such-agent')).not.toThrow();
+    });
+
+    it('agents are persisted across StateStore instances', () => {
+      const store1 = new StateStore(testFilePath);
+      store1.setAgent(createMockAgentProfile('persist-agent'));
+      store1.saveNow();
+
+      const store2 = new StateStore(testFilePath);
+      const got = store2.getAgent('persist-agent');
+      expect(got).toBeDefined();
+      expect(got!.agentId).toBe('persist-agent');
+    });
+
+    it('setAgent overwrites existing agent profile', () => {
+      const store = new StateStore(testFilePath);
+      store.setAgent(createMockAgentProfile('upsert-agent'));
+      const updated = { ...createMockAgentProfile('upsert-agent'), displayName: 'Updated Name' };
+      store.setAgent(updated);
+      expect(store.getAgent('upsert-agent')!.displayName).toBe('Updated Name');
+      expect(store.listAgents()).toHaveLength(1);
+    });
+  });
 });
 
 // Helper functions to create mock state objects
@@ -587,5 +655,18 @@ function createMockRalphState(sessionId: string): RalphSessionState {
     todoItems: [],
     lastUpdated: Date.now(),
     messageId: null,
+  };
+}
+
+function createMockAgentProfile(agentId: string): AgentProfile {
+  return {
+    agentId,
+    role: 'implementer' as AgentProfile['role'],
+    displayName: `Agent ${agentId}`,
+    vaultPath: `/tmp/vaults/${agentId}`,
+    capabilities: [],
+    notesSinceConsolidation: 0,
+    decay: { notesTtlDays: 90, patternsTtlDays: 180 },
+    createdAt: new Date().toISOString(),
   };
 }

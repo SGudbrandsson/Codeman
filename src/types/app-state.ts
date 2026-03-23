@@ -19,7 +19,7 @@
  * Cross-domain imports: SessionState, TaskState, RalphLoopState, RespawnConfig.
  */
 
-import type { SessionState } from './session.js';
+import type { SessionState, AgentProfile } from './session.js';
 import type { TaskState } from './task.js';
 import type { RalphLoopState } from './ralph.js';
 import type { RespawnConfig } from './respawn.js';
@@ -111,6 +111,8 @@ export interface AppState {
   tokenStats?: TokenStats;
   /** The session ID last explicitly selected by the user. Used by resolve-active. */
   activeSessionId?: string | null;
+  /** Persistent agent profiles keyed by agentId */
+  agents?: Record<string, AgentProfile>;
 }
 
 // ========== Default Configuration ==========
@@ -154,6 +156,7 @@ export function createInitialState(): AppState {
     config: { ...DEFAULT_CONFIG },
     globalStats: createInitialGlobalStats(),
     activeSessionId: null,
+    agents: {},
   };
 }
 
