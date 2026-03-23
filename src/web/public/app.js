@@ -1879,6 +1879,73 @@ const PanelBackdrop = {
   },
 };
 
+// ═══════════════════════════════════════════════════════════════
+// TranscriptTTS — text-to-speech singleton for assistant messages
+// ═══════════════════════════════════════════════════════════════
+const TranscriptTTS = {
+  _currentBtn: null,
+  _utterance: null,
+  supported: 'speechSynthesis' in window,
+
+  _stripMarkdown(text) {
+    let s = text;
+    // Remove fenced code blocks (don't read raw code aloud)
+    s = s.replace(/```[\s\S]*?```/g, ' ');
+    // Remove inline code
+    s = s.replace(/`[^`]*`/g, '');
+    // Bold and italic — keep inner text
+    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+    s = s.replace(/__([^_]+)__/g, '$1');
+    s = s.replace(/\*([^*]+)\*/g, '$1');
+    s = s.replace(/_([^_]+)_/g, '$1');
+    // Heading markers
+    s = s.replace(/^#{1,6}\s+/gm, '');
+    // Horizontal rules
+    s = s.replace(/^[-*_]{3,}\s*$/gm, '');
+    // List markers
+    s = s.replace(/^[-*+]\s+/gm, '');
+    s = s.replace(/^\d+\.\s+/gm, '');
+    // Markdown links — keep label only
+    s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    // Collapse excess whitespace
+    s = s.replace(/\s{2,}/g, ' ').trim();
+    return s;
+  },
+
+  speak(btn, rawText) {
+    if (this._currentBtn === btn) {
+      this._stop();
+      return;
+    }
+    this._stop();
+    const strippedText = this._stripMarkdown(rawText);
+    const utterance = new SpeechSynthesisUtterance(strippedText);
+    utterance.onend = () => this._reset(btn);
+    utterance.onerror = () => this._reset(btn);
+    this._utterance = utterance;
+    this._currentBtn = btn;
+    btn.classList.add('tv-tts-btn--speaking');
+    btn.setAttribute('aria-label', 'Stop reading aloud');
+    window.speechSynthesis.speak(utterance);
+  },
+
+  _stop() {
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+    if (this._currentBtn) {
+      this._reset(this._currentBtn);
+    }
+  },
+
+  _reset(btn) {
+    btn.classList.remove('tv-tts-btn--speaking');
+    btn.setAttribute('aria-label', 'Read aloud');
+    this._currentBtn = null;
+    this._utterance = null;
+  },
+};
+
 const TranscriptView = {
   _container: null,
   _sessionId: null,
@@ -2903,6 +2970,39 @@ const TranscriptView = {
         ts.className = 'tv-ts';
         ts.textContent = tsText;
         div.appendChild(ts);
+      }
+      if (TranscriptTTS.supported) {
+        const capturedText = block.text;
+        const ttsBtn = document.createElement('button');
+        ttsBtn.className = 'tv-tts-btn';
+        ttsBtn.setAttribute('aria-label', 'Read aloud');
+        ttsBtn.setAttribute('title', 'Read aloud');
+        // Build Feather Icons "volume-2" SVG via DOM (compile-time constant geometry, not user data)
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const ttsSvg = document.createElementNS(svgNS, 'svg');
+        ttsSvg.setAttribute('width', '14');
+        ttsSvg.setAttribute('height', '14');
+        ttsSvg.setAttribute('viewBox', '0 0 24 24');
+        ttsSvg.setAttribute('fill', 'none');
+        ttsSvg.setAttribute('stroke', 'currentColor');
+        ttsSvg.setAttribute('stroke-width', '2');
+        ttsSvg.setAttribute('stroke-linecap', 'round');
+        ttsSvg.setAttribute('stroke-linejoin', 'round');
+        const poly = document.createElementNS(svgNS, 'polygon');
+        poly.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+        const path1 = document.createElementNS(svgNS, 'path');
+        path1.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
+        const path2 = document.createElementNS(svgNS, 'path');
+        path2.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
+        ttsSvg.appendChild(poly);
+        ttsSvg.appendChild(path1);
+        ttsSvg.appendChild(path2);
+        ttsBtn.appendChild(ttsSvg);
+        ttsBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          TranscriptTTS.speak(ttsBtn, capturedText);
+        });
+        div.appendChild(ttsBtn);
       }
     }
     return div;
