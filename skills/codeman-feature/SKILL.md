@@ -64,6 +64,52 @@ The `notes` field is just this short trigger sentence — the full task descript
 - `INVALID_INPUT` other → fix the branch name (no spaces, valid git ref characters only).
 - `OPERATION_FAILED` → report the full error message and stop.
 
+## Step 4b — Create Work Item (optional — guard all steps)
+
+If the work item API is unavailable or returns an error at any sub-step, log a warning and continue. Work item tracking must never block the core task workflow.
+
+**4b.1 — Create the work item:**
+
+```bash
+curl -s -X POST http://localhost:3001/api/work-items \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "<title from Step 1>",
+    "description": "<description from Step 1>",
+    "source": "manual"
+  }'
+```
+
+Save the returned `data.id` as `WORK_ITEM_ID`. If the request fails, set `WORK_ITEM_ID=none` and skip 4b.2 and 4b.3.
+
+**4b.2 — Auto-claim if the session has an agent:**
+
+From the Step 2 parent session lookup, check if the session object has `agentProfile.agentId`. If it does:
+
+```bash
+curl -s -X POST http://localhost:3001/api/work-items/WORK_ITEM_ID/claim \
+  -H "Content-Type: application/json" \
+  -d '{"agentId": "<agentProfile.agentId>"}'
+```
+
+If the response is 409 (already claimed), skip silently. If the session has no `agentProfile.agentId`, skip this step.
+
+**4b.3 — Link worktree path and branch:**
+
+After Step 4 returns `worktreePath`:
+
+```bash
+curl -s -X PATCH http://localhost:3001/api/work-items/WORK_ITEM_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "worktreePath": "<worktreePath>",
+    "branchName": "feat/<slug>",
+    "taskMdPath": "<worktreePath>/TASK.md"
+  }'
+```
+
+If this PATCH fails, log a warning and continue.
+
 ## Step 5 — Write TASK.md and CLAUDE.md
 
 Write both files to `worktreePath` from the response.
@@ -79,6 +125,7 @@ title: <title from Step 1>
 description: <full description from Step 1>
 constraints: <constraints/acceptance criteria from Step 1, or "none specified">
 affected_area: unknown
+work_item_id: <WORK_ITEM_ID, or "none" if not created>
 fix_cycles: 0
 test_fix_cycles: 0
 
@@ -134,6 +181,8 @@ Summarize what was created:
 - Worktree: `<worktreePath>`
 - Session: link or name from API response
 - Status: session started, running autonomously
+- Work item: `<WORK_ITEM_ID>` (or "none — work item tracking skipped")
+  Board: http://localhost:3001 → Board → find item "<title>"
 
 ---
 

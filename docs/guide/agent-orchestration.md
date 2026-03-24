@@ -14,9 +14,10 @@ management tools via the Clockwork OS API.
 3. [Memory Vault](#memory-vault)
 4. [Work Items](#work-items)
 5. [Board View](#board-view)
-6. [Inter-Agent Messaging](#inter-agent-messaging)
-7. [Clockwork OS Integration](#clockwork-os-integration)
-8. [Complete API Reference](#complete-api-reference)
+6. [Workflow](#workflow)
+7. [Inter-Agent Messaging](#inter-agent-messaging)
+8. [Clockwork OS Integration](#clockwork-os-integration)
+9. [Complete API Reference](#complete-api-reference)
 
 ---
 
@@ -422,6 +423,70 @@ agents: status changes, claims, new items created, and messages sent. The feed i
 updated in real time via SSE without requiring a page refresh.
 
 ![Timeline feed showing cross-agent activity events](images/board-timeline.png)
+
+---
+
+## Workflow
+
+This section describes how Codeman's skills integrate with the work item board to
+provide a fully automated development lifecycle.
+
+### How skills create work items
+
+When `codeman-feature` or `codeman-fix` is invoked, it automatically:
+
+1. Calls `POST /api/work-items` with the task title and description (status starts as `queued`).
+2. Checks if the current session has an associated agent (`agentProfile.agentId`). If so, claims the work item immediately via `POST /api/work-items/:id/claim` (status moves to `assigned`).
+3. PATCHes `worktreePath`, `branchName`, and `taskMdPath` onto the work item so the board card shows the branch and links back to TASK.md.
+4. Stores the `work_item_id` in TASK.md frontmatter so the task runner can update status at each phase.
+
+All work item API calls are guarded: if the API is unavailable or returns an error, the skill logs a warning and continues. The core worktree workflow works even when the board is offline.
+
+### How status flows through the board
+
+`codeman-task-runner` updates the work item status at each major phase transition:
+
+| Phase | Board status |
+|-------|-------------|
+| Analysis running | `assigned` (set at claim time) |
+| Implementing / reviewing | `in_progress` |
+| Test review phase | `review` |
+| Committed clean | `done` |
+| Needs human review (fix_cycles limit) | `blocked` |
+| Merged via codeman-merge-worktree | `done` (final, triggers Clockwork webhook) |
+
+The board updates in real time via SSE — no page refresh needed.
+
+### How to tell if docs need updating
+
+After every QA phase, `codeman-task-runner` runs a **docs staleness check**: it
+diffs the branch against master and flags categories of changed files:
+
+- `src/web/routes/*.ts` changed → "API docs may need update"
+- `src/web/public/app.js` or `styles.css` changed → "UI docs may need update"
+- `skills/*/SKILL.md` changed → "Skill docs may need update"
+
+`codeman-merge-prep` also outputs a **docs checklist** in its verdict block.
+Neither tool auto-updates documentation — the flags are advisory. The human reviews
+the checklist and decides what to update.
+
+### Lifecycle diagram
+
+```
+codeman-feature invoked
+  → POST /api/work-items          (status: queued)
+  → POST /api/work-items/:id/claim (status: assigned)
+  → PATCH worktreePath + branchName
+
+task-runner runs
+  → Phase 2 start                 (status: in_progress)
+  → Phase 3 approved              (status: review)
+  → Phase 8 clean commit          (status: done)
+
+codeman-merge-worktree runs
+  → PATCH status: done            (Clockwork webhook fires)
+  → worktree deleted
+```
 
 ---
 

@@ -13,6 +13,27 @@ Run the full autonomous task workflow inside a Codeman worktree session. Reads `
 
 **If `status` is `done` or `failed`:** Output a short message ("Task already completed — status: <status>. See TASK.md for results.") and stop. Do not re-run a completed task.
 
+## Work Item Status Updates
+
+If `work_item_id` is present in TASK.md frontmatter and is not `none`, update the work item status at each phase transition using:
+
+```bash
+curl -s -X PATCH http://localhost:3001/api/work-items/<work_item_id> \
+  -H "Content-Type: application/json" \
+  -d '{"status": "<new_status>"}'
+```
+
+If the API returns an error or is unavailable, log a warning and continue. Work item tracking must never block the task workflow.
+
+Phase transition mapping (the runner does these updates, not subagents):
+
+| Transition | Status to set |
+|-----------|--------------|
+| After Phase 1 (Analysis) completes, before dispatching Phase 2 | `in_progress` |
+| After Phase 3 (Review) is APPROVED, before dispatching Phase 4 | `review` |
+| After Phase 8 clean commit (status: done) | `done` |
+| After Phase 8 NEEDS REVIEW commit (status: failed) | `blocked` |
+
 ## Workflow
 
 ```dot
@@ -277,6 +298,18 @@ Dispatch a fresh subagent with this prompt:
 > Update the '## QA Results' section of TASK.md with pass/fail status for each check run and any error output.
 > - All pass → change `status` to `done`
 > - Any fail → change `status` back to `fixing`
+>
+> **Docs Staleness Check (always run, informational only):**
+> Run:
+> ```bash
+> git diff master..HEAD --name-only
+> ```
+> Apply these rules to the output:
+> - Any file matching `src/web/routes/*.ts` → flag: `"API docs may need update (src/web/routes/ changed)"`
+> - Any file matching `src/web/public/app.js` or `src/web/public/styles.css` → flag: `"UI docs may need update (frontend changed significantly)"`
+> - Any file matching `skills/*/SKILL.md` → flag: `"Skill docs may need update (skills/ changed)"`
+>
+> Output the flags in `## QA Results` under a `### Docs Staleness` subsection. If no flags apply, output `### Docs Staleness: none`. Do NOT update any docs — this is advisory only.
 >
 > IMPORTANT: Do NOT modify the `fix_cycles` or `test_fix_cycles` fields — the runner does that."
 

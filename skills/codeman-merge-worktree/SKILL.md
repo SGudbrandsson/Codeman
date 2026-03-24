@@ -84,6 +84,20 @@ To commit manually before retrying:
 git -C /path/to/worktree add -A && git -C /path/to/worktree commit -m "fix: description"
 ```
 
+## Step 4b — Update work item (if linked)
+
+Read `TASK.md` from the worktree (at the `worktreePath` returned by Step 4) and extract the `work_item_id` field. If the field is absent or its value is `none`, skip this step entirely.
+
+```bash
+curl -s -X PATCH http://localhost:3001/api/work-items/<work_item_id> \
+  -H "Content-Type: application/json" \
+  -d '{"status": "done"}'
+```
+
+Confirm success: check that the response includes `"data": { "status": "done" }`. If the PATCH fails or returns an error, log a warning and proceed — work item tracking must never block the merge.
+
+This PATCH fires the Clockwork OS webhook if one is configured.
+
 ## Step 5 — Delete worktree and session
 
 ```bash
@@ -118,3 +132,4 @@ npm run build && cp -r dist /home/siggi/.codeman/app/ && cp package.json /home/s
 | Using `force: true` without user approval | Only force if user said "yes, discard the changes" |
 | Forgetting to delete the session after the worktree | Always `DELETE /api/sessions/:id` after worktree removal |
 | Wrong port | Codeman runs on **3001**, not 3000 |
+| Forgetting to mark work item done | After merge, PATCH work item status to 'done' to trigger Clockwork webhook |

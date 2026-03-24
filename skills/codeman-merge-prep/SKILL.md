@@ -133,6 +133,23 @@ There must be at least one commit beyond master.
 
 ---
 
+## Step 6b — Docs checklist
+
+Run:
+
+```bash
+git diff master..HEAD --name-only
+```
+
+Apply these rules to the output:
+- Any file matching `src/web/routes/*.ts` → flag: `"API docs may need update (src/web/routes/ changed)"`
+- Any file matching `src/web/public/app.js` or `src/web/public/styles.css` → flag: `"UI docs may need update (frontend changed significantly)"`
+- Any file matching `skills/*/SKILL.md` → flag: `"Skill docs may need update (skills/ changed)"`
+
+Record the flags for inclusion in the Step 7 verdict. This is advisory — not a blocking check.
+
+---
+
 ## Step 7 — Output verdict
 
 ### If all checks passed:
@@ -147,6 +164,11 @@ Checks passed:
   ✓ Lint — 0 errors
   ✓ Tests — <written N tests | not needed | N passed>
   ✓ Git — clean, <N> commit(s) ahead of master
+
+Docs checklist:
+  [ ] API docs  — <flagged: src/web/routes/ changed | not needed>
+  [ ] UI docs   — <flagged: frontend changed significantly | not needed>
+  [ ] Skill docs — <flagged: skills/ changed | not needed>
 
 Commits on branch:
   <git log --oneline output>
@@ -174,6 +196,11 @@ Details:
 
 Suggested fix:
   <specific actionable instruction>
+
+Docs checklist (informational — not blocking):
+  [ ] API docs  — <flagged: src/web/routes/ changed | not needed>
+  [ ] UI docs   — <flagged: frontend changed significantly | not needed>
+  [ ] Skill docs — <flagged: skills/ changed | not needed>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -188,3 +215,4 @@ Suggested fix:
 | Skipping test assessment for "just frontend" changes | Still check — new API routes or backend helpers need tests |
 | Proceeding to verdict with TS errors | Fix all TS errors before lint/tests — they cascade |
 | Wrong port for dev server | Use the worktree's `assignedPort` from session state or TASK.md notes |
+| Treating docs flags as blocking | Docs checklist is advisory — it never blocks a merge |
