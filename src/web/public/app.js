@@ -18785,6 +18785,13 @@ const SessionDrawer = {
       }
     }
 
+    // New agent button at the top
+    const newAgentBtn = document.createElement('button');
+    newAgentBtn.className = 'agent-new-btn';
+    newAgentBtn.textContent = '+ New Agent';
+    newAgentBtn.addEventListener('click', () => { SessionDrawer.close(); AgentPanel.openNew(); });
+    list.appendChild(newAgentBtn);
+
     // Render each agent group
     // Merge known agents from app.agents with session-derived agent profiles
     const renderedAgentIds = new Set();
@@ -18798,6 +18805,13 @@ const SessionDrawer = {
       const header = document.createElement('div');
       header.className = 'drawer-agent-header';
       header.textContent = profile.displayName.toUpperCase();
+
+      const gearBtn = document.createElement('button');
+      gearBtn.className = 'drawer-agent-gear';
+      gearBtn.title = 'Edit agent';
+      gearBtn.textContent = '\u2699';
+      gearBtn.addEventListener('click', (e) => { e.stopPropagation(); SessionDrawer.close(); AgentPanel.open(agentId); });
+      header.appendChild(gearBtn);
 
       groupEl.appendChild(header);
       for (const s of sessions) groupEl.appendChild(this._renderAgentRow(s, profile));
@@ -20559,3 +20573,466 @@ window.app = app;
 window.MobileDetection = MobileDetection;
 window.TranscriptView = TranscriptView;
 window.InputPanel = InputPanel;
+
+// ─── AgentPanel ────────────────────────────────────────────────────────────
+// Note: innerHTML is used consistently throughout app.js (128 existing usages).
+// All user-provided content is escaped via escapeHtml() before insertion.
+const AgentPanel = {
+  _agentId: null,
+  _mcpLibrary: null,
+  _pendingMcp: [],
+  _showMcpLibrary: false,
+  _mcpSearch: '',
+
+  open(agentId) {
+    this._agentId = agentId;
+    const agent = app.agents.get(agentId);
+    if (!agent) { app.showToast('Agent not found', 'error'); return; }
+    this._pendingMcp = (agent.capabilities || [])
+      .filter(c => c.type === 'mcp')
+      .map(c => ({ ...c, _envVals: {} }));
+    this._showMcpLibrary = false;
+    this._render();
+    document.getElementById('agentPanel').classList.add('open');
+    document.getElementById('agentPanelOverlay').classList.add('open');
+  },
+
+  openNew() {
+    this._agentId = null;
+    this._pendingMcp = [];
+    this._showMcpLibrary = false;
+    this._render();
+    document.getElementById('agentPanel').classList.add('open');
+    document.getElementById('agentPanelOverlay').classList.add('open');
+  },
+
+  close() {
+    document.getElementById('agentPanel').classList.remove('open');
+    document.getElementById('agentPanelOverlay').classList.remove('open');
+    this._agentId = null;
+    this._pendingMcp = [];
+    this._showMcpLibrary = false;
+  },
+
+  _render() {
+    const panel = document.getElementById('agentPanel');
+    const agent = this._agentId ? app.agents.get(this._agentId) : null;
+    const isCreate = !this._agentId;
+    const roles = ['keeps-engineer', 'codeman-dev', 'deployment-agent', 'orchestrator', 'analyst'];
+
+    let html = `
+      <div class="agent-panel-header">
+        <span class="agent-panel-title">${isCreate ? 'New Agent' : (agent ? escapeHtml(agent.displayName) : 'Edit Agent')}</span>
+        ${!isCreate && agent ? `<button class="agent-btn-danger" style="font-size:0.75rem;padding:5px 10px" onclick="AgentPanel._delete()">Delete</button>` : ''}
+        <button class="agent-panel-close" onclick="AgentPanel.close()">&#x2715;</button>
+      </div>
+      <div class="agent-panel-body">
+        <div class="agent-form-field">
+          <label class="agent-form-label">Display Name *</label>
+          <input id="agentFormName" class="agent-form-input" type="text" placeholder="e.g. Backend Engineer"
+            value="${agent ? escapeHtml(agent.displayName) : ''}" />
+          <div id="agentFormNameErr" class="agent-form-error" style="display:none">Display name is required</div>
+        </div>
+        <div class="agent-form-field">
+          <label class="agent-form-label">Role *</label>
+          <select id="agentFormRole" class="agent-form-select">
+            ${isCreate ? `<option value="">Select a role…</option>` : ''}
+            ${roles.map(r => `<option value="${escapeHtml(r)}" ${agent && agent.role === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+          </select>
+          <div id="agentFormRoleErr" class="agent-form-error" style="display:none">Role is required</div>
+        </div>
+        <div class="agent-form-field">
+          <label class="agent-form-label">Role Prompt <span style="color:#475569">(optional)</span></label>
+          <textarea id="agentFormPrompt" class="agent-form-textarea" placeholder="Custom instructions for this agent...">${agent && agent.rolePrompt ? escapeHtml(agent.rolePrompt) : ''}</textarea>
+        </div>`;
+
+    if (!isCreate && agent) {
+      html += `
+        <div class="agent-section-title">Memory Decay</div>
+        <div style="display:flex;gap:14px">
+          <div class="agent-form-field" style="flex:1">
+            <label class="agent-form-label">Notes TTL (days)</label>
+            <input id="agentFormNotesTtl" class="agent-form-input" type="number" min="1" max="365"
+              value="${agent.decay ? agent.decay.notesTtlDays : 30}" />
+          </div>
+          <div class="agent-form-field" style="flex:1">
+            <label class="agent-form-label">Patterns TTL (days)</label>
+            <input id="agentFormPatternsTtl" class="agent-form-input" type="number" min="1" max="365"
+              value="${agent.decay ? agent.decay.patternsTtlDays : 90}" />
+          </div>
+        </div>`;
+
+      html += `<div class="agent-section-title">MCP Servers</div>
+        <div class="agent-mcp-list" id="agentMcpList">`;
+      this._pendingMcp.forEach((mcp, idx) => {
+        const envEntries = mcp.envVars ? Object.entries(mcp.envVars) : [];
+        html += `
+          <div class="agent-mcp-row" data-mcp-idx="${idx}">
+            <div class="agent-mcp-row-header">
+              <input type="checkbox" class="agent-mcp-toggle" ${mcp.enabled !== false ? 'checked' : ''}
+                onchange="AgentPanel._toggleMcp(${idx}, this.checked)" />
+              <span class="agent-mcp-name">${escapeHtml(mcp.name || mcp.ref || 'Unknown MCP')}</span>
+              <button class="agent-mcp-remove" onclick="AgentPanel._removeMcp(${idx})">&#x2715;</button>
+            </div>
+            ${envEntries.length > 0 ? `<div class="agent-mcp-env-section">
+              ${envEntries.map(([k], ei) => `
+                <div class="mcp-env-row">
+                  <input class="mcp-env-key" type="text" value="${escapeHtml(k)}" readonly />
+                  <input class="mcp-env-val" type="password" data-mcp="${idx}" data-env="${ei}"
+                    value="" placeholder="value" />
+                  <button class="mcp-env-eye" onclick="AgentPanel._toggleEnvEye(this)" title="Show/hide value">&#x1F441;&#xFE0F;</button>
+                </div>`).join('')}
+            </div>` : ''}
+          </div>`;
+      });
+      html += `</div>
+        <button class="agent-add-mcp-btn" onclick="AgentPanel._toggleMcpLibrary()">+ Add MCP Server</button>`;
+
+      if (this._showMcpLibrary) {
+        html += `<div class="agent-mcp-library" id="agentMcpLibrary">`;
+        if (!this._mcpLibrary) {
+          html += `<div style="padding:10px;color:#64748b;font-size:0.82rem">Loading...</div>`;
+        } else {
+          const filtered = this._mcpSearch
+            ? this._mcpLibrary.filter(e => e.name.toLowerCase().includes(this._mcpSearch.toLowerCase()))
+            : this._mcpLibrary;
+          html += `<div style="padding:8px 10px">
+            <input class="agent-form-input" type="text" placeholder="Search MCPs..."
+              value="${escapeHtml(this._mcpSearch)}"
+              oninput="AgentPanel._mcpSearch=this.value;AgentPanel._render()"
+              style="margin-bottom:0" />
+          </div>`;
+          filtered.forEach(entry => {
+            html += `<div class="agent-mcp-library-item" onclick="AgentPanel._addMcpFromLibrary(${JSON.stringify(entry.id)})">
+              <div class="agent-mcp-library-item-name">${escapeHtml(entry.name)}</div>
+              <div class="agent-mcp-library-item-desc">${escapeHtml(entry.description || '')}</div>
+            </div>`;
+          });
+          if (filtered.length === 0) {
+            html += `<div style="padding:10px;color:#64748b;font-size:0.82rem">No results</div>`;
+          }
+        }
+        html += `</div>`;
+      }
+
+      const sessions = Array.from(app.sessions.values());
+      const linkedSession = sessions.find(s => s.agentProfile && s.agentProfile.agentId === this._agentId);
+      html += `
+        <div class="agent-section-title">Linked Session</div>
+        <div class="agent-linked-session">
+          <select id="agentFormSession" class="agent-form-select" onchange="AgentPanel._linkSession(this.value)">
+            <option value="">None</option>
+            ${sessions.map(s => `<option value="${escapeHtml(s.id)}" ${linkedSession && linkedSession.id === s.id ? 'selected' : ''}>${escapeHtml(s.workingDir || s.id)}</option>`).join('')}
+          </select>
+          <button class="agent-btn-secondary" onclick="AgentPanel._createSessionForAgent()">+ New Session</button>
+        </div>`;
+
+      html += `
+        <div class="agent-section-title">Vault</div>
+        <div class="agent-vault-stats">
+          <div class="agent-vault-stat">
+            <span class="agent-vault-stat-val">${agent.notesSinceConsolidation || 0}</span>
+            <span class="agent-vault-stat-label">notes since last consolidation</span>
+          </div>
+          ${agent.lastConsolidatedAt ? `<div class="agent-vault-stat">
+            <span class="agent-vault-stat-label">Last consolidated:</span>
+            <span class="agent-vault-stat-val" style="font-size:0.78rem;color:#94a3b8;margin-left:4px">${new Date(agent.lastConsolidatedAt).toLocaleDateString()}</span>
+          </div>` : ''}
+        </div>
+        <div class="agent-vault-actions">
+          <button class="agent-btn-secondary" onclick="AgentPanel._viewVaultNotes()">View Notes</button>
+          <button class="agent-btn-secondary" onclick="AgentPanel._consolidate()">Consolidate Now</button>
+        </div>`;
+    }
+
+    html += `</div>
+      <div class="agent-panel-footer">`;
+    if (isCreate) {
+      html += `<button class="agent-btn-primary" onclick="AgentPanel._create()">Create Agent</button>`;
+    } else {
+      html += `<button class="agent-btn-primary" onclick="AgentPanel._save()">Save Changes</button>`;
+    }
+    html += `</div>`;
+
+    if (!document.getElementById('agentNotesModal')) {
+      const modalHtml = `
+        <div class="agent-notes-modal-overlay" id="agentNotesModalOverlay" onclick="AgentPanel._closeNotesModal()">
+          <div class="agent-notes-modal" id="agentNotesModal" onclick="event.stopPropagation()">
+            <h3>Vault Notes</h3>
+            <div id="agentNotesList"></div>
+            <div style="text-align:right;margin-top:12px">
+              <button class="agent-btn-secondary" onclick="AgentPanel._closeNotesModal()">Close</button>
+            </div>
+          </div>
+        </div>`;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    panel.innerHTML = html;
+  },
+
+  _toggleEnvEye(btn) {
+    const input = btn.previousElementSibling;
+    input.type = input.type === 'password' ? 'text' : 'password';
+  },
+
+  _toggleMcp(idx, enabled) {
+    this._pendingMcp[idx].enabled = enabled;
+  },
+
+  _removeMcp(idx) {
+    this._pendingMcp.splice(idx, 1);
+    this._render();
+  },
+
+  async _toggleMcpLibrary() {
+    this._showMcpLibrary = !this._showMcpLibrary;
+    this._render();
+    if (this._showMcpLibrary && !this._mcpLibrary) {
+      await this._loadMcpLibrary();
+    }
+  },
+
+  async _loadMcpLibrary() {
+    try {
+      const res = await fetch('/api/mcp/library');
+      const data = await res.json();
+      this._mcpLibrary = data.data || data;
+      this._render();
+    } catch (e) {
+      app.showToast('Failed to load MCP library', 'error');
+    }
+  },
+
+  _addMcpFromLibrary(entryId) {
+    if (!this._mcpLibrary) return;
+    const entry = this._mcpLibrary.find(e => e.id === entryId);
+    if (!entry) return;
+    const envVars = {};
+    if (entry.envVars) {
+      entry.envVars.forEach(k => { envVars[k] = ''; });
+    }
+    this._pendingMcp.push({
+      name: entry.name,
+      type: 'mcp',
+      ref: entry.id,
+      enabled: true,
+      envVars,
+      _envVals: {}
+    });
+    this._showMcpLibrary = false;
+    this._render();
+  },
+
+  _validate() {
+    const nameEl = document.getElementById('agentFormName');
+    const nameErrEl = document.getElementById('agentFormNameErr');
+    const roleEl = document.getElementById('agentFormRole');
+    const roleErrEl = document.getElementById('agentFormRoleErr');
+    let ok = true;
+    if (!nameEl || !nameEl.value.trim()) {
+      if (nameErrEl) { nameErrEl.style.display = ''; }
+      ok = false;
+    } else {
+      if (nameErrEl) { nameErrEl.style.display = 'none'; }
+    }
+    if (!roleEl || !roleEl.value) {
+      if (roleErrEl) { roleErrEl.style.display = ''; }
+      ok = false;
+    } else {
+      if (roleErrEl) { roleErrEl.style.display = 'none'; }
+    }
+    return ok;
+  },
+
+  _buildBody() {
+    const nameEl = document.getElementById('agentFormName');
+    const roleEl = document.getElementById('agentFormRole');
+    const promptEl = document.getElementById('agentFormPrompt');
+    const notesTtlEl = document.getElementById('agentFormNotesTtl');
+    const patternsTtlEl = document.getElementById('agentFormPatternsTtl');
+
+    const body = {
+      displayName: nameEl ? nameEl.value.trim() : '',
+      role: roleEl ? roleEl.value : 'analyst',
+      rolePrompt: promptEl ? promptEl.value.trim() : undefined,
+    };
+
+    if (notesTtlEl) {
+      body.decay = {
+        notesTtlDays: parseInt(notesTtlEl.value, 10) || 30,
+        patternsTtlDays: parseInt(patternsTtlEl ? patternsTtlEl.value : '90', 10) || 90,
+      };
+    }
+
+    const capabilities = this._pendingMcp.map((mcp, idx) => {
+      const rowEl = document.querySelector(`[data-mcp-idx="${idx}"]`);
+      const envInputs = rowEl ? rowEl.querySelectorAll('.mcp-env-val') : [];
+      const envKeys = rowEl ? rowEl.querySelectorAll('.mcp-env-key') : [];
+      const envVars = {};
+      envKeys.forEach((kEl, ei) => {
+        const vEl = envInputs[ei];
+        if (kEl && vEl) envVars[kEl.value] = vEl.value;
+      });
+      return {
+        name: mcp.name || mcp.ref,
+        type: 'mcp',
+        ref: mcp.ref,
+        enabled: mcp.enabled !== false,
+        envVars: Object.keys(envVars).length ? envVars : undefined,
+      };
+    });
+    body.capabilities = capabilities;
+
+    return body;
+  },
+
+  async _create() {
+    if (!this._validate()) return;
+    const body = this._buildBody();
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create agent');
+      app.showToast('Agent created', 'success');
+      this.close();
+    } catch (e) {
+      app.showToast(e.message || 'Failed to create agent', 'error');
+    }
+  },
+
+  async _save() {
+    if (!this._validate()) return;
+    const body = this._buildBody();
+    try {
+      const res = await fetch(`/api/agents/${this._agentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save agent');
+      app.showToast('Agent saved', 'success');
+    } catch (e) {
+      app.showToast(e.message || 'Failed to save agent', 'error');
+    }
+  },
+
+  async _delete() {
+    if (!confirm('Delete this agent? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/agents/${this._agentId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete agent');
+      }
+      app.showToast('Agent deleted', 'success');
+      this.close();
+    } catch (e) {
+      app.showToast(e.message || 'Failed to delete agent', 'error');
+    }
+  },
+
+  async _linkSession(sessionId) {
+    if (!this._agentId) return;
+    try {
+      if (!sessionId) {
+        // Unlink: find the currently linked session and call with agentId: null
+        const sessions = Array.from(app.sessions.values());
+        const linked = sessions.find(s => s.agentProfile && s.agentProfile.agentId === this._agentId);
+        if (!linked) return; // nothing to unlink
+        const res = await fetch(`/api/sessions/${linked.id}/agent`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: null }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to unlink session');
+        app.showToast('Session unlinked', 'success');
+        return;
+      }
+      const res = await fetch(`/api/sessions/${sessionId}/agent`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: this._agentId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to link session');
+      app.showToast('Session linked', 'success');
+    } catch (e) {
+      app.showToast(e.message || 'Failed to link session', 'error');
+    }
+  },
+
+  async _createSessionForAgent() {
+    if (!this._agentId) return;
+    const dir = prompt('Working directory for new session:');
+    if (!dir) return;
+    try {
+      const createRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: dir }),
+      });
+      const createData = await createRes.json();
+      if (!createRes.ok || !createData.success) throw new Error(createData.error || 'Failed to create session');
+      const newSessionId = createData.data.id;
+      const linkRes = await fetch(`/api/sessions/${newSessionId}/agent`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: this._agentId }),
+      });
+      const linkData = await linkRes.json();
+      if (!linkRes.ok || !linkData.success) throw new Error(linkData.error || 'Failed to link session to agent');
+      app.showToast('New session created and linked', 'success');
+      this._render();
+    } catch (e) {
+      app.showToast(e.message || 'Failed to create session', 'error');
+    }
+  },
+
+  async _viewVaultNotes() {
+    const overlay = document.getElementById('agentNotesModalOverlay');
+    const list = document.getElementById('agentNotesList');
+    if (!overlay || !list) return;
+    list.innerHTML = '<div style="color:#64748b;font-size:0.82rem">Loading...</div>';
+    overlay.classList.add('open');
+    try {
+      const res = await fetch(`/api/agents/${this._agentId}/vault/notes`);
+      const data = await res.json();
+      const notes = data.data || data.notes || [];
+      if (notes.length === 0) {
+        list.innerHTML = '<div style="color:#64748b;font-size:0.82rem">No notes yet.</div>';
+        return;
+      }
+      list.innerHTML = notes.map(n => `
+        <div class="agent-note-item">
+          <div class="agent-note-content">${escapeHtml(n.content || n.text || JSON.stringify(n))}</div>
+          ${n.createdAt ? `<div class="agent-note-meta">${new Date(n.createdAt).toLocaleString()}</div>` : ''}
+        </div>`).join('');
+    } catch (e) {
+      list.innerHTML = `<div style="color:#f87171;font-size:0.82rem">Failed to load notes: ${escapeHtml(e.message)}</div>`;
+    }
+  },
+
+  _closeNotesModal() {
+    const overlay = document.getElementById('agentNotesModalOverlay');
+    if (overlay) overlay.classList.remove('open');
+  },
+
+  async _consolidate() {
+    try {
+      const res = await fetch(`/api/agents/${this._agentId}/vault/consolidate`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to consolidate');
+      app.showToast('Vault consolidation triggered', 'success');
+    } catch (e) {
+      app.showToast(e.message || 'Failed to consolidate vault', 'error');
+    }
+  },
+};
+window.AgentPanel = AgentPanel;

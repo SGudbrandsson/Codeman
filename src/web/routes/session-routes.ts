@@ -1196,6 +1196,45 @@ export function registerSessionRoutes(
    * Request: { muxSessionName: string, force?: boolean }
    * Response: { success: true } or { success: false, conflict: true, ownerSessionId, ownerSessionName }
    */
+  // ========== PATCH /api/sessions/:id/agent ==========
+
+  app.patch<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/agent', async (req, reply) => {
+    const { id } = req.params;
+    const session = ctx.sessions.get(id);
+    if (!session) {
+      reply.code(404);
+      return { success: false, error: 'Session not found' };
+    }
+
+    const body = req.body as { agentId?: string | null };
+    const agentId = body?.agentId ?? null;
+
+    const sessionState = ctx.store.getSession(id);
+    if (!sessionState) {
+      reply.code(404);
+      return { success: false, error: 'Session state not found' };
+    }
+
+    if (agentId === null || agentId === '') {
+      // Unlink: remove agentProfile
+      const { agentProfile: _removed, ...rest } = sessionState as typeof sessionState & { agentProfile?: unknown };
+      ctx.store.setSession(id, rest as typeof sessionState);
+    } else {
+      // Link: look up agent profile and attach it
+      const profile = ctx.store.getAgent(agentId);
+      if (!profile) {
+        reply.code(404);
+        return { success: false, error: 'Agent not found' };
+      }
+      ctx.store.setSession(id, { ...sessionState, agentProfile: profile });
+    }
+
+    ctx.persistSessionState(session);
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
+
+    return { success: true };
+  });
+
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/mux-rebind', async (req, reply) => {
     const { id } = req.params;
 
