@@ -11289,6 +11289,8 @@ kbd {
   padding: 10px 12px;
   cursor: pointer;
   transition: all 0.15s;
+  position: relative;
+  z-index: 8001; /* above the detail-panel overlay (7999) so cards remain clickable when panel is open */
 }
 .board-card:hover {
   border-color: rgba(96,165,250,0.3);

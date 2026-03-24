@@ -38,8 +38,8 @@ async function freshPage(width = 1280): Promise<{ context: BrowserContext; page:
 }
 
 async function navigateTo(page: Page): Promise<void> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => document.body.classList.contains('app-loaded'), { timeout: 8000 });
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForFunction(() => document.body.classList.contains('app-loaded'), { timeout: 10000 });
   await page.waitForTimeout(500);
 }
 
@@ -77,14 +77,14 @@ async function hideBoard(page: Page): Promise<void> {
   await page.waitForTimeout(200);
 }
 
-// Mock /api/work-items to return controlled data
+// Mock /api/work-items to return controlled data (using real API contract: { data: items })
 async function mockWorkItemsRoute(page: Page, items: unknown[], status = 200): Promise<void> {
   await page.route('**/api/work-items', (route) => {
     if (status === 200) {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ success: true, data: items }),
       });
     } else {
       route.fulfill({ status, body: 'Not Found' });
@@ -848,5 +848,739 @@ describe('Mock data banner — shown when API returns 404', () => {
     // MOCK_ITEMS has 4 items — total card count should be 4
     const totalCards = await page.locator('#boardKanban .board-card').count();
     expect(totalCards).toBe(4);
+  });
+});
+
+// ─── New tests: Bug 2 — real API data parsed correctly ───────────────────────
+
+describe('Bug 2 — real API data: board shows cards from data.data format', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const realItems = [
+    {
+      id: 'wi-real-01',
+      title: 'Real API card',
+      status: 'queued',
+      createdAt: new Date(Date.now() - 3600000).toISOString(),
+      assignedAgentId: null,
+    },
+    {
+      id: 'wi-real-02',
+      title: 'Real in-progress card',
+      status: 'in_progress',
+      createdAt: new Date(Date.now() - 7200000).toISOString(),
+      startedAt: new Date(Date.now() - 3600000).toISOString(),
+      assignedAgentId: null,
+    },
+  ];
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, realItems);
+    await showBoard(page);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 2 — real API data: cards appear in board (data.data parsed correctly)', async () => {
+    const totalCards = await page.locator('#boardKanban .board-card').count();
+    expect(totalCards).toBe(2);
+  });
+
+  it('Bug 2 — real API data: no mock banner shown when real data returned', async () => {
+    const bannerCount = await page.locator('#boardView .board-mock-banner').count();
+    expect(bannerCount).toBe(0);
+  });
+});
+
+// ─── New tests: Bug 1 — New Work Item dialog ─────────────────────────────────
+
+describe('Bug 1 — New Work Item dialog: opens and has correct fields', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    // Click the "+ New Work Item" button
+    await page.evaluate(() => {
+      (
+        window as unknown as { app: { boardView: { openNewItemDialog: () => void } } }
+      ).app.boardView.openNewItemDialog();
+    });
+    await page.waitForTimeout(300);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — dialog opens: #newWorkItemDialog is visible', async () => {
+    const visible = await page.evaluate(() => {
+      const dlg = document.getElementById('newWorkItemDialog');
+      if (!dlg) return false;
+      return window.getComputedStyle(dlg).display !== 'none';
+    });
+    expect(visible).toBe(true);
+  });
+
+  it('Bug 1 — dialog has title input field', async () => {
+    const count = await page.locator('#newWorkItemDialog #nwi-title').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 1 — dialog has description textarea', async () => {
+    const count = await page.locator('#newWorkItemDialog #nwi-description').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 1 — dialog has source select with manual/asana/github/clockwork options', async () => {
+    const options = await page.locator('#newWorkItemDialog #nwi-source option').allTextContents();
+    expect(options).toContain('manual');
+    expect(options).toContain('asana');
+    expect(options).toContain('github');
+    expect(options).toContain('clockwork');
+  });
+
+  it('Bug 1 — dialog has externalRef input', async () => {
+    const count = await page.locator('#newWorkItemDialog #nwi-externalRef').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 1 — dialog has externalUrl input', async () => {
+    const count = await page.locator('#newWorkItemDialog #nwi-externalUrl').count();
+    expect(count).toBe(1);
+  });
+});
+
+describe('Bug 1 — dialog cancel removes it from DOM', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { app: { boardView: { openNewItemDialog: () => void } } }
+      ).app.boardView.openNewItemDialog();
+    });
+    await page.waitForTimeout(200);
+    // Click cancel button
+    await page.locator('#newWorkItemDialog .board-btn-refresh').click();
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — cancel closes dialog: #newWorkItemDialog removed from DOM', async () => {
+    const count = await page.locator('#newWorkItemDialog').count();
+    expect(count).toBe(0);
+  });
+});
+
+describe('Bug 1 — backdrop click closes dialog', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { app: { boardView: { openNewItemDialog: () => void } } }
+      ).app.boardView.openNewItemDialog();
+    });
+    await page.waitForTimeout(200);
+    // Click the overlay backdrop (the dialog's outer element)
+    await page.locator('#newWorkItemDialog').click({ position: { x: 5, y: 5 } });
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — backdrop click closes dialog', async () => {
+    const count = await page.locator('#newWorkItemDialog').count();
+    expect(count).toBe(0);
+  });
+});
+
+describe('Bug 1 — empty title prevents submit', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { app: { boardView: { openNewItemDialog: () => void } } }
+      ).app.boardView.openNewItemDialog();
+    });
+    await page.waitForTimeout(200);
+    // Submit with empty title
+    await page.locator('#newWorkItemDialog .board-btn-new').click();
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — empty title prevents submit: dialog stays open', async () => {
+    const count = await page.locator('#newWorkItemDialog').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 1 — empty title: error message is shown', async () => {
+    const errorVisible = await page.evaluate(() => {
+      const err = document.querySelector('#newWorkItemDialog #nwi-error') as HTMLElement | null;
+      return err ? err.style.display !== 'none' : false;
+    });
+    expect(errorVisible).toBe(true);
+  });
+});
+
+describe('Bug 1 — submit POSTs to /api/work-items and closes dialog on success', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let postedBody: Record<string, unknown> | null = null;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+
+    // Mock POST /api/work-items to capture body and return success
+    await page.route('**/api/work-items', async (route) => {
+      if (route.request().method() === 'POST') {
+        postedBody = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 201,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              id: 'wi-new-created',
+              title: postedBody!['title'],
+              status: 'queued',
+              source: 'manual',
+              createdAt: new Date().toISOString(),
+              assignedAgentId: null,
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { app: { boardView: { openNewItemDialog: () => void } } }
+      ).app.boardView.openNewItemDialog();
+    });
+    await page.waitForTimeout(200);
+    await page.fill('#nwi-title', 'Test Item');
+    await page.locator('#newWorkItemDialog .board-btn-new').click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — submit: POST was made to /api/work-items with correct title', () => {
+    expect(postedBody).not.toBeNull();
+    expect(postedBody!['title']).toBe('Test Item');
+  });
+
+  it('Bug 1 — submit success: dialog is closed (removed from DOM)', async () => {
+    const count = await page.locator('#newWorkItemDialog').count();
+    expect(count).toBe(0);
+  });
+});
+
+describe('Bug 1 — created item appears in Queued column via SSE', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    // Inject SSE workItem:created as would happen server-side after POST
+    await injectSSE(page, '_onWorkItemCreated', {
+      id: 'wi-dialog-sse-01',
+      title: 'Dialog SSE Item',
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      assignedAgentId: null,
+    });
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 1 — created item: appears in Queued column after SSE event', async () => {
+    const count = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 1 — created item: card title matches SSE data', async () => {
+    const title = await page
+      .locator('#boardKanban .board-col[data-col="queued"] .board-card-title')
+      .first()
+      .textContent();
+    expect(title).toContain('Dialog SSE Item');
+  });
+});
+
+// ─── New tests: Bug 3 — Card interactions ────────────────────────────────────
+
+describe('Bug 3 — Claim button calls /claim API', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let claimCalled = false;
+  let claimBody: Record<string, unknown> | null = null;
+
+  const queuedItem = {
+    id: 'wi-claim-01',
+    title: 'Claimable item',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [queuedItem]);
+
+    // Intercept POST /api/work-items/:id/claim
+    await page.route('**/api/work-items/wi-claim-01/claim', async (route) => {
+      if (route.request().method() === 'POST') {
+        claimCalled = true;
+        claimBody = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: { ...queuedItem, assignedAgentId: 'agent-test', assignedAt: new Date().toISOString() },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    // Click the queued card to open detail panel
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(400);
+    // Click the Claim button
+    await page.locator('#workItemPanel #wipClaimBtn').click();
+    await page.waitForTimeout(200);
+    // Fill in agent ID and submit
+    await page.fill('#workItemPanel #wipClaimForm input', 'agent-test');
+    await page.locator('#workItemPanel #wipClaimForm .board-btn-new').click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 3 — Claim: POST to /api/work-items/:id/claim was made', () => {
+    expect(claimCalled).toBe(true);
+  });
+
+  it('Bug 3 — Claim: request body contains agentId', () => {
+    expect(claimBody).not.toBeNull();
+    expect(claimBody!['agentId']).toBe('agent-test');
+  });
+});
+
+describe('Bug 3 — Change Status moves card to new column', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const queuedItem = {
+    id: 'wi-status-01',
+    title: 'Status change item',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [queuedItem]);
+
+    // Intercept PATCH /api/work-items/:id
+    await page.route('**/api/work-items/wi-status-01', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        const body = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: { ...queuedItem, status: body.status },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(400);
+    await page.locator('#workItemPanel #wipChangeStatusBtn').click();
+    await page.waitForTimeout(200);
+    // Select 'in_progress' from the status select
+    await page.selectOption('#workItemPanel #wipStatusForm select', 'in_progress');
+    await page.locator('#workItemPanel #wipStatusForm .board-btn-new').click();
+    await page.waitForTimeout(600);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 3 — Change Status: card moved to Working column', async () => {
+    const workingCount = await page.locator('#boardKanban .board-col[data-col="working"] .board-card').count();
+    expect(workingCount).toBe(1);
+  });
+
+  it('Bug 3 — Change Status: Queued column is now empty', async () => {
+    const queuedCount = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').count();
+    expect(queuedCount).toBe(0);
+  });
+});
+
+describe('Bug 3 — Add Dependency calls /dependencies API', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let depCalled = false;
+  let depBody: Record<string, unknown> | null = null;
+
+  const item = {
+    id: 'wi-dep-01',
+    title: 'Dependency target',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [item]);
+
+    await page.route('**/api/work-items/wi-dep-01/dependencies', async (route) => {
+      if (route.request().method() === 'POST') {
+        depCalled = true;
+        depBody = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { id: 'dep-1', dependsOnId: depBody!['dependsOnId'] } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(400);
+    await page.locator('#workItemPanel #wipAddDepBtn').click();
+    await page.waitForTimeout(200);
+    await page.fill('#workItemPanel #wipDepForm input', 'wi-dep-99');
+    await page.locator('#workItemPanel #wipDepForm .board-btn-new').click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 3 — Add Dependency: POST to /api/work-items/:id/dependencies was made', () => {
+    expect(depCalled).toBe(true);
+  });
+
+  it('Bug 3 — Add Dependency: request body contains dependsOnId', () => {
+    expect(depBody).not.toBeNull();
+    expect(depBody!['dependsOnId']).toBe('wi-dep-99');
+  });
+});
+
+describe('Bug 3 — clicking second card while panel open switches content', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const items = [
+    {
+      id: 'wi-switch-a',
+      title: 'Card A',
+      status: 'queued',
+      createdAt: new Date(Date.now() - 7200000).toISOString(),
+      assignedAgentId: null,
+    },
+    {
+      id: 'wi-switch-b',
+      title: 'Card B',
+      status: 'queued',
+      createdAt: new Date(Date.now() - 3600000).toISOString(),
+      assignedAgentId: null,
+    },
+  ];
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, items);
+    await showBoard(page);
+    // Click card A
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').nth(0).click();
+    await page.waitForTimeout(400);
+    // Click card B while panel is open
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').nth(1).click();
+    await page.waitForTimeout(400);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 3 — card switch: panel now shows Card B title', async () => {
+    const titleText = await page.locator('#workItemPanel .wip-title').first().textContent();
+    expect(titleText).toContain('Card B');
+  });
+
+  it('Bug 3 — card switch: panel is still open', async () => {
+    const hasOpen = await page.evaluate(() => {
+      return document.getElementById('workItemPanel')?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(true);
+  });
+});
+
+// ─── New tests: Enhancement — inline status select on cards ──────────────────
+
+describe('Enhancement — inline status select on board cards', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const items = [
+    {
+      id: 'wi-inline-01',
+      title: 'Inline status item',
+      status: 'queued',
+      createdAt: new Date(Date.now() - 3600000).toISOString(),
+      assignedAgentId: null,
+    },
+  ];
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, items);
+    await showBoard(page);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Enhancement — each .board-card has a .board-card-status-select element', async () => {
+    const selectCount = await page.locator('#boardKanban .board-card .board-card-status-select').count();
+    const cardCount = await page.locator('#boardKanban .board-card').count();
+    expect(selectCount).toBe(cardCount);
+    expect(selectCount).toBeGreaterThan(0);
+  });
+
+  it('Enhancement — .board-card-status-select is pre-selected to card status', async () => {
+    const selectedValue = await page.evaluate(() => {
+      const select = document.querySelector(
+        '#boardKanban .board-card .board-card-status-select'
+      ) as HTMLSelectElement | null;
+      return select?.value ?? '';
+    });
+    expect(selectedValue).toBe('queued');
+  });
+});
+
+describe('Enhancement — inline status change moves card to new column', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const item = {
+    id: 'wi-inline-move-01',
+    title: 'Inline move item',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [item]);
+
+    // Intercept PATCH
+    await page.route('**/api/work-items/wi-inline-move-01', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        const body = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: { ...item, status: body.status },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    // Change status via inline select
+    await page.selectOption(
+      '#boardKanban .board-col[data-col="queued"] .board-card .board-card-status-select',
+      'review'
+    );
+    await page.waitForTimeout(600);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Enhancement — card moves to Review column after inline status change', async () => {
+    const reviewCount = await page.locator('#boardKanban .board-col[data-col="review"] .board-card').count();
+    expect(reviewCount).toBe(1);
+  });
+
+  it('Enhancement — Queued column is empty after inline status change', async () => {
+    const queuedCount = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').count();
+    expect(queuedCount).toBe(0);
+  });
+
+  it('Enhancement — count badge for Review column updates to 1', async () => {
+    const reviewBadge = await page.locator('#boardKanban .board-col[data-col="review"] .board-col-count').textContent();
+    expect(reviewBadge).toBe('1');
+  });
+});
+
+// ─── New tests: Bug 4 — SSE updates reflected when board becomes visible ─────
+
+describe('Bug 4 — SSE updates reflected when board becomes visible', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, []);
+    await showBoard(page);
+    // Hide the board
+    await hideBoard(page);
+    // Inject SSE while board is hidden
+    await injectSSE(page, '_onWorkItemCreated', {
+      id: 'wi-sse-hidden-01',
+      title: 'Hidden SSE Card',
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      assignedAgentId: null,
+    });
+    // Show board again — should use render() from _dirtyFromSSE flag
+    await page.evaluate(() => {
+      (window as unknown as { app: { showBoard: () => void } }).app.showBoard();
+    });
+    await page.waitForTimeout(600);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('Bug 4 — SSE card appears in Queued column when board becomes visible', async () => {
+    const count = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').count();
+    expect(count).toBe(1);
+  });
+
+  it('Bug 4 — SSE card title matches injected event', async () => {
+    const title = await page
+      .locator('#boardKanban .board-col[data-col="queued"] .board-card-title')
+      .first()
+      .textContent();
+    expect(title).toContain('Hidden SSE Card');
   });
 });

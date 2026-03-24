@@ -16,6 +16,7 @@ export default defineConfig({
       exclude: ['src/index.ts', 'src/cli.ts'],
     },
     testTimeout: 30000, // 30 seconds for integration tests
+    hookTimeout: 60000, // 60 seconds for beforeAll/afterAll hooks (Playwright setup under load)
     // Ensure cleanup runs even on test failures
     teardownTimeout: 60000,
   },

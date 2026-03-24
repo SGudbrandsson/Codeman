@@ -8332,7 +8332,12 @@ class CodemanApp {
     if (transEl) transEl.style.display = 'none';
     this._boardVisible = true;
     document.getElementById('boardViewBtn')?.classList.add('active');
-    this.boardView.refresh();
+    if (this.boardView._workItems.length > 0 && this.boardView._dirtyFromSSE) {
+      this.boardView._dirtyFromSSE = false;
+      this.boardView.render();
+    } else {
+      this.boardView.refresh();
+    }
   }
 
   hideBoard() {
@@ -19752,6 +19757,7 @@ const BoardView = {
   _timeline: [],       // BoardEvent[] (last 50)
   _detailItem: null,   // WorkItem | null
   _initialized: false,
+  _dirtyFromSSE: false, // set true by SSE handlers; showBoard uses render() instead of refresh()
 
   // Column definitions — maps API status values to display columns
   COLUMNS: [
@@ -19788,6 +19794,16 @@ const BoardView = {
         this.closeDetailPanel();
       }
     });
+    // Close panel when clicking outside: not inside #workItemPanel and not on a .board-card.
+    // The overlay uses pointer-events:none so cards remain clickable; this handler
+    // serves as the "click outside to close" mechanism.
+    document.addEventListener('mousedown', (e) => {
+      if (!this._detailItem) return;
+      const panel = document.getElementById('workItemPanel');
+      if (panel && panel.contains(e.target)) return; // click inside panel
+      if (e.target.closest && e.target.closest('.board-card')) return; // click on a card (will open it)
+      this.closeDetailPanel();
+    });
   },
 
   async refresh() {
@@ -19801,13 +19817,15 @@ const BoardView = {
       const res = await fetch('/api/work-items');
       if (res.ok) {
         const data = await res.json();
-        this._workItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+        this._workItems = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
       } else {
         useMock = true;
       }
     } catch (e) {
       useMock = true;
     }
+
+    this._dirtyFromSSE = false;
 
     if (useMock) {
       this._workItems = this.MOCK_ITEMS.slice();
@@ -19944,6 +19962,44 @@ const BoardView = {
     card.appendChild(meta);
     card.appendChild(nextAction);
 
+    // Inline status select for moving card between columns without opening detail panel
+    const STATUSES = ['queued', 'blocked', 'assigned', 'in_progress', 'review', 'done', 'cancelled'];
+    const statusSelect = document.createElement('select');
+    statusSelect.className = 'board-card-status-select';
+    statusSelect.style.cssText = 'margin-top:6px;width:100%;background:#0f1117;border:1px solid rgba(255,255,255,0.12);border-radius:3px;color:#94a3b8;padding:2px 6px;font-size:0.72rem;cursor:pointer;';
+    for (const s of STATUSES) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      if (s === item.status) opt.selected = true;
+      statusSelect.appendChild(opt);
+    }
+    statusSelect.addEventListener('change', async (e) => {
+      e.stopPropagation();
+      const newStatus = statusSelect.value;
+      const prevStatus = item.status;
+      try {
+        const res = await fetch(`/api/work-items/${item.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        const resp = await res.json();
+        if (res.ok && resp.success) {
+          const idx = this._workItems.findIndex(w => w.id === item.id);
+          if (idx >= 0) this._workItems[idx] = resp.data;
+          this.render();
+        } else {
+          statusSelect.value = prevStatus;
+          app.showToast(resp.error || 'Status update failed', 'error');
+        }
+      } catch (err) {
+        statusSelect.value = prevStatus;
+        app.showToast('Status update failed', 'error');
+      }
+    });
+    card.appendChild(statusSelect);
+
     card.addEventListener('click', () => this.openDetailPanel(item));
     return card;
   },
@@ -19992,6 +20048,8 @@ const BoardView = {
   },
 
   async openDetailPanel(item) {
+    const panelEl = document.getElementById('workItemPanel');
+    const alreadyOpen = panelEl && panelEl.classList.contains('open');
     this._detailItem = item;
     let agent = null;
     if (item.assignedAgentId) {
@@ -20007,8 +20065,10 @@ const BoardView = {
       }
     }
     this._renderDetailPanel(item, agent);
-    document.getElementById('workItemPanel')?.classList.add('open');
-    document.getElementById('workItemPanelOverlay')?.classList.add('open');
+    if (!alreadyOpen) {
+      panelEl?.classList.add('open');
+      document.getElementById('workItemPanelOverlay')?.classList.add('open');
+    }
   },
 
   closeDetailPanel() {
@@ -20097,14 +20157,151 @@ const BoardView = {
     </div>`;
 
     // Action buttons
-    html += `<div class="wip-actions">
-      <button class="board-btn-refresh" onclick="app.boardView.closeDetailPanel()">Close</button>
-      <button class="board-btn-new">Claim</button>
-      <button class="board-btn-new">Change Status</button>
-      <button class="board-btn-refresh">Add Dependency</button>
+    const claimDisabled = item.status !== 'queued' ? ' disabled style="opacity:0.4;cursor:not-allowed;"' : '';
+    html += `<div class="wip-actions" id="wipActions">
+      <button class="board-btn-refresh" id="wipCloseBtn">Close</button>
+      <button class="board-btn-new" id="wipClaimBtn"${claimDisabled}>Claim</button>
+      <button class="board-btn-new" id="wipChangeStatusBtn">Change Status</button>
+      <button class="board-btn-refresh" id="wipAddDepBtn">Add Dependency</button>
     </div>`;
 
     panel.innerHTML = html;
+    this._wireDetailPanelActions(panel, item);
+  },
+
+  _wireDetailPanelActions(panel, item) {
+    panel.querySelector('#wipCloseBtn').addEventListener('click', () => this.closeDetailPanel());
+
+    panel.querySelector('#wipClaimBtn').addEventListener('click', () => {
+      if (item.status !== 'queued') return;
+      const actionsDiv = panel.querySelector('#wipActions');
+      const existingForm = panel.querySelector('#wipClaimForm');
+      if (existingForm) { existingForm.remove(); return; }
+      const form = document.createElement('div');
+      form.id = 'wipClaimForm';
+      form.style.cssText = 'margin-top:8px;display:flex;gap:6px;align-items:center;';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Agent ID';
+      input.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'board-btn-new';
+      submitBtn.textContent = 'Submit';
+      submitBtn.addEventListener('click', async () => {
+        const agentId = input.value.trim();
+        if (!agentId) return;
+        try {
+          const res = await fetch(`/api/work-items/${item.id}/claim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId }),
+          });
+          const resp = await res.json();
+          if (res.status === 409) {
+            app.showToast('Already claimed', 'error');
+          } else if (res.ok && resp.success) {
+            const idx = this._workItems.findIndex(w => w.id === item.id);
+            if (idx >= 0) this._workItems[idx] = resp.data;
+            this.render();
+            this.openDetailPanel(resp.data);
+            app.showToast('Claimed successfully', 'success');
+          } else {
+            app.showToast(resp.error || 'Claim failed', 'error');
+          }
+        } catch (e) {
+          app.showToast('Claim failed', 'error');
+        }
+      });
+      form.appendChild(input);
+      form.appendChild(submitBtn);
+      actionsDiv.after(form);
+    });
+
+    panel.querySelector('#wipChangeStatusBtn').addEventListener('click', () => {
+      const actionsDiv = panel.querySelector('#wipActions');
+      const existingForm = panel.querySelector('#wipStatusForm');
+      if (existingForm) { existingForm.remove(); return; }
+      const STATUSES = ['queued', 'blocked', 'assigned', 'in_progress', 'review', 'done', 'cancelled'];
+      const form = document.createElement('div');
+      form.id = 'wipStatusForm';
+      form.style.cssText = 'margin-top:8px;display:flex;gap:6px;align-items:center;';
+      const select = document.createElement('select');
+      select.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      for (const s of STATUSES) {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        if (s === item.status) opt.selected = true;
+        select.appendChild(opt);
+      }
+      const applyBtn = document.createElement('button');
+      applyBtn.className = 'board-btn-new';
+      applyBtn.textContent = 'Apply';
+      applyBtn.addEventListener('click', async () => {
+        const newStatus = select.value;
+        try {
+          const res = await fetch(`/api/work-items/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus }),
+          });
+          const resp = await res.json();
+          if (res.ok && resp.success) {
+            const idx = this._workItems.findIndex(w => w.id === item.id);
+            if (idx >= 0) this._workItems[idx] = resp.data;
+            this.render();
+            this.openDetailPanel(resp.data);
+            app.showToast('Status updated', 'success');
+          } else {
+            app.showToast(resp.error || 'Status update failed', 'error');
+          }
+        } catch (e) {
+          app.showToast('Status update failed', 'error');
+        }
+      });
+      form.appendChild(select);
+      form.appendChild(applyBtn);
+      actionsDiv.after(form);
+    });
+
+    panel.querySelector('#wipAddDepBtn').addEventListener('click', () => {
+      const actionsDiv = panel.querySelector('#wipActions');
+      const existingForm = panel.querySelector('#wipDepForm');
+      if (existingForm) { existingForm.remove(); return; }
+      const form = document.createElement('div');
+      form.id = 'wipDepForm';
+      form.style.cssText = 'margin-top:8px;display:flex;gap:6px;align-items:center;';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Depends-on work item ID';
+      input.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'board-btn-new';
+      submitBtn.textContent = 'Add';
+      submitBtn.addEventListener('click', async () => {
+        const dependsOnId = input.value.trim();
+        if (!dependsOnId) return;
+        try {
+          const res = await fetch(`/api/work-items/${item.id}/dependencies`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dependsOnId }),
+          });
+          const resp = await res.json();
+          if (res.ok && resp.success) {
+            app.showToast('Dependency added', 'success');
+            form.remove();
+          } else {
+            app.showToast(resp.error || 'Failed to add dependency', 'error');
+          }
+        } catch (e) {
+          app.showToast('Failed to add dependency', 'error');
+        }
+      });
+      form.appendChild(input);
+      form.appendChild(submitBtn);
+      actionsDiv.after(form);
+    });
   },
 
   _esc(str) {
@@ -20147,10 +20344,142 @@ const BoardView = {
   },
 
   openNewItemDialog() {
-    // Placeholder — full implementation in Phase 3
-    if (typeof app !== 'undefined') {
-      app.showToast('New work item creation coming in Phase 3', 'info');
+    // Remove any existing dialog
+    document.getElementById('newWorkItemDialog')?.remove();
+
+    // Overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'newWorkItemDialog';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+
+    // Dialog box
+    const dlg = document.createElement('div');
+    dlg.style.cssText = 'background:#1e2130;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:24px;width:420px;max-width:95vw;color:#e2e8f0;font-family:inherit;';
+
+    // Title heading
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:1rem;font-weight:600;margin-bottom:16px;';
+    heading.textContent = 'New Work Item';
+    dlg.appendChild(heading);
+
+    const makeField = (labelText, el) => {
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'margin-bottom:12px;';
+      const lbl = document.createElement('label');
+      lbl.style.cssText = 'display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:4px;';
+      lbl.textContent = labelText;
+      wrapper.appendChild(lbl);
+      el.style.cssText = 'width:100%;box-sizing:border-box;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:6px 10px;font-size:0.82rem;';
+      wrapper.appendChild(el);
+      return wrapper;
+    };
+
+    const titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.placeholder = 'Title (required)';
+    titleInput.id = 'nwi-title';
+    dlg.appendChild(makeField('Title *', titleInput));
+
+    const descInput = document.createElement('textarea');
+    descInput.placeholder = 'Description';
+    descInput.id = 'nwi-description';
+    descInput.rows = 3;
+    dlg.appendChild(makeField('Description', descInput));
+
+    const sourceSelect = document.createElement('select');
+    sourceSelect.id = 'nwi-source';
+    for (const s of ['manual', 'asana', 'github', 'clockwork']) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      sourceSelect.appendChild(opt);
     }
+    dlg.appendChild(makeField('Source', sourceSelect));
+
+    const extRefInput = document.createElement('input');
+    extRefInput.type = 'text';
+    extRefInput.placeholder = 'e.g. ASANA-1234';
+    extRefInput.id = 'nwi-externalRef';
+    dlg.appendChild(makeField('External Ref', extRefInput));
+
+    const extUrlInput = document.createElement('input');
+    extUrlInput.type = 'text';
+    extUrlInput.placeholder = 'https://...';
+    extUrlInput.id = 'nwi-externalUrl';
+    dlg.appendChild(makeField('External URL', extUrlInput));
+
+    // Error message area
+    const errMsg = document.createElement('div');
+    errMsg.id = 'nwi-error';
+    errMsg.style.cssText = 'font-size:0.75rem;color:#ef4444;margin-bottom:8px;display:none;';
+    dlg.appendChild(errMsg);
+
+    // Buttons row
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'board-btn-refresh';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'board-btn-new';
+    submitBtn.textContent = 'Create';
+    submitBtn.addEventListener('click', async () => {
+      const title = titleInput.value.trim();
+      if (!title) {
+        errMsg.textContent = 'Title is required.';
+        errMsg.style.display = 'block';
+        return;
+      }
+      errMsg.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating...';
+      try {
+        const body = {
+          title,
+          description: descInput.value.trim() || undefined,
+          source: sourceSelect.value,
+          externalRef: extRefInput.value.trim() || undefined,
+          externalUrl: extUrlInput.value.trim() || undefined,
+        };
+        const res = await fetch('/api/work-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const resp = await res.json();
+        if (res.ok && resp.success) {
+          overlay.remove();
+          app.showToast('Work item created', 'success');
+        } else {
+          errMsg.textContent = resp.error || 'Failed to create work item.';
+          errMsg.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Create';
+        }
+      } catch (e) {
+        errMsg.textContent = 'Network error. Please try again.';
+        errMsg.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create';
+      }
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(submitBtn);
+    dlg.appendChild(btnRow);
+
+    overlay.appendChild(dlg);
+    document.body.appendChild(overlay);
+
+    // Clicking the backdrop (outside dialog) closes it
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    titleInput.focus();
   },
 
   // SSE handlers called by CodemanApp
@@ -20158,6 +20487,7 @@ const BoardView = {
     if (!data || !data.id) return;
     const exists = this._workItems.find(w => w.id === data.id);
     if (!exists) this._workItems.push(data);
+    this._dirtyFromSSE = true;
     this.render();
   },
 
@@ -20169,6 +20499,7 @@ const BoardView = {
     } else {
       this._workItems.push(data);
     }
+    this._dirtyFromSSE = true;
     this.render();
   },
 
@@ -20179,6 +20510,7 @@ const BoardView = {
       item.assignedAgentId = data.assignedAgentId || data.agentId || null;
       if (data.assignedAt) item.assignedAt = data.assignedAt;
     }
+    this._dirtyFromSSE = true;
     this.render();
   },
 
@@ -20189,6 +20521,7 @@ const BoardView = {
       item.status = data.status;
       if (data.updatedAt) item.updatedAt = data.updatedAt;
     }
+    this._dirtyFromSSE = true;
     this.render();
   },
 
@@ -20199,6 +20532,7 @@ const BoardView = {
       item.status = 'done';
       if (data.completedAt) item.completedAt = data.completedAt;
     }
+    this._dirtyFromSSE = true;
     this.render();
   },
 
