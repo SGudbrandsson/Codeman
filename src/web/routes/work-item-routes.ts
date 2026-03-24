@@ -28,6 +28,7 @@ import {
   getReadyWorkItems,
   addDependency,
   removeDependency,
+  deleteWorkItem,
 } from '../../work-items/index.js';
 import type { WorkItemSource, WorkItemStatus } from '../../work-items/index.js';
 import { deliverWebhookIfRegistered } from '../../clockwork-webhook.js';
@@ -194,6 +195,19 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       reply.code(400);
       return { success: false, error: e.message };
     }
+  });
+
+  // ── DELETE /api/work-items/:id ─────────────────────────────────────────────
+  app.delete('/api/work-items/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const deleted = deleteWorkItem(id);
+    if (!deleted) {
+      reply.code(404);
+      return { success: false, error: 'Work item not found' };
+    }
+    ctx.broadcast(SseEvent.WorkItemUpdated, { id, deleted: true });
+    reply.code(204);
+    return;
   });
 
   // ── DELETE /api/work-items/:id/dependencies/:depId ────────────────────────

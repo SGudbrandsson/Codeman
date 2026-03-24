@@ -20212,6 +20212,7 @@ const BoardView = {
       <button class="board-btn-new" id="wipClaimBtn"${claimDisabled}>Claim</button>
       <button class="board-btn-new" id="wipChangeStatusBtn">Change Status</button>
       <button class="board-btn-refresh" id="wipAddDepBtn">Add Dependency</button>
+      <button class="board-btn-delete" id="wipDeleteBtn" style="margin-left:auto;color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">Delete</button>
     </div>`;
 
     panel.innerHTML = html;
@@ -20350,6 +20351,24 @@ const BoardView = {
       form.appendChild(input);
       form.appendChild(submitBtn);
       actionsDiv.after(form);
+    });
+
+    panel.querySelector('#wipDeleteBtn').addEventListener('click', async () => {
+      if (!confirm('Delete this work item? This cannot be undone.')) return;
+      try {
+        const res = await fetch(`/api/work-items/${item.id}`, { method: 'DELETE' });
+        if (res.ok || res.status === 204) {
+          app.showToast('Work item deleted', 'success');
+          this._workItems = this._workItems.filter(w => w.id !== item.id);
+          this.closeDetailPanel();
+          this.render();
+        } else {
+          const resp = await res.json().catch(() => ({}));
+          app.showToast(resp.error || 'Failed to delete', 'error');
+        }
+      } catch (e) {
+        app.showToast('Failed to delete work item', 'error');
+      }
     });
   },
 
@@ -20542,6 +20561,13 @@ const BoardView = {
 
   onWorkItemUpdated(data) {
     if (!data || !data.id) return;
+    // Handle deletion
+    if (data.deleted) {
+      this._workItems = this._workItems.filter(w => w.id !== data.id);
+      this._dirtyFromSSE = true;
+      this.render();
+      return;
+    }
     const idx = this._workItems.findIndex(w => w.id === data.id);
     if (idx >= 0) {
       this._workItems[idx] = { ...this._workItems[idx], ...data };
