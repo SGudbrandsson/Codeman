@@ -18796,7 +18796,16 @@ const SessionDrawer = {
     const agentSessionMap = new Map(); // agentId -> Session[]
     const plainSessions = [];
 
+    const searchQ = this._searchQuery;
     for (const s of allSessions) {
+      // Filter by search query in agents view too
+      if (searchQ) {
+        const name = (app.getSessionName(s) || '').toLowerCase();
+        const dir = (s.workingDir || '').toLowerCase();
+        const agentName = (s.agentProfile?.displayName || '').toLowerCase();
+        const role = (s.agentProfile?.role || '').toLowerCase();
+        if (!name.includes(searchQ) && !dir.includes(searchQ) && !agentName.includes(searchQ) && !role.includes(searchQ)) continue;
+      }
       if (s.agentProfile && s.agentProfile.agentId) {
         const aid = s.agentProfile.agentId;
         if (!agentSessionMap.has(aid)) agentSessionMap.set(aid, []);
