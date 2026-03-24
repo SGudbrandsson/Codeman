@@ -66,6 +66,20 @@ Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/e
 
 ---
 
+## Agent Orchestration
+
+Codeman includes a built-in multi-agent coordination layer: define persistent agent
+profiles with roles and memory vaults, track work on a shared kanban board, route
+tasks between agents via a typed messaging system, and integrate external project
+management tools via the Clockwork OS API. Agents retain context across sessions
+through an automatically indexed memory vault with BM25 search and LLM-synthesised
+pattern notes.
+
+- [5-Minute Quickstart](docs/guide/quickstart.md) — create agents, claim a work item, open the board, send a message
+- [Full User Guide](docs/guide/agent-orchestration.md) — complete documentation for agents, vault, work items, board, messaging, Clockwork OS, and API reference
+
+---
+
 ## Mobile-Optimized Web UI
 
 The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
