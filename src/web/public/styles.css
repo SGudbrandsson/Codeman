@@ -11193,6 +11193,21 @@ kbd {
   display: flex;
   gap: 8px;
 }
+.board-btn-back {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-right: 8px;
+}
+.board-btn-back:hover {
+  background: rgba(255,255,255,0.06);
+  color: #e2e8f0;
+}
 .board-btn-refresh {
   padding: 4px 10px;
   font-size: 0.75rem;

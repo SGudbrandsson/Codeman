@@ -8322,6 +8322,17 @@ class CodemanApp {
     this.renderRalphStatePanel();
   }
 
+  toggleBoard() {
+    if (this._boardVisible) {
+      this.hideBoard();
+      // Restore the active session view
+      const s = this.sessions.get(this.activeSessionId);
+      if (s) this.selectSession(s.id);
+      return;
+    }
+    this.showBoard();
+  }
+
   showBoard() {
     this.hideWelcome();
     const boardEl = document.getElementById('boardView');

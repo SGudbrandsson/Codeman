@@ -59,7 +59,7 @@
       <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
       </div>
       <div class="header-right">
-        <button class="btn-board-view" id="boardViewBtn" onclick="app.showBoard()" title="Board view" aria-label="Open board view">Board</button>
+        <button class="btn-board-view" id="boardViewBtn" onclick="app.toggleBoard()" title="Board view" aria-label="Toggle board view">Board</button>
         <button class="tunnel-indicator" id="tunnelIndicator" style="display: none;" onclick="app.toggleTunnelPanel()" title="Cloudflare Tunnel" aria-label="Tunnel status">
           <span class="tunnel-dot"></span>
         </button>
@@ -294,6 +294,7 @@
       <!-- Board View -->
       <div class="board-view" id="boardView" style="display:none;" aria-label="Work item board">
         <div class="board-header">
+          <button class="board-btn-back" onclick="app.toggleBoard()" title="Close board" aria-label="Close board view">&larr; Back</button>
           <h2 class="board-title">Codeman Board</h2>
           <div class="board-header-actions">
             <button class="board-btn-refresh" onclick="app.boardView.refresh()">Refresh</button>
