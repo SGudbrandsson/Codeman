@@ -9800,6 +9800,10 @@ kbd {
   background: rgba(14, 5, 32, 0.95);
   border-color: #3b1d6e;
 }
+.tv-live-block--todos {
+  background: rgba(5, 32, 20, 0.95);
+  border-color: #065f46;
+}
 .tv-live-header {
   display: flex;
   justify-content: space-between;
@@ -9809,6 +9813,7 @@ kbd {
 }
 .tv-live-block--tasks .tv-live-header { color: #38bdf8; }
 .tv-live-block--agents .tv-live-header { color: #a78bfa; }
+.tv-live-block--todos .tv-live-header { color: #34d399; }
 .tv-live-header span { color: #6b7280; font-weight: 400; }
 .tv-live-rows { display: flex; flex-direction: column; gap: 2px; }
 .tv-live-row {

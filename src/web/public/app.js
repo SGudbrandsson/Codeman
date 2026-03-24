@@ -5828,6 +5828,7 @@ class CodemanApp {
     // Skip if user explicitly closed this session's Ralph panel
     if (this.ralphClosedSessions.has(data.sessionId)) return;
     this.updateRalphState(data.sessionId, { todos: data.todos });
+    this.renderTranscriptStatusBlocks(data.sessionId);
   }
 
   _onRalphCompletionDetected(data) {
@@ -13585,7 +13586,11 @@ class CodemanApp {
       a => this.subagentParentMap.get(a.agentId) === sessionId && a.status !== 'completed'
     );
 
-    const needsWrapper = hasTasks || activeAgents.length > 0;
+    // Evaluate ralph todos state
+    const ralphTodos = this.ralphStates.get(sessionId)?.todos || [];
+    const hasTodos = ralphTodos.length > 0;
+
+    const needsWrapper = hasTasks || activeAgents.length > 0 || hasTodos;
 
     if (!needsWrapper) {
       const _wrapper = document.getElementById('tv-live-status-wrapper');
@@ -13677,8 +13682,38 @@ class CodemanApp {
         `</div>`;
     }
 
+    // Build todos block HTML (ralph TodoWrite todos)
+    let todosHtml = '';
+    if (hasTodos) {
+      const completedTodos = ralphTodos.filter(t => t.status === 'completed');
+      const inProgressTodos = ralphTodos.filter(t => t.status === 'in_progress');
+      const pendingTodos = ralphTodos.filter(t => t.status === 'pending');
+      const completedCount = completedTodos.length;
+      const totalCount = ralphTodos.length;
+      const summaryParts = [];
+      if (inProgressTodos.length > 0) summaryParts.push(`${inProgressTodos.length} active`);
+      summaryParts.push(`${completedCount}/${totalCount} done`);
+      const summary = summaryParts.join(' \u00b7 ');
+
+      let rowsHtml = '';
+      for (const todo of inProgressTodos) {
+        rowsHtml += `<div class="tv-live-row tv-live-row--running"><span class="tv-live-row-name">\u25d0 ${escapeHtml(todo.content)}</span></div>`;
+      }
+      for (const todo of pendingTodos) {
+        rowsHtml += `<div class="tv-live-row"><span class="tv-live-row-name">\u25cb ${escapeHtml(todo.content)}</span></div>`;
+      }
+      for (const todo of completedTodos) {
+        rowsHtml += `<div class="tv-live-row tv-live-row--done"><span class="tv-live-row-name">\u2713 ${escapeHtml(todo.content)}</span></div>`;
+      }
+
+      todosHtml = `<div id="tv-live-todos" class="tv-live-block tv-live-block--todos">` +
+        `<div class="tv-live-header">\u2610 TASKS <span>${escapeHtml(summary)}</span></div>` +
+        `<div class="tv-live-rows">${rowsHtml}</div>` +
+        `</div>`;
+    }
+
     // Rebuild wrapper content (gradient + blocks)
-    const wrapperContent = `<div class="tv-live-gradient"></div>${tasksHtml}${agentsHtml}`;
+    const wrapperContent = `<div class="tv-live-gradient"></div>${todosHtml}${tasksHtml}${agentsHtml}`;
     // Use DOM to avoid hook warnings — build content safely
     const tmp = document.createElement('template');
     tmp.innerHTML = wrapperContent;

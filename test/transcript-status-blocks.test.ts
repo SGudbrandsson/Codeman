@@ -142,6 +142,7 @@ describe('CSS smoke — all required .tv-live-* classes are defined in the style
     '.tv-live-block',
     '.tv-live-block--tasks',
     '.tv-live-block--agents',
+    '.tv-live-block--todos',
     '.tv-live-header',
     '.tv-live-rows',
     '.tv-live-row',
@@ -440,5 +441,191 @@ describe('Background session — renderTranscriptStatusBlocks for a background s
       return (window as unknown as { TranscriptView: { _sessionId: string } }).TranscriptView._sessionId;
     });
     expect(currentSessionId).toBe(sessionA);
+  });
+});
+
+// ─── Gap 2: Todos block appears when ralphStates has todos ────────────────────
+
+describe('Todos block — #tv-live-todos appears when ralphStates has todos', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+
+    // Inject todos via ralphStates and call renderTranscriptStatusBlocks
+    await page.evaluate(
+      ({ sid }) => {
+        const a = (
+          window as unknown as {
+            app: {
+              ralphStates: Map<string, { loop: null; todos: Array<{ content: string; status: string }> }>;
+              renderTranscriptStatusBlocks: (id: string) => void;
+            };
+          }
+        ).app;
+        a.ralphStates.set(sid, {
+          loop: null,
+          todos: [
+            { content: 'Write unit tests', status: 'in_progress' },
+            { content: 'Review PR', status: 'pending' },
+            { content: 'Deploy to staging', status: 'completed' },
+          ],
+        });
+        a.renderTranscriptStatusBlocks(sid);
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#tv-live-todos is injected inside #transcriptView', async () => {
+    const isInsideTranscript = await page.evaluate(() => {
+      const wrapper = document.getElementById('tv-live-todos');
+      return wrapper !== null && wrapper.closest('#transcriptView') !== null;
+    });
+    expect(isInsideTranscript).toBe(true);
+  });
+
+  it('in_progress todo is rendered with the ◐ symbol (tv-live-row--running)', async () => {
+    const count = await page.locator('#tv-live-todos .tv-live-row--running').count();
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('pending todo is rendered with the ○ symbol (plain tv-live-row)', async () => {
+    const text = await page.locator('#tv-live-todos .tv-live-rows').innerText();
+    expect(text).toContain('○');
+  });
+
+  it('completed todo is rendered with the ✓ symbol (tv-live-row--done)', async () => {
+    const count = await page.locator('#tv-live-todos .tv-live-row--done').count();
+    expect(count).toBeGreaterThan(0);
+  });
+});
+
+// ─── Gap 3: hasTodos keeps wrapper alive when no tasks are running ────────────
+
+describe('hasTodos — wrapper persists when taskStats.running is 0 but todos are non-empty', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+
+    // Set taskStats.running = 0 (no running tasks) but provide todos
+    await page.evaluate(
+      ({ sid }) => {
+        const a = (
+          window as unknown as {
+            app: {
+              sessions: Map<
+                string,
+                {
+                  taskStats: { running: number; completed: number; failed: number; total: number };
+                  taskTree: unknown[];
+                }
+              >;
+              ralphStates: Map<string, { loop: null; todos: Array<{ content: string; status: string }> }>;
+              renderTranscriptStatusBlocks: (id: string) => void;
+            };
+          }
+        ).app;
+        const session = a.sessions.get(sid);
+        if (session) {
+          session.taskStats = { running: 0, completed: 0, failed: 0, total: 0 };
+          session.taskTree = [];
+        }
+        a.ralphStates.set(sid, {
+          loop: null,
+          todos: [{ content: 'Pending task', status: 'pending' }],
+        });
+        a.renderTranscriptStatusBlocks(sid);
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#tv-live-status-wrapper remains in the DOM when todos are present even though no tasks are running', async () => {
+    const count = await page.locator('#transcriptView #tv-live-status-wrapper').count();
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('#tv-live-todos is present inside the wrapper', async () => {
+    const count = await page.locator('#transcriptView #tv-live-todos').count();
+    expect(count).toBeGreaterThan(0);
+  });
+});
+
+// ─── Gap 4: _onRalphTodoUpdate triggers transcript re-render (SSE path) ───────
+
+describe('_onRalphTodoUpdate — calling the SSE handler creates #tv-live-todos in the transcript overlay', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+
+    // Simulate the SSE path by calling _onRalphTodoUpdate directly with a valid payload
+    await page.evaluate(
+      ({ sid }) => {
+        const a = (
+          window as unknown as {
+            app: {
+              _onRalphTodoUpdate: (data: {
+                sessionId: string;
+                todos: Array<{ content: string; status: string }>;
+              }) => void;
+            };
+          }
+        ).app;
+        a._onRalphTodoUpdate({
+          sessionId: sid,
+          todos: [
+            { content: 'Implement feature', status: 'in_progress' },
+            { content: 'Write tests', status: 'pending' },
+          ],
+        });
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#tv-live-todos appears in the transcript overlay after _onRalphTodoUpdate', async () => {
+    const count = await page.locator('#transcriptView #tv-live-todos').count();
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('#tv-live-status-wrapper is created after _onRalphTodoUpdate', async () => {
+    const count = await page.locator('#transcriptView #tv-live-status-wrapper').count();
+    expect(count).toBeGreaterThan(0);
   });
 });
