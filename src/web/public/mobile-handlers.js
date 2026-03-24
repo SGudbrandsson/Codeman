@@ -570,7 +570,7 @@ const SwipeHandler = {
       if (node.scrollWidth > node.clientWidth + 2) {
         const style = window.getComputedStyle(node);
         const ox = style.overflowX;
-        if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') {
+        if (ox === 'auto' || ox === 'scroll') {
           // direction -1 = swiping left — check room to scroll right
           if (direction === -1 && node.scrollLeft + node.clientWidth < node.scrollWidth - 2) return node;
           // direction +1 = swiping right — check room to scroll left
