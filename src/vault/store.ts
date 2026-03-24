@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { VaultNote } from './types.js';
+import type { VaultNote, VaultPattern } from './types.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -193,4 +193,149 @@ export function countNotes(vaultPath: string): number {
   } catch {
     return 0;
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Pattern I/O
+// ────────────────────────────────────────────────────────────────────────────
+
+function patternsDir(vaultPath: string): string {
+  return join(vaultPath, 'patterns');
+}
+
+interface PatternFrontmatter {
+  consolidatedAt: string;
+  sourceNotes: string[];
+  clusterLabel: string;
+}
+
+function parsePatternFrontmatter(content: string): PatternFrontmatter | null {
+  if (!content.startsWith('---')) return null;
+  const end = content.indexOf('\n---', 4);
+  if (end === -1) return null;
+  const block = content.slice(4, end);
+
+  const fm: Record<string, string> = {};
+  const sourceNotes: string[] = [];
+  let inSourceNotes = false;
+
+  for (const line of block.split('\n')) {
+    // Handle sourceNotes list items
+    if (inSourceNotes) {
+      const listMatch = line.match(/^\s+-\s+(.+)$/);
+      if (listMatch) {
+        sourceNotes.push(listMatch[1].trim());
+        continue;
+      } else {
+        inSourceNotes = false;
+      }
+    }
+
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+
+    if (key === 'sourceNotes') {
+      inSourceNotes = true;
+    } else {
+      fm[key] = value;
+    }
+  }
+
+  return {
+    consolidatedAt: fm['consolidatedAt'] ?? new Date().toISOString(),
+    sourceNotes,
+    clusterLabel: fm['clusterLabel'] ?? '',
+  };
+}
+
+/**
+ * Write a pattern note to vault/patterns/.
+ * Returns the filename written.
+ */
+export function writePattern(
+  vaultPath: string,
+  params: {
+    consolidatedAt: string;
+    sourceNotes: string[];
+    clusterLabel: string;
+    body: string;
+  }
+): string {
+  ensureVaultDirs(vaultPath);
+
+  const dir = patternsDir(vaultPath);
+  const dateStr = params.consolidatedAt.slice(0, 10); // YYYY-MM-DD
+
+  // Find next available cluster index for today
+  let idx = 0;
+  try {
+    const existing = readdirSync(dir)
+      .filter((f) => f.startsWith(`${dateStr}-cluster-`) && f.endsWith('.md'))
+      .map((f) => {
+        const match = f.match(/-cluster-(\d+)\.md$/);
+        return match ? parseInt(match[1], 10) : -1;
+      })
+      .filter((n) => n >= 0);
+    idx = existing.length === 0 ? 0 : Math.max(...existing) + 1;
+  } catch {
+    idx = 0;
+  }
+
+  const filename = `${dateStr}-cluster-${idx}.md`;
+  const filePath = join(dir, filename);
+
+  const sourceNotesYaml = params.sourceNotes.map((f) => `  - ${f}`).join('\n');
+  const frontmatter = [
+    '---',
+    `consolidatedAt: ${params.consolidatedAt}`,
+    `sourceNotes:`,
+    sourceNotesYaml,
+    `clusterLabel: ${params.clusterLabel}`,
+    '---',
+    '',
+  ].join('\n');
+
+  const content = frontmatter + `## Pattern: ${params.clusterLabel}\n\n${params.body}`;
+  writeFileSync(filePath, content, 'utf-8');
+
+  return filename;
+}
+
+/** List all pattern notes in vault/patterns/, returns VaultPattern[]. */
+export function listAllPatterns(vaultPath: string): VaultPattern[] {
+  const dir = patternsDir(vaultPath);
+  if (!existsSync(dir)) return [];
+
+  let files: string[];
+  try {
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+
+  const patterns: VaultPattern[] = [];
+  for (const filename of files) {
+    const filePath = join(dir, filename);
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const fm = parsePatternFrontmatter(content);
+      if (!fm) continue;
+      patterns.push({
+        filename,
+        consolidatedAt: fm.consolidatedAt,
+        sourceNotes: fm.sourceNotes,
+        content,
+        clusterLabel: fm.clusterLabel,
+      });
+    } catch {
+      // skip unreadable files
+    }
+  }
+
+  return patterns;
 }

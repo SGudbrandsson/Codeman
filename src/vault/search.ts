@@ -10,17 +10,20 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import FlexSearch from 'flexsearch';
-import { listAllNotes } from './store.js';
-import type { VaultNote, VaultQueryResult } from './types.js';
+import { listAllNotes, listAllPatterns } from './store.js';
+import type { VaultNote, VaultPattern, VaultQueryResult } from './types.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // In-memory index cache
 // ────────────────────────────────────────────────────────────────────────────
 
+const PATTERN_BOOST = 1.5;
+
 interface IndexEntry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   index: any;
   notes: Map<string, VaultNote>; // filename → VaultNote for quick lookup
+  patterns: Map<string, VaultPattern>; // filename → VaultPattern for quick lookup
 }
 
 const indexCache = new Map<string, IndexEntry>();
@@ -45,8 +48,9 @@ function buildIndex(agentId: string, vaultPath: string): IndexEntry {
   });
 
   const notes = new Map<string, VaultNote>();
-  const allNotes = listAllNotes(vaultPath);
+  const patterns = new Map<string, VaultPattern>();
 
+  const allNotes = listAllNotes(vaultPath);
   for (const note of allNotes) {
     notes.set(note.filename, note);
     index.add({
@@ -56,7 +60,17 @@ function buildIndex(agentId: string, vaultPath: string): IndexEntry {
     });
   }
 
-  const entry: IndexEntry = { index, notes };
+  const allPatterns = listAllPatterns(vaultPath);
+  for (const pattern of allPatterns) {
+    patterns.set(pattern.filename, pattern);
+    index.add({
+      filename: pattern.filename,
+      content: pattern.content,
+      workItemId: '',
+    });
+  }
+
+  const entry: IndexEntry = { index, notes, patterns };
   indexCache.set(agentId, entry);
   return entry;
 }
@@ -119,7 +133,7 @@ export async function queryIndex(
 ): Promise<VaultQueryResult[]> {
   if (!q.trim()) return [];
 
-  const { index, notes } = getOrBuildIndex(agentId, vaultPath);
+  const { index, notes, patterns } = getOrBuildIndex(agentId, vaultPath);
 
   // flexsearch Document.search returns per-field results.
   // With enrich:true, each fieldResult is {field, result: [{id, doc}]}.
@@ -150,6 +164,18 @@ export async function queryIndex(
 
   const output: VaultQueryResult[] = [];
   for (const [filename, score] of seen) {
+    const pattern = patterns.get(filename);
+    if (pattern) {
+      output.push({
+        sourceType: 'pattern',
+        sourceFile: filename,
+        snippet: extractSnippet(pattern.content, q),
+        score: Math.min(1, score * PATTERN_BOOST),
+        workItemId: null,
+        timestamp: pattern.consolidatedAt,
+      });
+      continue;
+    }
     const note = notes.get(filename);
     if (!note) continue;
     output.push({

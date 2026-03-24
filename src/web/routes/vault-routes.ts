@@ -10,12 +10,13 @@
 
 import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
-import { capture, query } from '../../vault/index.js';
-import { listNotes, deleteNote, countNotes } from '../../vault/store.js';
+import { capture, query, consolidate, CONSOLIDATION_THRESHOLD } from '../../vault/index.js';
+import { listNotes, deleteNote, countNotes, listAllPatterns } from '../../vault/store.js';
 import { invalidateIndex } from '../../vault/search.js';
-import type { ConfigPort } from '../ports/index.js';
+import { VaultConsolidateComplete } from '../sse-events.js';
+import type { ConfigPort, EventPort } from '../ports/index.js';
 
-export function registerVaultRoutes(app: FastifyInstance, ctx: ConfigPort): void {
+export function registerVaultRoutes(app: FastifyInstance, ctx: ConfigPort & Partial<EventPort>): void {
   const { store } = ctx;
 
   // ═══════════════════════════════════════════════════════════════
@@ -107,5 +108,59 @@ export function registerVaultRoutes(app: FastifyInstance, ctx: ConfigPort): void
 
     reply.code(204);
     return '';
+  });
+
+  // POST /api/agents/:agentId/vault/consolidate
+  app.post('/api/agents/:agentId/vault/consolidate', async (req) => {
+    const { agentId } = req.params as { agentId: string };
+    const agent = store.getAgent(agentId);
+    if (!agent) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Agent not found');
+
+    // Manual trigger: pass a synthetic notesSinceConsolidation above threshold
+    const agentForConsolidate = {
+      ...agent,
+      notesSinceConsolidation: Math.max(agent.notesSinceConsolidation, CONSOLIDATION_THRESHOLD + 1),
+    };
+
+    try {
+      const result = await consolidate(agentId, agent.vaultPath, agentForConsolidate);
+
+      // Reset notesSinceConsolidation and record consolidation time
+      store.setAgent({
+        ...agent,
+        notesSinceConsolidation: 0,
+        lastConsolidatedAt: new Date().toISOString(),
+      });
+
+      // Invalidate BM25 index so patterns appear in next query
+      invalidateIndex(agentId);
+
+      // Broadcast SSE event if EventPort is available
+      ctx.broadcast?.(VaultConsolidateComplete, {
+        agentId,
+        patternsWritten: result.patternsWritten,
+        notesProcessed: result.notesProcessed,
+      });
+
+      return {
+        success: true,
+        patternsWritten: result.patternsWritten,
+        notesProcessed: result.notesProcessed,
+        notesArchived: result.notesArchived,
+        patternsDeleted: result.patternsDeleted,
+      };
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Consolidation failed: ${String(err)}`);
+    }
+  });
+
+  // GET /api/agents/:agentId/vault/patterns
+  app.get('/api/agents/:agentId/vault/patterns', async (req) => {
+    const { agentId } = req.params as { agentId: string };
+    const agent = store.getAgent(agentId);
+    if (!agent) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Agent not found');
+
+    const patterns = listAllPatterns(agent.vaultPath);
+    return { success: true, patterns };
   });
 }

@@ -331,6 +331,13 @@ export const WorkItemClaimed = 'workItem:claimed' as const;
 /** Work item status transitioned. */
 export const WorkItemStatusChanged = 'workItem:statusChanged' as const;
 
+// ─── Vault ───────────────────────────────────────────────────────────────────
+
+/** Vault note capture completed for an agent session. */
+export const VaultCaptureComplete = 'vault:captureComplete' as const;
+/** Vault consolidation completed — pattern notes have been written. */
+export const VaultConsolidateComplete = 'vault:consolidateComplete' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -527,6 +534,10 @@ export const SseEvent = {
   WorkItemUpdated,
   WorkItemClaimed,
   WorkItemStatusChanged,
+
+  // Vault
+  VaultCaptureComplete,
+  VaultConsolidateComplete,
 
   // Cases
   CaseCreated,

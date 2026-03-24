@@ -13,6 +13,7 @@ import type { VaultNote, VaultQueryResult } from './types.js';
 import type { SessionState } from '../types/session.js';
 
 export type { VaultNote, VaultPattern, VaultQueryResult } from './types.js';
+export { consolidate, runMemoryDecay, CONSOLIDATION_THRESHOLD } from './consolidate.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // capture

@@ -10,7 +10,7 @@ import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
 import { sanitizeHookData } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
-import { capture } from '../../vault/index.js';
+import { capture, consolidate, CONSOLIDATION_THRESHOLD } from '../../vault/index.js';
 
 export function registerHookEventRoutes(
   app: FastifyInstance,
@@ -91,11 +91,30 @@ export function registerHookEventRoutes(
               // Update notesSinceConsolidation in state
               const agentProfile = ctx.store.getAgent(agentId);
               if (agentProfile) {
-                ctx.store.setAgent({
+                const updatedProfile = {
                   ...agentProfile,
                   notesSinceConsolidation: agentProfile.notesSinceConsolidation + 1,
                   lastActiveAt: new Date().toISOString(),
-                });
+                };
+                ctx.store.setAgent(updatedProfile);
+
+                // Trigger async consolidation if threshold exceeded (fire-and-forget)
+                if (updatedProfile.notesSinceConsolidation > CONSOLIDATION_THRESHOLD) {
+                  consolidate(agentId, vaultPath, updatedProfile)
+                    .then((result) => {
+                      // Reset notesSinceConsolidation after successful consolidation
+                      const latest = ctx.store.getAgent(agentId);
+                      if (latest) {
+                        ctx.store.setAgent({
+                          ...latest,
+                          notesSinceConsolidation: 0,
+                          lastConsolidatedAt: new Date().toISOString(),
+                        });
+                      }
+                      console.log(`[vault] consolidation complete: ${result.patternsWritten} patterns written`);
+                    })
+                    .catch((err: unknown) => console.error('[vault] consolidation failed:', err));
+                }
               }
             })
             .catch((err: unknown) => console.error('[vault] capture failed:', err));
