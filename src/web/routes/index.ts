@@ -25,3 +25,4 @@ export { registerAgentRoutes } from './agent-routes.js';
 export { registerVaultRoutes } from './vault-routes.js';
 export { registerWorkItemRoutes } from './work-item-routes.js';
 export { registerMessageRoutes } from './message-routes.js';
+export { registerClockworkRoutes } from './clockwork-routes.js';

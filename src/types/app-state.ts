@@ -91,6 +91,10 @@ export interface AppConfig {
   lastUsedCase: string | null;
   /** Whether Ralph/Todo tracker is globally enabled for all new sessions */
   ralphEnabled: boolean;
+  /** Clockwork OS API token (also checked against CLOCKWORK_API_TOKEN env var) */
+  clockworkToken?: string;
+  /** Clockwork OS webhook callback configuration */
+  clockworkWebhook?: { url: string; secret?: string | null };
 }
 
 /**

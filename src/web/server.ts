@@ -121,6 +121,7 @@ import {
   registerVaultRoutes,
   registerWorkItemRoutes,
   registerMessageRoutes,
+  registerClockworkRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -774,6 +775,7 @@ export class WebServer extends EventEmitter {
     registerVaultRoutes(this.app, ctx);
     registerWorkItemRoutes(this.app, ctx);
     registerMessageRoutes(this.app, ctx);
+    registerClockworkRoutes(this.app, ctx);
   }
 
   /**

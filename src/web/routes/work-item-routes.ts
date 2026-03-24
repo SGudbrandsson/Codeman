@@ -17,6 +17,7 @@
 
 import { FastifyInstance } from 'fastify';
 import type { EventPort } from '../ports/event-port.js';
+import type { ConfigPort } from '../ports/config-port.js';
 import { SseEvent } from '../sse-events.js';
 import {
   createWorkItem,
@@ -29,8 +30,9 @@ import {
   removeDependency,
 } from '../../work-items/index.js';
 import type { WorkItemSource, WorkItemStatus } from '../../work-items/index.js';
+import { deliverWebhookIfRegistered } from '../../clockwork-webhook.js';
 
-type WorkItemRoutesCtx = EventPort;
+type WorkItemRoutesCtx = EventPort & ConfigPort;
 
 export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutesCtx): void {
   // ── GET /api/work-items ───────────────────────────────────────────────────
@@ -125,6 +127,11 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       // Note: status was already applied — broadcast the final state
     }
     ctx.broadcast(SseEvent.WorkItemStatusChanged, { id, status: updated.status });
+
+    // Fire-and-forget webhook delivery to Clockwork OS if registered (only on status change)
+    if (body.status !== undefined) {
+      void deliverWebhookIfRegistered(ctx.store, id, updated.status).catch(() => {});
+    }
 
     return { success: true, data: updated };
   });

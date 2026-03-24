@@ -345,6 +345,13 @@ export const AgentMessage = 'agent:message' as const;
 /** A broadcast message was sent to all agents. */
 export const AgentBroadcast = 'agent:broadcast' as const;
 
+// ─── Clockwork OS ─────────────────────────────────────────────────────────────
+
+/** Work item pushed to Codeman by Clockwork OS. */
+export const ClockworkWorkItemPushed = 'clockwork:workItemPushed' as const;
+/** Briefing message sent to a specific agent by Clockwork OS. */
+export const ClockworkBriefingSent = 'clockwork:briefingSent' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -549,6 +556,10 @@ export const SseEvent = {
   // Agent messaging
   AgentMessage,
   AgentBroadcast,
+
+  // Clockwork OS
+  ClockworkWorkItemPushed,
+  ClockworkBriefingSent,
 
   // Cases
   CaseCreated,

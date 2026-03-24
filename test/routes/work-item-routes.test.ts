@@ -8,6 +8,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+// ── Mock the clockwork-webhook module (hoisted by Vitest) ─────────────────────
+vi.mock('../../src/clockwork-webhook.js', () => ({
+  deliverWebhookIfRegistered: vi.fn(),
+}));
+
 // ── Mock the work-items module (hoisted by Vitest) ───────────────────────────
 vi.mock('../../src/work-items/index.js', () => ({
   createWorkItem: vi.fn(),
@@ -35,6 +40,7 @@ import {
   addDependency,
   removeDependency,
 } from '../../src/work-items/index.js';
+import { deliverWebhookIfRegistered } from '../../src/clockwork-webhook.js';
 
 // Typed mock references
 const mockCreate = vi.mocked(createWorkItem);
@@ -45,6 +51,7 @@ const mockClaim = vi.mocked(claimWorkItem);
 const mockReady = vi.mocked(getReadyWorkItems);
 const mockAddDep = vi.mocked(addDependency);
 const mockRemoveDep = vi.mocked(removeDependency);
+const mockDeliverWebhook = vi.mocked(deliverWebhookIfRegistered);
 
 /** Minimal WorkItem stub for test responses */
 function makeItem(
@@ -97,6 +104,7 @@ describe('work-item-routes', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     mockRemoveDep.mockReturnValue(false);
+    mockDeliverWebhook.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -258,6 +266,32 @@ describe('work-item-routes', () => {
         SseEvent.WorkItemStatusChanged,
         expect.objectContaining({ id: 'wi-upd0001' })
       );
+    });
+
+    it('calls deliverWebhookIfRegistered when PATCH includes status field', async () => {
+      const item = makeItem({ id: 'wi-webhook01', status: 'done' });
+      mockUpdate.mockReturnValue(item);
+
+      await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/work-items/wi-webhook01',
+        payload: { status: 'done' },
+      });
+
+      expect(mockDeliverWebhook).toHaveBeenCalledWith(harness.ctx.store, 'wi-webhook01', 'done');
+    });
+
+    it('does NOT call deliverWebhookIfRegistered when PATCH does not include status field', async () => {
+      const item = makeItem({ id: 'wi-nowebhook01', status: 'queued' });
+      mockUpdate.mockReturnValue(item);
+
+      await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/work-items/wi-nowebhook01',
+        payload: { title: 'Updated title only' },
+      });
+
+      expect(mockDeliverWebhook).not.toHaveBeenCalled();
     });
   });
 
