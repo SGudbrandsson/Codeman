@@ -18560,6 +18560,16 @@ const SessionDrawer = {
     const drawer = this._getEl();
     if (drawer) {
       drawer.classList.add('open');
+      this._searchQuery = '';
+      const searchEl = document.getElementById('sessionDrawerSearch');
+      if (searchEl) {
+        searchEl.value = '';
+        if (this._searchInputListener) {
+          searchEl.removeEventListener('input', this._searchInputListener);
+        }
+        this._searchInputListener = (e) => this._filterSessions(e.target.value);
+        searchEl.addEventListener('input', this._searchInputListener);
+      }
       this._render();
     }
     // Inject pin button if not already present
