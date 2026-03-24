@@ -1680,7 +1680,7 @@ body {
   body.sidebar-pinned .ctx-banner { margin-right: 300px; }
   body.sidebar-pinned .keyboard-accessory-bar { right: 300px; }
   body.sidebar-pinned .mobile-input-panel { right: 300px; }
-  body.sidebar-pinned .board-view { margin-right: 300px; }
+  /* board-view is inside .main which already has margin-right: 300px — no extra margin needed */
   .main { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .header { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .session-indicator-bar { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
