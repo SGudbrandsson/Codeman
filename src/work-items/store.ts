@@ -234,7 +234,10 @@ export function updateWorkItem(id: string, updates: Partial<Omit<WorkItem, 'id' 
  * Delete a work item by ID. Returns true if deleted, false if not found.
  */
 export function deleteWorkItem(id: string): boolean {
-  const result = getDb().prepare('DELETE FROM work_items WHERE id = ?').run(id);
+  const db = getDb();
+  // Clear message FK references first (messages table lacks ON DELETE CASCADE)
+  db.prepare('UPDATE messages SET work_item_id = NULL WHERE work_item_id = ?').run(id);
+  const result = db.prepare('DELETE FROM work_items WHERE id = ?').run(id);
   return result.changes > 0;
 }
 
