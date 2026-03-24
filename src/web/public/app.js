@@ -2052,6 +2052,10 @@ const TranscriptView = {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
     this._lastSkillLaunch = null;
+    clearTimeout(this._workingDebounce);
+    this._workingDebounce = null;
+    clearTimeout(this._workingHideTimer);
+    this._workingHideTimer = null;
     this._thinkingBubbleEl = null;
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
@@ -2395,6 +2399,10 @@ const TranscriptView = {
 
     this._pendingToolUses = {};
     this._lastSkillLaunch = null;
+    clearTimeout(this._workingDebounce);
+    this._workingDebounce = null;
+    clearTimeout(this._workingHideTimer);
+    this._workingHideTimer = null;
     this._thinkingBubbleEl = null;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
@@ -4056,6 +4064,10 @@ class CodemanApp {
         // sent by tmux when attaching. Without this filter, they appear as typed text.
         // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
+        // Filter out OSC 10/11/12 color query responses (\x1b]10;rgb:rr/gg/bb\x07 etc.)
+        // xterm.js auto-responds to color queries from tmux; without this filter they
+        // prepend to the next message sent to the Claude PTY.
+        if (/^\x1b\]1[0-2];/.test(data)) return;
 
         // ── Local Echo Mode ──
         // When enabled, keystrokes are buffered locally in the overlay for
