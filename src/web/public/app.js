@@ -8356,6 +8356,11 @@ class CodemanApp {
     if (boardEl) boardEl.style.display = 'none';
     this._boardVisible = false;
     document.getElementById('boardViewBtn')?.classList.remove('active');
+    // Restore containers that showBoard() hid
+    const termEl = document.getElementById('terminalContainer');
+    const transEl = document.getElementById('transcriptView');
+    if (termEl) termEl.style.display = '';
+    if (transEl) transEl.style.display = '';
   }
 
   // ═══════════════════════════════════════════════════════════════
