@@ -251,7 +251,7 @@ describe('Agent Management UI — Playwright', () => {
 
       // Fill in the form
       await page.locator('#agentFormName').fill('Playwright Test Agent');
-      await page.locator('#agentFormRole').selectOption('analyst');
+      await page.locator('#agentFormRole').fill('analyst');
 
       // Submit by clicking the "Create Agent" button
       const createBtn = page.locator('#agentPanel button').filter({ hasText: /create agent/i });

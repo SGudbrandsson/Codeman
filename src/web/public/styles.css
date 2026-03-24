@@ -1680,6 +1680,7 @@ body {
   body.sidebar-pinned .ctx-banner { margin-right: 300px; }
   body.sidebar-pinned .keyboard-accessory-bar { right: 300px; }
   body.sidebar-pinned .mobile-input-panel { right: 300px; }
+  body.sidebar-pinned .board-view { margin-right: 300px; }
   .main { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .header { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .session-indicator-bar { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -10024,7 +10025,7 @@ kbd {
 }
 .tv-block--user .tv-bubble {
   background: #1e3a5f;
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px 12px 2px 12px;
   padding: 10px 14px;
   max-width: 80%;
@@ -11425,7 +11426,7 @@ kbd {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  z-index: 7999;
+  z-index: 9001;
 }
 .work-item-panel-overlay.open {
   display: block;
@@ -11442,7 +11443,7 @@ kbd {
   border-left: 1px solid rgba(255,255,255,0.07);
   transform: translateX(100%);
   transition: transform 0.22s cubic-bezier(0.4,0,0.2,1);
-  z-index: 8000;
+  z-index: 9002;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

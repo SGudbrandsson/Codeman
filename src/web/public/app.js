@@ -20646,10 +20646,12 @@ const AgentPanel = {
         </div>
         <div class="agent-form-field">
           <label class="agent-form-label">Role *</label>
-          <select id="agentFormRole" class="agent-form-select">
-            ${isCreate ? `<option value="">Select a role…</option>` : ''}
-            ${roles.map(r => `<option value="${escapeHtml(r)}" ${agent && agent.role === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
-          </select>
+          <input id="agentFormRole" class="agent-form-input" type="text" list="agentRoleSuggestions"
+            placeholder="e.g. codeman-dev"
+            value="${agent ? escapeHtml(agent.role) : ''}" />
+          <datalist id="agentRoleSuggestions">
+            ${roles.map(r => `<option value="${escapeHtml(r)}">`).join('')}
+          </datalist>
           <div id="agentFormRoleErr" class="agent-form-error" style="display:none">Role is required</div>
         </div>
         <div class="agent-form-field">

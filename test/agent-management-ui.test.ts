@@ -33,24 +33,26 @@ function appendInput(id: string, type = 'text', value = ''): HTMLInputElement {
 }
 
 /**
- * Appends a select element populated with options to document.body.
- * The first option is always an empty placeholder (create mode).
+ * Appends a role input element to document.body.
+ * Matches the real DOM: <input type="text" list="agentRoleSuggestions"> backed by a <datalist>.
+ * The first 5 preset roles appear as datalist suggestions but any free-text value is valid.
  */
-function appendRoleSelect(id: string): HTMLSelectElement {
-  const select = document.createElement('select');
-  select.id = id;
-  const blank = document.createElement('option');
-  blank.value = '';
-  blank.textContent = 'Select a role\u2026';
-  select.appendChild(blank);
+function appendRoleSelect(id: string): HTMLInputElement {
+  const datalist = document.createElement('datalist');
+  datalist.id = 'agentRoleSuggestions';
   for (const r of ['codeman-dev', 'orchestrator', 'analyst', 'keeps-engineer', 'deployment-agent']) {
     const opt = document.createElement('option');
     opt.value = r;
-    opt.textContent = r;
-    select.appendChild(opt);
+    datalist.appendChild(opt);
   }
-  document.body.appendChild(select);
-  return select;
+  document.body.appendChild(datalist);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = id;
+  input.setAttribute('list', 'agentRoleSuggestions');
+  document.body.appendChild(input);
+  return input;
 }
 
 /**
@@ -295,7 +297,7 @@ describe('AgentPanel._create()', () => {
     buildFormDom();
 
     (document.getElementById('agentFormName') as HTMLInputElement).value = 'My Test Agent';
-    (document.getElementById('agentFormRole') as HTMLSelectElement).value = 'codeman-dev';
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'codeman-dev';
 
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
@@ -320,7 +322,7 @@ describe('AgentPanel._save()', () => {
     buildFormDom();
 
     (document.getElementById('agentFormName') as HTMLInputElement).value = 'Updated Name';
-    (document.getElementById('agentFormRole') as HTMLSelectElement).value = 'orchestrator';
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'orchestrator';
 
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
@@ -494,8 +496,8 @@ describe('MCP env vars rendering', () => {
 describe('AgentPanel._validate()', () => {
   it('returns false and shows name error when displayName is empty', () => {
     buildFormDom();
-    // Leave name input empty; select a role
-    (document.getElementById('agentFormRole') as HTMLSelectElement).value = 'codeman-dev';
+    // Leave name input empty; set a role value
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'codeman-dev';
 
     const panel = makeAgentPanel(null);
     const result = panel._validate();
@@ -508,7 +510,7 @@ describe('AgentPanel._validate()', () => {
   it('returns false and shows role error when no role is selected', () => {
     buildFormDom();
     (document.getElementById('agentFormName') as HTMLInputElement).value = 'Valid Name';
-    // role select stays on blank option (value='')
+    // role input stays empty (value='')
 
     const panel = makeAgentPanel(null);
     const result = panel._validate();
@@ -516,5 +518,51 @@ describe('AgentPanel._validate()', () => {
     expect(result).toBe(false);
     const roleErr = document.getElementById('agentFormRoleErr') as HTMLElement;
     expect(roleErr.style.display).not.toBe('none');
+  });
+});
+
+describe('AgentPanel custom role — free-text role flows through _validate() and _buildBody()', () => {
+  it('_validate() returns true for a custom role string not in the preset list', () => {
+    buildFormDom();
+    (document.getElementById('agentFormName') as HTMLInputElement).value = 'Custom Role Agent';
+    // Set a custom role value that is not one of the 5 preset options
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'my-custom-role';
+
+    const panel = makeAgentPanel(null);
+    const result = panel._validate();
+
+    expect(result).toBe(true);
+  });
+
+  it('_buildBody() includes the custom role string verbatim in the returned body', () => {
+    buildFormDom();
+    (document.getElementById('agentFormName') as HTMLInputElement).value = 'Custom Role Agent';
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'my-custom-role';
+
+    const panel = makeAgentPanel(null);
+    const body = panel._buildBody();
+
+    expect(body.role).toBe('my-custom-role');
+    expect(body.displayName).toBe('Custom Role Agent');
+  });
+
+  it('_create() POSTs the custom role string to /api/agents', async () => {
+    buildFormDom();
+    (document.getElementById('agentFormName') as HTMLInputElement).value = 'Custom Role Agent';
+    (document.getElementById('agentFormRole') as HTMLInputElement).value = 'my-custom-role';
+
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: { agentId: 'new-custom-id' } }),
+    } as Response);
+
+    const panel = makeAgentPanel(null);
+    await panel._create();
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, options] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/agents');
+    const body = JSON.parse(options.body as string) as Record<string, unknown>;
+    expect(body.role).toBe('my-custom-role');
   });
 });

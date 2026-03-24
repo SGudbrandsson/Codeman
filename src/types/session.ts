@@ -30,8 +30,9 @@ import type { RespawnConfig } from './respawn.js';
 // Agent types
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Role of a persistent agent */
-export type AgentRole = 'keeps-engineer' | 'codeman-dev' | 'deployment-agent' | 'orchestrator' | 'analyst';
+/** Role of a persistent agent — any string is accepted; typical values are:
+ * 'keeps-engineer', 'codeman-dev', 'deployment-agent', 'orchestrator', 'analyst' */
+export type AgentRole = string;
 
 /** A capability (MCP server or skill) enabled for an agent */
 export interface AgentCapability {
