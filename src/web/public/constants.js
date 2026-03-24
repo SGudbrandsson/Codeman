@@ -328,6 +328,10 @@ const SSE_EVENTS = {
   WORK_ITEM_CLAIMED: 'workItem:claimed',
   WORK_ITEM_STATUS_CHANGED: 'workItem:statusChanged',
   WORK_ITEM_COMPLETED: 'workItem:completed',
+
+  // Agent messaging
+  AGENT_MESSAGE: 'agent:message',
+  AGENT_BROADCAST: 'agent:broadcast',
 };
 
 // ═══════════════════════════════════════════════════════════════

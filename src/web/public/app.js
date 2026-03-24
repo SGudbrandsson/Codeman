@@ -3382,6 +3382,10 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.WORK_ITEM_STATUS_CHANGED, '_onWorkItemStatusChanged'],
   [SSE_EVENTS.WORK_ITEM_COMPLETED, '_onWorkItemCompleted'],
 
+  // Agent messaging
+  [SSE_EVENTS.AGENT_MESSAGE, '_onAgentMessage'],
+  [SSE_EVENTS.AGENT_BROADCAST, '_onAgentBroadcast'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -17484,6 +17488,32 @@ class CodemanApp {
     this.boardView.addTimelineEvent({ type: 'workItem:completed', ...data });
   }
 
+  /** SSE handler: agent:message — targeted message delivered to an agent */
+  _onAgentMessage(data) {
+    // Add to timeline feed
+    if (this.boardView) {
+      this.boardView.addTimelineEvent({ type: 'agent:message', ...data });
+    }
+    // Refresh inbox badge on the target agent's session drawer row
+    if (data.toAgentId) {
+      SessionDrawer.refreshInboxBadge(data.toAgentId);
+    }
+  }
+
+  /** SSE handler: agent:broadcast — broadcast message sent to all agents */
+  _onAgentBroadcast(data) {
+    // Add to timeline feed
+    if (this.boardView) {
+      this.boardView.addTimelineEvent({ type: 'agent:broadcast', fromAgentId: data.fromAgentId });
+    }
+    // Refresh inbox badges for all agents (broadcast hits everyone)
+    if (Array.isArray(data.messages)) {
+      for (const msg of data.messages) {
+        if (msg.toAgentId) SessionDrawer.refreshInboxBadge(msg.toAgentId);
+      }
+    }
+  }
+
   renderMuxSessions() {
     // Debounce renders at 100ms to prevent excessive DOM updates
     if (this.renderMuxSessionsTimeout) {
@@ -18805,6 +18835,7 @@ const SessionDrawer = {
     const row = document.createElement('div');
     row.className = 'drawer-agent-row' + (isActive ? ' active' : '');
     row.dataset.sessionId = s.id;
+    if (profile && profile.agentId) row.dataset.agentId = profile.agentId;
 
     const dot = document.createElement('span');
     dot.className = 'drawer-agent-dot' + (isRunning ? ' running' : ' idle');
@@ -18817,9 +18848,48 @@ const SessionDrawer = {
     roleBadge.className = 'drawer-agent-role-badge';
     roleBadge.textContent = (profile && profile.role) ? profile.role : '';
 
+    // Inbox badge — will be populated async by refreshInboxBadge
+    const inboxBadge = document.createElement('span');
+    inboxBadge.className = 'drawer-agent-inbox-badge';
+    inboxBadge.style.display = 'none';
+    if (profile && profile.agentId) {
+      inboxBadge.dataset.agentId = profile.agentId;
+      // Async fetch unread count
+      fetch(`/api/agents/${encodeURIComponent(profile.agentId)}/inbox?unreadOnly=true&limit=1`)
+        .then(r => r.json())
+        .then(res => {
+          if (res.success && res.data && res.data.unreadCount > 0) {
+            inboxBadge.textContent = String(res.data.unreadCount > 99 ? '99+' : res.data.unreadCount);
+            inboxBadge.style.display = '';
+          }
+        })
+        .catch(() => {});
+    }
+
+    // Expandable inbox panel (hidden by default)
+    const inboxPanel = document.createElement('div');
+    inboxPanel.className = 'drawer-agent-inbox-panel';
+    inboxPanel.style.display = 'none';
+    if (profile && profile.agentId) {
+      inboxPanel.dataset.agentId = profile.agentId;
+    }
+
     row.appendChild(dot);
     row.appendChild(name);
     if (profile && profile.role) row.appendChild(roleBadge);
+    row.appendChild(inboxBadge);
+
+    // Click inbox badge to toggle inbox panel
+    inboxBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = inboxPanel.style.display !== 'none';
+      if (isOpen) {
+        inboxPanel.style.display = 'none';
+      } else {
+        this._loadInboxPanel(inboxPanel, profile && profile.agentId);
+        inboxPanel.style.display = '';
+      }
+    });
 
     row.addEventListener('click', () => {
       app.selectSession(s.id);
@@ -18828,7 +18898,84 @@ const SessionDrawer = {
       }
     });
 
-    return row;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'drawer-agent-row-wrapper';
+    wrapper.appendChild(row);
+    wrapper.appendChild(inboxPanel);
+
+    return wrapper;
+  },
+
+  /**
+   * Refresh the inbox unread-count badge for all agent rows matching agentId.
+   * Called when an agent:message or agent:broadcast SSE arrives.
+   */
+  refreshInboxBadge(agentId) {
+    if (!agentId) return;
+    fetch(`/api/agents/${encodeURIComponent(agentId)}/inbox?unreadOnly=true&limit=1`)
+      .then(r => r.json())
+      .then(res => {
+        const badges = document.querySelectorAll(`.drawer-agent-inbox-badge[data-agent-id="${CSS.escape(agentId)}"]`);
+        badges.forEach(badge => {
+          if (res.success && res.data && res.data.unreadCount > 0) {
+            badge.textContent = String(res.data.unreadCount > 99 ? '99+' : res.data.unreadCount);
+            badge.style.display = '';
+          } else {
+            badge.style.display = 'none';
+          }
+        });
+      })
+      .catch(() => {});
+  },
+
+  /**
+   * Load inbox messages into an expandable panel.
+   */
+  _loadInboxPanel(panel, agentId) {
+    if (!agentId) return;
+    panel.innerHTML = '<div class="drawer-agent-inbox-loading">Loading...</div>';
+    fetch(`/api/agents/${encodeURIComponent(agentId)}/inbox?limit=20`)
+      .then(r => r.json())
+      .then(res => {
+        if (!res.success || !res.data || res.data.messages.length === 0) {
+          panel.innerHTML = '<div class="drawer-agent-inbox-empty">No messages</div>';
+          return;
+        }
+        const msgs = res.data.messages;
+        let html = '<div class="drawer-agent-inbox-list">';
+        for (const msg of msgs) {
+          const isUnread = !msg.readAt;
+          const time = msg.sentAt ? new Date(msg.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+          html += `<div class="drawer-agent-inbox-item${isUnread ? ' unread' : ''}" data-msg-id="${escapeHtml(msg.id)}" data-agent-id="${escapeHtml(agentId)}">`;
+          html += `<span class="inbox-type-badge">${escapeHtml(msg.type)}</span>`;
+          html += `<span class="inbox-from">${escapeHtml(msg.fromAgentId)}</span>`;
+          html += `<span class="inbox-subject">${escapeHtml(msg.subject)}</span>`;
+          html += `<span class="inbox-time">${escapeHtml(time)}</span>`;
+          html += `<div class="inbox-body" style="display:none">${escapeHtml(msg.body)}</div>`;
+          html += '</div>';
+        }
+        html += '</div>';
+        panel.innerHTML = html;
+
+        // Click to expand body + mark read
+        panel.querySelectorAll('.drawer-agent-inbox-item').forEach(item => {
+          item.addEventListener('click', () => {
+            const bodyEl = item.querySelector('.inbox-body');
+            if (bodyEl) bodyEl.style.display = bodyEl.style.display === 'none' ? '' : 'none';
+            const msgId = item.dataset.msgId;
+            const aid = item.dataset.agentId;
+            if (msgId && aid && item.classList.contains('unread')) {
+              item.classList.remove('unread');
+              fetch(`/api/agents/${encodeURIComponent(aid)}/messages/${encodeURIComponent(msgId)}/read`, { method: 'PATCH' })
+                .then(() => SessionDrawer.refreshInboxBadge(aid))
+                .catch(() => {});
+            }
+          });
+        });
+      })
+      .catch(() => {
+        panel.innerHTML = '<div class="drawer-agent-inbox-error">Failed to load messages</div>';
+      });
   },
 
   _render() {

@@ -331,6 +331,13 @@ export const WorkItemClaimed = 'workItem:claimed' as const;
 /** Work item status transitioned. */
 export const WorkItemStatusChanged = 'workItem:statusChanged' as const;
 
+// ─── Agent Messaging ──────────────────────────────────────────────────────────
+
+/** A targeted message was delivered to an agent. */
+export const AgentMessage = 'agent:message' as const;
+/** A broadcast message was sent to all agents. */
+export const AgentBroadcast = 'agent:broadcast' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -527,6 +534,10 @@ export const SseEvent = {
   WorkItemUpdated,
   WorkItemClaimed,
   WorkItemStatusChanged,
+
+  // Agent messaging
+  AgentMessage,
+  AgentBroadcast,
 
   // Cases
   CaseCreated,
