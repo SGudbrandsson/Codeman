@@ -67,12 +67,13 @@
           <span class="connection-dot" id="connectionDot"></span>
           <span class="connection-text" id="connectionText"></span>
         </div>
-        <div class="header-font-controls">
+        <!-- Hidden originals kept for JS compatibility; overflow menu reads/syncs from these -->
+        <div class="header-font-controls" style="display:none">
           <button class="btn-icon-header btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)" aria-label="Decrease font size">A-</button>
           <span class="font-size-display" id="fontSizeDisplay" aria-label="Current font size">14</span>
           <button class="btn-icon-header btn-sm" onclick="app.increaseFontSize()" title="Increase font (Ctrl++)" aria-label="Increase font size">A+</button>
         </div>
-        <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
+        <div class="header-system-stats" id="headerSystemStats" title="System resource usage" style="display:none">
           <div class="stat-item">
             <span class="stat-label">CPU</span>
             <div class="stat-bar">
@@ -98,19 +99,32 @@
           <span class="mcp-chip-label">Plugins</span>
           <span class="mcp-chip-badge" style="display:none"></span>
         </button>
-        <button id="ctxChipBtn" class="mcp-chip ctx-chip" title="Context Window" style="display:none" aria-label="Context window usage">
-          <span class="mcp-chip-icon">&#x25a1;</span>
-          <span class="mcp-chip-label">CTX</span>
-          <span class="mcp-chip-badge" id="ctxChipBadge" style="display:none"></span>
-        </button>
-        <button class="btn-icon-header btn-health-analyzer" id="healthAnalyzerBtn" onclick="app.openHealthAnalyzer()" title="Analyze session health" aria-label="Analyze session health"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></button>
-        <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <button id="healthAnalyzerBtn" style="display:none" onclick="app.openHealthAnalyzer()"></button>
+        <button class="btn-icon-header btn-notifications" style="display:none" onclick="app.toggleNotifications()">
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
-        <button class="btn-icon-header btn-lifecycle-log" onclick="app.openLifecycleLog()" title="Session Lifecycle Log" aria-label="Open session lifecycle log"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></button>
-        <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="update-badge" id="updateBadge" style="display:none;" aria-label="Update available"></span></button>
-        <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
+        <button class="btn-icon-header btn-lifecycle-log" style="display:none" onclick="app.openLifecycleLog()"></button>
+        <button class="btn-icon-header btn-settings" style="display:none" onclick="app.openAppSettings()"><span class="update-badge" id="updateBadge" style="display:none;" aria-label="Update available"></span></button>
+        <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions" style="display:none">0 tokens</div>
+        <!-- New header: Model chip, Context arc, Overflow menu -->
+        <button id="modelChipBtn" class="model-chip" style="display:none"
+                aria-label="Current model, click to switch"
+                aria-haspopup="true" aria-expanded="false">
+          <span class="model-chip-name" id="modelChipName">Sonnet</span>
+          <span class="model-chip-caret">&#9660;</span>
+        </button>
+        <button id="ctxArcBtn" class="ctx-arc-btn" style="display:none"
+                aria-label="Context window usage" title="Context window usage">
+          <svg class="ctx-arc-svg" width="32" height="32" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="ctx-arc-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3.5"/>
+            <circle class="ctx-arc-fill" id="ctxArcFill" cx="18" cy="18" r="15.9155" fill="none"
+              stroke-width="3.5" stroke-dasharray="0 100" stroke-dashoffset="25"
+              stroke-linecap="round"/>
+          </svg>
+          <span class="ctx-arc-pct" id="ctxArcPct">0</span>
+        </button>
+        <button id="overflowMenuBtn" class="btn-overflow"
+                aria-label="More options" aria-haspopup="true" aria-expanded="false">&#8942;</button>
       </div>
       <div id="contextBar" class="ctx-bar" style="display:none" aria-label="Context usage bar">
         <div class="ctx-bar-seg ctx-seg-system" id="ctxSegSystem" style="width:0%"></div>
@@ -119,6 +133,24 @@
         <div class="ctx-bar-seg ctx-seg-free" id="ctxSegFree" style="width:100%"></div>
       </div>
     </header>
+
+    <!-- Overflow menu (outside header so it can overlap session tabs) -->
+    <div id="overflowMenu" class="overflow-menu" style="display:none" role="menu">
+      <button class="overflow-item" id="ovfMcpBtn" role="menuitem">MCP Servers</button>
+      <button class="overflow-item" id="ovfPluginsBtn" role="menuitem">Plugins</button>
+      <button class="overflow-item" id="ovfHealthBtn" role="menuitem">Health Analyzer</button>
+      <button class="overflow-item" id="ovfNotifBtn" role="menuitem">
+        Notifications <span id="ovfNotifBadge" style="display:none"></span>
+      </button>
+      <button class="overflow-item" id="ovfLifecycleBtn" role="menuitem">Lifecycle Log</button>
+      <button class="overflow-item" id="ovfSettingsBtn" role="menuitem">Settings <span id="ovfUpdateBadge" style="display:none">&#11044;</span></button>
+      <div class="overflow-font-controls" role="menuitem">
+        <button id="ovfFontDec">A-</button>
+        <span id="ovfFontSize">14</span>
+        <button id="ovfFontInc">A+</button>
+      </div>
+      <div class="overflow-tokens" id="ovfHeaderTokens">0 tokens</div>
+    </div>
 
     <!-- Session / Project Indicator Bar -->
     <div id="sessionIndicatorBar" class="session-indicator-bar" style="display:none;" aria-label="Active session" aria-live="polite">
@@ -2373,6 +2405,12 @@
       <button class="mcp-btn-cancel" id="mcpFormCancel">Cancel</button>
     </div>
   </div>
+</div>
+
+<!-- Model picker (position anchored dynamically by ModelPicker.open()) -->
+<div id="modelPicker" class="model-picker" style="display:none" role="listbox"
+     aria-label="Choose model">
+  <!-- items injected dynamically by ModelPicker._render() -->
 </div>
 </body>
 </html>

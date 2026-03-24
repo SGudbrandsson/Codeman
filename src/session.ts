@@ -100,8 +100,8 @@ const IDLE_DETECTION_DELAY_MS = 2000;
 /** Graceful shutdown delay when stopping session (100ms) */
 const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
-/** Context window size — all current Claude models use 200k tokens. */
-const CONTEXT_WINDOW_TOKENS = 200_000;
+// CONTEXT_WINDOW_TOKENS constant removed — context percentage now uses snapshot
+// formula per message: input_tokens + cache_creation_input_tokens + cache_read_input_tokens
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
@@ -146,6 +146,8 @@ export interface ClaudeMessage {
       cache_read_input_tokens?: number;
       cache_creation_input_tokens?: number;
     };
+    /** Model used for this message (e.g., "claude-opus-4-5", "claude-sonnet-4-5") */
+    model?: string;
   };
   /** Final result text (on result messages) */
   result?: string;
@@ -325,6 +327,7 @@ export class Session extends EventEmitter {
   // Claude Code CLI info (parsed from terminal startup)
   private _cliVersion: string = '';
   private _cliModel: string = '';
+  private _currentModel: string = ''; // confirmed model from stream-json assistant messages
   private _cliAccountType: string = '';
   private _cliLatestVersion: string = '';
   private _cliInfoParsed: boolean = false; // Only parse once per session
@@ -921,6 +924,7 @@ export class Session extends EventEmitter {
       flickerFilterEnabled: this._flickerFilterEnabled,
       cliVersion: this._cliVersion || undefined,
       cliModel: this._cliModel || undefined,
+      currentModel: this._currentModel || undefined,
       cliAccountType: this._cliAccountType || undefined,
       cliLatestVersion: this._cliLatestVersion || undefined,
       openCodeConfig: this._openCodeConfig,
@@ -1985,6 +1989,18 @@ export class Session extends EventEmitter {
                 this._textOutput.append(block.text);
               }
             }
+
+            // Extract model from assistant message and emit if changed
+            if (msg.message.model && msg.message.model !== this._currentModel) {
+              this._currentModel = msg.message.model;
+              this.emit('cliInfoUpdated', {
+                version: this._cliVersion,
+                model: this._currentModel,
+                accountType: this._cliAccountType,
+                latestVersion: this._cliLatestVersion,
+              });
+            }
+
             // Track tokens from usage (with validation)
             if (msg.message.usage) {
               const inputDelta = msg.message.usage.input_tokens || 0;
@@ -2011,13 +2027,20 @@ export class Session extends EventEmitter {
               this._autoOps.checkAutoCompact();
               this._autoOps.checkAutoClear();
 
-              // Emit passive context usage update
-              if (inputDelta > 0 && this._totalInputTokens > 0) {
-                const maxTokens = CONTEXT_WINDOW_TOKENS;
+              // Emit passive context usage update using snapshot formula.
+              // input_tokens is NOT a delta — it's the residual. The full context is:
+              // input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+              const snapshotTotal =
+                (msg.message.usage.input_tokens || 0) +
+                (msg.message.usage.cache_creation_input_tokens || 0) +
+                (msg.message.usage.cache_read_input_tokens || 0);
+              if (snapshotTotal > 0) {
+                this._contextWindowTokens = snapshotTotal;
+                const maxTokens = this._contextWindowMax ?? 200_000;
                 this.emit('contextUpdate', {
-                  inputTokens: this._totalInputTokens,
+                  inputTokens: snapshotTotal,
                   maxTokens,
-                  pct: Math.min(100, Math.round((this._totalInputTokens / maxTokens) * 100)),
+                  pct: Math.min(100, Math.round((snapshotTotal / maxTokens) * 100)),
                 });
               }
             }
