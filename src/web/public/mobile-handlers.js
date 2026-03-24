@@ -559,18 +559,42 @@ const SwipeHandler = {
     return false;
   },
 
+  /**
+   * Walk up the DOM from `el` looking for an ancestor that scrolls horizontally.
+   * Returns that element if it still has scroll room in the given direction
+   * (direction: -1 = left/next, +1 = right/prev), otherwise null.
+   */
+  _hScrollableAncestor(el, direction) {
+    let node = el;
+    while (node && node !== document.body) {
+      if (node.scrollWidth > node.clientWidth + 2) {
+        const style = window.getComputedStyle(node);
+        const ox = style.overflowX;
+        if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') {
+          // direction -1 = swiping left — check room to scroll right
+          if (direction === -1 && node.scrollLeft + node.clientWidth < node.scrollWidth - 2) return node;
+          // direction +1 = swiping right — check room to scroll left
+          if (direction === 1 && node.scrollLeft > 2) return node;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  },
+
   _onTouchStart(e) {
     if (this._isDisabled()) return;
     if (!e.touches || e.touches.length !== 1) return;
 
-    this.startX    = e.touches[0].clientX;
-    this.startY    = e.touches[0].clientY;
-    this.startTime = Date.now();
-    this._deltaX   = 0;
-    this._locked   = false;
-    this._cancelled= false;
-    this._targetId = null;
-    this._direction= 0;
+    this.startX     = e.touches[0].clientX;
+    this.startY     = e.touches[0].clientY;
+    this.startTime  = Date.now();
+    this._deltaX    = 0;
+    this._locked    = false;
+    this._cancelled = false;
+    this._targetId  = null;
+    this._direction = 0;
+    this._touchTarget = e.touches[0].target;
   },
 
   _onTouchMove(e) {
@@ -594,9 +618,20 @@ const SwipeHandler = {
         return;
       }
 
+      const direction = dx > 0 ? 1 : -1;
+
+      // If touch started inside a horizontally scrollable element that still has
+      // room to scroll in the swipe direction, let the element scroll instead of
+      // switching sessions. Cancel only this gesture — the element will receive
+      // the touch normally since we have not called preventDefault() yet.
+      if (this._hScrollableAncestor(this._touchTarget, direction)) {
+        this._cancelled = true;
+        return;
+      }
+
       // Horizontal gesture — lock in
       this._locked    = true;
-      this._direction = dx > 0 ? 1 : -1;  // +1 = prev, -1 = next
+      this._direction = direction;  // +1 = prev, -1 = next
 
       // Resolve target session
       this._targetId = this._resolveTarget(this._direction);
