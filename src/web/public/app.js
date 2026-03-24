@@ -2586,22 +2586,22 @@ const TranscriptView = {
     const targetDuration = Math.min(800, Math.max(300, text.length * 4));
     const startTime = performance.now();
     let lastCharsShown = 0;
+    // Scroll once at start — NOT every frame (prevents "pushing up" jank)
+    this._scrollToBottom(false);
     const tick = () => {
-      if (!el.isConnected) return; // element removed mid-animation - stop silently
+      if (!el.isConnected) return;
       const elapsed = performance.now() - startTime;
       const t = Math.min(elapsed / targetDuration, 1);
-      // Cubic ease-out: starts fast, decelerates toward end
       const eased = 1 - Math.pow(1 - t, 3);
       const charsToShow = Math.floor(eased * text.length);
       if (charsToShow > lastCharsShown) {
         content.textContent = text.slice(0, charsToShow);
-        this._scrollToBottom(false);
         lastCharsShown = charsToShow;
       }
       if (t < 1) {
         requestAnimationFrame(tick);
       } else {
-        // Final pass: render full markdown (same as original pattern)
+        // Final pass: render full markdown
         content.innerHTML = renderMarkdown(text); // eslint-disable-line no-unsanitized/property
         this._scrollToBottom(false);
       }
