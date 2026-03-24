@@ -3265,3 +3265,10 @@ html.mobile-init .file-browser-panel {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* Prevent new header chips from shrinking on narrow screens */
+.model-chip,
+.ctx-arc-btn,
+.btn-overflow {
+  flex-shrink: 0;
+}

@@ -212,6 +212,8 @@ export interface SessionState {
   cliVersion?: string;
   /** Claude model in use (parsed from terminal, e.g., "Opus 4.5") */
   cliModel?: string;
+  /** Confirmed model from stream-json assistant messages (e.g., "claude-opus-4-5") */
+  currentModel?: string;
   /** Account type (parsed from terminal, e.g., "Claude Max", "API") */
   cliAccountType?: string;
   /** Latest CLI version available (parsed from version check) */

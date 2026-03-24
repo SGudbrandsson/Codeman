@@ -1349,8 +1349,9 @@ const ContextBar = {
 
   init() {
     this._bar       = document.getElementById('contextBar');
-    this._chip      = document.getElementById('ctxChipBtn');
-    this._badge     = document.getElementById('ctxChipBadge');
+    this._arcBtn    = document.getElementById('ctxArcBtn');
+    this._arcFill   = document.getElementById('ctxArcFill');
+    this._arcPct    = document.getElementById('ctxArcPct');
     this._banner    = document.getElementById('contextBanner');
     this._bannerTxt = document.getElementById('contextBannerText');
     this._bannerClr = document.getElementById('contextBannerClear');
@@ -1363,7 +1364,7 @@ const ContextBar = {
     this._segTools  = document.getElementById('ctxSegTools');
     this._segFree   = document.getElementById('ctxSegFree');
 
-    this._chip?.addEventListener('click', () => this.toggle());
+    this._arcBtn?.addEventListener('click', () => this.toggle());
     document.getElementById('contextPanelClose')?.addEventListener('click', () => this.close());
 
     this._bannerClr?.addEventListener('click', () => {
@@ -1387,7 +1388,7 @@ const ContextBar = {
     if (data.id === sid) {
       this._updateBar(data);
       this._checkBanner(data);
-      this._updateChip(data);
+      this._updateArc(data);
       if (this._panel?.classList.contains('open')) this._renderPanel(data);
     }
   },
@@ -1397,11 +1398,11 @@ const ContextBar = {
     if (data) {
       this._updateBar(data);
       this._checkBanner(data);
-      this._updateChip(data);
+      this._updateArc(data);
     } else {
       this._clearBar();
       if (this._banner) this._banner.style.display = 'none';
-      this._clearChip();
+      this._clearArc();
     }
   },
 
@@ -1451,20 +1452,20 @@ const ContextBar = {
     }
   },
 
-  _updateChip(data) {
-    if (!this._chip || !this._badge) return;
-    this._chip.style.display = '';
-    this._badge.style.display = '';
-    this._badge.textContent = data.pct + '%';
-    this._chip.classList.remove('ctx-green', 'ctx-amber', 'ctx-red');
-    if (data.pct >= 85) this._chip.classList.add('ctx-red');
-    else if (data.pct >= 60) this._chip.classList.add('ctx-amber');
-    else this._chip.classList.add('ctx-green');
+  _updateArc(data) {
+    if (!this._arcBtn || !this._arcFill || !this._arcPct) return;
+    this._arcBtn.style.display = '';
+    const pct = data.pct || 0;
+    this._arcFill.setAttribute('stroke-dasharray', pct + ' ' + (100 - pct));
+    // Color: cyan < 60%, amber 60-85%, red 85%+
+    const strokeColor = pct >= 85 ? '#f87171' : pct >= 60 ? '#fbbf24' : '#22d3ee';
+    this._arcFill.setAttribute('stroke', strokeColor);
+    this._arcPct.textContent = pct;
   },
 
-  _clearChip() {
-    if (!this._chip) return;
-    this._chip.style.display = 'none';
+  _clearArc() {
+    if (!this._arcBtn) return;
+    this._arcBtn.style.display = 'none';
   },
 
   open(sessionId) {
@@ -1473,7 +1474,7 @@ const ContextBar = {
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
-    this._chip?.classList.add('active');
+    this._arcBtn?.classList.add('active');
     PanelBackdrop.show();
     const sid = sessionId || app.activeSessionId;
     if (sid) {
@@ -1489,7 +1490,7 @@ const ContextBar = {
   close() {
     if (!this._panel) return;
     this._panel.classList.remove('open');
-    this._chip?.classList.remove('active');
+    this._arcBtn?.classList.remove('active');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
@@ -1532,6 +1533,250 @@ const ContextBar = {
     if (suggestion) suggestion.style.display = pct >= 90 ? '' : 'none';
   },
 };
+
+// ===================================================================
+// Model Indicator Chip + Picker
+// ===================================================================
+const ModelPicker = {
+  MODELS: [
+    { id: 'claude-opus-4-5',    short: 'Opus',    desc: 'Most capable',      ctx: '200k' },
+    { id: 'claude-sonnet-4-5',  short: 'Sonnet',  desc: 'Balanced',          ctx: '200k' },
+    { id: 'claude-haiku-3-5',   short: 'Haiku',   desc: 'Fast & lightweight', ctx: '200k' },
+    { id: 'claude-opus-4',      short: 'Opus 4',  desc: 'Latest Opus',       ctx: '200k' },
+    { id: 'claude-sonnet-4',    short: 'Sonnet 4',desc: 'Latest Sonnet',     ctx: '200k' },
+    { id: 'claude-haiku-3',     short: 'Haiku 3', desc: 'Fast v3',           ctx: '200k' },
+  ],
+  _currentModelId: '',
+  _pendingSwitch: null,
+
+  init() {
+    this._chipBtn = document.getElementById('modelChipBtn');
+    this._chipName = document.getElementById('modelChipName');
+    this._picker = document.getElementById('modelPicker');
+    this._chipBtn?.addEventListener('click', () => this.toggle());
+    document.addEventListener('click', (e) => {
+      if (this._picker && this._picker.style.display !== 'none') {
+        if (!this._picker.contains(e.target) && e.target !== this._chipBtn && !this._chipBtn?.contains(e.target)) {
+          this.close();
+        }
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this._picker && this._picker.style.display !== 'none') {
+        this.close();
+      }
+    });
+  },
+
+  setModel(modelStr) {
+    if (!modelStr) return;
+    // Match against model list by substring
+    const lower = modelStr.toLowerCase();
+    const match = this.MODELS.find(m => lower.includes(m.id) || m.id.includes(lower));
+    if (match) {
+      this._currentModelId = match.id;
+      if (this._chipName) this._chipName.textContent = match.short;
+      if (this._chipBtn) this._chipBtn.style.display = '';
+      // Resolve pending switch if model matches
+      if (this._pendingSwitch && this._pendingSwitch.modelId === match.id) {
+        clearTimeout(this._pendingSwitch.timer);
+        this._pendingSwitch = null;
+      }
+    } else {
+      // Unknown model — show raw short name (first word)
+      const shortName = modelStr.split('-').slice(-2).join(' ');
+      if (this._chipName) this._chipName.textContent = shortName || modelStr;
+      if (this._chipBtn) this._chipBtn.style.display = '';
+    }
+  },
+
+  open() {
+    if (!this._picker || !this._chipBtn) return;
+    this._render();
+    const rect = this._chipBtn.getBoundingClientRect();
+    this._picker.style.display = '';
+    // Anchor to right edge of chip button
+    const pickerWidth = this._picker.offsetWidth || 220;
+    let left = rect.right - pickerWidth;
+    if (left < 4) left = 4;
+    this._picker.style.top = (rect.bottom + 4) + 'px';
+    this._picker.style.left = left + 'px';
+    this._chipBtn.setAttribute('aria-expanded', 'true');
+  },
+
+  close() {
+    if (!this._picker) return;
+    this._picker.style.display = 'none';
+    this._chipBtn?.setAttribute('aria-expanded', 'false');
+  },
+
+  toggle() {
+    if (this._picker && this._picker.style.display !== 'none') this.close();
+    else this.open();
+  },
+
+  _render() {
+    if (!this._picker) return;
+    while (this._picker.firstChild) this._picker.removeChild(this._picker.firstChild);
+    this.MODELS.forEach(m => {
+      const btn = document.createElement('button');
+      btn.className = 'model-picker-item' + (m.id === this._currentModelId ? ' active' : '');
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-selected', m.id === this._currentModelId ? 'true' : 'false');
+
+      const shortEl = document.createElement('span');
+      shortEl.className = 'mpi-short';
+      shortEl.textContent = m.short;
+
+      const descEl = document.createElement('span');
+      descEl.className = 'mpi-desc';
+      descEl.textContent = m.desc;
+
+      const ctxEl = document.createElement('span');
+      ctxEl.className = 'mpi-ctx';
+      ctxEl.textContent = m.ctx;
+
+      btn.appendChild(shortEl);
+      btn.appendChild(descEl);
+      btn.appendChild(ctxEl);
+      btn.addEventListener('click', () => this._select(m));
+      this._picker.appendChild(btn);
+    });
+  },
+
+  _select(m) {
+    this.close();
+    const sid = window.app ? app.activeSessionId : null;
+    if (!sid) return;
+    app._sendInputAsync(sid, '/model ' + m.id + '\r');
+    // Set up 10s confirmation timeout
+    if (this._pendingSwitch) clearTimeout(this._pendingSwitch.timer);
+    this._pendingSwitch = {
+      modelId: m.id,
+      timer: setTimeout(() => {
+        this._pendingSwitch = null;
+        this._showToast('Model switch not confirmed — try again');
+      }, 10000),
+    };
+  },
+
+  _showToast(msg) {
+    if (window.app && app.showToast) app.showToast(msg, 'warn');
+    else console.warn('[ModelPicker]', msg);
+  },
+};
+
+// ===================================================================
+// Overflow Menu (⋮) — houses moved header items
+// ===================================================================
+const OverflowMenu = {
+  init() {
+    this._menuBtn = document.getElementById('overflowMenuBtn');
+    this._menu = document.getElementById('overflowMenu');
+    this._menuBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggle(); });
+    document.addEventListener('click', (e) => {
+      if (this._menu && this._menu.style.display !== 'none') {
+        if (!this._menu.contains(e.target) && e.target !== this._menuBtn) {
+          this.close();
+        }
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this._menu && this._menu.style.display !== 'none') {
+        this.close();
+      }
+    });
+    // Wire overflow items to their real handlers
+    document.getElementById('ovfMcpBtn')?.addEventListener('click', () => {
+      this.close();
+      const sid = window.app ? app.activeSessionId : null;
+      if (sid) McpPanel.open(sid);
+    });
+    document.getElementById('ovfPluginsBtn')?.addEventListener('click', () => {
+      this.close();
+      const sid = window.app ? app.activeSessionId : null;
+      if (sid) PluginsPanel.open(sid);
+    });
+    document.getElementById('ovfHealthBtn')?.addEventListener('click', () => {
+      this.close();
+      if (window.app && app.openHealthAnalyzer) app.openHealthAnalyzer();
+    });
+    document.getElementById('ovfNotifBtn')?.addEventListener('click', () => {
+      this.close();
+      if (window.app && app.toggleNotifications) app.toggleNotifications();
+    });
+    document.getElementById('ovfLifecycleBtn')?.addEventListener('click', () => {
+      this.close();
+      if (window.app && app.openLifecycleLog) app.openLifecycleLog();
+    });
+    document.getElementById('ovfSettingsBtn')?.addEventListener('click', () => {
+      this.close();
+      if (window.app && app.openAppSettings) app.openAppSettings();
+    });
+    document.getElementById('ovfFontDec')?.addEventListener('click', () => {
+      if (window.app && app.decreaseFontSize) app.decreaseFontSize();
+      this._syncFontSize();
+    });
+    document.getElementById('ovfFontInc')?.addEventListener('click', () => {
+      if (window.app && app.increaseFontSize) app.increaseFontSize();
+      this._syncFontSize();
+    });
+  },
+
+  open() {
+    if (!this._menu || !this._menuBtn) return;
+    this._syncAll();
+    const rect = this._menuBtn.getBoundingClientRect();
+    this._menu.style.display = '';
+    // Anchor below button, aligned to right edge
+    const menuWidth = this._menu.offsetWidth || 200;
+    let left = rect.right - menuWidth;
+    if (left < 4) left = 4;
+    this._menu.style.top = (rect.bottom + 4) + 'px';
+    this._menu.style.left = left + 'px';
+    this._menuBtn.setAttribute('aria-expanded', 'true');
+  },
+
+  close() {
+    if (!this._menu) return;
+    this._menu.style.display = 'none';
+    this._menuBtn?.setAttribute('aria-expanded', 'false');
+  },
+
+  toggle() {
+    if (this._menu && this._menu.style.display !== 'none') this.close();
+    else this.open();
+  },
+
+  _syncFontSize() {
+    const display = document.getElementById('fontSizeDisplay');
+    const ovfDisplay = document.getElementById('ovfFontSize');
+    if (display && ovfDisplay) ovfDisplay.textContent = display.textContent;
+  },
+
+  _syncAll() {
+    // Sync font size
+    this._syncFontSize();
+    // Sync token count
+    const headerTokens = document.getElementById('headerTokens');
+    const ovfTokens = document.getElementById('ovfHeaderTokens');
+    if (headerTokens && ovfTokens) ovfTokens.textContent = headerTokens.textContent;
+    // Sync notification badge
+    const notifBadge = document.getElementById('notifBadge');
+    const ovfNotifBadge = document.getElementById('ovfNotifBadge');
+    if (notifBadge && ovfNotifBadge) {
+      ovfNotifBadge.textContent = notifBadge.textContent;
+      ovfNotifBadge.style.display = notifBadge.style.display;
+    }
+    // Sync update badge
+    const updateBadge = document.getElementById('updateBadge');
+    const ovfUpdateBadge = document.getElementById('ovfUpdateBadge');
+    if (updateBadge && ovfUpdateBadge) {
+      ovfUpdateBadge.style.display = updateBadge.style.display;
+    }
+  },
+};
+
 /** In-session terminal search using xterm.js SearchAddon. Ctrl+F to open. */
 const TerminalSearch = {
   _bar: null,
@@ -3687,6 +3932,8 @@ class CodemanApp {
     McpPanel.init();
     PluginsPanel.init();
     ContextBar.init();
+    ModelPicker.init();
+    OverflowMenu.init();
     SessionIndicatorBar.init();
     PanelBackdrop.init();
     TerminalSearch.init();
@@ -5594,6 +5841,7 @@ class CodemanApp {
     }
     if (data.sessionId === this.activeSessionId) {
       this.updateCliInfoDisplay();
+      if (data.model) ModelPicker.setModel(data.model);
     }
   }
 
@@ -7792,6 +8040,9 @@ class CodemanApp {
     if (typeof McpPanel !== 'undefined') McpPanel.showForSession(sessionId);
     PluginsPanel.showChip();
     ContextBar.onSessionSelected(sessionId);
+    const _msCliInfo = this.sessions.get(sessionId);
+    if (_msCliInfo && _msCliInfo.cliModel) ModelPicker.setModel(_msCliInfo.cliModel);
+    else if (_msCliInfo && _msCliInfo.currentModel) ModelPicker.setModel(_msCliInfo.currentModel);
     this.renderElicitationPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mark-active`, { method: 'POST' }).catch(() => {});
