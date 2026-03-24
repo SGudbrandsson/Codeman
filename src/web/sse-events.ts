@@ -338,6 +338,13 @@ export const VaultCaptureComplete = 'vault:captureComplete' as const;
 /** Vault consolidation completed — pattern notes have been written. */
 export const VaultConsolidateComplete = 'vault:consolidateComplete' as const;
 
+// ─── Agent Messaging ──────────────────────────────────────────────────────────
+
+/** A targeted message was delivered to an agent. */
+export const AgentMessage = 'agent:message' as const;
+/** A broadcast message was sent to all agents. */
+export const AgentBroadcast = 'agent:broadcast' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -538,6 +545,10 @@ export const SseEvent = {
   // Vault
   VaultCaptureComplete,
   VaultConsolidateComplete,
+
+  // Agent messaging
+  AgentMessage,
+  AgentBroadcast,
 
   // Cases
   CaseCreated,

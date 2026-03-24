@@ -45,6 +45,21 @@ CREATE TABLE IF NOT EXISTS dependencies (
 
 CREATE INDEX IF NOT EXISTS idx_wi_status ON work_items(status);
 CREATE INDEX IF NOT EXISTS idx_deps_to_id ON dependencies(to_id);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id             TEXT PRIMARY KEY,
+  from_agent_id  TEXT NOT NULL,
+  to_agent_id    TEXT,
+  work_item_id   TEXT REFERENCES work_items(id),
+  type           TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  body           TEXT NOT NULL,
+  context        TEXT,
+  sent_at        TEXT NOT NULL,
+  read_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_to_agent ON messages(to_agent_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at DESC);
 `;
 
 /**
