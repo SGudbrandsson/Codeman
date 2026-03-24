@@ -1304,8 +1304,13 @@ export class Session extends EventEmitter {
             this._status = 'busy';
             this.emit('working');
           }
-          this._awaitingIdleConfirmation = false;
-          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          // Only cancel the idle timeout if we haven't yet seen the ❯ prompt.
+          // Once _awaitingIdleConfirmation is true, a spinner char in a tmux redraw
+          // must NOT prevent the timeout from firing — that would leave the
+          // Processing... bubble stuck forever.
+          if (!this._awaitingIdleConfirmation) {
+            if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          }
         }
       }
 
@@ -2750,8 +2755,10 @@ export class Session extends EventEmitter {
             this._status = 'busy';
             this.emit('working');
           }
-          this._awaitingIdleConfirmation = false;
-          if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          // Only cancel the idle timeout if we haven't yet seen the ❯ prompt.
+          if (!this._awaitingIdleConfirmation) {
+            if (this.activityTimeout) clearTimeout(this.activityTimeout);
+          }
         }
       }
 
