@@ -46,6 +46,15 @@ export interface OrchestratorStatus {
   recentDecisions: OrchestratorDecision[];
 }
 
+export interface MergePrepResult {
+  passed: boolean;
+  tscErrors?: string;
+  lintErrors?: string;
+  commitsAhead?: number;
+  failures: string[];
+  timestamp: string;
+}
+
 export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
   pollIntervalMs: 30000,
   stallThresholdMs: 900000,

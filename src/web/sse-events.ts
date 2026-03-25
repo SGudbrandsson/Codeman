@@ -314,6 +314,12 @@ export const OrchestratorDispatch = 'orchestrator:dispatch' as const;
 export const OrchestratorDecision = 'orchestrator:decision' as const;
 /** Orchestrator detected a stall in a dispatched work item. */
 export const OrchestratorStall = 'orchestrator:stall' as const;
+/** Orchestrator started merge-prep checks for a completed work item. */
+export const OrchestratorMergePrepStarted = 'orchestrator:mergePrepStarted' as const;
+/** Orchestrator merge-prep checks completed with results. */
+export const OrchestratorMergePrepCompleted = 'orchestrator:mergePrepCompleted' as const;
+/** Orchestrator detected work item completion — includes merge-prep results. */
+export const OrchestratorCompletion = 'orchestrator:completion' as const;
 
 // ─── Worktree ─────────────────────────────────────────────────────────────────
 
@@ -548,6 +554,9 @@ export const SseEvent = {
   OrchestratorDispatch,
   OrchestratorDecision,
   OrchestratorStall,
+  OrchestratorMergePrepStarted,
+  OrchestratorMergePrepCompleted,
+  OrchestratorCompletion,
 
   // Worktree
   WorktreeSessionEnded,

@@ -137,6 +137,21 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       void deliverWebhookIfRegistered(ctx.store, id, updated.status).catch(() => {});
     }
 
+    // Trigger orchestrator completion flow when status transitions to 'done'
+    if (body.status === 'done') {
+      try {
+        const { getOrchestrator } = await import('../../orchestrator.js');
+        const orchestrator = getOrchestrator();
+        if (orchestrator) {
+          orchestrator.handleCompletionFlow(id).catch((err: unknown) => {
+            console.error('[work-item-routes] orchestrator completion flow failed:', err);
+          });
+        }
+      } catch {
+        /* orchestrator not initialized */
+      }
+    }
+
     return { success: true, data: updated };
   });
 
