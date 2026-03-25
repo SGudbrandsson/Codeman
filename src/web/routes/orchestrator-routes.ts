@@ -86,8 +86,38 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: EventPort 
   });
 
   // ── PATCH /api/orchestrator/config ────────────────────────────────────
-  app.patch('/api/orchestrator/config', async (req) => {
-    const body = req.body as Partial<OrchestratorConfig>;
+  app.patch('/api/orchestrator/config', async (req, reply) => {
+    const body = req.body as Record<string, unknown>;
+    const errors: string[] = [];
+
+    // Validate numeric fields are positive integers
+    for (const field of [
+      'pollIntervalMs',
+      'stallThresholdMs',
+      'nudgeThresholdMs',
+      'maxConcurrentDispatches',
+      'matchingThreshold',
+    ] as const) {
+      if (field in body) {
+        const val = body[field];
+        if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
+          errors.push(`${field} must be a positive number`);
+        } else if (field === 'maxConcurrentDispatches' && !Number.isInteger(val)) {
+          errors.push(`${field} must be an integer`);
+        }
+      }
+    }
+
+    // Validate mode
+    if ('mode' in body && body.mode !== 'hybrid' && body.mode !== 'autonomous') {
+      errors.push('mode must be "hybrid" or "autonomous"');
+    }
+
+    if (errors.length > 0) {
+      reply.code(400);
+      return { success: false, error: errors.join('; ') };
+    }
+
     const appConfig = ctx.store.getConfig();
     const current = appConfig.orchestrator;
     const merged = { ...current, ...body } as OrchestratorConfig;
@@ -122,6 +152,11 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: EventPort 
 
     try {
       if (body.agentId) {
+        const agent = ctx.store.getAgent(body.agentId);
+        if (!agent) {
+          reply.code(404);
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, `Agent "${body.agentId}" not found`);
+        }
         await orchestrator.dispatchWorkItem(item, body.agentId, 'explicit', 'Manual dispatch');
       } else {
         const selection = await orchestrator.selectAgent(item);
