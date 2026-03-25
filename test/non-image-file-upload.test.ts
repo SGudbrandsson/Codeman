@@ -11,7 +11,7 @@
  * This mirrors the approach used in paste-newline-routing.test.ts.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Types mirroring the relevant DataTransferItem / File shape
@@ -247,6 +247,219 @@ describe('Non-image file upload logic', () => {
         { name: 'b.js', type: 'text/javascript' },
       ];
       expect(buildTextareaValue('Hello world', files)).toBe('Hello world\na.txt\nb.js');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // NEW: _uploadNonImageFiles logic
+  // ---------------------------------------------------------------------------
+
+  describe('_uploadNonImageFiles — fetch to /api/sessions/:id/upload', () => {
+    /**
+     * Simulates the core logic of _uploadNonImageFiles:
+     * - pushes entry to _files with uploading:true
+     * - calls fetch, on success updates entry
+     * - on failure removes entry from _files
+     * - always increments/decrements uploadingCount
+     */
+    async function simulateUploadNonImageFiles(
+      files: { name: string }[],
+      activeSessionId: string | null,
+      fetchImpl: (
+        url: string,
+        init: RequestInit
+      ) => Promise<{ ok: boolean; json: () => Promise<Record<string, unknown>> }>
+    ) {
+      if (!files.length || !activeSessionId) return { filesArray: [], uploadingCount: 0, errors: [] };
+
+      const _files: { filename: string; path: string | null; uploading: boolean }[] = [];
+      let uploadingCount = 0;
+      const errors: string[] = [];
+
+      for (const file of files) {
+        const entry = { filename: file.name, path: null as string | null, uploading: true };
+        _files.push(entry);
+        uploadingCount++;
+
+        try {
+          const res = await fetchImpl(`/api/sessions/${activeSessionId}/upload`, {
+            method: 'POST',
+            body: new FormData(),
+          });
+          const data = await res.json();
+          if (!data.success) throw new Error((data.error as string) || 'Upload failed');
+          entry.path = data.path as string;
+          entry.filename = data.filename as string;
+          entry.uploading = false;
+        } catch (err) {
+          errors.push((err as Error).message);
+          const idx = _files.indexOf(entry);
+          if (idx !== -1) _files.splice(idx, 1);
+        } finally {
+          uploadingCount = Math.max(0, uploadingCount - 1);
+        }
+      }
+
+      return { filesArray: _files, uploadingCount, errors };
+    }
+
+    it('populates _files array on successful upload', async () => {
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          success: true,
+          path: '/tmp/work/.codeman-uploads/report.pdf',
+          filename: 'report.pdf',
+          isImage: false,
+        }),
+      }));
+      const result = await simulateUploadNonImageFiles([{ name: 'report.pdf' }], 'session-1', fetchImpl);
+      expect(result.filesArray).toHaveLength(1);
+      expect(result.filesArray[0].path).toBe('/tmp/work/.codeman-uploads/report.pdf');
+      expect(result.filesArray[0].uploading).toBe(false);
+    });
+
+    it('calls fetch with correct URL containing session ID', async () => {
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ success: true, path: '/tmp/f.txt', filename: 'f.txt', isImage: false }),
+      }));
+      await simulateUploadNonImageFiles([{ name: 'f.txt' }], 'abc-123', fetchImpl);
+      expect(fetchImpl).toHaveBeenCalledWith(
+        '/api/sessions/abc-123/upload',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    it('removes entry from _files on upload failure', async () => {
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ success: false, error: 'Session has no working directory' }),
+      }));
+      const result = await simulateUploadNonImageFiles([{ name: 'data.csv' }], 'session-1', fetchImpl);
+      expect(result.filesArray).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('working directory');
+    });
+
+    it('decrements uploadingCount even on failure', async () => {
+      const fetchImpl = vi.fn(async () => {
+        throw new Error('Network error');
+      });
+      const result = await simulateUploadNonImageFiles([{ name: 'file.txt' }], 'session-1', fetchImpl);
+      expect(result.uploadingCount).toBe(0);
+    });
+
+    it('does nothing when no active session', async () => {
+      const fetchImpl = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ success: true }),
+      }));
+      const result = await simulateUploadNonImageFiles([{ name: 'file.txt' }], null, fetchImpl);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(result.filesArray).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // NEW: send() file reference prepend
+  // ---------------------------------------------------------------------------
+
+  describe('send() — [Attached file:] prepend logic', () => {
+    /**
+     * Replicates the file reference prepend logic from send():
+     *   const attachedFiles = _files.filter(f => f.path);
+     *   const fileRefs = attachedFiles.map(f => `[Attached file: ${f.path}]`).join('\n');
+     *   sendText = fileRefs + (sendText ? '\n' + sendText : '');
+     */
+    function buildSendText(text: string, files: { path: string | null }[]): string {
+      const attachedFiles = files.filter((f) => f.path);
+      if (!attachedFiles.length) return text;
+      const fileRefs = attachedFiles.map((f) => `[Attached file: ${f.path}]`).join('\n');
+      return fileRefs + (text ? '\n' + text : '');
+    }
+
+    it('prepends single file reference before user text', () => {
+      const result = buildSendText('Analyze this', [{ path: '/tmp/.codeman-uploads/report.pdf' }]);
+      expect(result).toBe('[Attached file: /tmp/.codeman-uploads/report.pdf]\nAnalyze this');
+    });
+
+    it('prepends multiple file references, each on its own line', () => {
+      const result = buildSendText('Review these files', [
+        { path: '/tmp/.codeman-uploads/a.txt' },
+        { path: '/tmp/.codeman-uploads/b.js' },
+      ]);
+      expect(result).toBe(
+        '[Attached file: /tmp/.codeman-uploads/a.txt]\n[Attached file: /tmp/.codeman-uploads/b.js]\nReview these files'
+      );
+    });
+
+    it('sends only file references when user text is empty', () => {
+      const result = buildSendText('', [{ path: '/tmp/.codeman-uploads/data.csv' }]);
+      expect(result).toBe('[Attached file: /tmp/.codeman-uploads/data.csv]');
+    });
+
+    it('skips files with null path (still uploading)', () => {
+      const result = buildSendText('Hello', [{ path: '/tmp/.codeman-uploads/done.txt' }, { path: null }]);
+      expect(result).toBe('[Attached file: /tmp/.codeman-uploads/done.txt]\nHello');
+    });
+
+    it('returns plain text when no files attached', () => {
+      const result = buildSendText('Just text', []);
+      expect(result).toBe('Just text');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // NEW: _renderThumbnails with _files
+  // ---------------------------------------------------------------------------
+
+  describe('_renderThumbnails — non-image file entries', () => {
+    /**
+     * Replicates the per-file rendering logic from _renderThumbnails.
+     * Returns a description of what would be rendered for each file entry.
+     */
+    function describeFileThumb(file: { filename: string; path: string | null; uploading: boolean }) {
+      const ext = file.filename.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toUpperCase() || '';
+      return {
+        className: 'compose-thumb compose-thumb-file',
+        extensionBadge: ext || '\ud83d\udcc4', // fallback to document emoji
+        label: file.uploading ? 'Uploading\u2026' : file.filename,
+        hasRemoveButton: true,
+        ariaLabel: 'Remove file',
+      };
+    }
+
+    it('renders extension badge from filename', () => {
+      const thumb = describeFileThumb({ filename: 'report.pdf', path: '/tmp/report.pdf', uploading: false });
+      expect(thumb.extensionBadge).toBe('PDF');
+      expect(thumb.label).toBe('report.pdf');
+    });
+
+    it('renders JS extension for .js files', () => {
+      const thumb = describeFileThumb({ filename: 'index.js', path: '/tmp/index.js', uploading: false });
+      expect(thumb.extensionBadge).toBe('JS');
+    });
+
+    it('shows "Uploading..." label while file is uploading', () => {
+      const thumb = describeFileThumb({ filename: 'data.csv', path: null, uploading: true });
+      expect(thumb.label).toBe('Uploading\u2026');
+    });
+
+    it('shows document emoji when filename has no extension', () => {
+      const thumb = describeFileThumb({ filename: 'Makefile', path: '/tmp/Makefile', uploading: false });
+      expect(thumb.extensionBadge).toBe('\ud83d\udcc4');
+    });
+
+    it('includes remove button with correct aria-label', () => {
+      const thumb = describeFileThumb({ filename: 'notes.txt', path: '/tmp/notes.txt', uploading: false });
+      expect(thumb.hasRemoveButton).toBe(true);
+      expect(thumb.ariaLabel).toBe('Remove file');
+    });
+
+    it('uses compose-thumb-file CSS class', () => {
+      const thumb = describeFileThumb({ filename: 'x.py', path: '/tmp/x.py', uploading: false });
+      expect(thumb.className).toContain('compose-thumb-file');
     });
   });
 });

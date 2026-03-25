@@ -814,6 +814,106 @@ export function registerSystemRoutes(
     return fs.readFile(filepath);
   });
 
+  // ========== File Upload (any type, session-scoped) ==========
+
+  const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
+  const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'ico']);
+
+  app.post('/api/sessions/:id/upload', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+
+    if (!session.workingDir) {
+      reply.status(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
+    }
+
+    const contentType = req.headers['content-type'] ?? '';
+    if (!contentType.includes('multipart/form-data')) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
+    }
+
+    const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
+    if (!boundaryMatch) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing boundary');
+    }
+
+    // Collect raw body with size limit
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    for await (const chunk of req.raw) {
+      totalSize += chunk.length;
+      if (totalSize > MAX_UPLOAD_SIZE) {
+        reply.status(413);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File too large (max 10MB)');
+      }
+      chunks.push(chunk as Buffer);
+    }
+    const body = Buffer.concat(chunks);
+
+    // Extract file from multipart body (same parsing as screenshots endpoint)
+    const boundary = '--' + boundaryMatch[1];
+    const boundaryBuf = Buffer.from(boundary);
+    const parts: { headers: string; data: Buffer }[] = [];
+    let pos = 0;
+    while (pos < body.length) {
+      const start = body.indexOf(boundaryBuf, pos);
+      if (start === -1) break;
+      const afterBoundary = start + boundaryBuf.length;
+      if (body[afterBoundary] === 0x2d && body[afterBoundary + 1] === 0x2d) break;
+      const headerStart = afterBoundary + 2;
+      const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), headerStart);
+      if (headerEnd === -1) break;
+      const headers = body.subarray(headerStart, headerEnd).toString();
+      const dataStart = headerEnd + 4;
+      const nextBoundary = body.indexOf(boundaryBuf, dataStart);
+      const dataEnd = nextBoundary === -1 ? body.length : nextBoundary - 2;
+      parts.push({ headers, data: body.subarray(dataStart, dataEnd) });
+      pos = nextBoundary === -1 ? body.length : nextBoundary;
+    }
+
+    const filePart = parts.find((p) => p.headers.includes('name="file"'));
+    if (!filePart || filePart.data.length === 0) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No file uploaded');
+    }
+
+    // Extract original filename
+    const filenameMatch = filePart.headers.match(/filename="(.+?)"/);
+    let originalName = filenameMatch ? filenameMatch[1] : 'upload';
+    // Sanitize filename: remove path separators and null bytes
+    // eslint-disable-next-line no-control-regex
+    originalName = originalName.replace(/[/\\:\x00]/g, '_');
+
+    // Determine if it's an image
+    const extMatch = originalName.match(/\.([a-zA-Z0-9]+)$/);
+    const ext = extMatch ? extMatch[1].toLowerCase() : '';
+    const isImage = IMAGE_EXTENSIONS.has(ext);
+
+    // Save to <workingDir>/.codeman-uploads/
+    const uploadsDir = join(session.workingDir, '.codeman-uploads');
+    if (!existsSync(uploadsDir)) {
+      mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Handle duplicate filenames by appending numeric suffix
+    let savedName = originalName;
+    let filepath = join(uploadsDir, savedName);
+    if (existsSync(filepath)) {
+      const baseName = originalName.replace(/\.[^.]+$/, '');
+      const extPart = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : '';
+      let counter = 1;
+      while (existsSync(filepath)) {
+        savedName = `${baseName} (${counter})${extPart}`;
+        filepath = join(uploadsDir, savedName);
+        counter++;
+      }
+    }
+
+    await fs.writeFile(filepath, filePart.data);
+
+    return { success: true, path: filepath, filename: savedName, isImage };
+  });
+
   // ========== Context Window ==========
 
   app.get('/api/sessions/:id/context', (req) => {
