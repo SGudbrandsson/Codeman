@@ -625,6 +625,16 @@
           <div class="monitor-section-body" id="backgroundTasksBody">
           </div>
         </div>
+        <div class="monitor-section" id="agentDashboardSection">
+          <div class="monitor-section-header">
+            <span>Agent Dashboard</span>
+            <span class="task-stats" id="agentDashboardStats">0 agents</span>
+            <button class="btn-icon-sm" onclick="app.refreshAgentDashboard()" title="Refresh">&#x21BB;</button>
+          </div>
+          <div class="monitor-section-body" id="agentDashboardBody">
+            <div class="monitor-empty">No registered agents</div>
+          </div>
+        </div>
         <div class="monitor-section" id="orchestratorSection">
           <div class="monitor-section-header">
             <span>Orchestrator</span>
