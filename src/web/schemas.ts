@@ -343,6 +343,8 @@ export const SettingsUpdateSchema = z
         _version: z.number().optional(),
       })
       .optional(),
+    // Auto-name sessions using AI
+    autoNameEnabled: z.boolean().optional(),
     // Voice settings (cross-device sync)
     voiceSettings: z
       .object({

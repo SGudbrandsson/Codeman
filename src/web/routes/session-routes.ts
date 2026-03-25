@@ -199,6 +199,84 @@ export function registerSessionRoutes(
     return { success: true, name: session.name };
   });
 
+  // ========== Auto-name Session via AI ==========
+
+  app.post('/api/sessions/:id/auto-name', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = ctx.sessions.get(id);
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    // Check if auto-naming is enabled in settings (default: enabled)
+    try {
+      const settingsRaw = await fs.readFile(SETTINGS_PATH, 'utf-8');
+      const settings = JSON.parse(settingsRaw) as Record<string, unknown>;
+      if (settings.autoNameEnabled === false) {
+        return { success: false, reason: 'disabled' };
+      }
+    } catch {
+      // Settings file missing or invalid — proceed with default (enabled)
+    }
+
+    // Gather session context for the prompt
+    const workDir = session.workingDir || '';
+    const pathParts = workDir.split('/').filter(Boolean);
+    const shortPath = pathParts.slice(-2).join('/');
+    const branch = session.worktreeBranch || '';
+    const notes = session.worktreeNotes || '';
+    const currentName = session.name || '';
+
+    const contextLines: string[] = [];
+    if (shortPath) contextLines.push(`Working directory: ${shortPath}`);
+    if (branch) contextLines.push(`Git branch: ${branch}`);
+    if (notes) contextLines.push(`Notes: ${notes}`);
+    if (currentName) contextLines.push(`Current name: ${currentName}`);
+
+    if (contextLines.length === 0) {
+      return { success: false, reason: 'no-context' };
+    }
+
+    try {
+      // Dynamic import — SDK is optional, not in package.json
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Anthropic = ((await import('@anthropic-ai/sdk' as string)) as any).default;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      const client = new Anthropic() as {
+        messages: {
+          create: (opts: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+        };
+      };
+
+      const prompt = `Given this session context, generate a short descriptive name (2-5 words) for this coding session. The name should describe what the session is likely working on. Return ONLY the name, nothing else. No quotes, no special characters, no punctuation. Max 60 characters.
+
+${contextLines.join('\n')}`;
+
+      const response = (await client.messages.create({
+        model: 'claude-haiku-4-5-20241022',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: prompt }],
+      })) as { content: Array<{ type: string; text?: string }> };
+
+      const firstBlock = response.content[0];
+      const rawName = firstBlock?.type === 'text' && firstBlock.text ? firstBlock.text.trim() : '';
+      if (!rawName) {
+        return { success: false, reason: 'empty-response' };
+      }
+
+      const generatedName = rawName.slice(0, MAX_SESSION_NAME_LENGTH);
+      session.name = generatedName;
+      ctx.mux.updateSessionName(id, session.name);
+      ctx.persistSessionState(session);
+      ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
+
+      return { success: true, name: generatedName };
+    } catch {
+      // SDK not installed or API error — graceful fallback
+      return { success: false, reason: 'api-error' };
+    }
+  });
+
   // ========== Set Session Color ==========
 
   app.put('/api/sessions/:id/color', async (req) => {
