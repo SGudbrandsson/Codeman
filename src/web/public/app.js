@@ -5421,7 +5421,7 @@ class CodemanApp {
       }
     }
     this.renderSessionTabs();
-    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+    if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
     this.updateCost();
     // Start stats polling when first session appears
     const nonArchived = [...this.sessions.values()].filter(s => s.status !== 'archived');
@@ -5455,7 +5455,7 @@ class CodemanApp {
     }
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
-    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+    if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
     this.updateCost();
     // Update tokens display if this is the active session
     if (session.id === this.activeSessionId && session.tokens) {
@@ -5490,7 +5490,7 @@ class CodemanApp {
       this.showWelcome();
     }
     this.renderSessionTabs();
-    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+    if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
     this.renderRalphStatePanel();  // Update ralph panel after session deleted
     this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
     // Stop stats polling when no sessions remain
@@ -5647,7 +5647,7 @@ class CodemanApp {
       session.status = 'idle';
       session.isWorking = false;
       this._updateTabStatusDebounced(data.id, 'idle');
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+      if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
       this.sendPendingCtrlL(data.id);
       // Fix: setWorking(false) must fire for any session the TranscriptView is rendering,
       // not just the currently active (terminal-view) session. TranscriptView._sessionId
@@ -5687,7 +5687,7 @@ class CodemanApp {
         this.tabAlerts.delete(data.id);
       }
       this._updateTabStatusDebounced(data.id, 'busy');
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+      if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -7462,6 +7462,9 @@ class CodemanApp {
 
   _renderSessionTabsImmediate() {
     const container = this.$('sessionTabs');
+    // P0 perf: skip all work when tabs container is hidden (display:none in CSS + inline style).
+    // Use offsetParent as a cheap visibility check (null when display:none or not in DOM).
+    if (!container || !container.offsetParent) return;
     const existingTabs = container.querySelectorAll('.session-tab[data-id]');
     const existingIds = new Set([...existingTabs].map(t => t.dataset.id));
     // Exclude archived sessions from the sidebar — they are in sessions Map
@@ -7578,6 +7581,9 @@ class CodemanApp {
 
   _fullRenderSessionTabs() {
     const container = this.$('sessionTabs');
+    // P0 perf: skip all work when tabs container is hidden (display:none in CSS + inline style).
+    // Use offsetParent as a cheap visibility check (null when display:none or not in DOM).
+    if (!container || !container.offsetParent) return;
 
     // Clean up any orphaned dropdowns before re-rendering
     document.querySelectorAll('body > .subagent-dropdown').forEach(d => d.remove());
@@ -8151,7 +8157,7 @@ class CodemanApp {
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
     // Re-render the session drawer so the active highlight updates when the sidebar is open/pinned
-    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+    if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
     this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
     // Fix: use session.isWorking (set synchronously by _onSessionIdle/_onSessionWorking) rather
@@ -8751,7 +8757,7 @@ class CodemanApp {
       const cases = await res.json();
       this.cases = cases;
       // Re-render drawer if open so project groups appear even if drawer was opened before cases loaded
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
+      if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
       // Re-render mobile picker if open so deleted/added projects appear immediately
       if (document.getElementById('mobileCasePickerModal')?.classList.contains('active')) this.showMobileCasePicker();
       console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name), 'lastUsedCase:', lastUsedCase);
@@ -14172,10 +14178,17 @@ class CodemanApp {
       return;
     }
 
-    // Start interval for elapsed time ticking
+    // Start interval for elapsed time ticking — only re-render each second
+    // when a task is actively running (elapsed time is changing). Static states
+    // (todos, completed agents) don't need per-second DOM updates.
     if (!this._liveStatusInterval) {
       this._liveStatusInterval = setInterval(() => {
-        if (TranscriptView._sessionId) this.renderTranscriptStatusBlocks(TranscriptView._sessionId);
+        if (!TranscriptView._sessionId) return;
+        const _s = this.sessions.get(TranscriptView._sessionId);
+        const _ts = _s?.taskStats || {};
+        if ((_ts.running || 0) > 0 || _s?.isWorking) {
+          this.renderTranscriptStatusBlocks(TranscriptView._sessionId);
+        }
       }, 1000);
     }
 
@@ -18110,8 +18123,8 @@ class CodemanApp {
   _onAgentCreated(data) {
     if (data && data.agentId) {
       this.agents.set(data.agentId, data);
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
-        SessionDrawer._render();
+      if (SessionDrawer.isOpen()) {
+        SessionDrawer._renderDebounced();
       }
     }
   }
@@ -18120,8 +18133,8 @@ class CodemanApp {
   _onAgentUpdated(data) {
     if (data && data.agentId) {
       this.agents.set(data.agentId, data);
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
-        SessionDrawer._render();
+      if (SessionDrawer.isOpen()) {
+        SessionDrawer._renderDebounced();
       }
     }
   }
@@ -18130,8 +18143,8 @@ class CodemanApp {
   _onAgentDeleted(data) {
     if (data && data.agentId) {
       this.agents.delete(data.agentId);
-      if (document.getElementById('sessionDrawer')?.classList.contains('open')) {
-        SessionDrawer._render();
+      if (SessionDrawer.isOpen()) {
+        SessionDrawer._renderDebounced();
       }
     }
   }
@@ -19289,11 +19302,14 @@ const SessionDrawer = {
   _swipeStartY: 0,
   _swipeStartTime: 0,
   _swiping: false,
+  _renderTimeout: null,
   /** 'sessions' | 'agents' — which view is currently active in the sidebar */
   _viewMode: localStorage.getItem('sidebarViewMode') || 'sessions',
   _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
   _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
   _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
+  /** P1 perf: cached drawer-open check — avoids repeated getElementById in SSE handlers. */
+  isOpen() { return this._getEl()?.classList.contains('open') ?? false; },
   _openPinned() {
     // Opens the drawer silently for pinned mode: no overlay, no search focus.
     const drawer = this._getEl();
@@ -19772,6 +19788,88 @@ const SessionDrawer = {
       });
   },
 
+  /**
+   * P1 perf: incremental DOM update for the session drawer.
+   * Updates status dots, active class, names, and badges on existing rows
+   * without tearing down and rebuilding the entire DOM tree.
+   * Returns true if incremental update was sufficient, false if full rebuild is needed.
+   */
+  _tryIncrementalUpdate(list) {
+    const existingRows = list.querySelectorAll('.drawer-session-row[data-session-id]');
+    if (existingRows.length === 0) return false; // No existing DOM — need full build
+
+    const existingIds = new Set();
+    for (const row of existingRows) existingIds.add(row.dataset.sessionId);
+
+    // Check if session set changed (added/removed) — if so, need full rebuild
+    const currentIds = new Set();
+    const searchQ = this._searchQuery;
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (!s) continue;
+      if (searchQ) {
+        const name = (app.getSessionName(s) || '').toLowerCase();
+        const dir  = (s.workingDir || '').toLowerCase();
+        if (!name.includes(searchQ) && !dir.includes(searchQ)) continue;
+      }
+      currentIds.add(id);
+    }
+
+    if (existingIds.size !== currentIds.size) return false;
+    for (const id of existingIds) {
+      if (!currentIds.has(id)) return false;
+    }
+
+    // Same session set — do targeted updates on each row
+    for (const row of existingRows) {
+      const sid = row.dataset.sessionId;
+      const s = app.sessions.get(sid);
+      if (!s) continue;
+
+      const isActive = sid === app.activeSessionId;
+      const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
+      const hasRalph  = app.ralphStates?.get(sid)?.enabled;
+
+      // Update active class
+      row.classList.toggle('active', isActive);
+
+      // Update status dot
+      const dot = row.querySelector('.drawer-session-dot');
+      if (dot) {
+        dot.className = 'drawer-session-dot'
+          + (isRunning ? ' running' : ' idle')
+          + (hasRalph  ? ' ralph'   : '');
+      }
+
+      // Update name (may have been renamed)
+      const nameEl = row.querySelector('.drawer-session-name');
+      if (nameEl) {
+        const newName = app.getSessionName(s);
+        if (nameEl.textContent !== newName) nameEl.textContent = newName;
+      }
+
+      // Update mode badge
+      const badge = row.querySelector('.session-mode-badge');
+      if (badge) {
+        const modeLabel = s.cliMode || s.mode || 'claude';
+        if (badge.textContent !== modeLabel) {
+          badge.textContent = modeLabel;
+          badge.setAttribute('data-mode', modeLabel);
+        }
+      }
+    }
+    return true;
+  },
+
+  /** P0 perf: debounced _render — coalesces rapid SSE events into a single render (100ms). */
+  _renderDebounced() {
+    if (this._renderTimeout) clearTimeout(this._renderTimeout);
+    this._renderTimeout = setTimeout(() => {
+      this._renderTimeout = null;
+      this._render();
+    }, 100);
+  },
+
   _render() {
     const list = this._getList();
     if (!list || typeof app === 'undefined') return;
@@ -19786,6 +19884,10 @@ const SessionDrawer = {
       this._renderAgentsView(list);
       return;
     }
+
+    // P1 perf: try incremental update — only update status dots, active class, and names
+    // on existing rows instead of full DOM teardown + rebuild.
+    if (this._tryIncrementalUpdate(list)) return;
 
     list.replaceChildren();
 
