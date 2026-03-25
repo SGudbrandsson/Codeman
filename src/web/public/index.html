@@ -104,6 +104,10 @@
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
         <button class="btn-icon-header btn-lifecycle-log" style="display:none" onclick="app.openLifecycleLog()"></button>
+        <button class="btn-icon-header btn-attention" id="attentionBtn" style="display:none" onclick="app.toggleAttentionQueue()" title="Attention Queue" aria-label="Attention Queue">
+          <span class="attention-icon">&#x1F514;</span>
+          <span class="attention-badge" id="attentionBadge" style="display:none;">0</span>
+        </button>
         <button class="btn-icon-header btn-settings" style="display:none" onclick="app.openAppSettings()"><span class="update-badge" id="updateBadge" style="display:none;" aria-label="Update available"></span></button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions" style="display:none">0 tokens</div>
         <!-- New header: Model chip, Context arc, Overflow menu -->
@@ -1932,6 +1936,17 @@
         <div class="modal-footer-cancel">
           <button class="btn-toolbar btn-sm" onclick="app.closeKillAllModal()">Cancel</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Attention Queue Panel -->
+    <div class="attention-queue-panel" id="attentionQueuePanel">
+      <div class="attention-queue-header">
+        <span class="attention-queue-title">Attention Queue</span>
+        <button class="attention-queue-close" onclick="app.toggleAttentionQueue()">&times;</button>
+      </div>
+      <div class="attention-queue-list" id="attentionQueueList">
+        <div class="attention-queue-empty">No items awaiting your attention</div>
       </div>
     </div>
 

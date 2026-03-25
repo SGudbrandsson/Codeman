@@ -3875,6 +3875,11 @@ class CodemanApp {
     this.boardView = BoardView;
     BoardView.init();
 
+    // Attention Queue: items waiting for human input
+    // Map<string, {sessionId, sessionName, itemType, hookType, context, timestamp}>
+    // key = `${sessionId}:${hookType}` or `${sessionId}:review:${workItemId}`
+    this.attentionItems = new Map();
+
     this.init();
   }
 
@@ -3925,8 +3930,10 @@ class CodemanApp {
     if (!hooks) return;
     if (hookType) {
       hooks.delete(hookType);
+      this.removeAttentionItem(sessionId, hookType);
     } else {
       hooks.clear();
+      this.removeAttentionHooksForSession(sessionId);
     }
     if (hooks.size === 0) {
       this.pendingHooks.delete(sessionId);
@@ -3950,6 +3957,192 @@ class CodemanApp {
       this.tabAlerts.set(sessionId, 'idle');
     }
     this.renderSessionTabs();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Attention Queue — centralized "waiting for human" tracking
+  // ═══════════════════════════════════════════════════════════════
+
+  addAttentionItem(sessionId, hookType, context) {
+    const session = this.sessions.get(sessionId);
+    const key = `${sessionId}:${hookType}`;
+    this.attentionItems.set(key, {
+      sessionId,
+      sessionName: session?.name || this.getShortId(sessionId),
+      hookType,
+      context: context || '',
+      timestamp: Date.now(),
+    });
+    this._renderAttentionQueue();
+  }
+
+  addAttentionWorkItem(sessionId, workItemId, title) {
+    const session = this.sessions.get(sessionId);
+    const key = `${sessionId}:review:${workItemId}`;
+    this.attentionItems.set(key, {
+      sessionId,
+      sessionName: session?.name || this.getShortId(sessionId),
+      hookType: 'review',
+      workItemId,
+      context: title || `Work item ${workItemId} needs review`,
+      timestamp: Date.now(),
+    });
+    this._renderAttentionQueue();
+  }
+
+  removeAttentionItemsForSession(sessionId) {
+    for (const key of [...this.attentionItems.keys()]) {
+      if (key.startsWith(sessionId + ':')) {
+        this.attentionItems.delete(key);
+      }
+    }
+    this._renderAttentionQueue();
+  }
+
+  removeAttentionItem(sessionId, hookType) {
+    const key = `${sessionId}:${hookType}`;
+    this.attentionItems.delete(key);
+    this._renderAttentionQueue();
+  }
+
+  removeAttentionWorkItem(sessionId, workItemId) {
+    const key = `${sessionId}:review:${workItemId}`;
+    this.attentionItems.delete(key);
+    this._renderAttentionQueue();
+  }
+
+  removeAttentionHooksForSession(sessionId) {
+    for (const key of [...this.attentionItems.keys()]) {
+      if (key.startsWith(sessionId + ':') && !key.includes(':review:')) {
+        this.attentionItems.delete(key);
+      }
+    }
+    this._renderAttentionQueue();
+  }
+
+  toggleAttentionQueue() {
+    const panel = document.getElementById('attentionQueuePanel');
+    if (!panel) return;
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) {
+      const handler = (e) => {
+        if (!panel.contains(e.target) && !e.target.closest('#attentionBtn')) {
+          panel.classList.remove('open');
+          document.removeEventListener('mousedown', handler);
+        }
+      };
+      setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    }
+  }
+
+  _renderAttentionQueue() {
+    const btn = document.getElementById('attentionBtn');
+    const badge = document.getElementById('attentionBadge');
+    const list = document.getElementById('attentionQueueList');
+
+    const count = this.attentionItems.size;
+
+    if (btn) btn.style.display = count > 0 ? '' : 'none';
+    if (badge) {
+      badge.style.display = count > 0 ? '' : 'none';
+      badge.textContent = String(count);
+      const hasCritical = [...this.attentionItems.values()].some(
+        i => i.hookType === 'permission_prompt' || i.hookType === 'elicitation_dialog' || i.hookType === 'ask_user_question'
+      );
+      badge.classList.toggle('critical', hasCritical);
+    }
+
+    if (!list) return;
+
+    if (count === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'attention-queue-empty';
+      empty.textContent = 'No items awaiting your attention';
+      list.replaceChildren(empty);
+      const panel = document.getElementById('attentionQueuePanel');
+      if (panel?.classList.contains('open')) panel.classList.remove('open');
+      return;
+    }
+
+    const priorityOrder = { permission_prompt: 0, elicitation_dialog: 1, ask_user_question: 1, idle_prompt: 2, review: 3 };
+    const sorted = [...this.attentionItems.values()].sort((a, b) => {
+      const pa = priorityOrder[a.hookType] ?? 9;
+      const pb = priorityOrder[b.hookType] ?? 9;
+      if (pa !== pb) return pa - pb;
+      return b.timestamp - a.timestamp;
+    });
+
+    const badgeLabels = {
+      permission_prompt: 'PERMISSION',
+      elicitation_dialog: 'QUESTION',
+      ask_user_question: 'QUESTION',
+      idle_prompt: 'IDLE',
+      review: 'REVIEW',
+    };
+    const badgeClasses = {
+      permission_prompt: 'badge-permission',
+      elicitation_dialog: 'badge-elicitation',
+      ask_user_question: 'badge-question',
+      idle_prompt: 'badge-idle',
+      review: 'badge-review',
+    };
+    const typeClasses = {
+      permission_prompt: 'type-permission',
+      elicitation_dialog: 'type-elicitation',
+      ask_user_question: 'type-ask_user_question',
+      idle_prompt: 'type-idle',
+      review: 'type-review',
+    };
+
+    const fragment = document.createDocumentFragment();
+    sorted.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'attention-item ' + (typeClasses[item.hookType] || '');
+      div.addEventListener('click', () => this._attentionItemClick(item.sessionId));
+
+      const top = document.createElement('div');
+      top.className = 'attention-item-top';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'attention-item-session';
+      nameSpan.textContent = item.sessionName || '';
+      const badgeSpan = document.createElement('span');
+      badgeSpan.className = 'attention-item-badge ' + (badgeClasses[item.hookType] || '');
+      badgeSpan.textContent = badgeLabels[item.hookType] || item.hookType;
+      top.appendChild(nameSpan);
+      top.appendChild(badgeSpan);
+      div.appendChild(top);
+
+      if (item.context) {
+        const ctx = document.createElement('div');
+        ctx.className = 'attention-item-context';
+        ctx.textContent = item.context.substring(0, 120);
+        div.appendChild(ctx);
+      }
+
+      const time = document.createElement('div');
+      time.className = 'attention-item-time';
+      time.textContent = this._relativeTime(item.timestamp);
+      div.appendChild(time);
+
+      fragment.appendChild(div);
+    });
+    list.replaceChildren(fragment);
+  }
+
+  _attentionItemClick(sessionId) {
+    if (this.sessions.has(sessionId)) {
+      this.selectSession(sessionId);
+    }
+    const panel = document.getElementById('attentionQueuePanel');
+    if (panel) panel.classList.remove('open');
+  }
+
+  _relativeTime(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return `${Math.floor(diff / 86400000)}d ago`;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -6221,6 +6414,7 @@ class CodemanApp {
     // Always track pending hook - alert will show when switching away from session
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'idle_prompt');
+      this.addAttentionItem(data.sessionId, 'idle_prompt', data.message || 'Claude is idle and waiting for a prompt');
     }
     this.notificationManager?.notify({
       urgency: 'warning',
@@ -6237,6 +6431,8 @@ class CodemanApp {
     // Always track pending hook - action alerts need user interaction to clear
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'permission_prompt');
+      const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
+      this.addAttentionItem(data.sessionId, 'permission_prompt', toolInfo || 'Claude needs tool approval to continue');
     }
     const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
     this.notificationManager?.notify({
@@ -6521,6 +6717,9 @@ class CodemanApp {
     const fromTerminal = this._parseElicitationOptions(data.sessionId);
     const parsed = (fromPayload?.options?.length ? fromPayload : null) || fromTerminal;
     const question = parsed?.question || promptText.split('\n')[0]?.trim() || '';
+    if (data.sessionId) {
+      this.addAttentionItem(data.sessionId, 'elicitation_dialog', question || 'Claude is asking a question');
+    }
     this.notificationManager?.notify({
       urgency: 'critical',
       category: 'hook-elicitation',
@@ -6566,6 +6765,9 @@ class CodemanApp {
     const questions = data.tool_input?.questions;
     if (!questions || !Array.isArray(questions) || questions.length === 0) return;
     const q = questions[0];
+    if (data.sessionId) {
+      this.addAttentionItem(data.sessionId, 'ask_user_question', q.question || q.header || 'Claude is asking a question');
+    }
     this.notificationManager?.notify({
       urgency: 'critical',
       category: 'hook-ask-user-question',
@@ -7224,6 +7426,9 @@ class CodemanApp {
     SwipeHandler.init();
     // Clear tab alerts
     this.tabAlerts.clear();
+    // Clear attention queue on reconnect (will be repopulated by incoming events)
+    this.attentionItems.clear();
+    this._renderAttentionQueue();
     // Invalidate all session state cache entries on reconnect (server is authoritative)
     this._sessionStateCache.clear();
     // Clear shown completions (used for duplicate notification prevention)
@@ -8470,6 +8675,7 @@ class CodemanApp {
     this.projectInsights.delete(sessionId);
     this.pendingHooks.delete(sessionId);
     this.tabAlerts.delete(sessionId);
+    this.removeAttentionItemsForSession(sessionId);
     this.clearCountdownTimers(sessionId);
     this.closeSessionLogViewerWindows(sessionId);
     this.closeSessionImagePopups(sessionId);
@@ -18159,6 +18365,18 @@ class CodemanApp {
   _onWorkItemStatusChanged(data) {
     this.boardView.onWorkItemStatusChanged(data);
     this.boardView.addTimelineEvent({ type: 'workItem:statusChanged', ...data });
+    // Attention queue: add when status becomes 'review', remove otherwise
+    if (data.status === 'review' && data.sessionId) {
+      this.addAttentionWorkItem(data.sessionId, data.id, data.title);
+    } else if (data.id) {
+      // Remove review attention item for any session that had it
+      for (const key of [...this.attentionItems.keys()]) {
+        if (key.endsWith(':review:' + data.id)) {
+          this.attentionItems.delete(key);
+        }
+      }
+      this._renderAttentionQueue();
+    }
   }
 
   /** SSE handler: workItem:completed */
