@@ -77,6 +77,48 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// ─── getStatus ──────────────────────────────────────────────────────────────
+
+describe('Orchestrator.getStatus', () => {
+  it('returns running: false and config when not started', () => {
+    const deps = makeMockDeps();
+    const orch = new Orchestrator(deps);
+    const status = orch.getStatus();
+
+    expect(status.running).toBe(false);
+    expect(status.config).toBeDefined();
+    expect(status.config.pollIntervalMs).toBe(30000);
+    expect(status.config.mode).toBe('hybrid');
+    expect(status.config.maxConcurrentDispatches).toBe(5);
+    expect(status.mode).toBe('hybrid');
+    expect(status.activeCases).toEqual([]);
+    expect(status.activeDispatches).toBe(0);
+    expect(status.lastActionAt).toBeNull();
+    expect(status.recentDecisions).toEqual([]);
+  });
+
+  it('returns running: true after start()', () => {
+    const deps = makeMockDeps();
+    const orch = new Orchestrator(deps);
+    orch.start();
+    try {
+      const status = orch.getStatus();
+      expect(status.running).toBe(true);
+    } finally {
+      orch.stop();
+    }
+  });
+
+  it('returns running: false after stop()', () => {
+    const deps = makeMockDeps();
+    const orch = new Orchestrator(deps);
+    orch.start();
+    orch.stop();
+    const status = orch.getStatus();
+    expect(status.running).toBe(false);
+  });
+});
+
 // ─── selectAgent ─────────────────────────────────────────────────────────────
 
 describe('Orchestrator.selectAgent', () => {

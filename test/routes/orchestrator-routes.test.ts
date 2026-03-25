@@ -11,12 +11,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const mockGetStatus = vi.fn();
 const mockSelectAgent = vi.fn();
 const mockDispatchWorkItem = vi.fn();
+const mockStart = vi.fn();
+const mockStop = vi.fn();
 
 vi.mock('../../src/orchestrator.js', () => ({
   getOrchestrator: vi.fn(() => ({
     getStatus: mockGetStatus,
     selectAgent: mockSelectAgent,
     dispatchWorkItem: mockDispatchWorkItem,
+    start: mockStart,
+    stop: mockStop,
   })),
   initOrchestrator: vi.fn(),
 }));
@@ -55,6 +59,8 @@ describe('orchestrator-routes', () => {
       getStatus: mockGetStatus,
       selectAgent: mockSelectAgent,
       dispatchWorkItem: mockDispatchWorkItem,
+      start: mockStart,
+      stop: mockStop,
     } as never);
 
     mockGetStatus.mockReturnValue({
@@ -91,6 +97,22 @@ describe('orchestrator-routes', () => {
       const body = res.json();
       expect(body.success).toBe(true);
       expect(body.data.mode).toBe('disabled');
+    });
+
+    it('returns full fallback shape with running: false and config when orchestrator is null', async () => {
+      mockGetOrchestrator.mockReturnValue(null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/orchestrator/status',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.data.running).toBe(false);
+      expect(body.data.config).toBeDefined();
+      expect(body.data.config.pollIntervalMs).toBe(30000);
+      expect(body.data.config.mode).toBe('hybrid');
+      expect(body.data.config.maxConcurrentDispatches).toBe(5);
     });
   });
 
@@ -263,6 +285,84 @@ describe('orchestrator-routes', () => {
       expect(res.statusCode).toBe(400);
       const body = res.json();
       expect(body.error).toContain('No agent available');
+    });
+  });
+
+  // ── POST /api/orchestrator/start ────────────────────────────────────────
+
+  describe('POST /api/orchestrator/start', () => {
+    it('starts orchestrator and returns status', async () => {
+      mockGetStatus.mockReturnValue({
+        running: true,
+        mode: 'hybrid',
+        activeCases: [],
+        activeDispatches: 0,
+        lastActionAt: null,
+        recentDecisions: [],
+        config: { pollIntervalMs: 30000, mode: 'hybrid' },
+      });
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/orchestrator/start',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.running).toBe(true);
+      expect(mockStart).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 503 when orchestrator is null', async () => {
+      mockGetOrchestrator.mockReturnValue(null);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/orchestrator/start',
+      });
+      expect(res.statusCode).toBe(503);
+      const body = res.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('not available');
+    });
+  });
+
+  // ── POST /api/orchestrator/stop ─────────────────────────────────────────
+
+  describe('POST /api/orchestrator/stop', () => {
+    it('stops orchestrator and returns status', async () => {
+      mockGetStatus.mockReturnValue({
+        running: false,
+        mode: 'hybrid',
+        activeCases: [],
+        activeDispatches: 0,
+        lastActionAt: null,
+        recentDecisions: [],
+        config: { pollIntervalMs: 30000, mode: 'hybrid' },
+      });
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/orchestrator/stop',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.running).toBe(false);
+      expect(mockStop).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 503 when orchestrator is null', async () => {
+      mockGetOrchestrator.mockReturnValue(null);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/orchestrator/stop',
+      });
+      expect(res.statusCode).toBe(503);
+      const body = res.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('not available');
     });
   });
 });

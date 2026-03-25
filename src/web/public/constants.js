@@ -329,6 +329,11 @@ const SSE_EVENTS = {
   WORK_ITEM_STATUS_CHANGED: 'workItem:statusChanged',
   WORK_ITEM_COMPLETED: 'workItem:completed',
 
+  // Orchestrator
+  ORCHESTRATOR_DISPATCH: 'orchestrator:dispatch',
+  ORCHESTRATOR_DECISION: 'orchestrator:decision',
+  ORCHESTRATOR_STALL: 'orchestrator:stall',
+
   // Agent messaging
   AGENT_MESSAGE: 'agent:message',
   AGENT_BROADCAST: 'agent:broadcast',

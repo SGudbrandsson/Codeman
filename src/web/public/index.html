@@ -480,6 +480,11 @@
                 <span>Agent Teams</span>
               </label>
               <span class="form-hint">Enable experimental Agent Teams for new sessions in this project</span>
+              <label class="checkbox-inline" style="margin-top:4px;">
+                <input type="checkbox" id="caseOrchestration" onchange="app.onCaseOrchestrationChanged()">
+                <span>Orchestration</span>
+              </label>
+              <span class="form-hint">Enable automated orchestration for this project</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
@@ -504,6 +509,11 @@
               <span>Agent Teams</span>
             </label>
             <span class="form-hint">Enable Agent Teams for new sessions</span>
+            <label class="checkbox-inline" style="margin-top:4px;">
+              <input type="checkbox" id="caseOrchestrationMobile" onchange="app.onCaseOrchestrationChangedMobile()">
+              <span>Orchestration</span>
+            </label>
+            <span class="form-hint">Enable automated orchestration</span>
           </div>
         </div>
 
@@ -613,6 +623,17 @@
             <span class="task-stats" id="taskPanelStats">0 running</span>
           </div>
           <div class="monitor-section-body" id="backgroundTasksBody">
+          </div>
+        </div>
+        <div class="monitor-section" id="orchestratorSection">
+          <div class="monitor-section-header">
+            <span>Orchestrator</span>
+            <span class="task-stats" id="orchestratorStatusBadge">stopped</span>
+            <button class="btn-toolbar btn-sm" onclick="app.toggleOrchestratorRunning()" id="orchestratorToggleBtn" title="Start/stop orchestrator">Start</button>
+            <button class="btn-icon-sm" onclick="app.renderOrchestratorStatus()" title="Refresh">&#x21BB;</button>
+          </div>
+          <div class="monitor-section-body" id="orchestratorStatusBody">
+            <div class="monitor-empty">Loading...</div>
           </div>
         </div>
       </div>
@@ -1000,6 +1021,7 @@
           <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
           <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
           <button class="modal-tab-btn" id="settingsUpdatesTabBtn" data-tab="settings-updates">Updates</button>
+          <button class="modal-tab-btn" data-tab="settings-orchestrator">Orchestrator</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1536,6 +1558,57 @@
                   placeholder="/home/user/sources/Codeman"
                   onchange="app.saveUpdateRepoPath(this.value)">
               </label>
+            </div>
+          </div>
+          <!-- Orchestrator Tab -->
+          <div class="modal-tab-content hidden" id="settings-orchestrator">
+            <div class="settings-grid">
+              <div class="settings-section-header">Orchestrator Configuration</div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Poll Interval (seconds)</span>
+                  <span class="settings-item-desc">How often the orchestrator checks for queued work items</span>
+                </div>
+                <input type="number" id="orchPollInterval" class="settings-input" min="5" step="5" style="width:80px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Stall Threshold (minutes)</span>
+                  <span class="settings-item-desc">Idle time before sending a nudge prompt to a dispatched session</span>
+                </div>
+                <input type="number" id="orchStallThreshold" class="settings-input" min="1" step="1" style="width:80px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Nudge Threshold (minutes)</span>
+                  <span class="settings-item-desc">Idle time after nudge before marking blocked</span>
+                </div>
+                <input type="number" id="orchNudgeThreshold" class="settings-input" min="1" step="1" style="width:80px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Max Concurrent Dispatches</span>
+                  <span class="settings-item-desc">Maximum number of simultaneous orchestrated work items</span>
+                </div>
+                <input type="number" id="orchMaxConcurrent" class="settings-input" min="1" max="20" step="1" style="width:80px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Mode</span>
+                  <span class="settings-item-desc">Hybrid requires explicit case opt-in; autonomous orchestrates all eligible items</span>
+                </div>
+                <select id="orchMode" class="settings-input" style="width:140px;">
+                  <option value="hybrid">Hybrid</option>
+                  <option value="autonomous">Autonomous</option>
+                </select>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Matching Threshold</span>
+                  <span class="settings-item-desc">Minimum score gap for a clear winner in agent capability matching</span>
+                </div>
+                <input type="number" id="orchMatchingThreshold" class="settings-input" min="1" max="20" step="1" style="width:80px;">
+              </div>
             </div>
           </div>
         </div>

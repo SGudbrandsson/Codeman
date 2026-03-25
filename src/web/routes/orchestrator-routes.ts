@@ -6,6 +6,8 @@
  *   POST   /api/orchestrator/toggle   — toggle orchestration for a case
  *   PATCH  /api/orchestrator/config   — update orchestrator config
  *   POST   /api/orchestrator/dispatch — manual dispatch trigger
+ *   POST   /api/orchestrator/start    — start the orchestrator loop
+ *   POST   /api/orchestrator/stop     — stop the orchestrator loop
  */
 
 import { FastifyInstance } from 'fastify';
@@ -18,7 +20,7 @@ import { getOrchestrator } from '../../orchestrator.js';
 import { getWorkItem } from '../../work-items/index.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types/api.js';
 import { CASES_DIR } from '../route-helpers.js';
-import type { OrchestratorConfig } from '../../types/orchestrator.js';
+import { DEFAULT_ORCHESTRATOR_CONFIG, type OrchestratorConfig } from '../../types/orchestrator.js';
 
 export function registerOrchestratorRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
   // ── GET /api/orchestrator/status ──────────────────────────────────────
@@ -27,7 +29,15 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: EventPort 
     if (!orchestrator) {
       return {
         success: true,
-        data: { mode: 'disabled', activeCases: [], activeDispatches: 0, lastActionAt: null, recentDecisions: [] },
+        data: {
+          running: false,
+          mode: 'disabled',
+          activeCases: [],
+          activeDispatches: 0,
+          lastActionAt: null,
+          recentDecisions: [],
+          config: DEFAULT_ORCHESTRATOR_CONFIG,
+        },
       };
     }
     return { success: true, data: orchestrator.getStatus() };
@@ -135,5 +145,27 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: EventPort 
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
+  });
+
+  // ── POST /api/orchestrator/start ─────────────────────────────────────
+  app.post('/api/orchestrator/start', async (_req, reply) => {
+    const orchestrator = getOrchestrator();
+    if (!orchestrator) {
+      reply.code(503);
+      return { success: false, error: 'Orchestrator not available' };
+    }
+    orchestrator.start();
+    return { success: true, data: orchestrator.getStatus() };
+  });
+
+  // ── POST /api/orchestrator/stop ──────────────────────────────────────
+  app.post('/api/orchestrator/stop', async (_req, reply) => {
+    const orchestrator = getOrchestrator();
+    if (!orchestrator) {
+      reply.code(503);
+      return { success: false, error: 'Orchestrator not available' };
+    }
+    orchestrator.stop();
+    return { success: true, data: orchestrator.getStatus() };
   });
 }
