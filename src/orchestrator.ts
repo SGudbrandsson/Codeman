@@ -2,10 +2,38 @@
  * @fileoverview Automated orchestration system.
  *
  * Server-side orchestrator loop that watches for queued work items with
- * orchestration-enabled cases, assigns them to agents (explicit assignment,
- * mechanical capability scoring, LLM fallback), creates worktree sessions
- * per work item, monitors progress via hooks and stall detection, and
+ * orchestration-enabled cases, assigns them to agents, creates worktree
+ * sessions per work item, monitors progress via stall detection, and
  * handles cleanup.
+ *
+ * ## Agent Selection Pipeline (4-tier cascade)
+ *
+ * When a work item is ready for dispatch, `selectAgent()` evaluates
+ * agents in this order:
+ *
+ * 1. **Explicit** — if `item.assignedAgentId` is set AND the agent exists
+ *    in the store, use it directly. If the agent has been deleted, fall
+ *    through to the next tier.
+ *
+ * 2. **Mechanical scoring** — score every registered agent against the
+ *    work item using `scoreAgent()`. If the top scorer has score > 0 and
+ *    leads by at least `matchingThreshold` (default 3) over the runner-up,
+ *    it wins.
+ *
+ *    Scoring formula:
+ *      base              = +1
+ *      role keyword hit  = +3  (first keyword from agent.role that appears in title+description)
+ *      MCP capability    = +2  (first enabled capability name that appears in title+description)
+ *      busy penalty      = -5  (agent has an in_progress work item)
+ *
+ * 3. **LLM routing** — if no clear mechanical winner, call Claude with a
+ *    structured prompt listing agents and the work item, parse JSON response.
+ *    Only fires when the Anthropic SDK is installed and the API key is set.
+ *
+ * 4. **Idle fallback** — first agent with no in_progress items. Used when
+ *    LLM routing is unavailable or returns no result.
+ *
+ * If all tiers fail, the item is skipped (no agent available).
  *
  * Singleton pattern — use `initOrchestrator(deps)` to create and
  * `getOrchestrator()` to retrieve.
@@ -289,12 +317,24 @@ export class Orchestrator extends EventEmitter {
 
   // ─── Agent selection ─────────────────────────────────────────────────────
 
+  /**
+   * Select the best agent for a work item using a 4-tier cascade:
+   * explicit → mechanical scoring → LLM routing → idle fallback.
+   *
+   * Returns null if no agent is available across all tiers.
+   */
   async selectAgent(
     item: WorkItem
   ): Promise<{ agentId: string; method: OrchestratorDecision['method']; reasoning: string } | null> {
-    // Explicit assignment
+    // Explicit assignment — verify agent still exists before trusting pre-assignment
     if (item.assignedAgentId) {
-      return { agentId: item.assignedAgentId, method: 'explicit', reasoning: 'Pre-assigned agent' };
+      const explicitAgent = this.deps.store.getAgent(item.assignedAgentId);
+      if (explicitAgent) {
+        return { agentId: item.assignedAgentId, method: 'explicit', reasoning: 'Pre-assigned agent' };
+      }
+      console.warn(
+        `[orchestrator] pre-assigned agent "${item.assignedAgentId}" not found for ${item.id} — falling through to scoring`
+      );
     }
 
     const agents = this.deps.store.listAgents();
@@ -335,6 +375,14 @@ export class Orchestrator extends EventEmitter {
     return null;
   }
 
+  /**
+   * Score an agent's fit for a work item.
+   *
+   * Formula: base(+1) + roleKeyword(+3) + mcpCapability(+2) + busyPenalty(-5)
+   *
+   * Role keywords are extracted by splitting `agent.role` on hyphens, underscores,
+   * and spaces. Keywords shorter than 3 chars are ignored to avoid false positives.
+   */
   private scoreAgent(agent: AgentProfile, item: WorkItem): number {
     let score = 1; // base score
 
@@ -382,7 +430,6 @@ export class Orchestrator extends EventEmitter {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Anthropic = ((await import('@anthropic-ai/sdk' as string)) as any).default;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const client = new Anthropic() as {
         messages: {
           create: (opts: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>;
@@ -450,6 +497,13 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
     this.lastActionAt = decision.timestamp;
     this.deps.broadcast(SseEvent.OrchestratorDecision, decision);
 
+    // Step 0: Validate agent exists
+    const agent = this.deps.store.getAgent(agentId);
+    if (!agent) {
+      console.warn(`[orchestrator] agent "${agentId}" not found — cannot dispatch ${item.id}`);
+      return;
+    }
+
     // Step 1: Claim
     const claimed = claimWorkItem(item.id, agentId);
     if (!claimed) {
@@ -494,7 +548,8 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       await addWorktree(gitRoot, worktreePath, branch, true);
     } catch (err) {
       console.error(`[orchestrator] addWorktree failed for ${item.id}:`, getErrorMessage(err));
-      // Dispatch recovery will revert after timeout
+      updateWorkItem(item.id, { status: 'queued', assignedAgentId: null, assignedAt: null });
+      this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'queued' });
       return;
     }
 
@@ -517,8 +572,6 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       .map((s) => s.assignedPort)
       .filter((p): p is number => p !== undefined);
     const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
-
-    const agent = this.deps.store.getAgent(agentId);
 
     const newSession = new Session({
       workingDir: worktreePath,
@@ -546,9 +599,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       sessionState.isDispatchSession = true;
       sessionState.caseId = item.caseId;
       sessionState.currentWorkItemId = item.id;
-      if (agent) {
-        sessionState.agentProfile = agent;
-      }
+      sessionState.agentProfile = agent;
     }
     this.deps.persistSessionState(newSession);
 
@@ -562,7 +613,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
 
       // Build initial prompt
       const promptParts: string[] = [];
-      if (agent?.rolePrompt) {
+      if (agent.rolePrompt) {
         promptParts.push(agent.rolePrompt);
       }
       promptParts.push(`## Work Item: ${item.title}`);
@@ -580,9 +631,18 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       newSession.sendInput(prompt);
     } catch (err) {
       console.error(`[orchestrator] session start failed for ${item.id}:`, getErrorMessage(err));
+      // Revert work item — don't rely on 5-min dispatch recovery
+      updateWorkItem(item.id, { status: 'queued', assignedAgentId: null, assignedAt: null });
+      this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'queued' });
+      try {
+        await this.deps.cleanupSession(newSession.id);
+      } catch {
+        /* best-effort cleanup */
+      }
+      return;
     }
 
-    // Step 7: Update work item
+    // Step 7: Update work item (only on success)
     updateWorkItem(item.id, {
       status: 'in_progress',
       startedAt: new Date().toISOString(),

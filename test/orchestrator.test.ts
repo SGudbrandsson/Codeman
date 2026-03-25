@@ -80,8 +80,10 @@ afterEach(() => {
 // ─── selectAgent ─────────────────────────────────────────────────────────────
 
 describe('Orchestrator.selectAgent', () => {
-  it('returns pre-assigned agent with method "explicit"', async () => {
+  it('returns pre-assigned agent with method "explicit" when agent exists', async () => {
     const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _agents: AgentProfile[] };
+    depsExt._agents.push(makeAgent({ agentId: 'agent-007' }));
     const orch = new Orchestrator(deps);
     const item = createWorkItem({ title: 'Task' });
     // Claim to set assignedAgentId
@@ -92,6 +94,24 @@ describe('Orchestrator.selectAgent', () => {
     expect(result).not.toBeNull();
     expect(result!.agentId).toBe('agent-007');
     expect(result!.method).toBe('explicit');
+  });
+
+  it('falls through to scoring when pre-assigned agent does not exist', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _agents: AgentProfile[] };
+    // Add an agent that is NOT the pre-assigned one
+    depsExt._agents.push(makeAgent({ agentId: 'backup-agent', role: 'generalist' }));
+    const orch = new Orchestrator(deps);
+    const item = createWorkItem({ title: 'Task' });
+    // Claim with a non-existent agent
+    claimWorkItem(item.id, 'deleted-agent');
+    const claimed = getWorkItem(item.id)!;
+
+    const result = await orch.selectAgent(claimed);
+    expect(result).not.toBeNull();
+    // Should NOT use the deleted agent — should fall through to scoring/fallback
+    expect(result!.agentId).toBe('backup-agent');
+    expect(result!.method).not.toBe('explicit');
   });
 
   it('returns null when no agents exist', async () => {

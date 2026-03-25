@@ -142,6 +142,61 @@ describe('orchestrator-routes', () => {
       expect(body.success).toBe(true);
       expect(harness.ctx.store.setConfig).toHaveBeenCalledTimes(1);
     });
+
+    it('rejects negative pollIntervalMs', async () => {
+      const res = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/orchestrator/config',
+        payload: { pollIntervalMs: -1000 },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('pollIntervalMs');
+    });
+
+    it('rejects non-integer maxConcurrentDispatches', async () => {
+      const res = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/orchestrator/config',
+        payload: { maxConcurrentDispatches: 2.5 },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.error).toContain('maxConcurrentDispatches');
+    });
+
+    it('rejects invalid mode value', async () => {
+      const res = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/orchestrator/config',
+        payload: { mode: 'turbo' },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.error).toContain('mode');
+    });
+
+    it('accepts valid mode value', async () => {
+      const res = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/orchestrator/config',
+        payload: { mode: 'autonomous' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().success).toBe(true);
+    });
+
+    it('rejects zero-valued numeric fields', async () => {
+      const res = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/orchestrator/config',
+        payload: { stallThresholdMs: 0 },
+      });
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.error).toContain('stallThresholdMs');
+    });
   });
 
   // ── POST /api/orchestrator/dispatch ──────────────────────────────────────
@@ -202,13 +257,14 @@ describe('orchestrator-routes', () => {
       expect(body.error).toContain('in_progress');
     });
 
-    it('dispatches with explicit agentId when provided', async () => {
+    it('dispatches with explicit agentId when provided and agent exists', async () => {
       mockGetWorkItem.mockReturnValue({
         id: 'wi-12345678',
         status: 'queued',
         caseId: 'test',
       } as never);
       mockDispatchWorkItem.mockResolvedValue(undefined);
+      (harness.ctx.store.getAgent as ReturnType<typeof vi.fn>).mockReturnValue({ agentId: 'agent-1' });
 
       const res = await harness.app.inject({
         method: 'POST',
@@ -222,6 +278,25 @@ describe('orchestrator-routes', () => {
         'explicit',
         'Manual dispatch'
       );
+    });
+
+    it('returns 404 when explicit agentId does not exist', async () => {
+      mockGetWorkItem.mockReturnValue({
+        id: 'wi-12345678',
+        status: 'queued',
+        caseId: 'test',
+      } as never);
+      (harness.ctx.store.getAgent as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/orchestrator/dispatch',
+        payload: { workItemId: 'wi-12345678', agentId: 'ghost-agent' },
+      });
+      expect(res.statusCode).toBe(404);
+      const body = res.json();
+      expect(body.error).toContain('ghost-agent');
+      expect(mockDispatchWorkItem).not.toHaveBeenCalled();
     });
 
     it('uses selectAgent when agentId not provided', async () => {
