@@ -248,11 +248,13 @@ export class Orchestrator extends EventEmitter {
     }
 
     return {
+      running: this.running,
       mode: config.mode,
       activeCases: [...activeCases],
       activeDispatches,
       lastActionAt: this.lastActionAt,
       recentDecisions: this.recentDecisions.slice(0, 20),
+      config,
     };
   }
 

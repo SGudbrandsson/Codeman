@@ -39,11 +39,13 @@ export interface OrchestratorDecision {
 }
 
 export interface OrchestratorStatus {
+  running: boolean;
   mode: string;
   activeCases: string[];
   activeDispatches: number;
   lastActionAt: string | null;
   recentDecisions: OrchestratorDecision[];
+  config: OrchestratorConfig;
 }
 
 export interface MergePrepResult {

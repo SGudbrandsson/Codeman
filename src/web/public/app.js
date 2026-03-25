@@ -3671,6 +3671,11 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.AGENT_MESSAGE, '_onAgentMessage'],
   [SSE_EVENTS.AGENT_BROADCAST, '_onAgentBroadcast'],
 
+  // Orchestrator
+  [SSE_EVENTS.ORCHESTRATOR_DISPATCH, '_onOrchestratorDispatch'],
+  [SSE_EVENTS.ORCHESTRATOR_DECISION, '_onOrchestratorDecision'],
+  [SSE_EVENTS.ORCHESTRATOR_STALL, '_onOrchestratorStall'],
+
   // Worktrees
   [SSE_EVENTS.WORKTREE_SESSION_ENDED, '_onWorktreeSessionEnded'],
 
@@ -6947,6 +6952,22 @@ class CodemanApp {
       this.activePlanOrchestratorId = null;
     }
     this.renderMonitorPlanAgents();
+  }
+
+  // Orchestrator SSE handlers
+  _onOrchestratorDispatch(data) {
+    console.log('[Orchestrator Dispatch]', data);
+    this.renderOrchestratorStatus();
+  }
+
+  _onOrchestratorDecision(data) {
+    console.log('[Orchestrator Decision]', data);
+    this.renderOrchestratorStatus();
+  }
+
+  _onOrchestratorStall(data) {
+    console.log('[Orchestrator Stall]', data);
+    this.renderOrchestratorStatus();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -12016,6 +12037,9 @@ class CodemanApp {
     providerEl.textContent = providerName;
     providerEl.className = 'voice-provider-status' + (providerName.startsWith('Deepgram') ? ' active' : '');
 
+    // Load orchestrator configuration
+    this.loadOrchestratorConfigForSettings();
+
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
     const modal = document.getElementById('appSettingsModal');
@@ -12861,6 +12885,9 @@ class CodemanApp {
       // Save model configuration separately
       await this.saveModelConfigFromSettings();
 
+      // Save orchestrator configuration separately
+      await this.saveOrchestratorConfig();
+
       this.showToast('Settings saved', 'success');
 
       // Show tunnel-specific feedback if toggled on
@@ -12937,6 +12964,58 @@ class CodemanApp {
       });
     } catch (err) {
       console.warn('Failed to save model config:', err);
+    }
+  }
+
+  async loadOrchestratorConfigForSettings() {
+    try {
+      const res = await fetch('/api/orchestrator/status');
+      const json = await res.json();
+      if (!json.success) return;
+      const config = json.data.config || {};
+      const pollEl = document.getElementById('orchPollInterval');
+      const stallEl = document.getElementById('orchStallThreshold');
+      const nudgeEl = document.getElementById('orchNudgeThreshold');
+      const maxEl = document.getElementById('orchMaxConcurrent');
+      const modeEl = document.getElementById('orchMode');
+      const matchEl = document.getElementById('orchMatchingThreshold');
+      if (pollEl) pollEl.value = Math.round((config.pollIntervalMs || 30000) / 1000);
+      if (stallEl) stallEl.value = Math.round((config.stallThresholdMs || 900000) / 60000);
+      if (nudgeEl) nudgeEl.value = Math.round((config.nudgeThresholdMs || 1800000) / 60000);
+      if (maxEl) maxEl.value = config.maxConcurrentDispatches || 5;
+      if (modeEl) modeEl.value = config.mode || 'hybrid';
+      if (matchEl) matchEl.value = config.matchingThreshold || 3;
+    } catch (err) {
+      console.warn('Failed to load orchestrator config:', err);
+    }
+  }
+
+  async saveOrchestratorConfig() {
+    const pollEl = document.getElementById('orchPollInterval');
+    const stallEl = document.getElementById('orchStallThreshold');
+    const nudgeEl = document.getElementById('orchNudgeThreshold');
+    const maxEl = document.getElementById('orchMaxConcurrent');
+    const modeEl = document.getElementById('orchMode');
+    const matchEl = document.getElementById('orchMatchingThreshold');
+    if (!pollEl) return; // Tab not rendered
+
+    const config = {
+      pollIntervalMs: (parseInt(pollEl.value) || 30) * 1000,
+      stallThresholdMs: (parseInt(stallEl.value) || 15) * 60000,
+      nudgeThresholdMs: (parseInt(nudgeEl.value) || 30) * 60000,
+      maxConcurrentDispatches: parseInt(maxEl.value) || 5,
+      mode: modeEl.value || 'hybrid',
+      matchingThreshold: parseInt(matchEl.value) || 3,
+    };
+
+    try {
+      await fetch('/api/orchestrator/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+    } catch (err) {
+      console.warn('Failed to save orchestrator config:', err);
     }
   }
 
@@ -13609,6 +13688,7 @@ class CodemanApp {
       await this.loadMuxSessions();
       await fetch('/api/mux-sessions/stats/start', { method: 'POST' });
       this.renderTaskPanel();
+      this.renderOrchestratorStatus();
       if (toggleBtn) toggleBtn.innerHTML = '&#x25BC;'; // Down arrow when open
     } else {
       // Stop stats collection when panel is closed
@@ -13717,6 +13797,156 @@ class CodemanApp {
     header._touchDragHandler = onStart;
     header.addEventListener('mousedown', onStart);
     header.addEventListener('touchstart', onStart, { passive: false });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Orchestrator Monitor
+  // ═══════════════════════════════════════════════════════════════
+
+  async renderOrchestratorStatus() {
+    const body = document.getElementById('orchestratorStatusBody');
+    const badge = document.getElementById('orchestratorStatusBadge');
+    const toggleBtn = document.getElementById('orchestratorToggleBtn');
+    if (!body) return;
+
+    try {
+      const res = await fetch('/api/orchestrator/status');
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Failed to fetch status');
+      const status = json.data;
+
+      // Update header badge and toggle button
+      if (badge) {
+        badge.textContent = status.running ? 'running' : 'stopped';
+        badge.style.color = status.running ? 'var(--success, #4caf50)' : 'var(--text-secondary)';
+      }
+      if (toggleBtn) {
+        toggleBtn.textContent = status.running ? 'Stop' : 'Start';
+        toggleBtn.className = status.running ? 'btn-toolbar btn-sm btn-danger' : 'btn-toolbar btn-sm';
+      }
+
+      // Cache status for settings tab
+      this._orchestratorStatus = status;
+
+      // Build body content
+      const config = status.config || {};
+      const cases = status.activeCases || [];
+      const decisions = (status.recentDecisions || []).slice(0, 5);
+
+      // Clear and rebuild using DOM methods
+      body.textContent = '';
+      const container = document.createElement('div');
+      container.style.cssText = 'padding:4px 8px;font-size:0.8rem;display:flex;flex-direction:column;gap:6px;';
+
+      // Stats row
+      const statsRow = document.createElement('div');
+      statsRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;';
+      const modeSpan = document.createElement('span');
+      modeSpan.textContent = 'Mode: ';
+      const modeVal = document.createElement('strong');
+      modeVal.textContent = status.mode;
+      modeSpan.appendChild(modeVal);
+      statsRow.appendChild(modeSpan);
+
+      const dispSpan = document.createElement('span');
+      dispSpan.textContent = 'Dispatches: ';
+      const dispVal = document.createElement('strong');
+      dispVal.textContent = `${status.activeDispatches}/${config.maxConcurrentDispatches || '?'}`;
+      dispSpan.appendChild(dispVal);
+      statsRow.appendChild(dispSpan);
+
+      if (status.lastActionAt) {
+        const agoSpan = document.createElement('span');
+        agoSpan.textContent = 'Last action: ';
+        const agoVal = document.createElement('strong');
+        agoVal.textContent = this._formatTimeAgo(new Date(status.lastActionAt).getTime());
+        agoSpan.appendChild(agoVal);
+        statsRow.appendChild(agoSpan);
+      }
+      container.appendChild(statsRow);
+
+      // Active cases
+      if (cases.length > 0) {
+        const casesDiv = document.createElement('div');
+        const casesLabel = document.createElement('span');
+        casesLabel.style.color = 'var(--text-secondary)';
+        casesLabel.textContent = 'Active cases: ';
+        casesDiv.appendChild(casesLabel);
+        for (const c of cases) {
+          const pill = document.createElement('span');
+          pill.className = 'tag-pill';
+          pill.textContent = c;
+          casesDiv.appendChild(pill);
+          casesDiv.appendChild(document.createTextNode(' '));
+        }
+        container.appendChild(casesDiv);
+      }
+
+      // Recent decisions
+      if (decisions.length > 0) {
+        const decisionsDiv = document.createElement('div');
+        decisionsDiv.style.marginTop = '2px';
+        const decisionsLabel = document.createElement('span');
+        decisionsLabel.style.color = 'var(--text-secondary)';
+        decisionsLabel.textContent = 'Recent decisions:';
+        decisionsDiv.appendChild(decisionsLabel);
+
+        const decList = document.createElement('div');
+        decList.style.cssText = 'margin-top:2px;display:flex;flex-direction:column;gap:2px;';
+        for (const d of decisions) {
+          const row = document.createElement('div');
+          row.style.cssText = 'font-size:0.75rem;color:var(--text-secondary);';
+          const time = new Date(d.timestamp).toLocaleTimeString();
+          const timeSpan = document.createElement('span');
+          timeSpan.style.color = 'var(--text)';
+          timeSpan.textContent = time;
+          row.appendChild(timeSpan);
+          row.appendChild(document.createTextNode(` ${(d.workItemId || '?').slice(0, 8)} \u2192 ${d.agentId || 'none'} `));
+          const methodSpan = document.createElement('span');
+          methodSpan.style.opacity = '0.7';
+          methodSpan.textContent = `(${d.method || 'unknown'})`;
+          row.appendChild(methodSpan);
+          decList.appendChild(row);
+        }
+        decisionsDiv.appendChild(decList);
+        container.appendChild(decisionsDiv);
+      }
+
+      // Empty state
+      if (cases.length === 0 && decisions.length === 0) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.style.color = 'var(--text-secondary)';
+        emptyDiv.textContent = status.running
+          ? 'No active dispatches. Waiting for queued work items with orchestration-enabled cases.'
+          : 'Orchestrator is stopped. Enable orchestration on a case and start to begin automated dispatch.';
+        container.appendChild(emptyDiv);
+      }
+
+      body.appendChild(container);
+    } catch (err) {
+      body.textContent = '';
+      const errDiv = document.createElement('div');
+      errDiv.className = 'monitor-empty';
+      errDiv.style.color = 'var(--error, #f44336)';
+      errDiv.textContent = 'Error: ' + err.message;
+      body.appendChild(errDiv);
+    }
+  }
+
+  async toggleOrchestratorRunning() {
+    const badge = document.getElementById('orchestratorStatusBadge');
+    const isRunning = badge && badge.textContent === 'running';
+    const endpoint = isRunning ? '/api/orchestrator/stop' : '/api/orchestrator/start';
+
+    try {
+      const res = await fetch(endpoint, { method: 'POST' });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Failed');
+      this.renderOrchestratorStatus();
+      this.showToast(`Orchestrator ${isRunning ? 'stopped' : 'started'}`, 'success');
+    } catch (err) {
+      this.showToast(`Failed to ${isRunning ? 'stop' : 'start'} orchestrator: ${err.message}`, 'error');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -17365,6 +17595,7 @@ class CodemanApp {
       const caseName = document.getElementById('quickStartCase').value || 'testcase';
       const settings = this.getCaseSettings(caseName);
       document.getElementById('caseAgentTeams').checked = settings.agentTeams;
+      this._loadCaseOrchestrationState(caseName, 'caseOrchestration');
       popover.classList.remove('hidden');
 
       // Close on outside click (one-shot listener)
@@ -17409,6 +17640,7 @@ class CodemanApp {
       const caseName = document.getElementById('quickStartCase').value || 'testcase';
       const settings = this.getCaseSettings(caseName);
       document.getElementById('caseAgentTeamsMobile').checked = settings.agentTeams;
+      this._loadCaseOrchestrationState(caseName, 'caseOrchestrationMobile');
       popover.classList.remove('hidden');
 
       const closeHandler = (e) => {
@@ -17431,6 +17663,59 @@ class CodemanApp {
     // Sync desktop checkbox
     const desktopCheckbox = document.getElementById('caseAgentTeams');
     if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
+  }
+
+  // Per-case orchestration toggle helpers
+
+  async _loadCaseOrchestrationState(caseName, checkboxId) {
+    const checkbox = document.getElementById(checkboxId);
+    if (!checkbox) return;
+    checkbox.checked = false;
+    try {
+      // The toggle API response gives us the current state — but we need a read.
+      // Use a cached approach: store in localStorage after each toggle, and load from there.
+      const cached = localStorage.getItem('caseOrch_' + caseName);
+      if (cached !== null) {
+        checkbox.checked = cached === 'true';
+      }
+    } catch { /* ignore */ }
+  }
+
+  async onCaseOrchestrationChanged() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const enabled = document.getElementById('caseOrchestration').checked;
+    await this._setCaseOrchestration(caseName, enabled);
+    // Sync mobile
+    const mobileEl = document.getElementById('caseOrchestrationMobile');
+    if (mobileEl) mobileEl.checked = enabled;
+  }
+
+  async onCaseOrchestrationChangedMobile() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const enabled = document.getElementById('caseOrchestrationMobile').checked;
+    await this._setCaseOrchestration(caseName, enabled);
+    // Sync desktop
+    const desktopEl = document.getElementById('caseOrchestration');
+    if (desktopEl) desktopEl.checked = enabled;
+  }
+
+  async _setCaseOrchestration(caseName, enabled) {
+    try {
+      const res = await fetch('/api/orchestrator/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseId: caseName, enabled }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        localStorage.setItem('caseOrch_' + caseName, String(enabled));
+        this.showToast(`Orchestration ${enabled ? 'enabled' : 'disabled'} for ${caseName}`, 'success');
+      } else {
+        this.showToast(json.error || 'Failed to toggle orchestration', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to toggle orchestration: ' + err.message, 'error');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
