@@ -306,6 +306,15 @@ export const HookTeammateIdle = 'hook:teammate_idle' as const;
 /** Claude Code hook: teammate task completed. */
 export const HookTaskCompleted = 'hook:task_completed' as const;
 
+// ─── Orchestrator ─────────────────────────────────────────────────────────────
+
+/** Orchestrator dispatched a work item to an agent/worktree. */
+export const OrchestratorDispatch = 'orchestrator:dispatch' as const;
+/** Orchestrator made an agent assignment decision. */
+export const OrchestratorDecision = 'orchestrator:decision' as const;
+/** Orchestrator detected a stall in a dispatched work item. */
+export const OrchestratorStall = 'orchestrator:stall' as const;
+
 // ─── Worktree ─────────────────────────────────────────────────────────────────
 
 /** Emitted when a worktree session exits — triggers cleanup modal on frontend */
@@ -534,6 +543,11 @@ export const SseEvent = {
   HookStop,
   HookTeammateIdle,
   HookTaskCompleted,
+
+  // Orchestrator
+  OrchestratorDispatch,
+  OrchestratorDecision,
+  OrchestratorStall,
 
   // Worktree
   WorktreeSessionEnded,

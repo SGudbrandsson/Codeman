@@ -34,10 +34,19 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       const entries = await fs.readdir(CASES_DIR, { withFileTypes: true });
       for (const e of entries) {
         if (e.isDirectory()) {
+          let orchestrationEnabled = false;
+          try {
+            const caseConfigPath = join(CASES_DIR, e.name, 'case-config.json');
+            const caseConfig = JSON.parse(await fs.readFile(caseConfigPath, 'utf-8')) as Record<string, unknown>;
+            orchestrationEnabled = caseConfig.orchestrationEnabled === true;
+          } catch {
+            /* no case-config.json */
+          }
           cases.push({
             name: e.name,
             path: join(CASES_DIR, e.name),
             hasClaudeMd: existsSync(join(CASES_DIR, e.name, 'CLAUDE.md')),
+            orchestrationEnabled,
           });
         }
       }
@@ -48,8 +57,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // Get linked cases
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
-      const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
-      for (const [name, path] of Object.entries(linkedCases)) {
+      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
+        await fs.readFile(linkedCasesFile, 'utf-8')
+      );
+      for (const [name, entry] of Object.entries(linkedCases)) {
+        const path = typeof entry === 'string' ? entry : entry.path;
+        const orchestrationEnabled = typeof entry === 'object' ? (entry.orchestrationEnabled ?? false) : false;
         // Only add if not already in cases (avoid duplicates) and path exists
         if (!cases.some((c) => c.name === name) && existsSync(path)) {
           cases.push({
@@ -57,6 +70,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
             path,
             hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
             linked: true,
+            orchestrationEnabled,
           });
         }
       }
@@ -368,6 +382,60 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     ctx.broadcast(SseEvent.CaseDeleted, { name, mode: 'delete' });
     return { success: true, data: { name } };
+  });
+
+  // Update case configuration (e.g. orchestration toggle)
+  app.patch('/api/cases/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const body = req.body as { orchestrationEnabled?: boolean };
+
+    // Security: Path traversal protection
+    const resolvedPath = resolve(join(CASES_DIR, name));
+    const resolvedBase = resolve(CASES_DIR);
+    const relPath = relative(resolvedBase, resolvedPath);
+    if (relPath.startsWith('..') || isAbsolute(relPath)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+
+    // Check native case
+    const nativePath = join(CASES_DIR, name);
+    if (existsSync(nativePath)) {
+      if (typeof body.orchestrationEnabled === 'boolean') {
+        const configPath = join(nativePath, 'case-config.json');
+        let config: Record<string, unknown> = {};
+        try {
+          config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as Record<string, unknown>;
+        } catch {
+          /* no existing config */
+        }
+        config.orchestrationEnabled = body.orchestrationEnabled;
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+      }
+      return { success: true, data: { name, orchestrationEnabled: body.orchestrationEnabled } };
+    }
+
+    // Check linked case
+    const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+    let linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = {};
+    try {
+      linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8')) as typeof linkedCases;
+    } catch {
+      /* no file */
+    }
+
+    const entry = linkedCases[name];
+    if (!entry) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
+    }
+
+    if (typeof body.orchestrationEnabled === 'boolean') {
+      const path = typeof entry === 'string' ? entry : entry.path;
+      linkedCases[name] = { path, orchestrationEnabled: body.orchestrationEnabled };
+      await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+    }
+
+    return { success: true, data: { name, orchestrationEnabled: body.orchestrationEnabled } };
   });
 
   // Read @fix_plan.md from a case directory (for wizard to detect existing plans)

@@ -122,6 +122,7 @@ import {
   registerWorkItemRoutes,
   registerMessageRoutes,
   registerClockworkRoutes,
+  registerOrchestratorRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -776,6 +777,31 @@ export class WebServer extends EventEmitter {
     registerWorkItemRoutes(this.app, ctx);
     registerMessageRoutes(this.app, ctx);
     registerClockworkRoutes(this.app, ctx);
+    registerOrchestratorRoutes(this.app, ctx);
+
+    // Initialize and start the orchestrator
+    try {
+      const { initOrchestrator, getOrchestrator: getOrch } = await import('../orchestrator.js');
+      initOrchestrator({
+        store: this.store,
+        broadcast: (event, data) => this.broadcast(event, data),
+        addSession: (s) => {
+          this.sessions.set(s.id, s);
+        },
+        setupSessionListeners: (s) => this.setupSessionListeners(s),
+        persistSessionState: (s) => this.persistSessionState(s),
+        getSessionStateWithRespawn: (s) => this.getSessionStateWithRespawn(s),
+        sessions: this.sessions as ReadonlyMap<string, Session>,
+        cleanupSession: (id) => this.cleanupSession(id),
+        mux: this.mux,
+        getGlobalNiceConfig: () => this.getGlobalNiceConfig(),
+        getModelConfig: () => this.getModelConfig(),
+        getClaudeModeConfig: () => this.getClaudeModeConfig(),
+      });
+      getOrch()?.start();
+    } catch (err) {
+      console.warn('[server] orchestrator init failed:', err);
+    }
   }
 
   /**
@@ -3523,6 +3549,14 @@ export class WebServer extends EventEmitter {
     getLifecycleLog().log({ event: 'server_stopped', sessionId: '*' });
     // Set stopping flag to prevent new timer creation during shutdown
     this._isStopping = true;
+
+    // Stop orchestrator
+    try {
+      const { getOrchestrator: getOrch } = await import('../orchestrator.js');
+      getOrch()?.stop();
+    } catch {
+      /* orchestrator not initialized */
+    }
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

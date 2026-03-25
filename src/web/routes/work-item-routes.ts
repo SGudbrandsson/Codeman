@@ -62,6 +62,7 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       metadata?: Record<string, unknown>;
       externalRef?: string;
       externalUrl?: string;
+      caseId?: string;
     };
 
     if (!body.title) {
@@ -76,6 +77,7 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       metadata: body.metadata,
       externalRef: body.externalRef,
       externalUrl: body.externalUrl,
+      caseId: body.caseId,
     });
 
     ctx.broadcast(SseEvent.WorkItemCreated, item);
@@ -114,6 +116,7 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       externalUrl: string | null;
       metadata: Record<string, unknown>;
       compactSummary: string | null;
+      caseId: string | null;
     }>;
 
     const updated = updateWorkItem(id, body);

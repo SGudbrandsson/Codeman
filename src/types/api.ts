@@ -111,6 +111,8 @@ export interface CaseInfo {
   hasClaudeMd?: boolean;
   /** Whether this is a linked case (arbitrary path registered in linked-cases.json) */
   linked?: boolean;
+  /** Whether automated orchestration is enabled for this case */
+  orchestrationEnabled?: boolean;
 }
 
 // ========== Error Handling Utilities ==========

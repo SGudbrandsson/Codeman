@@ -85,6 +85,13 @@ export function openDb(path?: string): Database.Database {
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
 
+  // Idempotent migration: add case_id column
+  try {
+    db.prepare('ALTER TABLE work_items ADD COLUMN case_id TEXT').run();
+  } catch {
+    // Column already exists
+  }
+
   _db = db;
   _dbPath = resolvedPath;
   return db;
