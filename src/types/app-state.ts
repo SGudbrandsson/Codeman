@@ -23,6 +23,7 @@ import type { SessionState, AgentProfile } from './session.js';
 import type { TaskState } from './task.js';
 import type { RalphLoopState } from './ralph.js';
 import type { RespawnConfig } from './respawn.js';
+import type { OrchestratorConfig } from './orchestrator.js';
 
 // ========== Global Stats Types ==========
 
@@ -95,6 +96,8 @@ export interface AppConfig {
   clockworkToken?: string;
   /** Clockwork OS webhook callback configuration */
   clockworkWebhook?: { url: string; secret?: string | null };
+  /** Automated orchestrator configuration */
+  orchestrator?: OrchestratorConfig;
 }
 
 /**

@@ -240,6 +240,10 @@ export interface SessionState {
   transcriptPath?: string;
   /** Current work item ID being worked on (for vault capture metadata) */
   currentWorkItemId?: string | null;
+  /** Whether this is an orchestrator dispatch session */
+  isDispatchSession?: boolean;
+  /** Case this session belongs to */
+  caseId?: string;
 }
 
 /**

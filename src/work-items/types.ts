@@ -27,6 +27,7 @@ export interface WorkItem {
   externalUrl: string | null;
   metadata: Record<string, unknown>;
   compactSummary: string | null;
+  caseId: string | null;
 }
 
 export interface WorkItemDependency {

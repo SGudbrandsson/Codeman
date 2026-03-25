@@ -122,6 +122,24 @@ export function registerHookEventRoutes(
       }
     }
 
+    // Notify orchestrator of session completion
+    if (event === 'stop') {
+      const sessionStateForOrch = ctx.store.getState().sessions[sessionId];
+      if (sessionStateForOrch?.currentWorkItemId) {
+        try {
+          const { getOrchestrator } = await import('../../orchestrator.js');
+          const orchestrator = getOrchestrator();
+          if (orchestrator) {
+            orchestrator.handleSessionCompletion(sessionId).catch((err: unknown) => {
+              console.error('[hook-event] orchestrator completion handler failed:', err);
+            });
+          }
+        } catch {
+          /* orchestrator not initialized */
+        }
+      }
+    }
+
     return { success: true };
   });
 }

@@ -106,6 +106,16 @@ describe('createWorkItem', () => {
     expect(item.metadata).toEqual(meta);
   });
 
+  it('stores caseId when provided', () => {
+    const item = createWorkItem({ title: 'Case task', caseId: 'my-project' });
+    expect(item.caseId).toBe('my-project');
+  });
+
+  it('returns item with null caseId when not provided', () => {
+    const item = createWorkItem({ title: 'no case' });
+    expect(item.caseId).toBeNull();
+  });
+
   it('handles hash collision retry — pre-inserted row forces longer hash', () => {
     // Create a first item to establish a unique ID
     const first = createWorkItem({ title: 'collision base' });
@@ -161,6 +171,16 @@ describe('listWorkItems', () => {
     expect(queued).toHaveLength(1);
   });
 
+  it('filters by caseId', () => {
+    createWorkItem({ title: 'Case A task', caseId: 'case-a' });
+    createWorkItem({ title: 'Case B task', caseId: 'case-b' });
+    createWorkItem({ title: 'No case task' });
+
+    const caseAItems = listWorkItems({ caseId: 'case-a' });
+    expect(caseAItems).toHaveLength(1);
+    expect(caseAItems[0].caseId).toBe('case-a');
+  });
+
   it('filters by agentId', () => {
     const item = createWorkItem({ title: 'agent task' });
     claimWorkItem(item.id, 'agent-123');
@@ -194,6 +214,13 @@ describe('updateWorkItem', () => {
     const updated = updateWorkItem(item.id, { status: 'done' });
     expect(updated!.completedAt).not.toBeNull();
     expect(updated!.status).toBe('done');
+  });
+
+  it('updates caseId field', () => {
+    const item = createWorkItem({ title: 'update case test' });
+    expect(item.caseId).toBeNull();
+    const updated = updateWorkItem(item.id, { caseId: 'new-case' });
+    expect(updated!.caseId).toBe('new-case');
   });
 
   it('auto-sets completedAt when transitioning to cancelled', () => {

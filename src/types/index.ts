@@ -64,5 +64,6 @@ export * from './tools.js';
 export * from './teams.js';
 export * from './push.js';
 export * from './plan.js';
+export * from './orchestrator.js';
 export type { TranscriptBlock, TextBlock, ToolUseBlock, ToolResultBlock, ResultBlock } from './transcript-blocks.js';
 export { parseTranscriptEntry, parseTranscriptJSONL } from './transcript-blocks.js';

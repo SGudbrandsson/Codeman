@@ -29,6 +29,7 @@ interface WorkItemRow {
   external_url: string | null;
   metadata: string;
   compact_summary: string | null;
+  case_id: string | null;
 }
 
 interface DependencyRow {
@@ -59,6 +60,7 @@ function rowToWorkItem(row: WorkItemRow): WorkItem {
     externalUrl: row.external_url,
     metadata: JSON.parse(row.metadata || '{}') as Record<string, unknown>,
     compactSummary: row.compact_summary,
+    caseId: row.case_id,
   };
 }
 
@@ -94,6 +96,7 @@ export function createWorkItem(input: {
   metadata?: Record<string, unknown>;
   externalRef?: string;
   externalUrl?: string;
+  caseId?: string;
 }): WorkItem {
   const db = getDb();
   const createdAt = new Date().toISOString();
@@ -140,6 +143,10 @@ export function createWorkItem(input: {
     ).run(input.externalRef ?? null, input.externalUrl ?? null, id);
   }
 
+  if (input.caseId) {
+    db.prepare('UPDATE work_items SET case_id = ? WHERE id = ?').run(input.caseId, id);
+  }
+
   return getWorkItem(id)!;
 }
 
@@ -154,7 +161,7 @@ export function getWorkItem(id: string): WorkItem | null {
 /**
  * List all work items, with optional filters.
  */
-export function listWorkItems(filters?: { status?: WorkItemStatus; agentId?: string }): WorkItem[] {
+export function listWorkItems(filters?: { status?: WorkItemStatus; agentId?: string; caseId?: string }): WorkItem[] {
   const db = getDb();
   let sql = 'SELECT * FROM work_items WHERE 1=1';
   const params: unknown[] = [];
@@ -166,6 +173,10 @@ export function listWorkItems(filters?: { status?: WorkItemStatus; agentId?: str
   if (filters?.agentId) {
     sql += ' AND assigned_agent_id = ?';
     params.push(filters.agentId);
+  }
+  if (filters?.caseId) {
+    sql += ' AND case_id = ?';
+    params.push(filters.caseId);
   }
 
   sql += ' ORDER BY created_at ASC';
@@ -205,7 +216,8 @@ export function updateWorkItem(id: string, updates: Partial<Omit<WorkItem, 'id' 
       external_ref     = ?,
       external_url     = ?,
       metadata         = ?,
-      compact_summary  = ?
+      compact_summary  = ?,
+      case_id          = ?
     WHERE id = ?
   `
   ).run(
@@ -224,6 +236,7 @@ export function updateWorkItem(id: string, updates: Partial<Omit<WorkItem, 'id' 
     updates.externalUrl !== undefined ? updates.externalUrl : existing.externalUrl,
     JSON.stringify(updates.metadata ?? existing.metadata),
     updates.compactSummary !== undefined ? updates.compactSummary : existing.compactSummary,
+    updates.caseId !== undefined ? updates.caseId : existing.caseId,
     id
   );
 
