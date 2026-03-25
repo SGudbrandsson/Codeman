@@ -18279,6 +18279,7 @@ const InputPanel = {
   _panelEl: null,
   _textareaEl: null,
   _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
+  _files: [],      // Array<{ filename: string, path: string|null, uploading: boolean }>
   _slashVisible: false,
   _replaceIdx: -1,
   _autoGrowPending: false,
@@ -18417,7 +18418,7 @@ const InputPanel = {
       }
       if (nonImageItems.length) {
         const files = nonImageItems.map(it => it.getAsFile()).filter(Boolean);
-        if (files.length) this._handleNonImageFiles(files);
+        if (files.length) this._uploadNonImageFiles(files);
       }
     });
 
@@ -18508,6 +18509,7 @@ const InputPanel = {
       if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
     }
     this._images = [];
+    this._files = [];
     this._renderThumbnails();
     if (typeof KeyboardAccessoryBar !== 'undefined' && KeyboardAccessoryBar.instance) {
       KeyboardAccessoryBar.instance.setComposeActive(false);
@@ -18520,7 +18522,8 @@ const InputPanel = {
     if (!ta) return;
     const text = ta.value.trim();
     const images = this._images.filter(img => img.path);
-    if (!text && !images.length) return;
+    const attachedFiles = this._files.filter(f => f.path);
+    if (!text && !images.length && !attachedFiles.length) return;
     if (typeof app === 'undefined' || !app.sendInput) return;
 
     // Combine image paths and text into one message joined by \n (Ctrl+J line breaks).
@@ -18528,6 +18531,13 @@ const InputPanel = {
     // it all together — avoids the race where text+Enter arrive while Claude is still
     // processing the image path submission from a prior Enter.
     let sendText = text;
+
+    // Prepend non-image file references so Claude knows to read them
+    if (attachedFiles.length) {
+      const fileRefs = attachedFiles.map(f => `[Attached file: ${f.path}]`).join('\n');
+      sendText = fileRefs + (sendText ? '\n' + sendText : '');
+    }
+
     if (sendText && typeof SecretDetector !== 'undefined' && SecretDetector.isEnabled()) {
       const result = SecretDetector.scan(app.activeSessionId, sendText);
       if (result.count > 0) {
@@ -18590,6 +18600,7 @@ const InputPanel = {
 
     ta.value = '';
     this._images = [];
+    this._files = [];
     this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
     this._autoGrow(ta);
   },
@@ -18650,17 +18661,42 @@ const InputPanel = {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
     const nonImageFiles = files.filter(f => !f.type.startsWith('image/'));
     if (imageFiles.length) await this._uploadFiles(imageFiles);
-    if (nonImageFiles.length) this._handleNonImageFiles(nonImageFiles);
+    if (nonImageFiles.length) await this._uploadNonImageFiles(nonImageFiles);
   },
 
-  /** Handle non-image files by inserting filenames as plain text in the textarea */
-  _handleNonImageFiles(files) {
-    const ta = this._getTextarea();
-    if (!ta) return;
-    const names = files.map(f => f.name).join('\n');
-    const existing = ta.value;
-    ta.value = existing ? existing + '\n' + names : names;
-    this._autoGrow(ta);
+  /** Upload non-image files to the session's working directory */
+  async _uploadNonImageFiles(files) {
+    if (!files.length || typeof app === 'undefined' || !app.activeSessionId) return;
+
+    for (const file of files) {
+      const entry = { filename: file.name, path: null, uploading: true };
+      this._files.push(entry);
+      this._renderThumbnails();
+
+      this._uploadingCount = (this._uploadingCount || 0) + 1;
+      this._updateSendBtnState();
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`/api/sessions/${app.activeSessionId}/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Upload failed');
+        entry.path = data.path;
+        entry.filename = data.filename;
+        entry.uploading = false;
+        this._renderThumbnails();
+      } catch (err) {
+        if (typeof app !== 'undefined') app.showToast('File upload failed: ' + (err.message || err), 'error');
+        console.error('[InputPanel] file upload failed:', err);
+        const idx = this._files.indexOf(entry);
+        if (idx !== -1) this._files.splice(idx, 1);
+        this._renderThumbnails();
+      } finally {
+        this._uploadingCount = Math.max(0, (this._uploadingCount || 0) - 1);
+        this._updateSendBtnState();
+      }
+    }
   },
 
   /** Update Send button disabled state based on pending upload count */
@@ -18723,7 +18759,7 @@ const InputPanel = {
     const strip = document.getElementById('composeThumbStrip');
     if (!strip) return;
     strip.replaceChildren();
-    if (!this._images.length) { strip.style.display = 'none'; return; }
+    if (!this._images.length && !this._files.length) { strip.style.display = 'none'; return; }
     strip.style.display = '';
 
     this._images.forEach((img, idx) => {
@@ -18755,6 +18791,41 @@ const InputPanel = {
       });
 
       wrap.appendChild(imgEl);
+      wrap.appendChild(removeBtn);
+      strip.appendChild(wrap);
+    });
+
+    // Render non-image file attachments
+    this._files.forEach((file, idx) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'compose-thumb compose-thumb-file';
+      wrap.title = file.path || (file.uploading ? 'Uploading\u2026' : file.filename);
+
+      const icon = document.createElement('div');
+      icon.className = 'compose-file-icon';
+      // Show extension badge or generic file icon
+      const ext = file.filename.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toUpperCase() || '';
+      icon.textContent = ext || '\ud83d\udcc4';
+      icon.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:60%;font-size:11px;font-weight:700;color:var(--text-secondary,#999);letter-spacing:0.5px;';
+
+      const label = document.createElement('div');
+      label.className = 'compose-file-label';
+      label.textContent = file.uploading ? 'Uploading\u2026' : file.filename;
+      label.style.cssText = 'font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;text-align:center;padding:0 2px;color:var(--text-secondary,#999);';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'compose-thumb-remove';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('aria-label', 'Remove file');
+      removeBtn.textContent = '\xd7';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._files.splice(idx, 1);
+        this._renderThumbnails();
+      });
+
+      wrap.appendChild(icon);
+      wrap.appendChild(label);
       wrap.appendChild(removeBtn);
       strip.appendChild(wrap);
     });

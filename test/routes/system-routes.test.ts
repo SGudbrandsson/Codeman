@@ -910,6 +910,216 @@ describe('system-routes', () => {
     });
   });
 
+  // ========== POST /api/sessions/:id/upload ==========
+
+  describe('POST /api/sessions/:id/upload', () => {
+    /**
+     * The upload endpoint reads req.raw directly (same as screenshots).
+     * Fastify needs a content-type parser for multipart/form-data registered
+     * (done in server.ts but not in the test harness). We create a dedicated
+     * harness with the parser for these tests.
+     */
+    let uploadHarness: RouteTestHarness;
+
+    beforeEach(async () => {
+      const Fastify = (await import('fastify')).default;
+      const fastifyCookie = (await import('@fastify/cookie')).default;
+      const { createMockRouteContext } = await import('../mocks/index.js');
+
+      const app = Fastify({ logger: false });
+      await app.register(fastifyCookie);
+      // Register the multipart parser that server.ts normally provides
+      app.addContentTypeParser('multipart/form-data', (_req: unknown, _payload: unknown, done: (err: null) => void) => {
+        done(null);
+      });
+      const ctx = createMockRouteContext();
+      registerSystemRoutes(app, ctx as never);
+      await app.ready();
+      uploadHarness = { app, ctx };
+
+      // Re-apply fs mocks for this sub-harness
+      mockedExistsSync.mockReturnValue(false);
+      mockedWriteFile.mockResolvedValue(undefined);
+    });
+
+    afterEach(async () => {
+      await uploadHarness.app.close();
+    });
+
+    /** Build a multipart/form-data body with the given filename and content buffer */
+    function buildMultipart(filename: string, content: Buffer, fieldName = 'file') {
+      const boundary = '----TestBoundary123';
+      const header = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+      );
+      const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+      return {
+        body: Buffer.concat([header, content, footer]),
+        contentType: `multipart/form-data; boundary=${boundary}`,
+      };
+    }
+
+    it('uploads a non-image file successfully', async () => {
+      const { body, contentType } = buildMultipart('report.pdf', Buffer.from('pdf-content'));
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(true);
+      expect(data.filename).toBe('report.pdf');
+      expect(data.path).toContain('.codeman-uploads');
+      expect(data.path).toContain('report.pdf');
+      expect(data.isImage).toBe(false);
+      expect(mockedWriteFile).toHaveBeenCalled();
+    });
+
+    it('sets isImage true for image extensions', async () => {
+      const { body, contentType } = buildMultipart('photo.png', Buffer.from('png-data'));
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.isImage).toBe(true);
+    });
+
+    it('sets isImage true for jpg, jpeg, webp, gif, svg, bmp, ico', async () => {
+      for (const ext of ['jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'ico']) {
+        mockedExistsSync.mockReturnValue(false);
+        mockedWriteFile.mockResolvedValue(undefined);
+        const { body, contentType } = buildMultipart(`img.${ext}`, Buffer.from('data'));
+        const res = await uploadHarness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+          headers: { 'content-type': contentType },
+          body,
+        });
+        const data = JSON.parse(res.body);
+        expect(data.isImage).toBe(true);
+      }
+    });
+
+    it('handles duplicate filenames with numeric suffix', async () => {
+      let callCount = 0;
+      mockedExistsSync.mockImplementation(() => {
+        callCount++;
+        // call 1: uploadsDir check -> exists
+        // call 2: if(existsSync(filepath)) -> true (duplicate exists)
+        // call 3: while(existsSync(filepath)) -> true (same original path)
+        // call 4: while(existsSync(filepath)) -> false (renamed path "(1)" doesn't exist)
+        return callCount <= 3;
+      });
+
+      const { body, contentType } = buildMultipart('report.pdf', Buffer.from('content'));
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.filename).toBe('report (1).pdf');
+    });
+
+    it('sanitizes path traversal characters from filename', async () => {
+      const { body, contentType } = buildMultipart('../../../etc/passwd', Buffer.from('bad'));
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.filename).not.toContain('/');
+      expect(data.filename).not.toContain('\\');
+    });
+
+    it('rejects files exceeding 10MB', async () => {
+      const largeContent = Buffer.alloc(11 * 1024 * 1024, 'x');
+      const { body, contentType } = buildMultipart('big.bin', largeContent);
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(413);
+      const data = JSON.parse(res.body);
+      expect(data.error).toContain('too large');
+    });
+
+    it('returns 404 for non-existent session', async () => {
+      const { body, contentType } = buildMultipart('file.txt', Buffer.from('data'));
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: '/api/sessions/nonexistent/upload',
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('returns error when session has no workingDir', async () => {
+      uploadHarness.ctx._session.workingDir = '';
+      const { body, contentType } = buildMultipart('file.txt', Buffer.from('data'));
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(400);
+      const data = JSON.parse(res.body);
+      expect(data.error).toContain('working directory');
+    });
+
+    it('rejects non-multipart content type', async () => {
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        payload: { file: 'data' },
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain('multipart');
+    });
+
+    it('rejects request with no file part', async () => {
+      const boundary = '----TestBoundary123';
+      const body = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="other"; filename="f.txt"\r\nContent-Type: text/plain\r\n\r\ndata\r\n--${boundary}--\r\n`
+      );
+
+      const res = await uploadHarness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${uploadHarness.ctx._sessionId}/upload`,
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain('No file uploaded');
+    });
+  });
+
   // ========== POST /api/tunnel/qr/regenerate ==========
 
   describe('POST /api/tunnel/qr/regenerate', () => {
