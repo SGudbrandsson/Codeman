@@ -61,6 +61,7 @@ function makeMockDeps(overrides?: Partial<OrchestratorDeps>): OrchestratorDeps {
     getGlobalNiceConfig: vi.fn(async () => undefined),
     getModelConfig: vi.fn(async () => null),
     getClaudeModeConfig: vi.fn(async () => ({})),
+    sendPushNotifications: vi.fn(),
     ...overrides,
     // expose internal state for test manipulation
     _agents,
@@ -492,5 +493,189 @@ describe('Orchestrator.checkStalls', () => {
     await orch.checkStalls();
     const updated = getWorkItem(item.id);
     expect(updated!.status).toBe('blocked');
+  });
+
+  it('auto-detects TASK.md done status and triggers completion flow', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };
+
+    const item = createWorkItem({ title: 'Auto-detect done' });
+    claimWorkItem(item.id, 'agent-1');
+
+    // Create a temp directory with a TASK.md containing status: done
+    const tmpDir = (await import('node:os')).tmpdir();
+    const worktreePath = `${tmpDir}/test-orchestrator-${item.id}`;
+    const fsP = (await import('node:fs/promises')).default;
+    await fsP.mkdir(worktreePath, { recursive: true });
+    await fsP.writeFile(`${worktreePath}/TASK.md`, '---\ntype: feature\nstatus: done\n---\n# Test\n');
+
+    updateWorkItem(item.id, {
+      status: 'in_progress',
+      worktreePath,
+    });
+
+    depsExt._sessionsState['sess-1'] = {
+      id: 'sess-1',
+      currentWorkItemId: item.id,
+      status: 'running',
+      name: 'test-session',
+      lastActivityAt: Date.now(),
+    } as unknown as SessionState;
+
+    const orch = new Orchestrator(deps);
+    await orch.checkStalls();
+
+    // Work item should transition to review (synchronous in checkStalls)
+    const updated = getWorkItem(item.id);
+    expect(updated!.status).toBe('review');
+
+    // Status changed event should be broadcast synchronously
+    const broadcastCalls = (deps.broadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const statusCalls = broadcastCalls.filter((c: unknown[]) => c[0] === 'workItem:statusChanged');
+    expect(statusCalls.length).toBeGreaterThanOrEqual(1);
+    expect(statusCalls[0][1]).toMatchObject({ id: item.id, status: 'review' });
+
+    // Note: handleCompletionFlow is fire-and-forget — tested separately in its own describe block
+
+    // Cleanup
+    await fsP.rm(worktreePath, { recursive: true, force: true });
+  });
+
+  it('auto-detects TASK.md failed status and marks item blocked', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };
+
+    const item = createWorkItem({ title: 'Auto-detect failed' });
+    claimWorkItem(item.id, 'agent-1');
+
+    const tmpDir = (await import('node:os')).tmpdir();
+    const worktreePath = `${tmpDir}/test-orchestrator-failed-${item.id}`;
+    const fsP = (await import('node:fs/promises')).default;
+    await fsP.mkdir(worktreePath, { recursive: true });
+    await fsP.writeFile(`${worktreePath}/TASK.md`, '---\ntype: feature\nstatus: failed\n---\n# Test\n');
+
+    updateWorkItem(item.id, {
+      status: 'in_progress',
+      worktreePath,
+    });
+
+    depsExt._sessionsState['sess-1'] = {
+      id: 'sess-1',
+      currentWorkItemId: item.id,
+      status: 'running',
+      lastActivityAt: Date.now(),
+    } as unknown as SessionState;
+
+    const orch = new Orchestrator(deps);
+    await orch.checkStalls();
+
+    const updated = getWorkItem(item.id);
+    expect(updated!.status).toBe('blocked');
+
+    await fsP.rm(worktreePath, { recursive: true, force: true });
+  });
+
+  it('skips TASK.md detection when file is missing', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };
+
+    const item = createWorkItem({ title: 'No TASK.md' });
+    claimWorkItem(item.id, 'agent-1');
+    updateWorkItem(item.id, {
+      status: 'in_progress',
+      worktreePath: '/nonexistent/path/no-task-md',
+    });
+
+    // Session missing — should fall through to normal stall logic (marks blocked)
+    const orch = new Orchestrator(deps);
+    await orch.checkStalls();
+
+    const updated = getWorkItem(item.id);
+    expect(updated!.status).toBe('blocked');
+  });
+});
+
+// ─── handleCompletionFlow ────────────────────────────────────────────────────
+
+describe('Orchestrator.handleCompletionFlow', () => {
+  it('broadcasts completion event and sends push notification', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };
+
+    const item = createWorkItem({ title: 'Completed item' });
+    claimWorkItem(item.id, 'agent-1');
+    updateWorkItem(item.id, {
+      status: 'review',
+      worktreePath: '/nonexistent/no-worktree',
+      branchName: 'feat/test',
+    });
+
+    depsExt._sessionsState['sess-1'] = {
+      id: 'sess-1',
+      currentWorkItemId: item.id,
+      name: 'test-session',
+    } as unknown as SessionState;
+
+    const orch = new Orchestrator(deps);
+    await orch.handleCompletionFlow(item.id);
+
+    // Should broadcast orchestrator:completion
+    const broadcastCalls = (deps.broadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const completionCalls = broadcastCalls.filter((c: unknown[]) => c[0] === 'orchestrator:completion');
+    expect(completionCalls).toHaveLength(1);
+    expect(completionCalls[0][1]).toMatchObject({
+      workItemId: item.id,
+      workItemTitle: 'Completed item',
+      sessionName: 'test-session',
+    });
+
+    // Should send push notification
+    expect(deps.sendPushNotifications).toHaveBeenCalledWith(
+      'orchestrator:completion',
+      expect.objectContaining({ workItemId: item.id })
+    );
+  });
+
+  it('is idempotent — second call is a no-op', async () => {
+    const deps = makeMockDeps();
+
+    const item = createWorkItem({ title: 'Idempotent test' });
+    claimWorkItem(item.id, 'agent-1');
+    updateWorkItem(item.id, { status: 'review' });
+
+    const orch = new Orchestrator(deps);
+    await orch.handleCompletionFlow(item.id);
+    await orch.handleCompletionFlow(item.id);
+
+    // Completion event should only be broadcast once
+    const broadcastCalls = (deps.broadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const completionCalls = broadcastCalls.filter((c: unknown[]) => c[0] === 'orchestrator:completion');
+    expect(completionCalls).toHaveLength(1);
+  });
+
+  it('skips merge-prep when worktree path does not exist', async () => {
+    const deps = makeMockDeps();
+
+    const item = createWorkItem({ title: 'No worktree' });
+    claimWorkItem(item.id, 'agent-1');
+    updateWorkItem(item.id, {
+      status: 'review',
+      worktreePath: '/nonexistent/path',
+    });
+
+    const orch = new Orchestrator(deps);
+    await orch.handleCompletionFlow(item.id);
+
+    // Should still broadcast completion, just without merge-prep result
+    const broadcastCalls = (deps.broadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const completionCalls = broadcastCalls.filter((c: unknown[]) => c[0] === 'orchestrator:completion');
+    expect(completionCalls).toHaveLength(1);
+    expect(completionCalls[0][1]).toMatchObject({
+      mergePrepPassed: null,
+    });
+
+    // No merge-prep started event
+    const mergePrepCalls = broadcastCalls.filter((c: unknown[]) => c[0] === 'orchestrator:mergePrepStarted');
+    expect(mergePrepCalls).toHaveLength(0);
   });
 });

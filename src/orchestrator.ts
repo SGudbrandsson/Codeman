@@ -39,7 +39,12 @@ import {
 import { detectPortsFromDir, allocateNextPort } from './utils/port-detection.js';
 import { CASES_DIR } from './web/route-helpers.js';
 import { SseEvent } from './web/sse-events.js';
-import type { OrchestratorConfig, OrchestratorDecision, OrchestratorStatus } from './types/orchestrator.js';
+import type {
+  OrchestratorConfig,
+  OrchestratorDecision,
+  OrchestratorStatus,
+  MergePrepResult,
+} from './types/orchestrator.js';
 import { DEFAULT_ORCHESTRATOR_CONFIG } from './types/orchestrator.js';
 import { getErrorMessage } from './types/api.js';
 
@@ -60,6 +65,7 @@ export interface OrchestratorDeps {
   getGlobalNiceConfig: () => Promise<NiceConfig | undefined>;
   getModelConfig: () => Promise<{ defaultModel?: string } | null>;
   getClaudeModeConfig: () => Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
+  sendPushNotifications: (event: string, data: Record<string, unknown>) => void;
 }
 
 // ─── Singleton ───────────────────────────────────────────────────────────────
@@ -143,6 +149,16 @@ async function isCaseOrchestrationEnabled(caseName: string): Promise<boolean> {
 const MAX_RECENT_DECISIONS = 50;
 const STALL_CHECK_INTERVAL_MS = 300_000; // 5 minutes
 const DISPATCH_RECOVERY_THRESHOLD_MS = 300_000; // 5 minutes
+const MERGE_PREP_TIMEOUT_MS = 60_000; // 60 seconds for tsc/lint
+
+const YAML_FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---/;
+
+function parseTaskMdStatus(content: string): string | null {
+  const match = content.match(YAML_FRONTMATTER_RE);
+  if (!match) return null;
+  const statusMatch = match[1].match(/^status:\s*(.+)$/m);
+  return statusMatch ? statusMatch[1].trim() : null;
+}
 
 export class Orchestrator extends EventEmitter {
   private deps: OrchestratorDeps;
@@ -151,6 +167,7 @@ export class Orchestrator extends EventEmitter {
   private recentDecisions: OrchestratorDecision[] = [];
   private lastActionAt: string | null = null;
   private nudgedItems = new Set<string>();
+  private completionFlowProcessed = new Set<string>();
   private running = false;
 
   constructor(deps: OrchestratorDeps) {
@@ -609,7 +626,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
     if (!sessionState?.currentWorkItemId) return;
 
     const item = getWorkItem(sessionState.currentWorkItemId);
-    if (!item || item.status !== 'in_progress') return;
+    if (!item || (item.status !== 'in_progress' && item.status !== 'review')) return;
 
     // Check for commits on worktree branch
     let hasCommits = false;
@@ -629,9 +646,141 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       updateWorkItem(item.id, { status: 'review' });
       this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'review' });
       console.log(`[orchestrator] ${item.id} → review (commits found)`);
+
+      // Trigger full completion flow (merge-prep + notification)
+      this.handleCompletionFlow(item.id).catch((err) => {
+        console.error(`[orchestrator] completion flow failed for ${item.id}:`, getErrorMessage(err));
+      });
     } else {
       console.log(`[orchestrator] ${item.id} session completed but no commits — leaving in_progress`);
     }
+  }
+
+  // ─── Merge prep ────────────────────────────────────────────────────────
+
+  async runMergePrep(worktreePath: string): Promise<MergePrepResult> {
+    const failures: string[] = [];
+    let tscErrors: string | undefined;
+    let lintErrors: string | undefined;
+    let commitsAhead: number | undefined;
+
+    // Run tsc --noEmit
+    try {
+      await execFileP('npx', ['tsc', '--noEmit'], {
+        cwd: worktreePath,
+        timeout: MERGE_PREP_TIMEOUT_MS,
+      });
+    } catch (err) {
+      const e = err as { stderr?: string; stdout?: string };
+      tscErrors = (e.stderr || e.stdout || 'tsc failed').slice(0, 2000);
+      failures.push('tsc');
+    }
+
+    // Run npm run lint
+    try {
+      await execFileP('npm', ['run', 'lint'], {
+        cwd: worktreePath,
+        timeout: MERGE_PREP_TIMEOUT_MS,
+      });
+    } catch (err) {
+      const e = err as { stderr?: string; stdout?: string };
+      lintErrors = (e.stderr || e.stdout || 'lint failed').slice(0, 2000);
+      failures.push('lint');
+    }
+
+    // Count commits ahead of remote
+    try {
+      const { stdout } = await execFileP('git', ['log', 'HEAD', '--not', '--remotes', '--oneline'], {
+        cwd: worktreePath,
+        timeout: 10_000,
+      });
+      const lines = stdout
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0);
+      commitsAhead = lines.length;
+    } catch {
+      // git log failed
+    }
+
+    return {
+      passed: failures.length === 0,
+      tscErrors,
+      lintErrors,
+      commitsAhead,
+      failures,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ─── Completion flow ───────────────────────────────────────────────────
+
+  async handleCompletionFlow(workItemId: string): Promise<void> {
+    // Idempotency guard — prevent duplicate completion flow runs
+    if (this.completionFlowProcessed.has(workItemId)) return;
+    this.completionFlowProcessed.add(workItemId);
+
+    const item = getWorkItem(workItemId);
+    if (!item) return;
+
+    // Find associated session for push notification context
+    let sessionName = '';
+    const allSessions = this.deps.store.getSessions();
+    for (const key of Object.keys(allSessions)) {
+      const s = allSessions[key];
+      if (s.currentWorkItemId === workItemId) {
+        sessionName = s.name || key.slice(0, 8);
+        break;
+      }
+    }
+
+    // Run merge-prep if worktree path exists
+    let mergePrepResult: MergePrepResult | null = null;
+    if (item.worktreePath && existsSync(item.worktreePath)) {
+      this.deps.broadcast(SseEvent.OrchestratorMergePrepStarted, {
+        workItemId,
+        worktreePath: item.worktreePath,
+      });
+      console.log(`[orchestrator] running merge-prep for ${workItemId} at ${item.worktreePath}`);
+
+      mergePrepResult = await this.runMergePrep(item.worktreePath);
+
+      this.deps.broadcast(SseEvent.OrchestratorMergePrepCompleted, {
+        workItemId,
+        ...mergePrepResult,
+      });
+      console.log(
+        `[orchestrator] merge-prep for ${workItemId}: ${mergePrepResult.passed ? 'PASSED' : 'FAILED'} (${mergePrepResult.failures.join(', ') || 'clean'})`
+      );
+
+      // Store merge-prep results in work item metadata
+      updateWorkItem(workItemId, {
+        metadata: {
+          ...item.metadata,
+          mergePrepResult,
+          mergePrepPassed: mergePrepResult.passed,
+        },
+      });
+    }
+
+    // Broadcast completion event
+    const completionPayload = {
+      workItemId,
+      workItemTitle: item.title,
+      branchName: item.branchName,
+      worktreePath: item.worktreePath,
+      sessionName,
+      mergePrepPassed: mergePrepResult?.passed ?? null,
+      mergePrepFailures: mergePrepResult?.failures.join(', ') ?? null,
+      timestamp: new Date().toISOString(),
+    };
+
+    this.deps.broadcast(SseEvent.OrchestratorCompletion, completionPayload);
+
+    // Send push notification
+    this.deps.sendPushNotifications(SseEvent.OrchestratorCompletion, completionPayload);
+
+    console.log(`[orchestrator] completion flow done for ${workItemId} — "${item.title}"`);
   }
 
   // ─── Stall detection ────────────────────────────────────────────────────
@@ -643,6 +792,29 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
 
     for (const item of inProgress) {
       if (!item.worktreePath) continue;
+
+      // Auto-detect completion: check TASK.md status in worktree
+      const taskMdPath = join(item.worktreePath, 'TASK.md');
+      try {
+        const taskMdContent = await fs.readFile(taskMdPath, 'utf-8');
+        const taskStatus = parseTaskMdStatus(taskMdContent);
+        if (taskStatus === 'done' || taskStatus === 'failed') {
+          console.log(`[orchestrator] TASK.md status '${taskStatus}' detected for ${item.id}`);
+          const newStatus = taskStatus === 'done' ? 'review' : 'blocked';
+          updateWorkItem(item.id, { status: newStatus as 'review' | 'blocked' });
+          this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: newStatus });
+
+          if (taskStatus === 'done') {
+            this.handleCompletionFlow(item.id).catch((err) => {
+              console.error(`[orchestrator] completion flow failed for ${item.id}:`, getErrorMessage(err));
+            });
+          }
+          this.nudgedItems.delete(item.id);
+          continue;
+        }
+      } catch {
+        // TASK.md not found or unreadable — continue with normal stall checks
+      }
 
       // Find the session for this work item
       const allSessions = this.deps.store.getSessions();
@@ -774,6 +946,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
     });
     this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: workItemId, status: 'done' });
     this.nudgedItems.delete(workItemId);
+    this.completionFlowProcessed.delete(workItemId);
 
     console.log(`[orchestrator] work item ${workItemId} done — cleaned up`);
   }

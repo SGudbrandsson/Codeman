@@ -797,6 +797,7 @@ export class WebServer extends EventEmitter {
         getGlobalNiceConfig: () => this.getGlobalNiceConfig(),
         getModelConfig: () => this.getModelConfig(),
         getClaudeModeConfig: () => this.getClaudeModeConfig(),
+        sendPushNotifications: (event, data) => this.sendPushNotifications(event, data),
       });
       getOrch()?.start();
     } catch (err) {
@@ -2775,6 +2776,7 @@ export class WebServer extends EventEmitter {
     [SseEvent.SessionError]: { title: 'Session Error', urgency: 'critical' },
     [SseEvent.RespawnBlocked]: { title: 'Respawn Blocked', urgency: 'critical' },
     [SseEvent.SessionRalphCompletionDetected]: { title: 'Task Complete', urgency: 'warning' },
+    [SseEvent.OrchestratorCompletion]: { title: 'Work Item Complete', urgency: 'warning' },
   };
 
   /**
@@ -2809,6 +2811,14 @@ export class WebServer extends EventEmitter {
     } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
       body += body ? ' ' : '';
       body += `Tool: ${String(data.tool_name)}`;
+    } else if (event === SseEvent.OrchestratorCompletion && data.workItemTitle) {
+      body += body ? ' ' : '';
+      body += String(data.workItemTitle);
+      if (data.mergePrepPassed === true) {
+        body += ' — merge-prep passed';
+      } else if (data.mergePrepPassed === false) {
+        body += ` — merge-prep failed: ${String(data.mergePrepFailures ?? '').slice(0, 100)}`;
+      }
     }
 
     const payload = JSON.stringify({
