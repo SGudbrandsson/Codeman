@@ -3090,6 +3090,36 @@ export class WebServer extends EventEmitter {
         );
       }
     }
+    // Model info — restore from saved state or scan JSONL for last known model
+    if (savedState.cliModel || savedState.currentModel) {
+      session.restoreModel(savedState.cliModel, savedState.currentModel);
+    } else {
+      // No model in saved state — scan JSONL for last assistant message's model
+      try {
+        const projectHash = session.workingDir.replace(/\//g, '-');
+        const jsonlPath = join(homedir(), '.claude', 'projects', projectHash, `${session.id}.jsonl`);
+        if (existsSync(jsonlPath)) {
+          const content = readFileSync(jsonlPath, 'utf8');
+          const lines = content.split('\n');
+          for (let i = lines.length - 1; i >= Math.max(0, lines.length - 50); i--) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (obj.type === 'assistant' && obj.message?.model) {
+                session.restoreModel(undefined, obj.message.model);
+                break;
+              }
+            } catch {
+              /* skip malformed */
+            }
+          }
+        }
+      } catch {
+        /* JSONL scan is best-effort */
+      }
+    }
+
     // Ralph / Todo tracker (not supported for opencode sessions)
     if (session.mode !== 'opencode') {
       if (savedState.ralphAutoEnableDisabled) {

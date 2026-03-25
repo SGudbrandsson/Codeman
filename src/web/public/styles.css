@@ -15,7 +15,7 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --header-height: 34px;
+  --header-height: 44px;
   --toolbar-height: 40px;
 
   /* Session color palette */
@@ -129,7 +129,7 @@ body {
 /* Compact Header */
 .header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   min-height: var(--header-height);
   padding: 0 0.75rem;
   background: var(--bg-card);
@@ -226,9 +226,8 @@ body {
 .header-brand {
   display: flex;
   align-items: center;
-  padding-right: 0.75rem;
-  border-right: 1px solid var(--border);
-  margin-right: 0.5rem;
+  padding-right: 0.5rem;
+  margin-right: 0.25rem;
   height: var(--header-height);
   flex-shrink: 0;
 }
@@ -249,7 +248,7 @@ body {
 
 /* Session Tabs */
 .session-tabs {
-  display: flex;
+  display: none !important; /* Tabs moved to sidebar/hamburger menu */
   align-items: flex-start;
   flex-wrap: nowrap;
   gap: 4px 2px;
@@ -481,10 +480,10 @@ body {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.625rem;
   margin-left: auto;
-  padding-left: 0.75rem;
-  border-left: 1px solid var(--border);
+  padding-left: 0.5rem;
+  border-left: none;
 }
 
 /* Connection Indicator */
@@ -6522,6 +6521,11 @@ kbd {
 /* Responsive */
 @media (max-width: 600px) {
   .header-brand {
+    padding-right: 0;
+    border-right: none;
+    margin-right: 0;
+  }
+  .header-brand .logo {
     display: none;
   }
 
@@ -9472,7 +9476,7 @@ kbd {
     gap: 6px;
     overflow-x: auto;
     padding: 8px 44px 6px 44px;
-    border-bottom: none;
+    border-bottom: none !important;
     scrollbar-width: thin;
   }
   .compose-thumb {
@@ -10452,7 +10456,7 @@ kbd {
 }
 
 /* ── MCP chip button ─────────────────────────────────────── */
-.mcp-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.75rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;position:relative}
+.mcp-chip{display:none !important;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.75rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;position:relative}
 .mcp-chip:hover{background:rgba(6,182,212,0.16);border-color:rgba(6,182,212,0.6)}
 .mcp-chip.active{background:rgba(6,182,212,0.22);border-color:rgba(6,182,212,0.8)}
 .mcp-chip-badge{background:#22d3ee;color:#0f172a;border-radius:10px;font-size:.6rem;font-weight:700;padding:1px 5px;min-width:16px;text-align:center}
@@ -11743,13 +11747,13 @@ kbd {
 .agent-note-meta { color: #475569; font-size: 0.72rem; margin-top: 4px; }
 
 /* ── Model chip ───────────────────────────────────────────── */
-.model-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:12px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.75rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap}
+.model-chip{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:12px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap;min-height:36px}
 .model-chip:hover{background:rgba(6,182,212,0.16);border-color:rgba(6,182,212,0.6)}
 .model-chip.active{background:rgba(6,182,212,0.22);border-color:rgba(6,182,212,0.8)}
 .model-chip-caret{font-size:10px;opacity:.7}
 
 /* ── Context arc button ───────────────────────────────────── */
-.ctx-arc-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;background:none;border:none;cursor:pointer;padding:0}
+.ctx-arc-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;background:none;border:none;cursor:pointer;padding:2px}
 .ctx-arc-svg{transform:rotate(-90deg)}
 .ctx-arc-track{stroke:rgba(255,255,255,0.1)}
 .ctx-arc-fill{transition:stroke-dasharray 0.4s ease,stroke 0.3s}
@@ -11757,8 +11761,8 @@ kbd {
 .ctx-arc-btn.active .ctx-arc-pct{color:#22d3ee}
 
 /* ── Overflow menu button ────────────────────────────────── */
-.btn-overflow{background:none;border:none;color:var(--text-muted,#94a3b8);font-size:20px;cursor:pointer;padding:4px 6px;border-radius:4px;line-height:1;transition:color .15s,background .15s}
-.btn-overflow:hover{color:var(--text,#e2e8f0);background:var(--bg-hover,rgba(255,255,255,0.06))}
+.btn-overflow{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:var(--text,#e2e8f0);font-size:22px;cursor:pointer;padding:8px 12px;border-radius:8px;line-height:1;transition:color .15s,background .15s,border-color .15s;min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+.btn-overflow:hover{color:#fff;background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15)}
 
 /* ── Overflow menu dropdown ──────────────────────────────── */
 .overflow-menu{position:fixed;z-index:1200;background:var(--surface,#1e293b);border:1px solid rgba(255,255,255,0.1);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:180px;padding:4px 0}

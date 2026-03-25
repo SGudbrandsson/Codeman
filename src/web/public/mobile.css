@@ -2851,7 +2851,7 @@ html.mobile-init .file-browser-panel {
   gap: 8px;
   overflow-x: auto;
   padding: 8px 44px 6px 44px;
-  border-bottom: 1px solid #1a1a2e; /* divider between attachments and text, no separate box */
+  border-bottom: none; /* clean look — no divider between attachments and text */
   -webkit-overflow-scrolling: touch;
 }
 .compose-thumb {

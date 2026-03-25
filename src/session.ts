@@ -804,6 +804,12 @@ export class Session extends EventEmitter {
     this._totalCost = totalCost;
   }
 
+  /** Restore last known model info (from persisted state or JSONL scan). */
+  restoreModel(cliModel?: string, currentModel?: string): void {
+    if (cliModel) this._cliModel = cliModel;
+    if (currentModel) this._currentModel = currentModel;
+  }
+
   /** Restore last known context window usage (from persisted state). */
   restoreContextWindow(tokens: number, max: number, system?: number, conversation?: number): void {
     this._contextWindowTokens = tokens;

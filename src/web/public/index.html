@@ -54,12 +54,12 @@
       <div class="header-brand">
         <span class="logo" onclick="app.goHome()" title="Go to main page">Codeman</span>
       </div>
+      <button class="btn-board-view" id="boardViewBtn" onclick="app.toggleBoard()" title="Board view" aria-label="Toggle board view">Board</button>
 
-      <!-- Session Tabs -->
-      <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs">
+      <!-- Session Tabs (moved to sidebar/hamburger menu) -->
+      <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs" style="display:none">
       </div>
       <div class="header-right">
-        <button class="btn-board-view" id="boardViewBtn" onclick="app.toggleBoard()" title="Board view" aria-label="Toggle board view">Board</button>
         <button class="tunnel-indicator" id="tunnelIndicator" style="display: none;" onclick="app.toggleTunnelPanel()" title="Cloudflare Tunnel" aria-label="Tunnel status">
           <span class="tunnel-dot"></span>
         </button>
@@ -73,7 +73,7 @@
           <span class="font-size-display" id="fontSizeDisplay" aria-label="Current font size">14</span>
           <button class="btn-icon-header btn-sm" onclick="app.increaseFontSize()" title="Increase font (Ctrl++)" aria-label="Increase font size">A+</button>
         </div>
-        <div class="header-system-stats" id="headerSystemStats" title="System resource usage" style="display:none">
+        <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
           <div class="stat-item">
             <span class="stat-label">CPU</span>
             <div class="stat-bar">
@@ -126,7 +126,8 @@
         <button id="overflowMenuBtn" class="btn-overflow"
                 aria-label="More options" aria-haspopup="true" aria-expanded="false">&#8942;</button>
       </div>
-      <div id="contextBar" class="ctx-bar" style="display:none" aria-label="Context usage bar">
+      <!-- Context bar hidden — replaced by context arc in header -->
+      <div id="contextBar" class="ctx-bar" style="display:none!important" aria-label="Context usage bar">
         <div class="ctx-bar-seg ctx-seg-system" id="ctxSegSystem" style="width:0%"></div>
         <div class="ctx-bar-seg ctx-seg-conv" id="ctxSegConv" style="width:0%"></div>
         <div class="ctx-bar-seg ctx-seg-tools" id="ctxSegTools" style="width:0%"></div>

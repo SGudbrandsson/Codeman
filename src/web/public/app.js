@@ -483,8 +483,7 @@ const McpPanel = {
   },
 
   showForSession(sessionId) {
-    if (!this._chip) return;
-    this._chip.style.display = '';
+    // Chip is hidden — MCP lives in overflow menu now. Just track session.
     if (this._sessionId !== sessionId) {
       this._sessionId = sessionId;
       this._savedServers = [];
@@ -950,7 +949,7 @@ const PluginsPanel = {
   },
 
   showChip() {
-    if (this._chip) this._chip.style.display = '';
+    // Chip is hidden — Plugins lives in overflow menu now. Just load data.
     this._loadInstalled();
   },
 
@@ -1407,8 +1406,9 @@ const ContextBar = {
   },
 
   _updateBar(data) {
+    // Context bar hidden — arc is the primary indicator now.
+    // Still update segment widths for the detail panel donut.
     if (!this._bar) return;
-    this._bar.style.display = '';
     const max = data.maxTokens || 200000;
     const total = data.inputTokens || 0;
     const sys   = data.system      || 0;
@@ -1539,12 +1539,9 @@ const ContextBar = {
 // ===================================================================
 const ModelPicker = {
   MODELS: [
-    { id: 'claude-opus-4-5',    short: 'Opus',    desc: 'Most capable',      ctx: '200k' },
-    { id: 'claude-sonnet-4-5',  short: 'Sonnet',  desc: 'Balanced',          ctx: '200k' },
-    { id: 'claude-haiku-3-5',   short: 'Haiku',   desc: 'Fast & lightweight', ctx: '200k' },
-    { id: 'claude-opus-4',      short: 'Opus 4',  desc: 'Latest Opus',       ctx: '200k' },
-    { id: 'claude-sonnet-4',    short: 'Sonnet 4',desc: 'Latest Sonnet',     ctx: '200k' },
-    { id: 'claude-haiku-3',     short: 'Haiku 3', desc: 'Fast v3',           ctx: '200k' },
+    { id: 'claude-opus-4-6',   short: 'Opus',   slug: 'opus',   desc: 'Most capable. Best for complex tasks.', ctx: '1M' },
+    { id: 'claude-sonnet-4-6', short: 'Sonnet', slug: 'sonnet', desc: 'Fast and capable. Good balance.',       ctx: '200k' },
+    { id: 'claude-haiku-4-5',  short: 'Haiku',  slug: 'haiku',  desc: 'Fastest. Quick edits and simple tasks.', ctx: '200k' },
   ],
   _currentModelId: '',
   _pendingSwitch: null,
@@ -1570,9 +1567,12 @@ const ModelPicker = {
 
   setModel(modelStr) {
     if (!modelStr) return;
-    // Match against model list by substring
+    // Match against model list by substring or slug
     const lower = modelStr.toLowerCase();
-    const match = this.MODELS.find(m => lower.includes(m.id) || m.id.includes(lower));
+    const match = this.MODELS.find(m =>
+      lower.includes(m.id) || m.id.includes(lower) ||
+      lower.includes(m.slug) || lower.includes(m.short.toLowerCase())
+    );
     if (match) {
       this._currentModelId = match.id;
       if (this._chipName) this._chipName.textContent = match.short;
@@ -1648,7 +1648,7 @@ const ModelPicker = {
     this.close();
     const sid = window.app ? app.activeSessionId : null;
     if (!sid) return;
-    app._sendInputAsync(sid, '/model ' + m.id + '\r');
+    app._sendInputAsync(sid, '/model ' + (m.slug || m.id) + '\r');
     // Set up 10s confirmation timeout
     if (this._pendingSwitch) clearTimeout(this._pendingSwitch.timer);
     this._pendingSwitch = {
@@ -5384,6 +5384,7 @@ class CodemanApp {
       }
     }
     this.renderSessionTabs();
+    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
     this.updateCost();
     // Start stats polling when first session appears
     const nonArchived = [...this.sessions.values()].filter(s => s.status !== 'archived');
@@ -5417,6 +5418,7 @@ class CodemanApp {
     }
     this.sessions.set(session.id, session);
     this.renderSessionTabs();
+    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
     this.updateCost();
     // Update tokens display if this is the active session
     if (session.id === this.activeSessionId && session.tokens) {
@@ -5451,6 +5453,7 @@ class CodemanApp {
       this.showWelcome();
     }
     this.renderSessionTabs();
+    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
     this.renderRalphStatePanel();  // Update ralph panel after session deleted
     this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
     // Stop stats polling when no sessions remain
@@ -5607,6 +5610,7 @@ class CodemanApp {
       session.status = 'idle';
       session.isWorking = false;
       this._updateTabStatusDebounced(data.id, 'idle');
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
       this.sendPendingCtrlL(data.id);
       // Fix: setWorking(false) must fire for any session the TranscriptView is rendering,
       // not just the currently active (terminal-view) session. TranscriptView._sessionId
@@ -5646,6 +5650,7 @@ class CodemanApp {
         this.tabAlerts.delete(data.id);
       }
       this._updateTabStatusDebounced(data.id, 'busy');
+      if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
         this._updateLocalEchoState();
@@ -12953,14 +12958,15 @@ class CodemanApp {
     const systemStatsEl = document.getElementById('headerSystemStats');
     const tokenCountEl = document.getElementById('headerTokens');
 
+    // Font controls and token count in overflow menu. System stats visible in header.
     if (fontControlsEl) {
-      fontControlsEl.style.display = showFontControls ? '' : 'none';
+      fontControlsEl.style.display = 'none';
     }
     if (systemStatsEl) {
       systemStatsEl.style.display = showSystemStats ? '' : 'none';
     }
     if (tokenCountEl) {
-      tokenCountEl.style.display = showTokenCount ? '' : 'none';
+      tokenCountEl.style.display = 'none';
     }
 
     // Hide lifecycle log button when setting is disabled
