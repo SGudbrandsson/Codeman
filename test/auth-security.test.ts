@@ -220,7 +220,7 @@ describe('Settings Schema Security', () => {
 
   it('should enforce tunnelEnabled as boolean', () => {
     const result = SettingsUpdateSchema.safeParse({
-      tunnelEnabled: 'yes',  // truthy string — should be rejected
+      tunnelEnabled: 'yes', // truthy string — should be rejected
     });
     expect(result.success).toBe(false);
   });
@@ -264,9 +264,25 @@ describe('Settings Schema Security', () => {
     expect(validResult.success).toBe(true);
 
     const invalidResult = SettingsUpdateSchema.safeParse({
-      nice: { enabled: true, niceValue: 100 },  // Out of range
+      nice: { enabled: true, niceValue: 100 }, // Out of range
     });
     expect(invalidResult.success).toBe(false);
+  });
+
+  it('should accept autoNameEnabled as boolean', () => {
+    const trueResult = SettingsUpdateSchema.safeParse({ autoNameEnabled: true });
+    expect(trueResult.success).toBe(true);
+
+    const falseResult = SettingsUpdateSchema.safeParse({ autoNameEnabled: false });
+    expect(falseResult.success).toBe(true);
+  });
+
+  it('should reject autoNameEnabled as non-boolean', () => {
+    const stringResult = SettingsUpdateSchema.safeParse({ autoNameEnabled: 'yes' });
+    expect(stringResult.success).toBe(false);
+
+    const numberResult = SettingsUpdateSchema.safeParse({ autoNameEnabled: 1 });
+    expect(numberResult.success).toBe(false);
   });
 });
 
@@ -292,7 +308,7 @@ describe('No-Auth Server Warning', () => {
   });
 
   it('should warn when no CODEMAN_PASSWORD is set', () => {
-    const hasWarning = consoleWarnSpy.some(msg => msg.includes('No CODEMAN_PASSWORD set'));
+    const hasWarning = consoleWarnSpy.some((msg) => msg.includes('No CODEMAN_PASSWORD set'));
     expect(hasWarning).toBe(true);
   });
 

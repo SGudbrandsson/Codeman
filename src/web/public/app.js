@@ -8959,6 +8959,11 @@ class CodemanApp {
         })
       ));
 
+      // Auto-name sessions via AI (fire-and-forget, non-blocking)
+      sessionIds.forEach(id =>
+        fetch(`/api/sessions/${id}/auto-name`, { method: 'POST' }).catch(() => {})
+      );
+
       // Step 3: Start all sessions in parallel (biggest speedup)
       this.terminal.writeln(`\x1b[90m Starting ${tabCount} session(s) in parallel...\x1b[0m`);
       await Promise.all(sessionIds.map(id =>
@@ -9125,6 +9130,8 @@ class CodemanApp {
       // Switch to the new session (don't pre-set activeSessionId — selectSession
       // early-returns when IDs match, skipping buffer load and sendResize)
       if (data.sessionId) {
+        // Auto-name via AI (fire-and-forget)
+        fetch(`/api/sessions/${data.sessionId}/auto-name`, { method: 'POST' }).catch(() => {});
         await this.selectSession(data.sessionId);
       }
 
@@ -10160,7 +10167,11 @@ class CodemanApp {
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
-        if (data.sessionId) await this.selectSession(data.sessionId);
+        if (data.sessionId) {
+          // Auto-name via AI (fire-and-forget)
+          fetch(`/api/sessions/${data.sessionId}/auto-name`, { method: 'POST' }).catch(() => {});
+          await this.selectSession(data.sessionId);
+        }
       } catch (err) {
         console.error('startSessionInCase opencode error:', err);
       }
@@ -10189,6 +10200,9 @@ class CodemanApp {
             body: JSON.stringify(dims),
           });
         }
+      } else {
+        // Auto-name non-shell sessions via AI (fire-and-forget)
+        fetch(`/api/sessions/${sessionId}/auto-name`, { method: 'POST' }).catch(() => {});
       }
 
       await this.selectSession(sessionId);
