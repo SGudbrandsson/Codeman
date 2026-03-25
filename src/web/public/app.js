@@ -8076,6 +8076,8 @@ class CodemanApp {
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
+    // Re-render the session drawer so the active highlight updates when the sidebar is open/pinned
+    if (document.getElementById('sessionDrawer')?.classList.contains('open')) SessionDrawer._render();
     this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
     // Fix: use session.isWorking (set synchronously by _onSessionIdle/_onSessionWorking) rather
@@ -19078,6 +19080,9 @@ const SessionDrawer = {
     row.appendChild(closeBtn);
 
     row.addEventListener('click', () => {
+      // Immediate highlight update for pinned sidebar (before async selectSession completes)
+      document.querySelectorAll('.drawer-session-row.active').forEach(el => el.classList.remove('active'));
+      row.classList.add('active');
       app.selectSession(s.id);
       if (!document.body.classList.contains('sidebar-pinned')) {
         SessionDrawer.close();
@@ -19250,6 +19255,9 @@ const SessionDrawer = {
     });
 
     row.addEventListener('click', () => {
+      // Immediate highlight update for pinned sidebar (before async selectSession completes)
+      document.querySelectorAll('.drawer-session-row.active').forEach(el => el.classList.remove('active'));
+      row.classList.add('active');
       app.selectSession(s.id);
       if (!document.body.classList.contains('sidebar-pinned')) {
         SessionDrawer.close();
