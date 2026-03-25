@@ -3641,6 +3641,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
 
   // Update notifications
+  [SSE_EVENTS.UPDATE_AVAILABLE, '_onUpdateAvailable'],
   [SSE_EVENTS.UPDATE_PROGRESS, '_onUpdateProgress'],
   [SSE_EVENTS.UPDATE_COMPLETE, '_onUpdateComplete'],
   [SSE_EVENTS.UPDATE_FAILED, '_onUpdateFailed'],
@@ -6457,6 +6458,16 @@ class CodemanApp {
     }).catch(() => {});
   }
 
+  _onUpdateAvailable(data) {
+    if (this._updateToastShown) return;
+    this._updateToastShown = true;
+    const version = data.version ? ` — v${data.version}` : '';
+    this.showToast(`New version available${version}`, 'info', {
+      duration: 86400000,
+      action: { label: 'Refresh', onClick: () => window.location.reload() }
+    });
+  }
+
   _onUpdateProgress(data) {
     const log = document.getElementById('updateProgressLog');
     if (log) {
@@ -7121,6 +7132,17 @@ class CodemanApp {
       if (headerVersionEl) {
         headerVersionEl.textContent = `v${data.version}`;
         headerVersionEl.title = `Codeman v${data.version}`;
+      }
+
+      // Track initial version and detect server updates on SSE reconnect
+      if (!this._initialServerVersion) {
+        this._initialServerVersion = data.version;
+      } else if (data.version !== this._initialServerVersion && !this._updateToastShown) {
+        this._updateToastShown = true;
+        this.showToast(`New version available — v${data.version}`, 'info', {
+          duration: 86400000,
+          action: { label: 'Refresh', onClick: () => window.location.reload() }
+        });
       }
     }
 
