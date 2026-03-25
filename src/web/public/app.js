@@ -2171,6 +2171,9 @@ const TranscriptTTS = {
     this._currentBtn = btn;
     btn.classList.add('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Stop reading aloud');
+    btn.setAttribute('title', 'Stop reading aloud');
+    while (btn.firstChild) btn.removeChild(btn.firstChild);
+    btn.appendChild(this._stopSVG());
     window.speechSynthesis.speak(utterance);
   },
 
@@ -2186,8 +2189,56 @@ const TranscriptTTS = {
   _reset(btn) {
     btn.classList.remove('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Read aloud');
+    btn.setAttribute('title', 'Read aloud');
+    while (btn.firstChild) btn.removeChild(btn.firstChild);
+    btn.appendChild(this._speakerSVG());
     this._currentBtn = null;
     this._utterance = null;
+  },
+
+  _speakerSVG() {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const poly = document.createElementNS(svgNS, 'polygon');
+    poly.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+    const path1 = document.createElementNS(svgNS, 'path');
+    path1.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
+    const path2 = document.createElementNS(svgNS, 'path');
+    path2.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
+    svg.appendChild(poly);
+    svg.appendChild(path1);
+    svg.appendChild(path2);
+    return svg;
+  },
+
+  _stopSVG() {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const rect = document.createElementNS(svgNS, 'rect');
+    rect.setAttribute('x', '3');
+    rect.setAttribute('y', '3');
+    rect.setAttribute('width', '18');
+    rect.setAttribute('height', '18');
+    rect.setAttribute('rx', '2');
+    rect.setAttribute('ry', '2');
+    svg.appendChild(rect);
+    return svg;
   },
 };
 
@@ -3236,27 +3287,7 @@ const TranscriptView = {
         ttsBtn.className = 'tv-tts-btn';
         ttsBtn.setAttribute('aria-label', 'Read aloud');
         ttsBtn.setAttribute('title', 'Read aloud');
-        // Build Feather Icons "volume-2" SVG via DOM (compile-time constant geometry, not user data)
-        const svgNS = 'http://www.w3.org/2000/svg';
-        const ttsSvg = document.createElementNS(svgNS, 'svg');
-        ttsSvg.setAttribute('width', '14');
-        ttsSvg.setAttribute('height', '14');
-        ttsSvg.setAttribute('viewBox', '0 0 24 24');
-        ttsSvg.setAttribute('fill', 'none');
-        ttsSvg.setAttribute('stroke', 'currentColor');
-        ttsSvg.setAttribute('stroke-width', '2');
-        ttsSvg.setAttribute('stroke-linecap', 'round');
-        ttsSvg.setAttribute('stroke-linejoin', 'round');
-        const poly = document.createElementNS(svgNS, 'polygon');
-        poly.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
-        const path1 = document.createElementNS(svgNS, 'path');
-        path1.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
-        const path2 = document.createElementNS(svgNS, 'path');
-        path2.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
-        ttsSvg.appendChild(poly);
-        ttsSvg.appendChild(path1);
-        ttsSvg.appendChild(path2);
-        ttsBtn.appendChild(ttsSvg);
+        ttsBtn.appendChild(TranscriptTTS._speakerSVG());
         ttsBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           TranscriptTTS.speak(ttsBtn, capturedText);

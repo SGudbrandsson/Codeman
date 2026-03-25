@@ -11,7 +11,8 @@
  * non-image-file-upload.test.ts and paste-newline-routing.test.ts.
  */
 
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Pure function replicated from TranscriptTTS._stripMarkdown in app.js
@@ -227,5 +228,425 @@ describe('TranscriptTTS._stripMarkdown', () => {
       expect(result).not.toContain('https://example.com/readme');
       expect(result).not.toMatch(/^-\s/m);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DOM-based helpers replicated from TranscriptTTS in app.js
+// ---------------------------------------------------------------------------
+
+const svgNS = 'http://www.w3.org/2000/svg';
+
+function speakerSVG(): SVGSVGElement {
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const poly = document.createElementNS(svgNS, 'polygon');
+  poly.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+  const path1 = document.createElementNS(svgNS, 'path');
+  path1.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
+  const path2 = document.createElementNS(svgNS, 'path');
+  path2.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
+  svg.appendChild(poly);
+  svg.appendChild(path1);
+  svg.appendChild(path2);
+  return svg;
+}
+
+function stopSVG(): SVGSVGElement {
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const rect = document.createElementNS(svgNS, 'rect');
+  rect.setAttribute('x', '3');
+  rect.setAttribute('y', '3');
+  rect.setAttribute('width', '18');
+  rect.setAttribute('height', '18');
+  rect.setAttribute('rx', '2');
+  rect.setAttribute('ry', '2');
+  svg.appendChild(rect);
+  return svg;
+}
+
+// Minimal TranscriptTTS replica with the icon-swap and toggle behavior
+function createTranscriptTTS() {
+  return {
+    _currentBtn: null as HTMLElement | null,
+    _utterance: null as SpeechSynthesisUtterance | null,
+
+    _speakerSVG: speakerSVG,
+    _stopSVG: stopSVG,
+    _stripMarkdown: stripMarkdown,
+
+    speak(btn: HTMLElement, rawText: string) {
+      if (this._currentBtn === btn) {
+        this._stop();
+        return;
+      }
+      this._stop();
+      const strippedText = this._stripMarkdown(rawText);
+      const utterance = new SpeechSynthesisUtterance(strippedText);
+      utterance.onend = () => this._reset(btn);
+      utterance.onerror = () => this._reset(btn);
+      this._utterance = utterance;
+      this._currentBtn = btn;
+      btn.classList.add('tv-tts-btn--speaking');
+      btn.setAttribute('aria-label', 'Stop reading aloud');
+      btn.setAttribute('title', 'Stop reading aloud');
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.appendChild(this._stopSVG());
+      window.speechSynthesis.speak(utterance);
+    },
+
+    _stop() {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      if (this._currentBtn) {
+        this._reset(this._currentBtn);
+      }
+    },
+
+    _reset(btn: HTMLElement) {
+      btn.classList.remove('tv-tts-btn--speaking');
+      btn.setAttribute('aria-label', 'Read aloud');
+      btn.setAttribute('title', 'Read aloud');
+      while (btn.firstChild) btn.removeChild(btn.firstChild);
+      btn.appendChild(this._speakerSVG());
+      this._currentBtn = null;
+      this._utterance = null;
+    },
+  };
+}
+
+/** Create a button element pre-populated with speaker icon (initial state) */
+function createTTSButton(): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.setAttribute('aria-label', 'Read aloud');
+  btn.setAttribute('title', 'Read aloud');
+  btn.appendChild(speakerSVG());
+  return btn;
+}
+
+// ---------------------------------------------------------------------------
+// Mock speechSynthesis
+// ---------------------------------------------------------------------------
+
+function mockSpeechSynthesis() {
+  // Polyfill SpeechSynthesisUtterance (not available in jsdom)
+  if (typeof globalThis.SpeechSynthesisUtterance === 'undefined') {
+    (globalThis as any).SpeechSynthesisUtterance = class SpeechSynthesisUtterance {
+      text: string;
+      onend: ((ev: any) => void) | null = null;
+      onerror: ((ev: any) => void) | null = null;
+      constructor(text?: string) {
+        this.text = text ?? '';
+      }
+    };
+  }
+
+  const mock = {
+    speak: vi.fn(),
+    cancel: vi.fn(),
+    speaking: false,
+  };
+  Object.defineProperty(window, 'speechSynthesis', {
+    value: mock,
+    writable: true,
+    configurable: true,
+  });
+  return mock;
+}
+
+// ---------------------------------------------------------------------------
+// Tests — SVG factory methods
+// ---------------------------------------------------------------------------
+
+describe('TranscriptTTS._speakerSVG', () => {
+  it('returns an SVG element', () => {
+    const svg = speakerSVG();
+    expect(svg.tagName).toBe('svg');
+    expect(svg.namespaceURI).toBe(svgNS);
+  });
+
+  it('has width=14, height=14, viewBox="0 0 24 24"', () => {
+    const svg = speakerSVG();
+    expect(svg.getAttribute('width')).toBe('14');
+    expect(svg.getAttribute('height')).toBe('14');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 24 24');
+  });
+
+  it('has stroke attributes set correctly', () => {
+    const svg = speakerSVG();
+    expect(svg.getAttribute('fill')).toBe('none');
+    expect(svg.getAttribute('stroke')).toBe('currentColor');
+    expect(svg.getAttribute('stroke-width')).toBe('2');
+    expect(svg.getAttribute('stroke-linecap')).toBe('round');
+    expect(svg.getAttribute('stroke-linejoin')).toBe('round');
+  });
+
+  it('contains a polygon and two path children', () => {
+    const svg = speakerSVG();
+    const children = Array.from(svg.children);
+    expect(children).toHaveLength(3);
+    expect(children[0].tagName).toBe('polygon');
+    expect(children[0].getAttribute('points')).toBe('11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+    expect(children[1].tagName).toBe('path');
+    expect(children[1].getAttribute('d')).toBe('M19.07 4.93a10 10 0 0 1 0 14.14');
+    expect(children[2].tagName).toBe('path');
+    expect(children[2].getAttribute('d')).toBe('M15.54 8.46a5 5 0 0 1 0 7.07');
+  });
+});
+
+describe('TranscriptTTS._stopSVG', () => {
+  it('returns an SVG element', () => {
+    const svg = stopSVG();
+    expect(svg.tagName).toBe('svg');
+    expect(svg.namespaceURI).toBe(svgNS);
+  });
+
+  it('has width=14, height=14, viewBox="0 0 24 24"', () => {
+    const svg = stopSVG();
+    expect(svg.getAttribute('width')).toBe('14');
+    expect(svg.getAttribute('height')).toBe('14');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 24 24');
+  });
+
+  it('has stroke attributes set correctly', () => {
+    const svg = stopSVG();
+    expect(svg.getAttribute('fill')).toBe('none');
+    expect(svg.getAttribute('stroke')).toBe('currentColor');
+    expect(svg.getAttribute('stroke-width')).toBe('2');
+  });
+
+  it('contains a single rect child with correct attributes', () => {
+    const svg = stopSVG();
+    const children = Array.from(svg.children);
+    expect(children).toHaveLength(1);
+    expect(children[0].tagName).toBe('rect');
+    expect(children[0].getAttribute('x')).toBe('3');
+    expect(children[0].getAttribute('y')).toBe('3');
+    expect(children[0].getAttribute('width')).toBe('18');
+    expect(children[0].getAttribute('height')).toBe('18');
+    expect(children[0].getAttribute('rx')).toBe('2');
+    expect(children[0].getAttribute('ry')).toBe('2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — speak() icon swap
+// ---------------------------------------------------------------------------
+
+describe('TranscriptTTS.speak — icon swap', () => {
+  it('replaces button children with stop SVG', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    // Before speak: button has speaker SVG (polygon child)
+    expect(btn.querySelector('polygon')).not.toBeNull();
+    expect(btn.querySelector('rect')).toBeNull();
+
+    tts.speak(btn, 'Hello world');
+
+    // After speak: button has stop SVG (rect child, no polygon)
+    expect(btn.querySelector('rect')).not.toBeNull();
+    expect(btn.querySelector('polygon')).toBeNull();
+    // Only one SVG child
+    expect(btn.children).toHaveLength(1);
+    expect(btn.children[0].tagName).toBe('svg');
+  });
+
+  it('sets title to "Stop reading aloud"', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello world');
+
+    expect(btn.getAttribute('title')).toBe('Stop reading aloud');
+    expect(btn.getAttribute('aria-label')).toBe('Stop reading aloud');
+  });
+
+  it('adds the tv-tts-btn--speaking class', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello world');
+
+    expect(btn.classList.contains('tv-tts-btn--speaking')).toBe(true);
+  });
+
+  it('calls speechSynthesis.speak', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello world');
+
+    expect(synth.speak).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — _reset() icon restore
+// ---------------------------------------------------------------------------
+
+describe('TranscriptTTS._reset — icon restore', () => {
+  it('replaces button children with speaker SVG', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    // Put button into speaking state
+    tts.speak(btn, 'Hello');
+    expect(btn.querySelector('rect')).not.toBeNull();
+
+    // Reset
+    tts._reset(btn);
+
+    expect(btn.querySelector('polygon')).not.toBeNull();
+    expect(btn.querySelector('rect')).toBeNull();
+    expect(btn.children).toHaveLength(1);
+    expect(btn.children[0].tagName).toBe('svg');
+  });
+
+  it('sets title to "Read aloud"', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello');
+    tts._reset(btn);
+
+    expect(btn.getAttribute('title')).toBe('Read aloud');
+    expect(btn.getAttribute('aria-label')).toBe('Read aloud');
+  });
+
+  it('removes the tv-tts-btn--speaking class', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello');
+    expect(btn.classList.contains('tv-tts-btn--speaking')).toBe(true);
+
+    tts._reset(btn);
+    expect(btn.classList.contains('tv-tts-btn--speaking')).toBe(false);
+  });
+
+  it('clears _currentBtn and _utterance', () => {
+    mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello');
+    expect(tts._currentBtn).toBe(btn);
+    expect(tts._utterance).not.toBeNull();
+
+    tts._reset(btn);
+    expect(tts._currentBtn).toBeNull();
+    expect(tts._utterance).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — toggle round-trip
+// ---------------------------------------------------------------------------
+
+describe('TranscriptTTS — toggle round-trip', () => {
+  it('speak then tap same button stops and restores speaker icon', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    // First tap: starts speaking
+    tts.speak(btn, 'Hello world');
+    expect(btn.querySelector('rect')).not.toBeNull();
+    expect(btn.getAttribute('title')).toBe('Stop reading aloud');
+    expect(btn.classList.contains('tv-tts-btn--speaking')).toBe(true);
+
+    // Simulate that speech is active
+    synth.speaking = true;
+
+    // Second tap on same button: stops and resets
+    tts.speak(btn, 'Hello world');
+    expect(synth.cancel).toHaveBeenCalled();
+    expect(btn.querySelector('polygon')).not.toBeNull();
+    expect(btn.querySelector('rect')).toBeNull();
+    expect(btn.getAttribute('title')).toBe('Read aloud');
+    expect(btn.classList.contains('tv-tts-btn--speaking')).toBe(false);
+  });
+
+  it('switching to a different button resets the previous one', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn1 = createTTSButton();
+    const btn2 = createTTSButton();
+
+    // Speak on btn1
+    tts.speak(btn1, 'First');
+    expect(btn1.querySelector('rect')).not.toBeNull();
+
+    // Speak on btn2 — btn1 should be reset
+    tts.speak(btn2, 'Second');
+    expect(btn1.querySelector('polygon')).not.toBeNull();
+    expect(btn1.querySelector('rect')).toBeNull();
+    expect(btn1.getAttribute('title')).toBe('Read aloud');
+    expect(btn1.classList.contains('tv-tts-btn--speaking')).toBe(false);
+
+    // btn2 should now be in speaking state
+    expect(btn2.querySelector('rect')).not.toBeNull();
+    expect(btn2.getAttribute('title')).toBe('Stop reading aloud');
+    expect(btn2.classList.contains('tv-tts-btn--speaking')).toBe(true);
+  });
+
+  it('utterance onend callback restores speaker icon', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello');
+    expect(btn.querySelector('rect')).not.toBeNull();
+
+    // Grab the utterance that was passed to speechSynthesis.speak
+    const utterance = synth.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+
+    // Simulate speech ending
+    utterance.onend!(new Event('end') as SpeechSynthesisEvent);
+
+    expect(btn.querySelector('polygon')).not.toBeNull();
+    expect(btn.querySelector('rect')).toBeNull();
+    expect(btn.getAttribute('title')).toBe('Read aloud');
+    expect(tts._currentBtn).toBeNull();
+  });
+
+  it('utterance onerror callback restores speaker icon', () => {
+    const synth = mockSpeechSynthesis();
+    const tts = createTranscriptTTS();
+    const btn = createTTSButton();
+
+    tts.speak(btn, 'Hello');
+    const utterance = synth.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+
+    // Simulate speech error
+    utterance.onerror!(new Event('error') as SpeechSynthesisErrorEvent);
+
+    expect(btn.querySelector('polygon')).not.toBeNull();
+    expect(btn.getAttribute('title')).toBe('Read aloud');
+    expect(tts._currentBtn).toBeNull();
   });
 });

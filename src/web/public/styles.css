@@ -10206,6 +10206,11 @@ kbd {
   opacity: 1 !important;
   color: #06b6d4;
   background: rgba(6,182,212,0.12);
+  animation: tts-pulse 1.5s ease-in-out infinite;
+}
+@keyframes tts-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 .tv-markdown pre {
   background: #111827;
