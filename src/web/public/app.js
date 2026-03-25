@@ -1709,6 +1709,10 @@ const OverflowMenu = {
       this.close();
       if (window.app && app.openLifecycleLog) app.openLifecycleLog();
     });
+    document.getElementById('ovfCommandBtn')?.addEventListener('click', () => {
+      this.close();
+      CommandPanel.open();
+    });
     document.getElementById('ovfSettingsBtn')?.addEventListener('click', () => {
       this.close();
       if (window.app && app.openAppSettings) app.openAppSettings();
@@ -2098,7 +2102,265 @@ const SessionSwitcher = {
 };
 
 
-/** Shared translucent backdrop for mcp-type side panels (McpPanel, PluginsPanel, ContextBar). */
+// CommandPanel — natural language command interface to Codeman
+// See command-panel-routes.ts for backend. This singleton manages the slide-out panel UI.
+const CommandPanel = {
+  _panel: null, _messages: null, _input: null, _sendBtn: null,
+  _conversationId: null, _available: false, _sending: false,
+
+  init() {
+    this._panel = document.getElementById('commandPanel');
+    this._messages = document.getElementById('commandMessages');
+    this._input = document.getElementById('commandInput');
+    this._sendBtn = document.getElementById('commandSendBtn');
+    if (!this._panel) return;
+    document.getElementById('commandPanelClose')?.addEventListener('click', () => this.close());
+    this._sendBtn?.addEventListener('click', () => this._send());
+    this._input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._send(); }
+    });
+    this._conversationId = localStorage.getItem('commandPanelConvId') || null;
+    this._restoreHistory();
+    this._checkStatus();
+  },
+
+  async _checkStatus() {
+    try {
+      const res = await fetch('/api/command/status');
+      const data = await res.json();
+      this._available = !!data.available;
+      const btn = document.getElementById('ovfCommandBtn');
+      if (btn) btn.style.display = this._available ? '' : 'none';
+    } catch { this._available = false; }
+  },
+
+  open() {
+    if (!this._panel || !this._available) return;
+    if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
+    if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
+    if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) ContextBar.close();
+    this._panel.style.display = '';
+    requestAnimationFrame(() => this._panel.classList.add('open'));
+    PanelBackdrop.show();
+    this._scrollToBottom();
+    setTimeout(() => this._input?.focus(), 300);
+  },
+
+  close() {
+    if (!this._panel) return;
+    this._panel.classList.remove('open');
+    PanelBackdrop.hide();
+    const panel = this._panel;
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  toggle() {
+    if (this._panel?.classList.contains('open')) this.close();
+    else this.open();
+  },
+
+  async _send() {
+    if (this._sending || !this._input) return;
+    const message = this._input.value.trim();
+    if (!message) return;
+    this._input.value = '';
+    this._sending = true;
+    this._sendBtn.disabled = true;
+    this._addMessage('user', message);
+    this._saveHistory();
+    const typing = document.createElement('div');
+    typing.className = 'command-typing';
+    typing.textContent = 'Thinking...';
+    this._messages.appendChild(typing);
+    this._scrollToBottom();
+    try {
+      const res = await fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, conversationId: this._conversationId }),
+      });
+      const data = await res.json();
+      typing.remove();
+      if (data.error) {
+        this._addMessage('error', data.error);
+      } else {
+        if (data.conversationId) {
+          this._conversationId = data.conversationId;
+          localStorage.setItem('commandPanelConvId', data.conversationId);
+        }
+        if (data.response) this._addMessage('assistant', data.response, data.actions);
+        if (data.needsConfirmation) this._addConfirmation(data.needsConfirmation);
+      }
+    } catch (err) {
+      typing.remove();
+      this._addMessage('error', 'Network error: ' + (err.message || err));
+    }
+    this._sending = false;
+    this._sendBtn.disabled = false;
+    this._saveHistory();
+    this._scrollToBottom();
+  },
+
+  _addMessage(role, content, actions) {
+    const div = document.createElement('div');
+    div.className = 'command-msg command-msg-' + role;
+    div.appendChild(this._renderMarkdownSafe(content));
+    if (actions && actions.length > 0) {
+      const actDiv = document.createElement('div');
+      actDiv.className = 'command-msg-actions';
+      for (const a of actions) {
+        const line = document.createElement('div');
+        line.textContent = (a.success ? '\u2713 ' : '\u2717 ') + a.tool + (a.error ? ': ' + a.error : '');
+        actDiv.appendChild(line);
+      }
+      div.appendChild(actDiv);
+    }
+    this._messages.appendChild(div);
+    this._scrollToBottom();
+    return div;
+  },
+
+  _addConfirmation(conf) {
+    const div = document.createElement('div');
+    div.className = 'command-msg command-msg-assistant';
+    const label = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = conf.action;
+    label.appendChild(document.createTextNode('Confirm '));
+    label.appendChild(strong);
+    label.appendChild(document.createTextNode('?'));
+    div.appendChild(label);
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:.72rem;color:#94a3b8;margin-top:4px;word-break:break-all';
+    desc.textContent = conf.description;
+    div.appendChild(desc);
+    const row = document.createElement('div');
+    row.className = 'command-confirm-row';
+    const yesBtn = document.createElement('button');
+    yesBtn.className = 'command-confirm-btn command-confirm-yes';
+    yesBtn.textContent = 'Confirm';
+    yesBtn.addEventListener('click', () => this._confirm(conf.confirmId, div));
+    const noBtn = document.createElement('button');
+    noBtn.className = 'command-confirm-btn command-confirm-no';
+    noBtn.textContent = 'Cancel';
+    noBtn.addEventListener('click', () => this._cancel(div));
+    row.appendChild(yesBtn);
+    row.appendChild(noBtn);
+    div.appendChild(row);
+    this._messages.appendChild(div);
+    this._scrollToBottom();
+  },
+
+  async _confirm(confirmId, containerEl) {
+    const row = containerEl.querySelector('.command-confirm-row');
+    if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#64748b;font-size:.72rem'; em.textContent = 'Confirming...'; row.appendChild(em); }
+    try {
+      const res = await fetch('/api/command/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmId, conversationId: this._conversationId }),
+      });
+      const data = await res.json();
+      if (row) row.remove();
+      if (data.error) this._addMessage('error', data.error);
+      else this._addMessage('assistant', data.response || 'Action completed.', data.action ? [data.action] : undefined);
+    } catch (err) {
+      if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#fca5a5;font-size:.72rem'; em.textContent = 'Failed: ' + (err.message || err); row.appendChild(em); }
+    }
+    this._saveHistory();
+  },
+
+  _cancel(containerEl) {
+    const row = containerEl.querySelector('.command-confirm-row');
+    if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#64748b;font-size:.72rem'; em.textContent = 'Cancelled'; row.appendChild(em); }
+    this._saveHistory();
+  },
+
+  _renderMarkdownSafe(text) {
+    const frag = document.createDocumentFragment();
+    if (!text) return frag;
+    const paragraphs = text.split(/\n\n+/);
+    for (const para of paragraphs) {
+      const p = document.createElement('p');
+      const lines = para.split('\n');
+      let listItems = [];
+      for (const line of lines) {
+        const listMatch = line.match(/^- (.+)$/);
+        if (listMatch) { listItems.push(listMatch[1]); }
+        else {
+          if (listItems.length > 0) {
+            const ul = document.createElement('ul');
+            for (const li of listItems) { const item = document.createElement('li'); this._applyInline(item, li); ul.appendChild(item); }
+            frag.appendChild(ul);
+            listItems = [];
+          }
+          this._applyInline(p, (p.childNodes.length > 0 ? '\n' : '') + line);
+        }
+      }
+      if (listItems.length > 0) {
+        const ul = document.createElement('ul');
+        for (const li of listItems) { const item = document.createElement('li'); this._applyInline(item, li); ul.appendChild(item); }
+        frag.appendChild(ul);
+      }
+      if (p.childNodes.length > 0) frag.appendChild(p);
+    }
+    return frag;
+  },
+
+  _applyInline(container, text) {
+    const regex = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      if (match[2]) { const s = document.createElement('strong'); s.textContent = match[2]; container.appendChild(s); }
+      else if (match[3]) { const c = document.createElement('code'); c.textContent = match[3]; container.appendChild(c); }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) container.appendChild(document.createTextNode(text.slice(lastIndex)));
+  },
+
+  _scrollToBottom() {
+    if (this._messages) requestAnimationFrame(() => { this._messages.scrollTop = this._messages.scrollHeight; });
+  },
+
+  _saveHistory() {
+    if (!this._messages) return;
+    try {
+      const msgs = [];
+      for (const el of this._messages.children) {
+        if (el.classList.contains('command-typing')) continue;
+        const role = el.classList.contains('command-msg-user') ? 'user' : el.classList.contains('command-msg-error') ? 'error' : 'assistant';
+        msgs.push({ role, text: el.textContent || '' });
+      }
+      localStorage.setItem('commandPanelHistory', JSON.stringify(msgs.slice(-50)));
+    } catch { /* quota exceeded */ }
+  },
+
+  _restoreHistory() {
+    if (!this._messages) return;
+    try {
+      const raw = localStorage.getItem('commandPanelHistory');
+      if (!raw) return;
+      const msgs = JSON.parse(raw);
+      for (const m of msgs) {
+        const div = document.createElement('div');
+        div.className = 'command-msg command-msg-' + m.role;
+        div.textContent = m.text || '';
+        this._messages.appendChild(div);
+      }
+    } catch { /* corrupted */ }
+  },
+
+  clearHistory() {
+    localStorage.removeItem('commandPanelHistory');
+    localStorage.removeItem('commandPanelConvId');
+    this._conversationId = null;
+    if (this._messages) this._messages.textContent = '';
+  },
+};
+
+/** Shared translucent backdrop for mcp-type side panels (McpPanel, PluginsPanel, ContextBar, CommandPanel). */
 const PanelBackdrop = {
   _el: null,
   _get() { return this._el || (this._el = document.getElementById('panelBackdrop')); },
@@ -2110,7 +2372,7 @@ const PanelBackdrop = {
    *  immediately re-added by A's subsequent show() call — both within the same
    *  synchronous frame, so no visual flicker occurs. */
   hide() {
-    const anyOpen = [McpPanel, PluginsPanel, ContextBar].some(
+    const anyOpen = [McpPanel, PluginsPanel, ContextBar, CommandPanel].some(
       p => p._panel?.classList.contains('open')
     );
     if (!anyOpen) this._get()?.classList.remove('open');
@@ -2120,6 +2382,7 @@ const PanelBackdrop = {
       McpPanel.close();
       PluginsPanel.close();
       ContextBar.close();
+      CommandPanel.close();
     });
   },
 };
@@ -3971,6 +4234,7 @@ class CodemanApp {
     ContextBar.init();
     ModelPicker.init();
     OverflowMenu.init();
+    CommandPanel.init();
     SessionIndicatorBar.init();
     PanelBackdrop.init();
     TerminalSearch.init();
@@ -5222,6 +5486,12 @@ class CodemanApp {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'B') {
         e.preventDefault();
         VoiceInput.toggle();
+      }
+
+      // Ctrl/Cmd + Shift + K - toggle command panel
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'K') {
+        e.preventDefault();
+        CommandPanel.toggle();
       }
 
       // Ctrl/Cmd + Shift + V - paste text from clipboard

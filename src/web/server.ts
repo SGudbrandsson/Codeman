@@ -123,6 +123,7 @@ import {
   registerMessageRoutes,
   registerClockworkRoutes,
   registerOrchestratorRoutes,
+  registerCommandPanelRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -778,6 +779,7 @@ export class WebServer extends EventEmitter {
     registerMessageRoutes(this.app, ctx);
     registerClockworkRoutes(this.app, ctx);
     registerOrchestratorRoutes(this.app, ctx);
+    registerCommandPanelRoutes(this.app, ctx);
 
     // Initialize and start the orchestrator
     try {
