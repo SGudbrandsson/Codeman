@@ -18303,6 +18303,11 @@ const InputPanel = {
       this._saveDraftLocal(oldId);
       if (typeof SecretDetector !== 'undefined') SecretDetector.clearSession(oldId);
     }
+    // Clear textarea and images between save and load so _loadDraft doesn't
+    // mistake the previous session's leftover text as in-progress user input.
+    const ta = this._getTextarea();
+    if (ta) { ta.value = ''; }
+    this._restoreImages([]);
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
