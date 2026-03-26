@@ -10006,13 +10006,6 @@ kbd {
   color: #475569;
   font-size: 0.85rem;
 }
-.tv-load-more-sentinel {
-  text-align: center;
-  padding: 12px 0;
-  color: #64748b;
-  font-size: 0.8rem;
-  opacity: 0.7;
-}
 .tv-empty-cta {
   display: flex;
   flex-direction: column;
