@@ -69,7 +69,6 @@
  * @dependency notification-manager.js (NotificationManager class)
  * @dependency keyboard-accessory.js (KeyboardAccessoryBar, FocusTrap)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
- * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
  * @loadorder 6 of 9 — loaded after keyboard-accessory.js, before ralph-wizard.js
  */
 
@@ -2107,6 +2106,7 @@ const SessionSwitcher = {
 const CommandPanel = {
   _panel: null, _messages: null, _input: null, _sendBtn: null,
   _conversationId: null, _available: false, _sending: false,
+  _pendingImages: [], // { dataUrl, file }
 
   init() {
     this._panel = document.getElementById('commandPanel');
@@ -2115,13 +2115,32 @@ const CommandPanel = {
     this._sendBtn = document.getElementById('commandSendBtn');
     if (!this._panel) return;
     document.getElementById('commandPanelClose')?.addEventListener('click', () => this.close());
+    document.getElementById('commandNewBtn')?.addEventListener('click', () => {
+      this.clearHistory();
+      this._addMessage('assistant', 'New conversation started. How can I help?');
+    });
     this._sendBtn?.addEventListener('click', () => this._send());
     this._input?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._send(); }
     });
+    // Auto-grow textarea
+    this._input?.addEventListener('input', () => this._autoGrow());
+    // File attachment
+    const fileInput = document.getElementById('commandFileInput');
+    document.getElementById('commandAttachBtn')?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', (e) => this._onFileSelected(e));
+    // Paste image support
+    this._input?.addEventListener('paste', (e) => this._onPaste(e));
     this._conversationId = localStorage.getItem('commandPanelConvId') || null;
     this._restoreHistory();
     this._checkStatus();
+  },
+
+  _autoGrow() {
+    const ta = this._input;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 150) + 'px';
   },
 
   async _checkStatus() {
@@ -2143,7 +2162,7 @@ const CommandPanel = {
     requestAnimationFrame(() => this._panel.classList.add('open'));
     PanelBackdrop.show();
     this._scrollToBottom();
-    setTimeout(() => this._input?.focus(), 300);
+    setTimeout(() => this._input?.focus(), 200);
   },
 
   close() {
@@ -2151,7 +2170,7 @@ const CommandPanel = {
     this._panel.classList.remove('open');
     PanelBackdrop.hide();
     const panel = this._panel;
-    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 200);
   },
 
   toggle() {
@@ -2159,13 +2178,21 @@ const CommandPanel = {
     else this.open();
   },
 
-  async _send() {
+  async _send(retryMessage) {
     if (this._sending || !this._input) return;
-    const message = this._input.value.trim();
+    const message = retryMessage || this._input.value.trim();
     if (!message) return;
-    this._input.value = '';
+    if (!retryMessage) {
+      this._input.value = '';
+      this._input.style.height = '';
+    }
     this._sending = true;
     this._sendBtn.disabled = true;
+
+    // Collect pending images
+    const images = this._pendingImages.map(img => ({ dataUrl: img.dataUrl }));
+    this._clearAttachments();
+
     this._addMessage('user', message);
     this._saveHistory();
     const typing = document.createElement('div');
@@ -2177,11 +2204,33 @@ const CommandPanel = {
       const res = await fetch('/api/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversationId: this._conversationId }),
+        body: JSON.stringify({ message, conversationId: this._conversationId, images: images.length > 0 ? images : undefined }),
       });
       const data = await res.json();
       typing.remove();
+
+      // Bug 5: detect stale conversation / tool_use mismatch errors
+      if (data.conversationCleared) {
+        // Server cleared the conversation for us, reset local state
+        localStorage.removeItem('commandPanelHistory');
+        if (this._messages) this._messages.textContent = '';
+        this._addMessage('assistant', 'Previous conversation had errors and was reset. Here is the response to your latest message:');
+      }
+
       if (data.error) {
+        const errStr = String(data.error);
+        if (errStr.includes('tool_use') || errStr.includes('tool_result') || res.status === 400) {
+          // Stale conversation — clear and retry once
+          this.clearHistory();
+          this._addMessage('error', 'Conversation was corrupted. Starting fresh...');
+          this._saveHistory();
+          this._sending = false;
+          this._sendBtn.disabled = false;
+          if (!retryMessage) {
+            this._send(message);
+          }
+          return;
+        }
         this._addMessage('error', data.error);
       } else {
         if (data.conversationId) {
@@ -2215,6 +2264,13 @@ const CommandPanel = {
       }
       div.appendChild(actDiv);
     }
+    // Timestamp
+    const timeEl = document.createElement('div');
+    timeEl.className = 'command-msg-time';
+    timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    div.appendChild(timeEl);
+    // Make "Settings > Integrations" clickable (Bug 4)
+    this._linkifySettings(div);
     this._messages.appendChild(div);
     this._scrollToBottom();
     return div;
@@ -2331,7 +2387,12 @@ const CommandPanel = {
       for (const el of this._messages.children) {
         if (el.classList.contains('command-typing')) continue;
         const role = el.classList.contains('command-msg-user') ? 'user' : el.classList.contains('command-msg-error') ? 'error' : 'assistant';
-        msgs.push({ role, text: el.textContent || '' });
+        const timeEl = el.querySelector('.command-msg-time');
+        const time = timeEl ? timeEl.textContent : '';
+        const clone = el.cloneNode(true);
+        const cloneTime = clone.querySelector('.command-msg-time');
+        if (cloneTime) cloneTime.remove();
+        msgs.push({ role, text: clone.textContent || '', time });
       }
       localStorage.setItem('commandPanelHistory', JSON.stringify(msgs.slice(-50)));
     } catch { /* quota exceeded */ }
@@ -2346,7 +2407,14 @@ const CommandPanel = {
       for (const m of msgs) {
         const div = document.createElement('div');
         div.className = 'command-msg command-msg-' + m.role;
-        div.textContent = m.text || '';
+        div.appendChild(this._renderMarkdownSafe(m.text || ''));
+        if (m.time) {
+          const timeEl = document.createElement('div');
+          timeEl.className = 'command-msg-time';
+          timeEl.textContent = m.time;
+          div.appendChild(timeEl);
+        }
+        this._linkifySettings(div);
         this._messages.appendChild(div);
       }
     } catch { /* corrupted */ }
@@ -2356,7 +2424,106 @@ const CommandPanel = {
     localStorage.removeItem('commandPanelHistory');
     localStorage.removeItem('commandPanelConvId');
     this._conversationId = null;
+    this._pendingImages = [];
+    this._clearAttachments();
     if (this._messages) this._messages.textContent = '';
+  },
+
+  /** Make "Settings > Integrations" text clickable (Bug 4) */
+  _linkifySettings(container) {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const text = node.textContent;
+      const pattern = /Settings\s*>\s*Integrations/g;
+      const match = pattern.exec(text);
+      if (match) {
+        const before = text.slice(0, match.index);
+        const after = text.slice(match.index + match[0].length);
+        const frag = document.createDocumentFragment();
+        if (before) frag.appendChild(document.createTextNode(before));
+        const link = document.createElement('button');
+        link.className = 'command-settings-link';
+        link.textContent = 'Settings > Integrations';
+        link.addEventListener('click', () => {
+          if (window.app && app.openAppSettings) app.openAppSettings();
+          setTimeout(() => { if (window.app && app.switchSettingsTab) app.switchSettingsTab('settings-integrations'); }, 100);
+        });
+        frag.appendChild(link);
+        if (after) frag.appendChild(document.createTextNode(after));
+        node.parentNode.replaceChild(frag, node);
+      }
+    }
+  },
+
+  /** Handle file input selection */
+  _onFileSelected(e) {
+    const files = e.target?.files;
+    if (!files || files.length === 0) return;
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        this._pendingImages.push({ dataUrl: ev.target.result, file });
+        this._renderAttachments();
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  },
+
+  /** Handle paste events for images */
+  _onPaste(e) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          this._pendingImages.push({ dataUrl: ev.target.result, file });
+          this._renderAttachments();
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  },
+
+  _renderAttachments() {
+    const container = document.getElementById('commandAttachments');
+    if (!container) return;
+    container.textContent = '';
+    if (this._pendingImages.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+    container.style.display = '';
+    for (let i = 0; i < this._pendingImages.length; i++) {
+      const thumb = document.createElement('div');
+      thumb.className = 'command-attach-thumb';
+      const img = document.createElement('img');
+      img.src = this._pendingImages[i].dataUrl;
+      thumb.appendChild(img);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'command-attach-remove';
+      removeBtn.textContent = '\u2715';
+      const idx = i;
+      removeBtn.addEventListener('click', () => {
+        this._pendingImages.splice(idx, 1);
+        this._renderAttachments();
+      });
+      thumb.appendChild(removeBtn);
+      container.appendChild(thumb);
+    }
+  },
+
+  _clearAttachments() {
+    this._pendingImages = [];
+    const container = document.getElementById('commandAttachments');
+    if (container) { container.textContent = ''; container.style.display = 'none'; }
   },
 };
 
@@ -3957,6 +4124,22 @@ const _SSE_HANDLER_MAP = [
 /** Matches GSD context lines like "◆ Context: 47% · 3 tools · idle" */
 const STATUS_LINE_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btokens?\b)/i;
 
+// Shared terminal theme — single source of truth for main + teammate terminals
+const XTERM_THEME = {
+  background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e0e0e0',
+  cursorAccent: '#0d0d0d', selection: 'rgba(255, 255, 255, 0.3)',
+  black: '#0d0d0d', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd43b',
+  blue: '#339af0', magenta: '#cc5de8', cyan: '#22b8cf', white: '#e0e0e0',
+  brightBlack: '#495057', brightRed: '#ff8787', brightGreen: '#69db7c',
+  brightYellow: '#ffe066', brightBlue: '#5c7cfa', brightMagenta: '#da77f2',
+  brightCyan: '#66d9e8', brightWhite: '#ffffff',
+};
+const XTERM_BASE_OPTIONS = {
+  theme: XTERM_THEME,
+  fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
+  lineHeight: 1.2, cursorBlink: false, cursorStyle: 'block',
+  allowTransparency: true, allowProposedApi: true,
+};
 // ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
@@ -4112,11 +4295,6 @@ class CodemanApp {
     // Sequential input send chain — ensures keystroke ordering across async fetches
     this._inputSendChain = Promise.resolve();
 
-    // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
-    // (not at buffer.cursorY, which reflects Ink's internal cursor position)
-    this._localEchoOverlay = null;  // created after terminal.open()
-    this._localEchoEnabled = false; // true when setting on + session active
-    this._restoringFlushedState = false; // true during selectSession buffer load — protects flushed Maps
     this._statusStripEl = null; // lazy-cached in _updateStatusStrip
 
     // Accessibility: Focus trap for modals
@@ -4524,6 +4702,13 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   initTerminal() {
+    // Clean up previous terminal instance (prevents event listener leaks on re-init)
+    this._disposeTerminal();
+
+    // AbortController for container-scoped event listeners (wheel, touch)
+    // so _disposeTerminal() can remove them all at once on re-init.
+    this._containerListenerAC = new AbortController();
+
     // Load scrollback setting from localStorage (default 500)
     const scrollback = parseInt(localStorage.getItem('codeman-scrollback')) || DEFAULT_SCROLLBACK;
 
@@ -4535,39 +4720,14 @@ class CodemanApp {
     const effectiveScrollback = isMobile ? Math.min(scrollback, MOBILE_SCROLLBACK_CAP) : scrollback;
 
     this.terminal = new Terminal({
-      theme: {
-        background: '#0d0d0d',
-        foreground: '#e0e0e0',
-        cursor: '#e0e0e0',
-        cursorAccent: '#0d0d0d',
-        selection: 'rgba(255, 255, 255, 0.3)',
-        black: '#0d0d0d',
-        red: '#ff6b6b',
-        green: '#51cf66',
-        yellow: '#ffd43b',
-        blue: '#339af0',
-        magenta: '#cc5de8',
-        cyan: '#22b8cf',
-        white: '#e0e0e0',
-        brightBlack: '#495057',
-        brightRed: '#ff8787',
-        brightGreen: '#69db7c',
-        brightYellow: '#ffe066',
-        brightBlue: '#5c7cfa',
-        brightMagenta: '#da77f2',
-        brightCyan: '#66d9e8',
-        brightWhite: '#ffffff',
-      },
-      fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
+      ...XTERM_BASE_OPTIONS,
       // Use smaller font on mobile to fit more columns (prevents wrapping of Claude's status line)
       fontSize: MobileDetection.getDeviceType() === 'mobile' ? 10 : 14,
-      lineHeight: 1.2,
-      cursorBlink: false,
-      cursorStyle: 'block',
       scrollback: effectiveScrollback,
-      allowTransparency: true,
-      allowProposedApi: true,
     });
+
+    // Track disposables so cleanup is centralized
+    this._terminalDisposables = [];
 
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
@@ -4604,25 +4764,26 @@ class CodemanApp {
       } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
     }
 
-    this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
-
     // OSC-based busy/idle detection — more reliable than spinner character scanning.
     // onTitleChange fires on OSC 0/2 title-change sequences from the PTY.
     // registerOscHandler(133) captures shell integration marks (A/B/C/D) for reliable
     // prompt-shown / pre-execution signals if Claude Code emits them.
-    this.terminal.onTitleChange((title) => {
-      // Enable capture for investigation: run `window._oscTitleLog = []` in the browser console.
-      if (window._oscTitleLog) window._oscTitleLog.push({ title, at: Date.now() });
-      this._onTerminalTitleChange(title);
-    });
+    this._terminalDisposables.push(
+      this.terminal.onTitleChange((title) => {
+        if (window._oscTitleLog) window._oscTitleLog.push({ title, at: Date.now() });
+        this._onTerminalTitleChange(title);
+      })
+    );
 
     if (this.terminal.parser) {
       // OSC 133: A=prompt-start, B=prompt-end (idle), C=pre-exec (busy), D=exec-done (idle)
-      this.terminal.parser.registerOscHandler(133, (data) => {
-        if (window._osc133Log) window._osc133Log.push({ data, at: Date.now() });
-        this._onOsc133(data);
-        return true; // handler consumed the sequence
-      });
+      this._terminalDisposables.push(
+        this.terminal.parser.registerOscHandler(133, (data) => {
+          if (window._osc133Log) window._osc133Log.push({ data, at: Date.now() });
+          this._onOsc133(data);
+          return true;
+        })
+      );
     }
 
     // On mobile Safari, delay initial fit() to allow layout to settle
@@ -4649,7 +4810,7 @@ class CodemanApp {
       ev.preventDefault();
       const lines = Math.round(ev.deltaY / 25) || (ev.deltaY > 0 ? 1 : -1);
       this.terminal.scrollLines(lines);
-    }, { passive: false });
+    }, { passive: false, signal: this._containerListenerAC.signal });
 
     // Touch scrolling - only use custom JS scrolling on desktop
     // Mobile uses native browser scrolling via CSS touch-action: pan-y
@@ -4702,7 +4863,7 @@ class CodemanApp {
             scrollFrame = requestAnimationFrame(scrollLoop);
           }
         }
-      }, { passive: true });
+      }, { passive: true, signal: this._containerListenerAC.signal });
 
       container.addEventListener('touchmove', (ev) => {
         if (ev.touches.length === 1 && isTouching) {
@@ -4712,17 +4873,17 @@ class CodemanApp {
           velocity = delta * 1.2; // Track for momentum
           touchLastY = touchY;
         }
-      }, { passive: true });
+      }, { passive: true, signal: this._containerListenerAC.signal });
 
       container.addEventListener('touchend', () => {
         isTouching = false;
         // Momentum continues in scrollLoop
-      }, { passive: true });
+      }, { passive: true, signal: this._containerListenerAC.signal });
 
       container.addEventListener('touchcancel', () => {
         isTouching = false;
         velocity = 0;
-      }, { passive: true });
+      }, { passive: true, signal: this._containerListenerAC.signal });
     }
     // Mobile: native scrolling handles touch via CSS
 
@@ -4770,13 +4931,14 @@ class CodemanApp {
         }
         // Update subagent connection lines when viewport resizes
         this.updateConnectionLines();
-        // Re-render local echo overlay at new cell dimensions/positions
-        if (this._localEchoOverlay?.hasPending) {
-          this._localEchoOverlay.rerender();
-        }
       }, 100); // Throttle to 100ms
     };
 
+    // Store resize handler reference so _disposeTerminal() can remove it
+    if (this._windowResizeHandler) {
+      window.removeEventListener('resize', this._windowResizeHandler);
+    }
+    this._windowResizeHandler = throttledResize;
     window.addEventListener('resize', throttledResize);
     // Store resize observer for cleanup (prevents memory leak on terminal re-init)
     if (this.terminalResizeObserver) {
@@ -4801,12 +4963,7 @@ class CodemanApp {
       }
     };
 
-    // Local echo mode: buffer keystrokes locally (shown in overlay) and only
-    // send to PTY on Enter.  Avoids out-of-order delivery on high-latency
-    // mobile connections.  The overlay + localStorage persistence ensure input
-    // survives tab switches and reconnects.
-
-    this.terminal.onData((data) => {
+    this._terminalDisposables.push(this.terminal.onData((data) => {
       if (this.activeSessionId) {
         // Filter out terminal query responses that xterm.js generates automatically.
         // These are responses to DA (Device Attributes), DSR (Device Status Report), etc.
@@ -4817,170 +4974,6 @@ class CodemanApp {
         // xterm.js auto-responds to color queries from tmux; without this filter they
         // prepend to the next message sent to the Claude PTY.
         if (/^\x1b\]1[0-2];/.test(data)) return;
-
-        // ── Local Echo Mode ──
-        // When enabled, keystrokes are buffered locally in the overlay for
-        // instant visual feedback.  Nothing is sent to the PTY until Enter
-        // (or a control char) is pressed — avoids out-of-order char delivery.
-        if (this._localEchoEnabled) {
-          if (data === '\x7f') {
-            const source = this._localEchoOverlay?.removeChar();
-            if (source === 'flushed') {
-              // Sync app-level flushed Maps (per-session state for tab switching)
-              const { count, text } = this._localEchoOverlay.getFlushed();
-              if (this._flushedOffsets?.has(this.activeSessionId)) {
-                if (count === 0) {
-                  this._flushedOffsets.delete(this.activeSessionId);
-                  this._flushedTexts?.delete(this.activeSessionId);
-                } else {
-                  this._flushedOffsets.set(this.activeSessionId, count);
-                  this._flushedTexts?.set(this.activeSessionId, text);
-                }
-              }
-              this._pendingInput += data;
-              flushInput();
-            }
-            // 'pending' = removed unsent text (no PTY backspace needed)
-            // false = nothing to remove (swallow the backspace)
-            return;
-          }
-          if (/^[\r\n]+$/.test(data)) {
-            // Enter: send full buffered text + \r to PTY in one shot
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Clear flushed offset and text — Enter commits all text
-            this._flushedOffsets?.delete(this.activeSessionId);
-            this._flushedTexts?.delete(this.activeSessionId);
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-            }
-            // Send \r after a short delay so text arrives first
-            setTimeout(() => {
-              this._pendingInput += '\r';
-              flushInput();
-            }, 80);
-            return;
-          }
-          if (data.length > 1 && data.charCodeAt(0) >= 32) {
-            // Paste: append to overlay only (sent on Enter)
-            this._localEchoOverlay?.appendText(data);
-            return;
-          }
-          if (data.charCodeAt(0) < 32) {
-            // Skip xterm-generated terminal responses.
-            // These arrive via triggerDataEvent when the terminal processes
-            // buffer data (DA responses, OSC color queries, mode reports, etc.).
-            // They are NOT user input and must not clear flushed text state.
-            // Covers: CSI (\x1b[), OSC (\x1b]), DCS (\x1bP), APC (\x1b_),
-            // PM (\x1b^), SOS (\x1bX), and any other multi-byte ESC sequence.
-            // Single-byte ESC (user pressing Escape) still falls through to
-            // the control char handler below.
-            if (data.length > 1 && data.charCodeAt(0) === 27) {
-              // Multi-byte escape sequence — forward to PTY without clearing
-              // overlay/flushed state (terminal response, not user input)
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // During buffer load (tab switch), stray control chars from
-            // terminal response processing must not wipe the flushed state
-            // that selectSession() is actively restoring.
-            if (this._restoringFlushedState) {
-              this._pendingInput += data;
-              flushInput();
-              return;
-            }
-            // Tab key: send pending text + Tab to PTY for tab completion.
-            // Set a flag so flushPendingWrites() re-detects buffer text when
-            // the PTY response arrives (event-driven, no fixed timer).
-            if (data === '\t') {
-              const text = this._localEchoOverlay?.pendingText || '';
-              this._localEchoOverlay?.clear();
-              this._flushedOffsets?.delete(this.activeSessionId);
-              this._flushedTexts?.delete(this.activeSessionId);
-              if (text) {
-                this._pendingInput += text;
-              }
-              this._pendingInput += data;
-              if (this._inputFlushTimeout) {
-                clearTimeout(this._inputFlushTimeout);
-                this._inputFlushTimeout = null;
-              }
-              // Snapshot prompt line text BEFORE flushing — used to distinguish
-              // real Tab completions from pre-existing Claude UI text.
-              let baseText = '';
-              try {
-                const p = this._localEchoOverlay?.findPrompt?.();
-                if (p) {
-                  const buf = this.terminal.buffer.active;
-                  const line = buf.getLine(buf.viewportY + p.row);
-                  if (line) baseText = line.translateToString(true).slice(p.col + 2).trimEnd();
-                }
-              } catch {}
-              this._tabCompletionBaseText = baseText;
-              flushInput();
-              this._tabCompletionSessionId = this.activeSessionId;
-              this._tabCompletionRetries = 0;
-              // Fallback: if flushPendingWrites() detection misses the completion
-              // (e.g., flicker filter delays data, or xterm hasn't processed writes
-              // by the time the callback fires), retry detection after a delay.
-              // This ensures the overlay renders even without further terminal data.
-              if (this._tabCompletionFallback) clearTimeout(this._tabCompletionFallback);
-              const selfTab = this;
-              this._tabCompletionFallback = setTimeout(() => {
-                selfTab._tabCompletionFallback = null;
-                if (!selfTab._tabCompletionSessionId || selfTab._tabCompletionSessionId !== selfTab.activeSessionId) return;
-                const ov = selfTab._localEchoOverlay;
-                if (!ov || ov.pendingText) return;
-                selfTab.terminal.write('', () => {
-                  if (!selfTab._tabCompletionSessionId) return;
-                  ov.resetBufferDetection();
-                  const detected = ov.detectBufferText();
-                  if (detected && detected !== selfTab._tabCompletionBaseText) {
-                    selfTab._tabCompletionSessionId = null;
-                    selfTab._tabCompletionRetries = 0;
-                    selfTab._tabCompletionBaseText = null;
-                    ov.rerender();
-                  }
-                });
-              }, 300);
-              return;
-            }
-            // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
-            const text = this._localEchoOverlay?.pendingText || '';
-            this._localEchoOverlay?.clear();
-            // Suppress detection so PTY-echoed text isn't re-detected as user input
-            this._localEchoOverlay?.suppressBufferDetection();
-            // Clear flushed offset and text — control chars (Ctrl+C, Escape) change
-            // cursor position or abort readline, making flushed text tracking invalid.
-            this._flushedOffsets?.delete(this.activeSessionId);
-            this._flushedTexts?.delete(this.activeSessionId);
-            if (text) {
-              this._pendingInput += text;
-            }
-            this._pendingInput += data;
-            if (this._inputFlushTimeout) {
-              clearTimeout(this._inputFlushTimeout);
-              this._inputFlushTimeout = null;
-            }
-            flushInput();
-            return;
-          }
-          if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay only (sent on Enter)
-            this._localEchoOverlay?.addChar(data);
-            return;
-          }
-        }
-
-        // ── Normal Mode (echo disabled) ──
 
         // Paste detection: multi-char string starting with a printable character.
         // If the pasted text contains newlines, route through sendInput() with
@@ -5038,7 +5031,63 @@ class CodemanApp {
           }
         }
       }
-    });
+    }));
+  }
+
+  /**
+   * Centralized terminal cleanup — disposes all subscriptions, observers, and timers.
+   * Called by initTerminal() before re-creating the terminal to prevent event listener leaks.
+   */
+  _disposeTerminal() {
+    // Dispose xterm event subscriptions
+    if (this._terminalDisposables) {
+      for (const d of this._terminalDisposables) {
+        try { d.dispose(); } catch {}
+      }
+      this._terminalDisposables = null;
+    }
+
+    // Abort container-scoped listeners (wheel, touch)
+    if (this._containerListenerAC) {
+      this._containerListenerAC.abort();
+      this._containerListenerAC = null;
+    }
+
+    // Remove window resize listener
+    if (this._windowResizeHandler) {
+      window.removeEventListener('resize', this._windowResizeHandler);
+      this._windowResizeHandler = null;
+    }
+
+    // Disconnect resize observer
+    if (this.terminalResizeObserver) {
+      this.terminalResizeObserver.disconnect();
+      this.terminalResizeObserver = null;
+    }
+
+    // Clear pending timers
+    if (this._resizeTimeout) {
+      clearTimeout(this._resizeTimeout);
+      this._resizeTimeout = null;
+    }
+    if (this._inputFlushTimeout) {
+      clearTimeout(this._inputFlushTimeout);
+      this._inputFlushTimeout = null;
+    }
+
+    // Dispose WebGL addon
+    if (this._webglAddon) {
+      try { this._webglAddon.dispose(); } catch {}
+      this._webglAddon = null;
+    }
+
+    // Dispose the terminal itself
+    if (this.terminal) {
+      try { this.terminal.dispose(); } catch {}
+      this.terminal = null;
+    }
+
+    this.fitAddon = null;
   }
 
   /**
@@ -5335,55 +5384,6 @@ class CodemanApp {
   }
 
   /**
-   * Update local echo overlay state based on settings.
-   * Enabled whenever the setting is on — works during idle AND busy.
-   * Position is tracked dynamically by _findPrompt() on every render.
-   */
-  _updateLocalEchoState() {
-      const settings = this.loadAppSettingsFromStorage();
-      const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
-      const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-      const shouldEnable = !!(echoEnabled && session);
-      if (this._localEchoEnabled && !shouldEnable) {
-          this._localEchoOverlay?.clear();
-      }
-      this._localEchoEnabled = shouldEnable;
-
-      // Swap prompt finder based on session mode
-      if (this._localEchoOverlay && session) {
-        if (session.mode === 'opencode') {
-          // OpenCode (Bubble Tea TUI): find the ┃ border on the cursor's row.
-          // The input area is "┃  <text>" — the ┃ is the anchor, offset 3 skips "┃  ".
-          // We use the cursor row (cursorY) to find the right line, then scan for ┃.
-          this._localEchoOverlay.setPrompt({
-            type: 'custom',
-            offset: 3,
-            find: (terminal) => {
-              try {
-                const buf = terminal.buffer.active;
-                const row = buf.cursorY;
-                const line = buf.getLine(buf.viewportY + row);
-                if (!line) return null;
-                const text = line.translateToString(true);
-                const idx = text.indexOf('\u2503'); // ┃ (BOX DRAWINGS HEAVY VERTICAL)
-                if (idx >= 0) return { row, col: idx };
-                return null;
-              } catch { return null; }
-            }
-          });
-        } else if (session.mode === 'shell') {
-          // Shell mode: the shell provides its own PTY echo so the overlay isn't needed.
-          // Disable it by clearing any pending text.
-          this._localEchoOverlay.clear();
-          this._localEchoEnabled = false;
-        } else {
-          // Claude Code: scan for ❯ prompt character
-          this._localEchoOverlay.setPrompt({ type: 'character', char: '\u276f', offset: 2 });
-        }
-      }
-  }
-
-  /**
    * Flush pending writes to terminal, processing DEC 2026 sync markers.
    * Strips markers and writes content atomically within a single frame.
    */
@@ -5460,52 +5460,6 @@ class CodemanApp {
     }
 
     this._updateStatusStrip();
-
-    // Re-position local echo overlay after terminal writes — Ink redraws can
-    // move the ❯ prompt to a different row, making the overlay invisible.
-    if (this._localEchoOverlay?.hasPending) {
-      this._localEchoOverlay.rerender();
-    }
-
-    // After Tab completion: detect the completed text in the overlay.
-    // Use terminal.write('', callback) to defer detection until xterm.js
-    // finishes processing ALL queued writes — direct buffer reads after
-    // terminal.write(data) can miss text if xterm processes asynchronously.
-    if (this._tabCompletionSessionId && this._tabCompletionSessionId === this.activeSessionId
-        && this._localEchoOverlay && !this._localEchoOverlay.pendingText) {
-      const overlay = this._localEchoOverlay;
-      const self = this;
-      this.terminal.write('', () => {
-        if (!self._tabCompletionSessionId) return; // already resolved
-        overlay.resetBufferDetection();
-        const detected = overlay.detectBufferText();
-        if (detected) {
-          if (detected === self._tabCompletionBaseText) {
-            // Same text as before Tab — no completion yet. Undo and retry.
-            overlay.undoDetection();
-            self._tabCompletionRetries = (self._tabCompletionRetries || 0) + 1;
-            if (self._tabCompletionRetries > 60) {
-              self._tabCompletionSessionId = null;
-              self._tabCompletionRetries = 0;
-            }
-          } else {
-            // Text changed — real completion happened
-            self._tabCompletionSessionId = null;
-            self._tabCompletionRetries = 0;
-            self._tabCompletionBaseText = null;
-            if (self._tabCompletionFallback) { clearTimeout(self._tabCompletionFallback); self._tabCompletionFallback = null; }
-            overlay.rerender();
-          }
-        } else {
-          // No text found yet — retry on next flush.
-          self._tabCompletionRetries = (self._tabCompletionRetries || 0) + 1;
-          if (self._tabCompletionRetries > 60) {
-            self._tabCompletionSessionId = null;
-            self._tabCompletionRetries = 0;
-          }
-        }
-      });
-    }
   }
 
   /**
@@ -5701,11 +5655,7 @@ class CodemanApp {
         if (this.activeSessionId) {
           navigator.clipboard.readText().then(text => {
             if (!text) return;
-            if (this._localEchoEnabled && this._localEchoOverlay) {
-              this._localEchoOverlay.appendText(text);
-            } else {
-              this.sendInput(text).catch(() => {});
-            }
+            this.sendInput(text).catch(() => {});
           }).catch(() => {
             // Clipboard API denied (e.g. lost user activation after freeze) — fall back to dialog
             if (typeof KeyboardAccessory !== 'undefined') {
@@ -6013,8 +5963,6 @@ class CodemanApp {
         await this.chunkedTerminalWrite(data.terminalBuffer);
         this.terminal.scrollToBottom();
         termContainer?.classList.remove('buffer-loading');
-        // Re-position local echo overlay at new prompt location
-        this._localEchoOverlay?.rerender();
         // Resize PTY to match actual browser dimensions (critical for OpenCode
         // TUI sessions that render at fixed 120x40 until told the real size)
         if (this.activeSessionId) {
@@ -6045,8 +5993,6 @@ class CodemanApp {
 
         // Fire-and-forget resize — don't block on it
         this.sendResize(data.id);
-        // Re-position local echo overlay at new prompt location
-        this._localEchoOverlay?.rerender();
       } catch (err) {
         console.error('clearTerminal refresh failed:', err);
       }
@@ -6089,7 +6035,6 @@ class CodemanApp {
       if (tabHideTimer) { clearTimeout(tabHideTimer); this._tabStatusHideTimers.delete(data.id); }
       session.displayStatus = 'stopped';
       this.renderSessionTabs();
-      if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
     // Auto-close on clean exit (exit code 0) if setting enabled and respawn not running
     if (data.code === 0) {
@@ -6127,7 +6072,6 @@ class CodemanApp {
       // tracks the transcript being displayed and is independent of activeSessionId.
       if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(false);
       if (data.id === this.activeSessionId) {
-        this._updateLocalEchoState();
         this._updateSendBtn(false);
       }
     }
@@ -6164,7 +6108,6 @@ class CodemanApp {
       if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) {
-        this._updateLocalEchoState();
         this._updateSendBtn(true);
         if (TranscriptView._sessionId === data.id) TranscriptView.setWorking(true);
       }
@@ -7688,10 +7631,6 @@ class CodemanApp {
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
-    // Preserve local echo overlay text across SSE reconnect — just hide until
-    // terminal buffer reloads and prompt is visible again.  _render() re-scans
-    // for the ❯ prompt on every call, so rerender() after buffer load repositions it.
-    this._localEchoOverlay?.rerender();
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear parent name cache (prevents stale session name entries accumulating)
@@ -8538,11 +8477,6 @@ class CodemanApp {
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
 
-    // Clear tab completion detection flag — don't carry across sessions
-    this._tabCompletionSessionId = null;
-    this._tabCompletionRetries = 0;
-    this._tabCompletionBaseText = null;
-    if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
     if (this._clientDropRecoveryTimer) { clearTimeout(this._clientDropRecoveryTimer); this._clientDropRecoveryTimer = null; }
 
     // Clear status strip — new session may not have GSD output
@@ -8572,37 +8506,6 @@ class CodemanApp {
       }
     } catch {}
 
-    // Flush local echo text to PTY before switching tabs.
-    // Send as a single batch (no Enter) so it lands in the session's readline
-    // input buffer — avoids "old text resent on Enter" and overlay render bugs.
-    // Track flushed length so _render() offsets the overlay correctly even before
-    // the PTY echo arrives in the terminal buffer.
-    if (this.activeSessionId) {
-      const echoText = this._localEchoOverlay?.pendingText || '';
-      // Include buffer-detected flushed text (from Tab completion, etc.)
-      // so it's preserved across tab switches.
-      const existingFlushed = this._localEchoOverlay?.getFlushed()?.count || 0;
-      const existingFlushedText = this._localEchoOverlay?.getFlushed()?.text || '';
-      if (echoText) {
-        this._sendInputAsync(this.activeSessionId, echoText);
-      }
-      const totalOffset = existingFlushed + echoText.length;
-      if (totalOffset > 0) {
-        if (!this._flushedOffsets) this._flushedOffsets = new Map();
-        if (!this._flushedTexts) this._flushedTexts = new Map();
-        this._flushedOffsets.set(this.activeSessionId, totalOffset);
-        this._flushedTexts.set(this.activeSessionId, existingFlushedText + echoText);
-      }
-    }
-    this._localEchoOverlay?.clear();
-    // Prevent _detectBufferText() from picking up Claude's Ink UI text
-    // (status bar, model info, etc.) as "user input" on fresh sessions.
-    // Only sessions with prior flushed text (from tab-switch-away) need detection.
-    // After the user's first Enter, clear() resets _bufferDetectDone = false,
-    // re-enabling detection for tab completion and other legitimate cases.
-    if (this._localEchoOverlay && !this._flushedOffsets?.has(sessionId)) {
-      this._localEchoOverlay.suppressBufferDetection();
-    }
     const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
     // RC-3 fix: raise the buffer-load guard immediately after activeSessionId is updated.
@@ -8649,7 +8552,6 @@ class CodemanApp {
     this.renderSessionTabs();
     // Re-render the session drawer so the active highlight updates when the sidebar is open/pinned
     if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
-    this._updateLocalEchoState();
     const _switchedSession = this.sessions.get(sessionId);
     // Fix: use session.isWorking (set synchronously by _onSessionIdle/_onSessionWorking) rather
     // than displayStatus (debounce-settled). displayStatus may still read 'busy' if the debounce
@@ -8657,18 +8559,6 @@ class CodemanApp {
     const _switchedWorking = _switchedSession?.isWorking ?? false;
     this._updateSendBtn(_switchedWorking);
     if (TranscriptView._sessionId === sessionId) TranscriptView.setWorking(_switchedWorking);
-
-    // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
-    // the async buffer load.  Without this, the offset is 0 during the
-    // fetch() gap: backspace is swallowed, and typing a space covers the
-    // canvas text with an opaque overlay showing only the new char.
-    if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-      this._localEchoOverlay.setFlushed(
-        this._flushedOffsets.get(sessionId),
-        this._flushedTexts?.get(sessionId) || '',
-        false  // render=false: buffer not loaded yet
-      );
-    }
 
     // Glow the newly-active tab
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
@@ -8697,12 +8587,6 @@ class CodemanApp {
     // Show cached content instantly while fetching fresh data in background.
     // Use tail mode for faster initial load (128KB is enough for recent visible content).
     //
-    // Protect flushed state during buffer load: terminal.write() can trigger
-    // xterm.js onData responses (DA, OSC, etc.) that would otherwise clear
-    // the flushed Maps via the control char handler.  The multi-byte ESC
-    // filter catches most cases, but _restoringFlushedState provides a
-    // belt-and-suspenders guard for any edge cases.
-    this._restoringFlushedState = true;
     // Gate live SSE terminal writes for the ENTIRE buffer load sequence.
     // Without this, SSE events arriving during the fetch() gap compete with
     // the buffer write, causing 70KB+ single-frame flushes that stall WebGL.
@@ -8727,7 +8611,7 @@ class CodemanApp {
       if (isSoftReconnect && cachedBuffer) {
         _crashDiag.log('SOFT_RECONNECT: fetching to compare');
         const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
         const data = await res.json();
         _crashDiag.log(`SOFT_RECONNECT_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} changed=${data.terminalBuffer !== cachedBuffer}`);
 
@@ -8742,7 +8626,7 @@ class CodemanApp {
             this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
           }
           await this.chunkedTerminalWrite(data.terminalBuffer);
-          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
           this.terminalBufferCache.set(sessionId, data.terminalBuffer);
           if (this.terminalBufferCache.size > 20) {
             const oldest = this.terminalBufferCache.keys().next().value;
@@ -8764,14 +8648,14 @@ class CodemanApp {
           this.terminal.clear();
           this.terminal.reset();
           await this.chunkedTerminalWrite(cachedBuffer);
-          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
           _crashDiag.log('CACHE_DONE');
           // Stay hidden — fetch may have newer content; reveal once after final write
         }
 
         _crashDiag.log('FETCH_START');
         const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-        if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
         const data = await res.json();
         _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
@@ -8788,7 +8672,7 @@ class CodemanApp {
             }
             // Use chunked write for large buffers to avoid UI jank
             await this.chunkedTerminalWrite(data.terminalBuffer);
-            if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+            if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
           }
 
           // Update cache (cap at 20 entries)
@@ -8814,25 +8698,6 @@ class CodemanApp {
       // the chunked write (small buffer, cache hit, or empty), we must call it here.
       if (this._isLoadingBuffer) {
         this._finishBufferLoad();
-      }
-      // Drop the guard so user input clears state normally
-      this._restoringFlushedState = false;
-
-      // Restore flushed offset and text for this session so the overlay positions
-      // correctly even before the PTY echo arrives in the terminal buffer.
-      if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-        this._localEchoOverlay.setFlushed(
-          this._flushedOffsets.get(sessionId),
-          this._flushedTexts?.get(sessionId) || '',
-          false  // render=false: buffer just loaded, defer to rerender
-        );
-        // Trigger render after xterm.js finishes processing the buffer data.
-        // terminal.write('', callback) fires the callback after ALL previously
-        // queued writes have been parsed — so findPrompt() can find ❯ in the buffer.
-        const zl = this._localEchoOverlay;
-        this.terminal.write('', () => {
-          if (zl.hasPending) zl.rerender();
-        });
       }
 
       // Fire-and-forget resize — don't await to avoid blocking UI.
@@ -8941,7 +8806,6 @@ class CodemanApp {
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${(performance.now() - _selStart).toFixed(0)}ms`);
     } catch (err) {
       if (this._isLoadingBuffer) this._finishBufferLoad();
-      this._restoringFlushedState = false;
       console.error('Failed to load session terminal:', err);
     }
   }
@@ -8959,8 +8823,6 @@ class CodemanApp {
     this.terminalBufferCache.delete(sessionId);
     this._sessionCommands?.delete(sessionId);
 
-    this._flushedOffsets?.delete(sessionId);
-    this._flushedTexts?.delete(sessionId);
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
     this.ralphClosedSessions.delete(sessionId);
@@ -10309,8 +10171,6 @@ class CodemanApp {
     document.getElementById('fontSizeDisplay').textContent = size;
     this.fitAddon.fit();
     localStorage.setItem('codeman-font-size', size);
-    // Update overlay font cache and re-render at new cell dimensions
-    this._localEchoOverlay?.refreshFont();
   }
 
   loadFontSize() {
@@ -12426,7 +12286,6 @@ class CodemanApp {
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
-    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
     document.getElementById('appSettingsSecretRedaction').checked = settings.secretRedactionEnabled !== false;
     document.getElementById('appSettingsStopOnCleanExit').checked = settings.stopOnCleanExit ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
@@ -12537,6 +12396,9 @@ class CodemanApp {
 
     // Load orchestrator configuration
     this.loadOrchestratorConfigForSettings();
+
+    // Load integration settings
+    this.loadIntegrationSettings();
 
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
@@ -13252,7 +13114,6 @@ class CodemanApp {
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
-      localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       secretRedactionEnabled: document.getElementById('appSettingsSecretRedaction').checked,
       stopOnCleanExit: document.getElementById('appSettingsStopOnCleanExit').checked,
       hotbarButtons: [...document.querySelectorAll('input[name="hotbarBtn"]:checked')].map(cb => cb.value),
@@ -13272,7 +13133,6 @@ class CodemanApp {
 
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
-    this._updateLocalEchoState();
 
     // Save voice settings to localStorage + include in server payload for cross-device sync
     const voiceSettings = {
@@ -13374,9 +13234,8 @@ class CodemanApp {
     this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
 
     // Save to server (includes notification prefs for cross-browser persistence)
-    // Strip device-specific keys — localEchoEnabled is per-platform (touch default differs)
     // Strip secretRedactionEnabled — client-only preference, never sent to server
-    const { localEchoEnabled: _leo, secretRedactionEnabled: _sre, ...serverSettings } = settings;
+    const { secretRedactionEnabled: _sre, ...serverSettings } = settings;
     try {
       await this._apiPut('/api/settings', { ...serverSettings, notificationPreferences: notifPrefsToSave, voiceSettings });
 
@@ -13385,6 +13244,9 @@ class CodemanApp {
 
       // Save orchestrator configuration separately
       await this.saveOrchestratorConfig();
+
+      // Save integration settings separately (tokens go to server config)
+      await this.saveIntegrationSettings();
 
       this.showToast('Settings saved', 'success');
 
@@ -13514,6 +13376,120 @@ class CodemanApp {
       });
     } catch (err) {
       console.warn('Failed to save orchestrator config:', err);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Integration Settings (Asana, GitHub, Sentry, Slack)
+  // ═══════════════════════════════════════════════════════════════
+
+  async loadIntegrationSettings() {
+    try {
+      const res = await fetch('/api/integrations/config');
+      const json = await res.json();
+      if (!json.success) return;
+      const data = json.data || {};
+
+      // Asana
+      const asana = data.asana || {};
+      const asanaEnabledEl = document.getElementById('intgAsanaEnabled');
+      if (asanaEnabledEl) asanaEnabledEl.checked = asana.enabled ?? false;
+      const asanaStatusEl = document.getElementById('intgAsanaStatus');
+      if (asanaStatusEl) asanaStatusEl.textContent = asana.hasToken ? 'Token set' : 'Not configured';
+      // Don't populate token field — it's masked server-side
+
+      // GitHub
+      const github = data.github || {};
+      const ghEnabledEl = document.getElementById('intgGithubEnabled');
+      if (ghEnabledEl) ghEnabledEl.checked = github.enabled ?? false;
+      const ghStatusEl = document.getElementById('intgGithubStatus');
+      if (ghStatusEl) ghStatusEl.textContent = github.hasToken ? 'Token set' : 'Using gh CLI';
+
+      // Sentry
+      const sentry = data.sentry || {};
+      const sentryEnabledEl = document.getElementById('intgSentryEnabled');
+      if (sentryEnabledEl) sentryEnabledEl.checked = sentry.enabled ?? false;
+      const sentryOrgEl = document.getElementById('intgSentryOrg');
+      if (sentryOrgEl && sentry.org) sentryOrgEl.value = sentry.org;
+      const sentryStatusEl = document.getElementById('intgSentryStatus');
+      if (sentryStatusEl) sentryStatusEl.textContent = sentry.hasToken ? 'Token set' : 'Not configured';
+
+      // Slack
+      const slack = data.slack || {};
+      const slackEnabledEl = document.getElementById('intgSlackEnabled');
+      if (slackEnabledEl) slackEnabledEl.checked = slack.enabled ?? false;
+      const slackTeamEl = document.getElementById('intgSlackTeamId');
+      if (slackTeamEl && slack.teamId) slackTeamEl.value = slack.teamId;
+      const slackStatusEl = document.getElementById('intgSlackStatus');
+      if (slackStatusEl) slackStatusEl.textContent = slack.hasToken ? 'Token set' : 'Not configured';
+    } catch (err) {
+      console.warn('Failed to load integration settings:', err);
+    }
+  }
+
+  async saveIntegrationSettings() {
+    const config = {};
+
+    // Asana
+    const asanaToken = document.getElementById('intgAsanaToken')?.value?.trim();
+    config.asana = {
+      enabled: document.getElementById('intgAsanaEnabled')?.checked ?? false,
+      ...(asanaToken ? { token: asanaToken } : {}),
+    };
+
+    // GitHub
+    const ghToken = document.getElementById('intgGithubToken')?.value?.trim();
+    config.github = {
+      enabled: document.getElementById('intgGithubEnabled')?.checked ?? false,
+      ...(ghToken ? { token: ghToken } : {}),
+    };
+
+    // Sentry
+    const sentryToken = document.getElementById('intgSentryToken')?.value?.trim();
+    config.sentry = {
+      enabled: document.getElementById('intgSentryEnabled')?.checked ?? false,
+      ...(sentryToken ? { token: sentryToken } : {}),
+      org: document.getElementById('intgSentryOrg')?.value?.trim() || undefined,
+    };
+
+    // Slack
+    const slackToken = document.getElementById('intgSlackToken')?.value?.trim();
+    config.slack = {
+      enabled: document.getElementById('intgSlackEnabled')?.checked ?? false,
+      ...(slackToken ? { token: slackToken } : {}),
+      teamId: document.getElementById('intgSlackTeamId')?.value?.trim() || undefined,
+    };
+
+    try {
+      await fetch('/api/integrations/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+    } catch (err) {
+      console.warn('Failed to save integration settings:', err);
+    }
+  }
+
+  async testIntegration(service) {
+    const statusEl = document.getElementById(`intg${service.charAt(0).toUpperCase() + service.slice(1)}Status`);
+    if (statusEl) statusEl.textContent = 'Testing...';
+
+    // Save first so the server has the latest tokens
+    await this.saveIntegrationSettings();
+
+    try {
+      const res = await fetch(`/api/integrations/test/${service}`, { method: 'POST' });
+      const json = await res.json();
+      if (statusEl) {
+        statusEl.textContent = json.success ? 'Connected' : (json.error || 'Failed');
+        statusEl.style.color = json.success ? 'var(--success-color, #4caf50)' : 'var(--error-color, #f44336)';
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = 'Error';
+        statusEl.style.color = 'var(--error-color, #f44336)';
+      }
     }
   }
 
@@ -13815,7 +13791,7 @@ class CodemanApp {
         const displayKeys = new Set([
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'localEchoEnabled', 'secretRedactionEnabled',
+          'subagentActiveTabOnly', 'tabTwoRows', 'secretRedactionEnabled',
         ]);
         // Merge settings: non-display keys always sync from server,
         // display keys only seed from server when localStorage has no value
@@ -17010,37 +16986,10 @@ class CodemanApp {
       }
 
       const terminal = new Terminal({
-        theme: {
-          background: '#0d0d0d',
-          foreground: '#e0e0e0',
-          cursor: '#e0e0e0',
-          cursorAccent: '#0d0d0d',
-          selection: 'rgba(255, 255, 255, 0.3)',
-          black: '#0d0d0d',
-          red: '#ff6b6b',
-          green: '#51cf66',
-          yellow: '#ffd43b',
-          blue: '#339af0',
-          magenta: '#cc5de8',
-          cyan: '#22b8cf',
-          white: '#e0e0e0',
-          brightBlack: '#495057',
-          brightRed: '#ff8787',
-          brightGreen: '#69db7c',
-          brightYellow: '#ffe066',
-          brightBlue: '#5c7cfa',
-          brightMagenta: '#da77f2',
-          brightCyan: '#66d9e8',
-          brightWhite: '#ffffff',
-        },
-        fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
+        ...XTERM_BASE_OPTIONS,
         fontSize: 12,
-        lineHeight: 1.2,
         cursorBlink: true,
-        cursorStyle: 'block',
         scrollback: 500,
-        allowTransparency: true,
-        allowProposedApi: true,
       });
 
       const fitAddon = new FitAddon.FitAddon();

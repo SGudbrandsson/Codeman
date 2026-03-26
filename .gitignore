@@ -64,3 +64,4 @@ readme-preview.mjs
 
 # Worktree task metadata — not tracked in source
 TASK.md
+.superpowers/

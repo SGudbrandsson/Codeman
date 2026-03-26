@@ -14,8 +14,9 @@ import { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { SseEvent } from '../sse-events.js';
-import { listWorkItems, createWorkItem } from '../../work-items/index.js';
+import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/index.js';
 import type { WorkItemStatus } from '../../work-items/index.js';
+import { fetchAsanaTask, fetchGitHubContext, fetchSentryIssue, fetchSlackMessage } from '../../integrations/index.js';
 
 type CommandPanelCtx = SessionPort & EventPort & ConfigPort & InfraPort;
 
@@ -142,12 +143,21 @@ const TOOLS = [
   },
   {
     name: 'create_work_item',
-    description: 'Create a new work item.',
+    description:
+      'Create a new work item and dispatch it to the orchestrator. Include caseId to route to the right project.',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string', description: 'Title of the work item' },
-        description: { type: 'string', description: 'Description of the work item' },
+        description: {
+          type: 'string',
+          description: 'Detailed description including any URLs, context, or requirements',
+        },
+        caseId: {
+          type: 'string',
+          description:
+            'Project/case name to assign to (e.g. "Codeman", "keeps"). If known, always include this so the orchestrator picks it up.',
+        },
       },
       required: ['title'],
     },
@@ -174,18 +184,74 @@ const TOOLS = [
     description: 'Get system-level information: total sessions, uptime, server port, SSE client count.',
     input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
   },
+  {
+    name: 'fetch_asana_task',
+    description:
+      'Fetch an Asana task by ID or URL. Returns task details (title, description, URL). Use when user references an Asana task or pastes an Asana URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id_or_url: { type: 'string', description: 'Asana task GID or full Asana task URL' },
+      },
+      required: ['task_id_or_url'],
+    },
+  },
+  {
+    name: 'fetch_github_context',
+    description:
+      'Fetch a GitHub PR or issue by URL. Returns title, body, state, diff summary, and review comments. Use when user pastes a GitHub PR or issue URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Full GitHub PR or issue URL (e.g. https://github.com/owner/repo/pull/123)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'fetch_sentry_issue',
+    description:
+      'Fetch a Sentry issue by ID. Returns error title, culprit, stack trace, occurrence count. Use when user references a Sentry issue.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        issue_id: { type: 'string', description: 'Sentry issue ID (numeric)' },
+      },
+      required: ['issue_id'],
+    },
+  },
+  {
+    name: 'fetch_slack_message',
+    description:
+      'Fetch a Slack message and its thread by URL. Returns message text, author, channel, and thread replies. Use when user pastes a Slack message URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Slack message URL (e.g. https://team.slack.com/archives/C123/p1234567890)',
+        },
+      },
+      required: ['url'],
+    },
+  },
 ];
 
-const SYSTEM_PROMPT = `You are Codeman's command assistant. You help users manage their Codeman sessions, work items, and orchestrator through natural language.
+const SYSTEM_PROMPT = `You are Codeman's command assistant — a manager's interface for delegating work to AI agents. You help create tasks, monitor progress, and take action through tools.
 
-You have access to tools that let you interact with Codeman's internal API. When the user asks you to do something, use the appropriate tool. When listing information, format it clearly and concisely.
+You have tools to interact with Codeman: create work items, list sessions, check orchestrator status, and more. ALWAYS prefer action over asking questions. When the user asks you to do something, DO IT using tools.
 
-Important guidelines:
-- When referring to sessions, always include the session name AND a short version of the ID (first 8 chars) so the user can identify them.
-- Be concise. This is a utility chat, not a conversation.
-- If you're unsure which session or item the user means, list the options and ask them to clarify.
-- For destructive operations (delete, send input, toggle orchestrator), the system will automatically ask for confirmation — just call the tool normally.
-- When a user refers to a session by name or number, try to match it to an existing session.
+Key behaviors:
+- **When the user pastes a URL (Asana, Sentry, GitHub, Slack):** Use the appropriate fetch tool (fetch_asana_task, fetch_github_context, fetch_sentry_issue, fetch_slack_message) to get context FIRST, then offer to create a work item from it.
+- **When the user says "fix X" or "create a task for X":** Use create_work_item immediately. Include caseId if you can infer the project.
+- **When asked about status:** Use list_work_items, orchestrator_status, or list_sessions to give a real answer, not a guess.
+- **Be concise.** This is a utility chat, not a conversation. Lead with action.
+- When referring to sessions, include the name AND first 8 chars of ID.
+- For destructive operations, the system handles confirmation — just call the tool.
+- When a user refers to a session by name or number, match it to an existing session.
 - Format responses using simple markdown (bold, lists, code).`;
 
 /* ── Tool execution ─────────────────────────────────────────────────── */
@@ -281,7 +347,11 @@ async function executeTool(
           description: (toolInput.description as string) || undefined,
           source: 'manual' as const,
         });
-        return { success: true, result: item };
+        // Set caseId if provided (enables orchestrator dispatch)
+        if (toolInput.caseId && item.id) {
+          updateWorkItem(item.id, { caseId: toolInput.caseId as string } as Record<string, unknown>);
+        }
+        return { success: true, result: { ...item, caseId: (toolInput.caseId as string) || null } };
       }
 
       case 'orchestrator_status': {
@@ -327,6 +397,60 @@ async function executeTool(
         };
       }
 
+      case 'fetch_asana_task': {
+        const integrations = ctx.store.getConfig().integrations;
+        const asanaCfg = integrations?.asana;
+        if (!asanaCfg?.enabled || !asanaCfg.token) {
+          return {
+            success: false,
+            error: 'Asana integration not configured. Go to Settings > Integrations to add your Asana token.',
+          };
+        }
+        const task = await fetchAsanaTask(toolInput.task_id_or_url as string, asanaCfg.token);
+        return {
+          success: true,
+          result: {
+            title: task.name || '(Untitled)',
+            description: task.notes || '',
+            url: task.permalink_url || null,
+            gid: task.gid,
+          },
+        };
+      }
+
+      case 'fetch_github_context': {
+        const integrations = ctx.store.getConfig().integrations;
+        const ghToken = integrations?.github?.token;
+        const context = await fetchGitHubContext(toolInput.url as string, ghToken);
+        return { success: true, result: context };
+      }
+
+      case 'fetch_sentry_issue': {
+        const integrations = ctx.store.getConfig().integrations;
+        const sentryCfg = integrations?.sentry;
+        if (!sentryCfg?.enabled || !sentryCfg.token || !sentryCfg.org) {
+          return {
+            success: false,
+            error: 'Sentry integration not configured. Go to Settings > Integrations to add your Sentry token and org.',
+          };
+        }
+        const issue = await fetchSentryIssue(toolInput.issue_id as string, sentryCfg.token, sentryCfg.org);
+        return { success: true, result: issue };
+      }
+
+      case 'fetch_slack_message': {
+        const integrations = ctx.store.getConfig().integrations;
+        const slackCfg = integrations?.slack;
+        if (!slackCfg?.enabled || !slackCfg.token) {
+          return {
+            success: false,
+            error: 'Slack integration not configured. Go to Settings > Integrations to add your Slack bot token.',
+          };
+        }
+        const msg = await fetchSlackMessage(toolInput.url as string, slackCfg.token);
+        return { success: true, result: msg };
+      }
+
       default:
         return { success: false, error: `Unknown tool: ${toolName}` };
     }
@@ -354,7 +478,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
   app.post('/api/command', async (req, reply) => {
     pruneExpired();
 
-    const body = req.body as { message?: string; conversationId?: string };
+    const body = req.body as { message?: string; conversationId?: string; images?: Array<{ dataUrl: string }> };
     const message = body?.message?.trim();
     if (!message) {
       reply.code(400);
@@ -371,8 +495,29 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
     }
     conversation.lastActivity = Date.now();
 
+    // Build user message content — multimodal if images are attached
+    const images = body.images || [];
+    let userContent: string | Array<Record<string, unknown>>;
+    if (images.length > 0) {
+      const contentBlocks: Array<Record<string, unknown>> = [];
+      for (const img of images) {
+        // dataUrl format: "data:image/png;base64,iVBOR..."
+        const match = img.dataUrl?.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) {
+          contentBlocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: match[1], data: match[2] },
+          });
+        }
+      }
+      contentBlocks.push({ type: 'text', text: message });
+      userContent = contentBlocks;
+    } else {
+      userContent = message;
+    }
+
     // Add user message
-    conversation.messages.push({ role: 'user', content: message });
+    conversation.messages.push({ role: 'user', content: userContent });
 
     // Trim if too long
     if (conversation.messages.length > MAX_MESSAGES) {
@@ -415,69 +560,71 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       let textResponse = '';
       let needsConfirmation: { confirmId: string; action: string; description: string } | undefined;
 
-      // Process response blocks
+      // Extract text and collect tool_use blocks
+      const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       for (const block of response.content) {
         if (block.type === 'text' && block.text) {
           textResponse += block.text;
-        } else if (block.type === 'tool_use' && block.name && block.input) {
-          const toolName = block.name;
-          const toolInput = block.input;
+        } else if (block.type === 'tool_use' && block.name && block.input && block.id) {
+          toolUseBlocks.push({ id: block.id, name: block.name, input: block.input });
+        }
+      }
 
-          // Check if destructive — require confirmation
-          if (DESTRUCTIVE_TOOLS.has(toolName)) {
-            const confirmId = crypto.randomUUID();
-            const description = `${toolName}(${JSON.stringify(toolInput)})`;
-            pendingConfirmations.set(confirmId, {
-              confirmId,
-              conversationId: conversationId!,
-              toolName,
-              toolInput,
-              description,
-              createdAt: Date.now(),
-            });
-            needsConfirmation = { confirmId, action: toolName, description };
+      if (toolUseBlocks.length > 0) {
+        // Check for destructive tools first
+        const destructiveBlock = toolUseBlocks.find((b) => DESTRUCTIVE_TOOLS.has(b.name));
+        if (destructiveBlock) {
+          const confirmId = crypto.randomUUID();
+          const description = `${destructiveBlock.name}(${JSON.stringify(destructiveBlock.input)})`;
+          pendingConfirmations.set(confirmId, {
+            confirmId,
+            conversationId: conversationId!,
+            toolName: destructiveBlock.name,
+            toolInput: destructiveBlock.input,
+            description,
+            createdAt: Date.now(),
+          });
+          needsConfirmation = { confirmId, action: destructiveBlock.name, description };
 
-            // Add tool_use and a placeholder tool_result to conversation so Claude can continue
-            conversation.messages.push({
-              role: 'assistant',
-              content: response.content as unknown as Array<Record<string, unknown>>,
-            });
-            conversation.messages.push({
-              role: 'user',
-              content: [
-                {
-                  type: 'tool_result',
-                  tool_use_id: block.id,
-                  content: 'Awaiting user confirmation for this destructive action.',
-                },
-              ],
-            });
-
-            // Don't execute — wait for confirmation
-            break;
-          }
-
-          // Non-destructive: execute immediately
-          const result = await executeTool(toolName, toolInput, ctx);
-          actions.push({ tool: toolName, ...result });
-
-          // Add the assistant's tool_use and the tool_result to conversation
+          // Add assistant response + placeholder tool_results for ALL tool_uses
           conversation.messages.push({
             role: 'assistant',
             content: response.content as unknown as Array<Record<string, unknown>>,
           });
           conversation.messages.push({
             role: 'user',
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: JSON.stringify(result),
-              },
-            ],
+            content: toolUseBlocks.map((b) => ({
+              type: 'tool_result' as const,
+              tool_use_id: b.id,
+              content: DESTRUCTIVE_TOOLS.has(b.name)
+                ? 'Awaiting user confirmation for this destructive action.'
+                : 'Skipped — waiting for confirmation on destructive action in same response.',
+            })),
+          });
+        } else {
+          // Execute ALL tool calls, collect results
+          const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
+          for (const block of toolUseBlocks) {
+            const result = await executeTool(block.name, block.input, ctx);
+            actions.push({ tool: block.name, ...result });
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(result),
+            });
+          }
+
+          // Push assistant response (with all tool_uses) + user response (with all tool_results)
+          conversation.messages.push({
+            role: 'assistant',
+            content: response.content as unknown as Array<Record<string, unknown>>,
+          });
+          conversation.messages.push({
+            role: 'user',
+            content: toolResults,
           });
 
-          // Make a follow-up call to get the text summary
+          // Follow-up call to get text summary of the tool results
           const followUp = await client.messages.create({
             model: 'claude-haiku-4-5-20251001',
             max_tokens: 1024,
@@ -489,26 +636,19 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
             })),
           });
 
-          // Extract text from follow-up
           for (const fb of followUp.content) {
             if (fb.type === 'text' && fb.text) {
               textResponse += fb.text;
             }
           }
 
-          // Save assistant follow-up response
           conversation.messages.push({
             role: 'assistant',
             content: followUp.content as unknown as Array<Record<string, unknown>>,
           });
-
-          // Only process first tool call for simplicity
-          break;
         }
-      }
-
-      // If no tool was used, save the plain text response
-      if (actions.length === 0 && !needsConfirmation) {
+      } else {
+        // No tools — save plain text response
         conversation.messages.push({
           role: 'assistant',
           content: response.content as unknown as Array<Record<string, unknown>>,
@@ -532,6 +672,56 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
         reply.code(503);
         return { error: 'Anthropic SDK not available' };
       }
+
+      // Bug 5: detect tool_use/tool_result mismatch — clear conversation and retry
+      if (errMsg.includes('tool_use') && (errMsg.includes('tool_result') || errMsg.includes('400'))) {
+        // Clear the corrupted conversation, keep only the latest user message
+        const lastUserMsg = conversation!.messages.filter((m) => m.role === 'user').pop();
+        conversation!.messages = lastUserMsg ? [lastUserMsg] : [];
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const Anthropic2 = ((await import('@anthropic-ai/sdk' as string)) as any).default;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          const client2 = new Anthropic2() as {
+            messages: {
+              create: (opts: Record<string, unknown>) => Promise<{
+                content: Array<{
+                  type: string;
+                  text?: string;
+                  id?: string;
+                  name?: string;
+                  input?: Record<string, unknown>;
+                }>;
+                stop_reason: string;
+              }>;
+            };
+          };
+          const retryResponse = await client2.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1024,
+            system: SYSTEM_PROMPT,
+            tools: TOOLS,
+            messages: conversation!.messages.map((m) => ({ role: m.role, content: m.content })),
+          });
+          let retryText = '';
+          for (const block of retryResponse.content) {
+            if (block.type === 'text' && block.text) retryText += block.text;
+          }
+          conversation!.messages.push({
+            role: 'assistant',
+            content: retryResponse.content as unknown as Array<Record<string, unknown>>,
+          });
+          return {
+            response: retryText || 'I processed your request.',
+            conversationId,
+            conversationCleared: true,
+          };
+        } catch (retryErr) {
+          reply.code(500);
+          return { error: `Command failed after recovery: ${String(retryErr)}`, conversationCleared: true };
+        }
+      }
+
       reply.code(500);
       return { error: `Command failed: ${errMsg}` };
     }

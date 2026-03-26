@@ -9,6 +9,7 @@
  */
 
 import type { WorkItemSource } from './work-items/index.js';
+import type { SentryIssueContext, SlackMessageContext } from './integrations/types.js';
 
 /**
  * Normalized work item creation payload from external sources.
@@ -109,5 +110,56 @@ export function normalizeGitHubIssue(issue: GitHubIssue): NormalizedWorkItem {
     externalRef,
     externalUrl,
     metadata,
+  };
+}
+
+/**
+ * Normalize a Sentry issue into a work item creation payload.
+ *
+ * @param issue - Sentry issue context from the Sentry API
+ * @returns Normalized work item payload ready for createWorkItem()
+ */
+export function normalizeSentryIssue(issue: SentryIssueContext): NormalizedWorkItem {
+  const title = issue.title || '(Untitled Sentry Issue)';
+  const parts = [`**Culprit:** ${issue.culprit || 'unknown'}`];
+  if (issue.stackTrace) parts.push(`**Stack trace:**\n\`\`\`\n${issue.stackTrace}\n\`\`\``);
+  parts.push(`Occurrences: ${issue.count} | First seen: ${issue.firstSeen} | Last seen: ${issue.lastSeen}`);
+  const description = parts.join('\n\n');
+
+  return {
+    title,
+    description,
+    source: 'sentry',
+    externalRef: issue.url ? `sentry:${issue.url.split('/').pop() || ''}` : null,
+    externalUrl: issue.url || null,
+    metadata: { sentry: issue },
+  };
+}
+
+/**
+ * Normalize a Slack message into a work item creation payload.
+ *
+ * @param msg - Slack message context from the Slack API
+ * @returns Normalized work item payload ready for createWorkItem()
+ */
+export function normalizeSlackMessage(msg: SlackMessageContext): NormalizedWorkItem {
+  const title = msg.text.length > 80 ? msg.text.slice(0, 77) + '...' : msg.text || '(Slack message)';
+  const parts = [`**From:** ${msg.author} in #${msg.channel}`];
+  parts.push(`**Message:** ${msg.text}`);
+  if (msg.thread.length > 0) {
+    parts.push(`**Thread (${msg.thread.length} replies):**`);
+    for (const reply of msg.thread.slice(0, 10)) {
+      parts.push(`> ${reply}`);
+    }
+  }
+  const description = parts.join('\n\n');
+
+  return {
+    title,
+    description,
+    source: 'slack',
+    externalRef: `slack:${msg.channel}:${msg.timestamp}`,
+    externalUrl: msg.url || null,
+    metadata: { slack: msg },
   };
 }

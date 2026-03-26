@@ -21,7 +21,6 @@
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
   <script defer src="vendor/xterm-addon-search.min.js"></script>
-  <script defer src="vendor/xterm-zerolag-input.js"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
@@ -1037,6 +1036,7 @@
           <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
           <button class="modal-tab-btn" id="settingsUpdatesTabBtn" data-tab="settings-updates">Updates</button>
           <button class="modal-tab-btn" data-tab="settings-orchestrator">Orchestrator</button>
+          <button class="modal-tab-btn" data-tab="settings-integrations">Integrations</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1044,16 +1044,6 @@
             <div class="settings-grid">
               <!-- Input Section -->
               <div class="settings-section-header">Input</div>
-              <div class="settings-item settings-item-multiline" title="Shows typed characters instantly via overlay while forwarding keystrokes to the server in the background. Enables Tab completion, preserves input across tab switches, and protects against session crashes. Recommended for mobile and high-latency connections.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Local Echo</span>
-                  <span class="settings-item-desc">Instant typing feedback with local echo</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsLocalEcho">
-                  <span class="slider"></span>
-                </label>
-              </div>
               <div class="settings-item settings-item-multiline" title="Scan messages for API keys, tokens, and other secrets before sending. Detected secrets are replaced with named placeholders ([SECRET_TYPE_N]) and held in memory for this session only — never stored on disk or sent over the wire.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Redact Secrets Before Sending</span>
@@ -1623,6 +1613,112 @@
                   <span class="settings-item-desc">Minimum score gap for a clear winner in agent capability matching</span>
                 </div>
                 <input type="number" id="orchMatchingThreshold" class="settings-input" min="1" max="20" step="1" style="width:80px;">
+              </div>
+            </div>
+          </div>
+          <!-- Integrations Tab -->
+          <div class="modal-tab-content hidden" id="settings-integrations">
+            <div class="settings-grid">
+              <!-- Asana -->
+              <div class="settings-section-header">Asana</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgAsanaEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Personal Access Token</span>
+                  <span class="settings-item-desc">From Asana Developer Console</span>
+                </div>
+                <input type="password" id="intgAsanaToken" class="settings-input" placeholder="Bearer token" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgAsanaStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('asana')">Test</button>
+              </div>
+
+              <!-- GitHub -->
+              <div class="settings-section-header">GitHub</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgGithubEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Token (optional)</span>
+                  <span class="settings-item-desc">Falls back to gh CLI auth if empty</span>
+                </div>
+                <input type="password" id="intgGithubToken" class="settings-input" placeholder="ghp_..." style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgGithubStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('github')">Test</button>
+              </div>
+
+              <!-- Sentry -->
+              <div class="settings-section-header">Sentry</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgSentryEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Auth Token</span>
+                  <span class="settings-item-desc">From Sentry Settings > Auth Tokens</span>
+                </div>
+                <input type="password" id="intgSentryToken" class="settings-input" placeholder="Auth token" style="width:220px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Organization Slug</span>
+                  <span class="settings-item-desc">Your Sentry organization URL slug</span>
+                </div>
+                <input type="text" id="intgSentryOrg" class="settings-input" placeholder="my-org" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgSentryStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('sentry')">Test</button>
+              </div>
+
+              <!-- Slack -->
+              <div class="settings-section-header">Slack</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgSlackEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Bot Token</span>
+                  <span class="settings-item-desc">xoxb-... from Slack App settings</span>
+                </div>
+                <input type="password" id="intgSlackToken" class="settings-input" placeholder="xoxb-..." style="width:220px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Team ID (optional)</span>
+                  <span class="settings-item-desc">Workspace team ID for API calls</span>
+                </div>
+                <input type="text" id="intgSlackTeamId" class="settings-input" placeholder="T0123456" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgSlackStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('slack')">Test</button>
               </div>
             </div>
           </div>
@@ -2511,12 +2607,18 @@
 <div id="commandPanel" class="mcp-panel command-panel" style="display:none" aria-label="Command Panel">
   <div class="mcp-panel-header">
     <span class="mcp-panel-title">Command</span>
-    <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+    <div class="command-header-actions">
+      <button class="command-new-btn" id="commandNewBtn" title="New conversation">&#x2b;</button>
+      <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+    </div>
   </div>
   <div class="command-panel-messages" id="commandMessages"></div>
+  <div class="command-attachments" id="commandAttachments" style="display:none"></div>
   <div class="command-input-row">
-    <input type="text" id="commandInput" class="command-input" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false">
+    <button class="command-attach-btn" id="commandAttachBtn" title="Attach image">&#x1f4ce;</button>
+    <textarea id="commandInput" class="command-input" rows="1" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false"></textarea>
     <button id="commandSendBtn" class="command-send-btn" title="Send">&#x2191;</button>
+    <input type="file" id="commandFileInput" accept="image/*" style="display:none">
   </div>
 </div>
 

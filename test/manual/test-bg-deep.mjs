@@ -57,9 +57,6 @@ const bgInfo = await page.evaluate(() => {
   // Theme config
   results.theme = term.options?.theme;
   
-  // Overlay bg
-  results.overlayBg = window.app?._localEchoOverlay?._font?.backgroundColor;
-  
   return results;
 });
 

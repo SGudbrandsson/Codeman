@@ -333,6 +333,139 @@ describe('POST /api/command', () => {
     const body = JSON.parse(res.body);
     expect(body.error).toMatch(/API rate limit/);
   });
+
+  // ── Gap 1: Multimodal image support ──────────────────────────────────────
+
+  it('builds multimodal content blocks when images are provided', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('I see the image.'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: {
+        message: 'what is this?',
+        images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }],
+      },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(200);
+    expect(body.response).toBe('I see the image.');
+
+    // Verify the Claude API was called with multimodal content blocks
+    const apiCall = mockCreate.mock.calls[0][0] as { messages: Array<{ role: string; content: unknown }> };
+    const userMsg = apiCall.messages.find((m) => m.role === 'user');
+    expect(Array.isArray(userMsg!.content)).toBe(true);
+    const blocks = userMsg!.content as Array<Record<string, unknown>>;
+    expect(blocks).toHaveLength(2); // 1 image + 1 text
+    expect(blocks[0].type).toBe('image');
+    expect((blocks[0].source as Record<string, string>).media_type).toBe('image/png');
+    expect((blocks[0].source as Record<string, string>).data).toBe('iVBORw0KGgo=');
+    expect(blocks[1]).toEqual({ type: 'text', text: 'what is this?' });
+  });
+
+  it('skips malformed data URLs and sends only text block', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('Got it.'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: {
+        message: 'check this',
+        images: [{ dataUrl: 'not-a-valid-data-url' }],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    // Only a text block should be in the content (malformed image skipped)
+    const apiCall = mockCreate.mock.calls[0][0] as { messages: Array<{ role: string; content: unknown }> };
+    const userMsg = apiCall.messages.find((m) => m.role === 'user');
+    expect(Array.isArray(userMsg!.content)).toBe(true);
+    const blocks = userMsg!.content as Array<Record<string, unknown>>;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toEqual({ type: 'text', text: 'check this' });
+  });
+
+  it('treats empty images array as plain text message', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('Plain text.'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: {
+        message: 'hello',
+        images: [],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    // Content should be a plain string, not an array of blocks
+    const apiCall = mockCreate.mock.calls[0][0] as { messages: Array<{ role: string; content: unknown }> };
+    const userMsg = apiCall.messages.find((m) => m.role === 'user');
+    expect(typeof userMsg!.content).toBe('string');
+    expect(userMsg!.content).toBe('hello');
+  });
+
+  // ── Gap 2: Stale conversation recovery ───────────────────────────────────
+
+  it('retries with cleared conversation on tool_use/tool_result mismatch error', async () => {
+    // First call fails with a tool_use/tool_result mismatch error
+    mockCreate.mockRejectedValueOnce(new Error('400 tool_use ids were found without a corresponding tool_result'));
+    // Retry after clearing conversation succeeds
+    mockCreate.mockResolvedValueOnce(textResponse('Recovered!'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: 'try again' },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(200);
+    expect(body.response).toBe('Recovered!');
+    expect(body.conversationCleared).toBe(true);
+    expect(body.conversationId).toBeDefined();
+
+    // mockCreate should have been called twice (original + retry)
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns 500 with conversationCleared when retry also fails', async () => {
+    // First call fails with tool_use mismatch
+    mockCreate.mockRejectedValueOnce(new Error('400 tool_use ids were found without a corresponding tool_result'));
+    // Retry also fails
+    mockCreate.mockRejectedValueOnce(new Error('Still broken'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: 'try again' },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(500);
+    expect(body.conversationCleared).toBe(true);
+    expect(body.error).toMatch(/recovery/i);
+  });
+
+  it('does not trigger recovery for non-tool_use errors', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('Rate limit exceeded'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: 'hello' },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(500);
+    expect(body.conversationCleared).toBeUndefined();
+    expect(body.error).toMatch(/Rate limit/);
+    // Should only have been called once (no retry)
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('POST /api/command/confirm', () => {

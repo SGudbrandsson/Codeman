@@ -13,7 +13,7 @@
  */
 
 import { execSync } from 'child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
@@ -30,33 +30,17 @@ run('tsc', 'tsc');
 run('chmod dist/index.js', 'chmod +x dist/index.js');
 
 // 2. Copy static assets
-run('prepare dirs', 'mkdir -p dist/web dist/templates dist/web/public/vendor');
-run('copy web assets', 'cp -r src/web/public dist/web/');
+run('prepare dirs', 'mkdir -p dist/web dist/templates');
+run('copy web assets', 'rm -rf dist/web/public && cp -r src/web/public dist/web/ && mkdir -p dist/web/public/vendor');
 run('copy template', 'cp src/templates/case-template.md dist/templates/');
 
-// 3. Vendor xterm bundles
-run('xterm css', 'cp node_modules/xterm/css/xterm.css dist/web/public/vendor/');
-run('xterm js', 'npx esbuild node_modules/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js');
-run('xterm-addon-fit', 'npx esbuild node_modules/xterm-addon-fit/lib/xterm-addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js');
-run('xterm-addon-webgl', 'cp node_modules/xterm-addon-webgl/lib/xterm-addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
-run('xterm-addon-unicode11', 'npx esbuild node_modules/xterm-addon-unicode11/lib/xterm-addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
-run('xterm-addon-search', 'npx esbuild node_modules/xterm-addon-search/lib/xterm-addon-search.js --minify --outfile=dist/web/public/vendor/xterm-addon-search.min.js');
-run('xterm-zerolag-input', 'npx esbuild packages/xterm-zerolag-input/src/zerolag-input-addon.ts --bundle --minify --format=iife --global-name=XtermZerolagInput --outfile=dist/web/public/vendor/xterm-zerolag-input.js');
-
-// Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`
-appendFileSync(
-  join(ROOT, 'dist/web/public/vendor/xterm-zerolag-input.js'),
-  '\n// Global aliases for browser usage\n' +
-  'if(typeof window!=="undefined"){' +
-    'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
-    'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
-      'constructor(terminal){' +
-        'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
-        'this.activate(terminal);' +
-      '}' +
-    '};' +
-  '}\n'
-);
+// 3. Vendor xterm bundles (@xterm/* v6 namespace)
+run('xterm css', 'cp node_modules/@xterm/xterm/css/xterm.css dist/web/public/vendor/');
+run('xterm js', 'npx esbuild node_modules/@xterm/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js');
+run('xterm-addon-fit', 'npx esbuild node_modules/@xterm/addon-fit/lib/addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js');
+run('xterm-addon-webgl', 'cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
+run('xterm-addon-unicode11', 'npx esbuild node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
+run('xterm-addon-search', 'npx esbuild node_modules/@xterm/addon-search/lib/addon-search.js --minify --outfile=dist/web/public/vendor/xterm-addon-search.min.js');
 
 // 4. Minify frontend assets
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');

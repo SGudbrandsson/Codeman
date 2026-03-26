@@ -28,3 +28,4 @@ export { registerMessageRoutes } from './message-routes.js';
 export { registerClockworkRoutes } from './clockwork-routes.js';
 export { registerOrchestratorRoutes } from './orchestrator-routes.js';
 export { registerCommandPanelRoutes } from './command-panel-routes.js';
+export { registerIntegrationRoutes } from './integration-routes.js';

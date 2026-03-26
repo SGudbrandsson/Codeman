@@ -7,7 +7,7 @@
 
 export type WorkItemStatus = 'queued' | 'blocked' | 'assigned' | 'in_progress' | 'review' | 'done' | 'cancelled';
 
-export type WorkItemSource = 'manual' | 'asana' | 'github' | 'clockwork';
+export type WorkItemSource = 'manual' | 'asana' | 'github' | 'clockwork' | 'sentry' | 'slack';
 
 export interface WorkItem {
   id: string; // wi-<8-char-hash>

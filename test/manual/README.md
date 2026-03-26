@@ -46,30 +46,6 @@ PORT=3099 node test/manual/test-image-send-race.mjs
 
 ---
 
-### `test-verify-fix.mjs` — Local echo overlay vertical alignment
-
-**What it tests:** Verifies the local echo overlay renders text at the correct vertical position within terminal cells (char top + centering correction). Checks that the `top`, `height`, `lineHeight`, and `transform` styles on overlay spans match expected values.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-verify-fix.mjs
-```
-
-Saves a screenshot of the terminal to `/tmp/fix-verify-term.png`.
-
----
-
-### `test-verify-no-overhang.mjs` — Local echo overlay no character overhang
-
-**What it tests:** Verifies that local echo overlay characters do not overhang into adjacent cells. Checks that character width does not exceed cell width.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-verify-no-overhang.mjs
-```
-
----
-
 ### `test-dims.mjs` — Terminal dimension inspection
 
 **What it tests:** Dumps xterm.js render service dimensions (cell size, char metrics, canvas size) to stdout. Diagnostic tool for debugging terminal rendering issues — not a pass/fail test.
@@ -77,50 +53,6 @@ PORT=3099 node test/manual/test-verify-no-overhang.mjs
 **How to run:**
 ```bash
 PORT=3099 node test/manual/test-dims.mjs
-```
-
----
-
-### `test-overlay2.mjs` — Local echo overlay creation and rendering
-
-**What it tests:** Creates a fresh session, enables local echo, and verifies the overlay renders correctly. Checks for console errors during overlay initialization.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-overlay2.mjs
-```
-
----
-
-### `test-line-artifact.mjs` — Local echo line rendering artifacts
-
-**What it tests:** Renders the local echo overlay at 2× device pixel ratio and captures a zoomed screenshot to inspect for sub-pixel line artifacts. Uses `deviceScaleFactor: 2` to simulate a retina/HiDPI display.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-line-artifact.mjs
-```
-
----
-
-### `test-sc.mjs` — Local echo single-character rendering
-
-**What it tests:** Forces the local echo overlay to render a single character at a realistic prompt position and inspects the resulting span styles. Diagnostic for character alignment issues.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-sc.mjs
-```
-
----
-
-### `test-pixel.mjs` — Local echo pixel-level inspection
-
-**What it tests:** Samples pixel colors from the xterm canvas and overlay to verify that local echo characters are rendered at the correct pixel position. Cross-references canvas pixels with overlay span positions.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-pixel.mjs
 ```
 
 ---
@@ -136,11 +68,3 @@ PORT=3099 node test/manual/test-bg-deep.mjs
 
 ---
 
-### `test-bg-mismatch.mjs` — Terminal background pixel vs CSS color mismatch
-
-**What it tests:** Samples actual canvas pixel color at an empty terminal area and compares it against the CSS background color. Detects mismatches between the WebGL renderer's background and the page background.
-
-**How to run:**
-```bash
-PORT=3099 node test/manual/test-bg-mismatch.mjs
-```
