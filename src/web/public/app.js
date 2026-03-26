@@ -2684,6 +2684,7 @@ const TranscriptView = {
   _clearFallbackTimer: null,     // set by clearOnly(); cancelled by clear() when TRANSCRIPT_CLEAR arrives
   _pendingOptimisticText: null,  // text of the optimistic bubble shown after /clear; survives multiple clear()+load() cycles
   _clearPending: false,          // true between clearOnly() and clear() — load() must not render old-session blocks during this window
+  _loadFetchInProgress: false,   // true while load()'s HTTP fetch is in-flight — gates _prependBatch to avoid race
   _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
   _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
   _thinkingPhrases: ['Thinking...','Processing...','Germinating...','Reasoning...','Contemplating...','Synthesizing...','Deliberating...','Cogitating...','Extrapolating...','Formulating...','Consulting the oracle...','Parsing neural patterns...','Reticulating splines...','Traversing thought-space...','Engaging cortex...','Quantum-tunneling...'],
@@ -2739,12 +2740,16 @@ const TranscriptView = {
     // resumed in the background (e.g. an orchestrator that kept running after clear).
     if (state.blocks.length > 0) {
       const currentCount = state.blocks.length;
-      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript')
+      const lastTs = state.blocks[state.blocks.length - 1]?.timestamp ?? '';
+      // Use ?tail to avoid fetching all blocks for long sessions (perf/OOM guard).
+      const tailCount = Math.min(currentCount + this._BATCH_SIZE, currentCount * 2);
+      fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript?tail=' + tailCount)
         .then(r => r.ok ? r.json() : null)
         .then(blocks => {
           if (!Array.isArray(blocks) || this._sessionId !== sessionId) return;
-          if (blocks.length <= currentCount) return;
-          const newBlocks = blocks.slice(currentCount);
+          // Find blocks newer than our last cached block
+          const newBlocks = blocks.filter(b => b.timestamp > lastTs);
+          if (newBlocks.length === 0) return;
           for (const b of newBlocks) {
             state.blocks.push(b);
             this._appendBlock(b, false);
@@ -2806,6 +2811,7 @@ const TranscriptView = {
       this._container.style.opacity = '';
     }
 
+    this._loadFetchInProgress = true;
     try {
       const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2815,13 +2821,14 @@ const TranscriptView = {
 
       const prevCount = state.blocks.length;
       // Defensive: detect if cached blocks belong to a different session's content.
-      // Compare the first block's id/timestamp between what was pre-rendered (cached)
-      // and what the server just returned. If they differ the cache was stale/wrong
-      // (e.g. populated by a previous bad backend response) — force full re-render.
-      const cachedFirst = state.blocks[0];
-      const fetchedFirst = blocks[0];
-      const cacheMatchesFetch = !cachedFirst || !fetchedFirst ||
-        (cachedFirst.id === fetchedFirst.id && cachedFirst.timestamp === fetchedFirst.timestamp);
+      // Compare the LAST block (most recent) — with tail pagination the first block
+      // of the cache and fetch slide as the session grows, so first-block comparison
+      // falsely reports mismatch. The last block is stable: if no new blocks were added
+      // it is the same; if new blocks were added, we detect incremental growth.
+      const cachedLast = state.blocks[state.blocks.length - 1];
+      const fetchedLast = blocks[blocks.length - 1];
+      const cacheMatchesFetch = !cachedLast || !fetchedLast ||
+        (cachedLast.timestamp === fetchedLast.timestamp);
       state.blocks = [...blocks];  // update cache with authoritative server data
 
       if (prevCount > 0 && blocks.length >= prevCount && cacheMatchesFetch) {
@@ -2889,9 +2896,17 @@ const TranscriptView = {
       // Scroll to bottom unless the user explicitly scrolled up during the fetch.
       if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
       if (!hadCache) this._container.style.opacity = '';
-    } catch {
+      this._loadFetchInProgress = false;
+    } catch (err) {
+      this._loadFetchInProgress = false;
+      console.error('[TranscriptView] load failed for', sessionId, err);
       this._container.style.opacity = '';
-      this._setPlaceholder('Could not load session history.');
+      if (hadCache) {
+        // Cache was already rendered — keep showing it instead of wiping with an error.
+        console.warn('[TranscriptView] fetch failed but cache preserved for', sessionId);
+      } else {
+        this._setPlaceholder('Could not load session history.');
+      }
     }
   },
 
@@ -3276,6 +3291,153 @@ const TranscriptView = {
     const behavior = this._animateNextScroll ? 'smooth' : 'instant';
     this._animateNextScroll = false;
     this._container.scrollTo({ top: this._container.scrollHeight, behavior });
+  },
+
+  /** Insert the load-more sentinel at the top of the container and start observing it. */
+  _insertSentinel() {
+    if (this._loadMoreSentinel) return; // already present
+    if (!this._container) return;
+    const sentinel = document.createElement('div');
+    sentinel.className = 'tv-load-more-sentinel';
+    sentinel.textContent = 'Loading older messages\u2026';
+    this._container.insertBefore(sentinel, this._container.firstChild);
+    this._loadMoreSentinel = sentinel;
+    // Create observer if needed
+    if (!this._loadMoreObserver) {
+      this._loadMoreObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) this._prependBatch();
+        }
+      }, { root: this._container, rootMargin: '200px 0px 0px 0px' });
+    }
+    this._loadMoreObserver.observe(sentinel);
+  },
+
+  /** Remove the sentinel and stop observing. */
+  _removeSentinel() {
+    if (this._loadMoreObserver && this._loadMoreSentinel) {
+      this._loadMoreObserver.unobserve(this._loadMoreSentinel);
+    }
+    if (this._loadMoreSentinel) {
+      this._loadMoreSentinel.remove();
+      this._loadMoreSentinel = null;
+    }
+  },
+
+  /** Prepend the next batch of older blocks above the current rendered range. */
+  async _prependBatch() {
+    if (!this._container || !this._sessionId) return;
+    // Gate: don't mutate DOM/state while load() fetch is in-flight — avoids race conditions
+    if (this._loadFetchInProgress) return;
+    const state = this._getState(this._sessionId);
+    if (this._renderedStartIdx <= 0 && state.blocks.length >= (state.totalServerBlocks || state.blocks.length)) {
+      this._removeSentinel();
+      return;
+    }
+
+    let batch;
+    let newStart;
+
+    if (this._renderedStartIdx > 0) {
+      // We have older blocks in the local cache — use them
+      newStart = Math.max(0, this._renderedStartIdx - this._BATCH_SIZE);
+      batch = state.blocks.slice(newStart, this._renderedStartIdx);
+    } else if (state.totalServerBlocks && state.totalServerBlocks > state.blocks.length) {
+      // Local cache exhausted but server has more — fetch older blocks
+      try {
+        if (this._loadMoreSentinel) this._loadMoreSentinel.textContent = 'Loading older messages\u2026';
+        const need = Math.min(this._BATCH_SIZE, state.totalServerBlocks - state.blocks.length);
+        // Fetch a range that includes what we have plus the next batch
+        const fetchCount = state.blocks.length + need;
+        const res = await fetch('/api/sessions/' + encodeURIComponent(this._sessionId) + '/transcript?tail=' + fetchCount);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const allBlocks = await res.json();
+        const totalFromHeader = parseInt(res.headers.get('X-Total-Blocks') || '0', 10);
+        if (totalFromHeader) state.totalServerBlocks = totalFromHeader;
+        // The new blocks are at the beginning of allBlocks (before what we already have)
+        const newBlocks = allBlocks.slice(0, allBlocks.length - state.blocks.length);
+        if (newBlocks.length === 0) {
+          this._removeSentinel();
+          return;
+        }
+        // Prepend to local cache
+        state.blocks = [...newBlocks, ...state.blocks];
+        this._renderedStartIdx = newBlocks.length; // shift index since we prepended to cache
+        newStart = 0;
+        batch = newBlocks;
+      } catch (err) {
+        console.error('[TranscriptView] fetch older blocks failed:', err);
+        this._removeSentinel();
+        return;
+      }
+    } else {
+      this._removeSentinel();
+      return;
+    }
+    // Save scroll position before prepending
+    const savedHeight = this._container.scrollHeight;
+    const savedTop = this._container.scrollTop;
+    // Remove sentinel temporarily so prepended blocks go before it
+    const sentinelRef = this._loadMoreSentinel;
+    if (sentinelRef) sentinelRef.remove();
+    // Create a document fragment with blocks in chronological order
+    const frag = document.createDocumentFragment();
+    // We need to render blocks through _appendBlock but into the fragment, not the container.
+    // Use a temporary container to capture what _appendBlock generates.
+    const tempContainer = document.createElement('div');
+    const realContainer = this._container;
+    this._container = tempContainer;
+    // Save and reset tracking state so prepended blocks don't merge with tail groups
+    const savedThinkingBubble = this._thinkingBubbleEl;
+    const savedPendingToolUses = this._pendingToolUses;
+    const savedLastSkillLaunch = this._lastSkillLaunch;
+    this._thinkingBubbleEl = null;
+    this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
+    for (const block of batch) {
+      this._appendBlock(block, false);
+    }
+    this._thinkingBubbleEl = savedThinkingBubble;
+    this._pendingToolUses = savedPendingToolUses;
+    this._lastSkillLaunch = savedLastSkillLaunch;
+    this._container = realContainer;
+    // Move all children from temp into the fragment
+    while (tempContainer.firstChild) {
+      frag.appendChild(tempContainer.firstChild);
+    }
+    // Re-insert sentinel at the top if there are still more blocks, then the batch
+    const hasMoreBlocks = newStart > 0 || (state.totalServerBlocks && state.totalServerBlocks > state.blocks.length);
+    if (hasMoreBlocks && sentinelRef) {
+      realContainer.insertBefore(sentinelRef, realContainer.firstChild);
+    } else {
+      this._loadMoreSentinel = null;
+      if (this._loadMoreObserver && sentinelRef) this._loadMoreObserver.unobserve(sentinelRef);
+    }
+    // Insert the batch after the sentinel (or at the top if no sentinel)
+    const insertBefore = this._loadMoreSentinel ? this._loadMoreSentinel.nextSibling : realContainer.firstChild;
+    realContainer.insertBefore(frag, insertBefore);
+    // Restore scroll position so viewport doesn't jump
+    const heightAdded = realContainer.scrollHeight - savedHeight;
+    realContainer.scrollTop = savedTop + heightAdded;
+    this._renderedStartIdx = newStart;
+  },
+
+  /** Render only the tail batch of blocks and set up lazy loading for older ones. */
+  _renderTailBatch(blocks) {
+    if (!this._container) return;
+    this._container.textContent = '';
+    this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
+    this._compactingEl = null;
+    this._removeSentinel();
+    const startIdx = Math.max(0, blocks.length - this._BATCH_SIZE);
+    this._renderedStartIdx = startIdx;
+    const tail = blocks.slice(startIdx);
+    for (const block of tail) this._appendBlock(block, false);
+    // Insert sentinel if there are older blocks (local or on server)
+    const state = this._getState(this._sessionId);
+    const hasMoreOnServer = state && state.totalServerBlocks && state.totalServerBlocks > blocks.length;
+    if (startIdx > 0 || hasMoreOnServer) this._insertSentinel();
   },
 
   /** Show or hide the "Claude is thinking" typing indicator (in-flow bubble) */

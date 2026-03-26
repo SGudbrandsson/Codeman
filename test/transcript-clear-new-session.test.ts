@@ -47,7 +47,7 @@ async function selectSession(page: Page, sessionId: string): Promise<void> {
 
 /** Mock the transcript endpoint for this session */
 async function mockTranscript(page: Page, sessionId: string, blocks: unknown[]): Promise<void> {
-  await page.route(`**/api/sessions/${sessionId}/transcript`, (route) => {
+  await page.route(`**/api/sessions/${sessionId}/transcript**`, (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blocks) });
   });
 }
@@ -273,7 +273,7 @@ describe('Transcript clear → new session: tab switch must not show old content
 
     // Now transcript:clear SSE arrives (backend registered new UUID)
     // Mock transcript endpoint now returns empty (new session, no blocks yet)
-    await page.unroute(`**/api/sessions/${sessionId}/transcript`);
+    await page.unroute(`**/api/sessions/${sessionId}/transcript**`);
     await mockTranscript(page, sessionId, []);
     await fireTranscriptClearSSE(page, sessionId);
 
@@ -284,7 +284,7 @@ describe('Transcript clear → new session: tab switch must not show old content
     await switchToTerminal(page, sessionId);
 
     // Mock transcript now returns the new session with Claude's response
-    await page.unroute(`**/api/sessions/${sessionId}/transcript`);
+    await page.unroute(`**/api/sessions/${sessionId}/transcript**`);
     await mockTranscript(page, sessionId, [
       { type: 'text', role: 'user', text: NEW_USER_MESSAGE, timestamp: new Date().toISOString() },
       { type: 'text', role: 'assistant', text: CLAUDE_REPLY, timestamp: new Date().toISOString() },
@@ -305,13 +305,13 @@ describe('Transcript clear → new session: tab switch must not show old content
     await fireUserSendMessage(page, NEW_USER_MESSAGE);
 
     // transcript:clear SSE arrives, new session established
-    await page.unroute(`**/api/sessions/${sessionId}/transcript`);
+    await page.unroute(`**/api/sessions/${sessionId}/transcript**`);
     await mockTranscript(page, sessionId, []);
     await fireTranscriptClearSSE(page, sessionId);
     await fireClaudeResponse(page, sessionId, CLAUDE_REPLY);
 
     // Mock transcript returns new session content
-    await page.unroute(`**/api/sessions/${sessionId}/transcript`);
+    await page.unroute(`**/api/sessions/${sessionId}/transcript**`);
     await mockTranscript(page, sessionId, [
       { type: 'text', role: 'user', text: NEW_USER_MESSAGE, timestamp: new Date().toISOString() },
       { type: 'text', role: 'assistant', text: CLAUDE_REPLY, timestamp: new Date().toISOString() },
