@@ -4023,6 +4023,11 @@ class CodemanApp {
           if (requireKeyboardVisible && !KeyboardHandler.keyboardVisible) return;
           const btn = e.target.closest('button');
           if (!btn) return;
+          // Skip action-sheet buttons — their onclick triggers a file-input
+          // .click() that needs a clean user-gesture chain.  Intercepting here
+          // with preventDefault + synthetic click creates a double-synthetic
+          // chain that breaks mobile file pickers (Safari/WebKit).
+          if (btn.closest('.compose-action-sheet')) return;
           e.preventDefault();
           btn.click();
           // Refocus terminal so keyboard stays open (e.g. voice input button),
@@ -19024,7 +19029,13 @@ const InputPanel = {
     const id = type === 'camera' ? 'composeFileCamera'
              : type === 'gallery' ? 'composeFileGallery'
              : 'composeFileAny';
-    document.getElementById(id)?.click();
+    // Defer the file-input click to the next microtask so it escapes any
+    // synthetic-click chain (e.g. touchstart → btn.click() → here).  Some
+    // mobile browsers (Safari/WebKit) require the file-input click to
+    // originate from a "real" user-gesture frame; a double-synthetic chain
+    // can silently suppress the picker.  setTimeout(fn, 0) keeps us within
+    // the gesture allowance window while breaking the synchronous chain.
+    setTimeout(() => { document.getElementById(id)?.click(); }, 0);
   },
 
   /** Handle files pasted from clipboard (Ctrl+V / Cmd+V with image data) */
@@ -19057,7 +19068,19 @@ const InputPanel = {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch(`/api/sessions/${app.activeSessionId}/upload`, { method: 'POST', body: formData });
+        // 30-second timeout prevents indefinite spinner if server hangs
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        let res;
+        try {
+          res = await fetch(`/api/sessions/${app.activeSessionId}/upload`, { method: 'POST', body: formData, signal: controller.signal });
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Server returned ${res.status}: ${text.slice(0, 200)}`);
+        }
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Upload failed');
         entry.path = data.path;
@@ -19065,7 +19088,8 @@ const InputPanel = {
         entry.uploading = false;
         this._renderThumbnails();
       } catch (err) {
-        if (typeof app !== 'undefined') app.showToast('File upload failed: ' + (err.message || err), 'error');
+        const msg = err.name === 'AbortError' ? 'File upload timed out' : ('File upload failed: ' + (err.message || err));
+        if (typeof app !== 'undefined') app.showToast(msg, 'error');
         console.error('[InputPanel] file upload failed:', err);
         const idx = this._files.indexOf(entry);
         if (idx !== -1) this._files.splice(idx, 1);
@@ -19082,6 +19106,19 @@ const InputPanel = {
     const btn = document.getElementById('composeSendBtn');
     if (!btn) return;
     btn.disabled = this._uploadingCount > 0;
+    // Safety valve: if _uploadingCount is stuck positive (e.g. an exception
+    // bypassed the finally block), force-reset after 60 seconds so the Send
+    // button doesn't stay permanently disabled.
+    if (this._uploadingCount > 0) {
+      clearTimeout(this._uploadSafetyTimer);
+      this._uploadSafetyTimer = setTimeout(() => {
+        if (this._uploadingCount > 0) {
+          console.warn('[InputPanel] upload safety reset — forcing _uploadingCount to 0');
+          this._uploadingCount = 0;
+          this._updateSendBtnState();
+        }
+      }, 60000);
+    }
   },
 
   async _uploadFiles(files) {
@@ -19114,13 +19151,26 @@ const InputPanel = {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch('/api/screenshots', { method: 'POST', body: formData });
+        // 30-second timeout prevents indefinite spinner if server hangs
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        let res;
+        try {
+          res = await fetch('/api/screenshots', { method: 'POST', body: formData, signal: controller.signal });
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Server returned ${res.status}: ${text.slice(0, 200)}`);
+        }
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Upload failed');
         entry.path = data.path;
         this._renderThumbnails();
       } catch (err) {
-        if (typeof app !== 'undefined') app.showToast('Image upload failed', 'error');
+        const msg = err.name === 'AbortError' ? 'Image upload timed out' : 'Image upload failed';
+        if (typeof app !== 'undefined') app.showToast(msg, 'error');
         console.error('[InputPanel] image upload failed:', err);
         const idx = this._images.indexOf(entry);
         if (idx !== -1) this._images.splice(idx, 1);
