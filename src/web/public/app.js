@@ -3970,6 +3970,9 @@ class CodemanApp {
     this.draggedTabId = null; // Currently dragged tab session ID
     this.cases = [];
     this.agents = new Map(); // Map<agentId, AgentProfile>
+    this.workItems = new Map(); // Map<workItemId, WorkItem> — agent dashboard cache
+    this._agentDashboardExpanded = new Set(); // Set<agentId> — expanded cards
+    this._renderAgentDashboardDebounced = null; // debounce timer
     this.currentRun = null;
     this.totalTokens = 0;
     this.globalStats = null; // Global token/cost stats across all sessions
@@ -5899,6 +5902,8 @@ class CodemanApp {
       }
       this.selectSession(data.id);
     }
+    // Update agent dashboard if session has an agent profile
+    if (data.agentProfile) this._scheduleAgentDashboardRender();
   }
 
   _onSessionUpdated(data) {
@@ -6138,6 +6143,7 @@ class CodemanApp {
         this.idleTimers.delete(data.id);
       }, threshold));
     }
+    this._scheduleAgentDashboardRender();
   }
 
   _onSessionWorking(data) {
@@ -6164,6 +6170,7 @@ class CodemanApp {
       clearTimeout(timer);
       this.idleTimers.delete(data.id);
     }
+    this._scheduleAgentDashboardRender();
   }
 
   /** Called when xterm receives an OSC 0/2 title-change sequence from the PTY.
@@ -7801,6 +7808,10 @@ class CodemanApp {
       const hasAgentSession = [...this.sessions.values()].some(s => s.agentProfile);
       if (hasAgentSession) SessionDrawer._viewMode = 'agents';
     }
+
+    // Load work items and render agent dashboard (fire-and-forget, non-blocking)
+    this.workItems.clear();
+    this._loadWorkItemsForDashboard().then(() => this.renderAgentDashboard());
 
     this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
     this.totalCost += data.scheduledRuns.reduce((sum, r) => sum + (r.totalCost || 0), 0);
@@ -14432,6 +14443,371 @@ class CodemanApp {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // Agent Dashboard (Monitor Panel)
+  // ═══════════════════════════════════════════════════════════════
+
+  /** Debounced wrapper — batches rapid SSE bursts into a single render */
+  _scheduleAgentDashboardRender() {
+    if (this._renderAgentDashboardDebounced) clearTimeout(this._renderAgentDashboardDebounced);
+    this._renderAgentDashboardDebounced = setTimeout(() => {
+      this._renderAgentDashboardDebounced = null;
+      this.renderAgentDashboard();
+    }, 120);
+  }
+
+  /** Fetch work items for agent dashboard cache */
+  async _loadWorkItemsForDashboard() {
+    try {
+      const res = await fetch('/api/work-items');
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+        this.workItems.clear();
+        for (const item of items) {
+          if (item.id) this.workItems.set(item.id, item);
+        }
+      }
+    } catch (e) {
+      console.warn('[AgentDashboard] Failed to load work items:', e);
+    }
+  }
+
+  /** Refresh work items then re-render the agent dashboard (for manual refresh button) */
+  async refreshAgentDashboard() {
+    await this._loadWorkItemsForDashboard();
+    this.renderAgentDashboard();
+  }
+
+  /** Render the agent dashboard monitor section */
+  renderAgentDashboard() {
+    const body = document.getElementById('agentDashboardBody');
+    const stats = document.getElementById('agentDashboardStats');
+    if (!body) return;
+
+    const agents = [...this.agents.values()];
+    if (agents.length === 0) {
+      body.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'monitor-empty';
+      empty.textContent = 'No registered agents';
+      body.appendChild(empty);
+      if (stats) stats.textContent = '0 agents';
+      return;
+    }
+
+    // Build agent-to-session and agent-to-workitem mappings
+    const agentSessions = new Map(); // agentId -> session
+    for (const s of this.sessions.values()) {
+      if (s.agentProfile && s.agentProfile.agentId) {
+        agentSessions.set(s.agentProfile.agentId, s);
+      }
+    }
+
+    const agentWorkItems = new Map(); // agentId -> workItem[] (active)
+    const agentCompletedItems = new Map(); // agentId -> workItem[] (done)
+    for (const wi of this.workItems.values()) {
+      if (wi.assignedAgentId) {
+        if (wi.status === 'done' || wi.status === 'cancelled') {
+          if (!agentCompletedItems.has(wi.assignedAgentId)) agentCompletedItems.set(wi.assignedAgentId, []);
+          agentCompletedItems.get(wi.assignedAgentId).push(wi);
+        } else {
+          if (!agentWorkItems.has(wi.assignedAgentId)) agentWorkItems.set(wi.assignedAgentId, []);
+          agentWorkItems.get(wi.assignedAgentId).push(wi);
+        }
+      }
+    }
+
+    // Determine status for each agent
+    let busyCount = 0, idleCount = 0, offlineCount = 0;
+    const agentData = agents.map(agent => {
+      const session = agentSessions.get(agent.agentId);
+      let statusColor, statusLabel;
+      if (!session || session.status === 'closed' || session.status === 'archived') {
+        statusColor = 'gray';
+        statusLabel = 'offline';
+        offlineCount++;
+      } else if (session.isWorking || session.status === 'busy') {
+        statusColor = 'green';
+        statusLabel = 'working';
+        busyCount++;
+      } else {
+        // Check if idle for a long time (stalled check)
+        statusColor = 'yellow';
+        statusLabel = 'idle';
+        idleCount++;
+      }
+      return { agent, session, statusColor, statusLabel };
+    });
+
+    // Sort: busy first, then idle, then offline
+    const statusOrder = { green: 0, yellow: 1, red: 2, gray: 3 };
+    agentData.sort((a, b) => (statusOrder[a.statusColor] ?? 9) - (statusOrder[b.statusColor] ?? 9));
+
+    // Update stats badge
+    const parts = [];
+    if (busyCount > 0) parts.push(`${busyCount} busy`);
+    if (idleCount > 0) parts.push(`${idleCount} idle`);
+    if (offlineCount > 0) parts.push(`${offlineCount} offline`);
+    if (stats) stats.textContent = parts.join(' / ') || `${agents.length} agents`;
+
+    // Render cards
+    body.textContent = '';
+    const container = document.createElement('div');
+    container.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+
+    for (const { agent, session, statusColor, statusLabel } of agentData) {
+      const card = document.createElement('div');
+      card.className = 'agent-dashboard-card';
+      const isExpanded = this._agentDashboardExpanded.has(agent.agentId);
+      if (isExpanded) card.classList.add('expanded');
+
+      // Status dot
+      const dot = document.createElement('div');
+      dot.className = `agent-status-dot ${statusColor}`;
+      dot.title = statusLabel;
+      card.appendChild(dot);
+
+      // Info column
+      const info = document.createElement('div');
+      info.className = 'agent-card-info';
+
+      // Header: name + role
+      const header = document.createElement('div');
+      header.className = 'agent-card-header';
+      const name = document.createElement('span');
+      name.className = 'agent-card-name';
+      name.textContent = agent.displayName || agent.agentId;
+      header.appendChild(name);
+      if (agent.role) {
+        const role = document.createElement('span');
+        role.className = 'agent-card-role';
+        role.textContent = agent.role;
+        header.appendChild(role);
+      }
+      info.appendChild(header);
+
+      // Current work item(s)
+      const activeItems = agentWorkItems.get(agent.agentId) || [];
+      if (activeItems.length > 0) {
+        for (const wi of activeItems.slice(0, 2)) {
+          const wiDiv = document.createElement('div');
+          wiDiv.className = 'agent-work-item';
+          const wiStatus = document.createElement('span');
+          wiStatus.className = `agent-wi-status ${wi.status || ''}`;
+          wiStatus.textContent = (wi.status || 'unknown').replace('_', ' ');
+          wiDiv.appendChild(wiStatus);
+          const wiTitle = document.createElement('span');
+          wiTitle.textContent = wi.title || wi.id;
+          wiTitle.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+          wiDiv.appendChild(wiTitle);
+          info.appendChild(wiDiv);
+        }
+      }
+
+      // Session info
+      if (session && session.status !== 'closed' && session.status !== 'archived') {
+        const sessDiv = document.createElement('div');
+        sessDiv.className = 'agent-session-info';
+        const sessState = session.isWorking ? 'working' : (session.status || 'idle');
+        sessDiv.textContent = `Session: ${session.name || this.getShortId(session.id)} (${sessState})`;
+        info.appendChild(sessDiv);
+      }
+
+      // Expanded detail section
+      if (isExpanded) {
+        const detail = document.createElement('div');
+        detail.className = 'agent-card-detail';
+
+        // Active work item details
+        if (activeItems.length > 0) {
+          const wi = activeItems[0];
+          if (wi.branchName) {
+            const row = document.createElement('div');
+            row.className = 'agent-detail-row';
+            const label = document.createElement('span');
+            label.className = 'agent-detail-label';
+            label.textContent = 'Branch:';
+            row.appendChild(label);
+            const val = document.createElement('span');
+            val.textContent = wi.branchName;
+            row.appendChild(val);
+            detail.appendChild(row);
+          }
+          if (wi.description) {
+            const row = document.createElement('div');
+            row.className = 'agent-detail-row';
+            const label = document.createElement('span');
+            label.className = 'agent-detail-label';
+            label.textContent = 'Task:';
+            row.appendChild(label);
+            const val = document.createElement('span');
+            val.textContent = wi.description.length > 80 ? wi.description.slice(0, 80) + '...' : wi.description;
+            val.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            row.appendChild(val);
+            detail.appendChild(row);
+          }
+        }
+
+        // Session link
+        if (session && session.status !== 'closed' && session.status !== 'archived') {
+          const row = document.createElement('div');
+          row.className = 'agent-detail-row';
+          const label = document.createElement('span');
+          label.className = 'agent-detail-label';
+          label.textContent = 'Session:';
+          row.appendChild(label);
+          const link = document.createElement('span');
+          link.className = 'agent-session-link';
+          link.textContent = session.name || this.getShortId(session.id);
+          link.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.selectSession(session.id);
+          });
+          row.appendChild(link);
+          detail.appendChild(row);
+        }
+
+        // Completed work items
+        const completedItems = (agentCompletedItems.get(agent.agentId) || []).slice(0, 3);
+        if (completedItems.length > 0) {
+          const row = document.createElement('div');
+          const label = document.createElement('span');
+          label.className = 'agent-detail-label';
+          label.textContent = 'Completed:';
+          row.appendChild(label);
+          const list = document.createElement('ul');
+          list.className = 'agent-completed-list';
+          for (const ci of completedItems) {
+            const li = document.createElement('li');
+            li.textContent = ci.title || ci.id;
+            list.appendChild(li);
+          }
+          row.appendChild(list);
+          detail.appendChild(row);
+        }
+
+        // Agent capabilities
+        if (agent.capabilities && agent.capabilities.length > 0) {
+          const row = document.createElement('div');
+          row.className = 'agent-detail-row';
+          const label = document.createElement('span');
+          label.className = 'agent-detail-label';
+          label.textContent = 'Skills:';
+          row.appendChild(label);
+          const val = document.createElement('span');
+          val.textContent = agent.capabilities.map(c => c.name).join(', ');
+          val.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+          row.appendChild(val);
+          detail.appendChild(row);
+        }
+
+        info.appendChild(detail);
+
+        // Agent messaging section
+        const msgSection = document.createElement('div');
+        msgSection.className = 'agent-messaging-section';
+
+        // Load messages
+        const msgList = document.createElement('div');
+        msgList.className = 'agent-msg-list';
+        msgList.textContent = 'Loading messages...';
+        msgSection.appendChild(msgList);
+
+        // Send message input
+        const inputRow = document.createElement('div');
+        inputRow.className = 'agent-msg-input-row';
+        const msgInput = document.createElement('input');
+        msgInput.type = 'text';
+        msgInput.placeholder = 'Send message...';
+        msgInput.addEventListener('click', (e) => e.stopPropagation());
+        msgInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && msgInput.value.trim()) {
+            e.stopPropagation();
+            this._sendAgentDashboardMessage(agent.agentId, msgInput.value.trim(), msgList);
+            msgInput.value = '';
+          }
+        });
+        inputRow.appendChild(msgInput);
+        const sendBtn = document.createElement('button');
+        sendBtn.textContent = 'Send';
+        sendBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (msgInput.value.trim()) {
+            this._sendAgentDashboardMessage(agent.agentId, msgInput.value.trim(), msgList);
+            msgInput.value = '';
+          }
+        });
+        inputRow.appendChild(sendBtn);
+        msgSection.appendChild(inputRow);
+        info.appendChild(msgSection);
+
+        // Fetch messages async
+        this._loadAgentDashboardMessages(agent.agentId, msgList);
+      }
+
+      card.appendChild(info);
+
+      // Toggle expand on click
+      card.addEventListener('click', () => {
+        if (this._agentDashboardExpanded.has(agent.agentId)) {
+          this._agentDashboardExpanded.delete(agent.agentId);
+        } else {
+          this._agentDashboardExpanded.add(agent.agentId);
+        }
+        this.renderAgentDashboard();
+      });
+
+      container.appendChild(card);
+    }
+
+    body.appendChild(container);
+  }
+
+  /** Load recent messages for an agent in the dashboard */
+  async _loadAgentDashboardMessages(agentId, msgListEl) {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/inbox?limit=5`);
+      if (!res.ok) { msgListEl.textContent = 'No messages'; return; }
+      const data = await res.json();
+      const messages = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+      msgListEl.textContent = '';
+      if (messages.length === 0) {
+        msgListEl.textContent = 'No messages';
+        return;
+      }
+      for (const msg of messages.slice(0, 5)) {
+        const item = document.createElement('div');
+        item.className = 'agent-msg-item';
+        const from = msg.fromAgentId || 'system';
+        const text = msg.body || msg.content || JSON.stringify(msg);
+        const truncated = text.length > 100 ? text.slice(0, 100) + '...' : text;
+        item.textContent = `${from}: ${truncated}`;
+        msgListEl.appendChild(item);
+      }
+    } catch {
+      msgListEl.textContent = 'Failed to load messages';
+    }
+  }
+
+  /** Send a message to an agent from the dashboard */
+  async _sendAgentDashboardMessage(agentId, content, msgListEl) {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromAgentId: 'dashboard-user', type: 'info', subject: 'Dashboard message', body: content }),
+      });
+      if (res.ok) {
+        this._loadAgentDashboardMessages(agentId, msgListEl);
+      } else {
+        this.showToast('Failed to send message', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to send message: ' + err.message, 'error');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // Subagents Panel Detach & Drag
   // ═══════════════════════════════════════════════════════════════
 
@@ -18602,6 +18978,7 @@ class CodemanApp {
       if (SessionDrawer.isOpen()) {
         SessionDrawer._renderDebounced();
       }
+      this._scheduleAgentDashboardRender();
     }
   }
 
@@ -18612,6 +18989,7 @@ class CodemanApp {
       if (SessionDrawer.isOpen()) {
         SessionDrawer._renderDebounced();
       }
+      this._scheduleAgentDashboardRender();
     }
   }
 
@@ -18622,6 +19000,7 @@ class CodemanApp {
       if (SessionDrawer.isOpen()) {
         SessionDrawer._renderDebounced();
       }
+      this._scheduleAgentDashboardRender();
     }
   }
 
@@ -18631,17 +19010,29 @@ class CodemanApp {
   _onWorkItemCreated(data) {
     this.boardView.onWorkItemCreated(data);
     this.boardView.addTimelineEvent({ type: 'workItem:created', ...data });
+    if (data && data.id) this.workItems.set(data.id, data);
+    this._scheduleAgentDashboardRender();
   }
 
   /** SSE handler: workItem:updated */
   _onWorkItemUpdated(data) {
     this.boardView.onWorkItemUpdated(data);
+    if (data && data.id) {
+      const existing = this.workItems.get(data.id);
+      this.workItems.set(data.id, existing ? { ...existing, ...data } : data);
+    }
+    this._scheduleAgentDashboardRender();
   }
 
   /** SSE handler: workItem:claimed */
   _onWorkItemClaimed(data) {
     this.boardView.onWorkItemClaimed(data);
     this.boardView.addTimelineEvent({ type: 'workItem:claimed', ...data });
+    if (data && data.id) {
+      const existing = this.workItems.get(data.id);
+      this.workItems.set(data.id, existing ? { ...existing, ...data } : data);
+    }
+    this._scheduleAgentDashboardRender();
   }
 
   /** SSE handler: workItem:statusChanged */
@@ -18652,7 +19043,6 @@ class CodemanApp {
     if (data.status === 'review' && data.sessionId) {
       this.addAttentionWorkItem(data.sessionId, data.id, data.title);
     } else if (data.id) {
-      // Remove review attention item for any session that had it
       for (const key of [...this.attentionItems.keys()]) {
         if (key.endsWith(':review:' + data.id)) {
           this.attentionItems.delete(key);
@@ -18660,12 +19050,23 @@ class CodemanApp {
       }
       this._renderAttentionQueue();
     }
+    // Agent dashboard: track work item state
+    if (data && data.id) {
+      const existing = this.workItems.get(data.id);
+      this.workItems.set(data.id, existing ? { ...existing, ...data } : data);
+    }
+    this._scheduleAgentDashboardRender();
   }
 
   /** SSE handler: workItem:completed */
   _onWorkItemCompleted(data) {
     this.boardView.onWorkItemCompleted(data);
     this.boardView.addTimelineEvent({ type: 'workItem:completed', ...data });
+    if (data && data.id) {
+      const existing = this.workItems.get(data.id);
+      this.workItems.set(data.id, existing ? { ...existing, ...data, status: 'done' } : { ...data, status: 'done' });
+    }
+    this._scheduleAgentDashboardRender();
   }
 
   /** SSE handler: agent:message — targeted message delivered to an agent */
