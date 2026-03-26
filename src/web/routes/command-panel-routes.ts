@@ -14,7 +14,7 @@ import { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { SseEvent } from '../sse-events.js';
-import { listWorkItems, createWorkItem } from '../../work-items/index.js';
+import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/index.js';
 import type { WorkItemStatus } from '../../work-items/index.js';
 
 type CommandPanelCtx = SessionPort & EventPort & ConfigPort & InfraPort;
@@ -142,12 +142,21 @@ const TOOLS = [
   },
   {
     name: 'create_work_item',
-    description: 'Create a new work item.',
+    description:
+      'Create a new work item and dispatch it to the orchestrator. Include caseId to route to the right project.',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string', description: 'Title of the work item' },
-        description: { type: 'string', description: 'Description of the work item' },
+        description: {
+          type: 'string',
+          description: 'Detailed description including any URLs, context, or requirements',
+        },
+        caseId: {
+          type: 'string',
+          description:
+            'Project/case name to assign to (e.g. "Codeman", "keeps"). If known, always include this so the orchestrator picks it up.',
+        },
       },
       required: ['title'],
     },
@@ -176,16 +185,18 @@ const TOOLS = [
   },
 ];
 
-const SYSTEM_PROMPT = `You are Codeman's command assistant. You help users manage their Codeman sessions, work items, and orchestrator through natural language.
+const SYSTEM_PROMPT = `You are Codeman's command assistant — a manager's interface for delegating work to AI agents. You help create tasks, monitor progress, and take action through tools.
 
-You have access to tools that let you interact with Codeman's internal API. When the user asks you to do something, use the appropriate tool. When listing information, format it clearly and concisely.
+You have tools to interact with Codeman: create work items, list sessions, check orchestrator status, and more. ALWAYS prefer action over asking questions. When the user asks you to do something, DO IT using tools.
 
-Important guidelines:
-- When referring to sessions, always include the session name AND a short version of the ID (first 8 chars) so the user can identify them.
-- Be concise. This is a utility chat, not a conversation.
-- If you're unsure which session or item the user means, list the options and ask them to clarify.
-- For destructive operations (delete, send input, toggle orchestrator), the system will automatically ask for confirmation — just call the tool normally.
-- When a user refers to a session by name or number, try to match it to an existing session.
+Key behaviors:
+- **When the user pastes a URL (Asana, Sentry, GitHub, Slack, etc.):** You cannot browse URLs, but you CAN create a work item from the context the user provides. Extract what you can from the URL (task ID, project name, issue number) and create a work item. Include the URL in the description so the agent can access it.
+- **When the user says "fix X" or "create a task for X":** Use create_work_item immediately. Include "caseId" in the description if you can infer the project.
+- **When asked about status:** Use list_work_items, orchestrator_status, or list_sessions to give a real answer, not a guess.
+- **Be concise.** This is a utility chat, not a conversation. Lead with action.
+- When referring to sessions, include the name AND first 8 chars of ID.
+- For destructive operations, the system handles confirmation — just call the tool.
+- When a user refers to a session by name or number, match it to an existing session.
 - Format responses using simple markdown (bold, lists, code).`;
 
 /* ── Tool execution ─────────────────────────────────────────────────── */
@@ -281,7 +292,11 @@ async function executeTool(
           description: (toolInput.description as string) || undefined,
           source: 'manual' as const,
         });
-        return { success: true, result: item };
+        // Set caseId if provided (enables orchestrator dispatch)
+        if (toolInput.caseId && item.id) {
+          updateWorkItem(item.id, { caseId: toolInput.caseId as string } as Record<string, unknown>);
+        }
+        return { success: true, result: { ...item, caseId: (toolInput.caseId as string) || null } };
       }
 
       case 'orchestrator_status': {
