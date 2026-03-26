@@ -250,10 +250,11 @@ if (isGlobalInstall) {
 } else {
     try {
         const require = createRequire(import.meta.url);
-        const xtermDir = join(require.resolve('xterm'), '..', '..');
-        const fitDir = join(require.resolve('xterm-addon-fit'), '..', '..');
-        const webglDir = join(require.resolve('xterm-addon-webgl'), '..', '..');
-        const unicode11Dir = join(require.resolve('xterm-addon-unicode11'), '..', '..');
+        const xtermDir = join(require.resolve('@xterm/xterm'), '..', '..');
+        const fitDir = join(require.resolve('@xterm/addon-fit'), '..', '..');
+        const webglDir = join(require.resolve('@xterm/addon-webgl'), '..', '..');
+        const unicode11Dir = join(require.resolve('@xterm/addon-unicode11'), '..', '..');
+        const searchDir = join(require.resolve('@xterm/addon-search'), '..', '..');
         const vendorDir = join(srcDir, 'web', 'public', 'vendor');
 
         const { mkdirSync, copyFileSync } = await import('fs');
@@ -263,47 +264,21 @@ if (isGlobalInstall) {
         // Minify xterm JS for dev vendor dir (npm packages don't ship .min.js)
         try {
             execSync(`npx esbuild "${join(xtermDir, 'lib', 'xterm.js')}" --minify --outfile="${join(vendorDir, 'xterm.min.js')}"`, { stdio: 'pipe' });
-            execSync(`npx esbuild "${join(fitDir, 'lib', 'xterm-addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
-            execSync(`npx esbuild "${join(unicode11Dir, 'lib', 'xterm-addon-unicode11.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-unicode11.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(fitDir, 'lib', 'addon-fit.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-fit.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(unicode11Dir, 'lib', 'addon-unicode11.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-unicode11.min.js')}"`, { stdio: 'pipe' });
+            execSync(`npx esbuild "${join(searchDir, 'lib', 'addon-search.js')}" --minify --outfile="${join(vendorDir, 'xterm-addon-search.min.js')}"`, { stdio: 'pipe' });
             console.log(colors.green('✓ xterm vendor files copied to src/web/public/vendor/'));
         } catch {
             // Fallback: copy unminified
             copyFileSync(join(xtermDir, 'lib', 'xterm.js'), join(vendorDir, 'xterm.min.js'));
-            copyFileSync(join(fitDir, 'lib', 'xterm-addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
-            copyFileSync(join(unicode11Dir, 'lib', 'xterm-addon-unicode11.js'), join(vendorDir, 'xterm-addon-unicode11.min.js'));
+            copyFileSync(join(fitDir, 'lib', 'addon-fit.js'), join(vendorDir, 'xterm-addon-fit.min.js'));
+            copyFileSync(join(unicode11Dir, 'lib', 'addon-unicode11.js'), join(vendorDir, 'xterm-addon-unicode11.min.js'));
+            copyFileSync(join(searchDir, 'lib', 'addon-search.js'), join(vendorDir, 'xterm-addon-search.min.js'));
             console.log(colors.green('✓ xterm vendor files copied') + colors.dim(' (unminified — esbuild not available)'));
         }
 
         // WebGL addon: copy unminified (matches build script behavior)
-        copyFileSync(join(webglDir, 'lib', 'xterm-addon-webgl.js'), join(vendorDir, 'xterm-addon-webgl.min.js'));
-
-        // xterm-zerolag-input: bundle local package as IIFE for <script> tag loading
-        try {
-            const zerolagSrc = join(import.meta.dirname, '..', 'packages', 'xterm-zerolag-input', 'src', 'zerolag-input-addon.ts');
-            const zerolagOut = join(vendorDir, 'xterm-zerolag-input.js');
-            execSync(
-                `npx esbuild "${zerolagSrc}" --bundle --format=iife --global-name=XtermZerolagInput --outfile="${zerolagOut}"`,
-                { stdio: 'pipe' }
-            );
-            // Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`
-            const { appendFileSync } = await import('fs');
-            appendFileSync(
-                zerolagOut,
-                '\n// Global aliases for browser usage\n' +
-                'if(typeof window!=="undefined"){' +
-                    'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
-                    'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
-                        'constructor(terminal){' +
-                            'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
-                            'this.activate(terminal);' +
-                        '}' +
-                    '};' +
-                '}\n'
-            );
-            console.log(colors.green('✓ xterm-zerolag-input bundled to vendor/'));
-        } catch {
-            console.log(colors.yellow('⚠ Failed to bundle xterm-zerolag-input — overlay may not work in dev mode'));
-        }
+        copyFileSync(join(webglDir, 'lib', 'addon-webgl.js'), join(vendorDir, 'xterm-addon-webgl.min.js'));
     } catch (err) {
         hasWarnings = true;
         console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));

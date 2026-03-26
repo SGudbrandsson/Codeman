@@ -21,7 +21,6 @@
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
   <script defer src="vendor/xterm-addon-search.min.js"></script>
-  <script defer src="vendor/xterm-zerolag-input.js"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
@@ -1045,16 +1044,6 @@
             <div class="settings-grid">
               <!-- Input Section -->
               <div class="settings-section-header">Input</div>
-              <div class="settings-item settings-item-multiline" title="Shows typed characters instantly via overlay while forwarding keystrokes to the server in the background. Enables Tab completion, preserves input across tab switches, and protects against session crashes. Recommended for mobile and high-latency connections.">
-                <div class="settings-item-text">
-                  <span class="settings-item-label">Local Echo</span>
-                  <span class="settings-item-desc">Instant typing feedback with local echo</span>
-                </div>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsLocalEcho">
-                  <span class="slider"></span>
-                </label>
-              </div>
               <div class="settings-item settings-item-multiline" title="Scan messages for API keys, tokens, and other secrets before sending. Detected secrets are replaced with named placeholders ([SECRET_TYPE_N]) and held in memory for this session only — never stored on disk or sent over the wire.">
                 <div class="settings-item-text">
                   <span class="settings-item-label">Redact Secrets Before Sending</span>
