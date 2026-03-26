@@ -2521,6 +2521,11 @@ const TranscriptView = {
   _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
   _thinkingPhrases: ['Thinking...','Processing...','Germinating...','Reasoning...','Contemplating...','Synthesizing...','Deliberating...','Cogitating...','Extrapolating...','Formulating...','Consulting the oracle...','Parsing neural patterns...','Reticulating splines...','Traversing thought-space...','Engaging cortex...','Quantum-tunneling...'],
   _animateNextScroll: false,     // when true, _scrollToBottom uses 'smooth' behavior
+  // Lazy-load state: only render the tail of the transcript, prepend older batches on scroll-up
+  _BATCH_SIZE: 50,
+  _renderedStartIdx: 0,         // index into state.blocks of the oldest rendered block
+  _loadMoreSentinel: null,      // DOM element at the top observed by IntersectionObserver
+  _loadMoreObserver: null,      // IntersectionObserver instance
 
   init() {
     this._container = document.getElementById('transcriptView');
@@ -2628,8 +2633,7 @@ const TranscriptView = {
     // is rendered and scrolled, then reveal in one frame — no flash, no jump.
     const hadCache = state.blocks.length > 0;
     if (hadCache) {
-      this._container.textContent = '';
-      for (const block of state.blocks) this._appendBlock(block, false);
+      this._renderTailBatch(state.blocks);
       // Scroll to bottom while still invisible, then reveal
       this._container.scrollTop = this._container.scrollHeight;
       this._container.style.opacity = '';
@@ -2664,22 +2668,23 @@ const TranscriptView = {
         for (const block of newBlocks) this._appendBlock(block, false);
       } else {
         // First load or server has fewer blocks than cache (clear happened) — full re-render.
-        // Reset _compactingEl ref: the DOM was cleared so the element is now detached.
         // _isCompacting is preserved so we can restore the spinner below if still pending.
-        this._compactingEl = null;
-        this._container.textContent = '';
-        this._pendingToolUses = {};
-        this._lastSkillLaunch = null;
         // If a /clear is in progress (_clearPending), the backend may still be serving
         // the old conversation's blocks — the new conversation UUID hasn't been registered
         // yet. Treat any non-empty response as stale and show empty/optimistic instead.
         // _clearPending is reset to false by clear() when transcript:clear SSE arrives.
         const treatAsEmpty = !blocks.length || this._clearPending;
         if (treatAsEmpty) {
+          this._compactingEl = null;
+          this._container.textContent = '';
+          this._pendingToolUses = {};
+          this._lastSkillLaunch = null;
+          this._removeSentinel();
           // Do not cache stale old-session blocks. If we leave state.blocks populated
           // from the state.blocks=[...blocks] above, the next load() will pre-render
           // those old blocks before the fetch completes, showing the wrong session.
           state.blocks = [];
+          this._renderedStartIdx = 0;
           if (opts.pendingOptimisticText) {
             // Transcript is empty but user already sent a message — rebuild their
             // optimistic bubble from the stored text so it stays visible while
@@ -2700,7 +2705,8 @@ const TranscriptView = {
           state._sseBuffer = null;
           return;
         }
-        for (const block of blocks) this._appendBlock(block, false);
+        // Lazy render: only render the tail batch for performance
+        this._renderTailBatch(blocks);
       }
 
       // Replay any SSE blocks that arrived after the HTTP snapshot was taken
@@ -2963,6 +2969,8 @@ const TranscriptView = {
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
     this._thinkingBubbleEl = null;
+    this._removeSentinel();
+    this._renderedStartIdx = 0;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
       state.blocks = [];
@@ -2991,6 +2999,8 @@ const TranscriptView = {
     this._clearPending = true;   // block load() from rendering stale old-session content until transcript:clear SSE arrives
     this._pendingToolUses = {};
     this._lastSkillLaunch = null;
+    this._removeSentinel();
+    this._renderedStartIdx = 0;
     if (this._sessionId) {
       const state = this._getState(this._sessionId);
       state.blocks = [];
@@ -3029,6 +3039,8 @@ const TranscriptView = {
       this._lastSkillLaunch = null;
       this._compactingEl = null;
       this._isCompacting = false;
+      this._removeSentinel();
+      this._renderedStartIdx = 0;
       const state = this._getState(pendingSessionId);
       state.blocks = [];
       state.scrolledUp = false;
@@ -3109,6 +3121,110 @@ const TranscriptView = {
     const behavior = this._animateNextScroll ? 'smooth' : 'instant';
     this._animateNextScroll = false;
     this._container.scrollTo({ top: this._container.scrollHeight, behavior });
+  },
+
+  /** Insert the load-more sentinel at the top of the container and start observing it. */
+  _insertSentinel() {
+    if (this._loadMoreSentinel) return; // already present
+    if (!this._container) return;
+    const sentinel = document.createElement('div');
+    sentinel.className = 'tv-load-more-sentinel';
+    sentinel.textContent = 'Loading older messages\u2026';
+    this._container.insertBefore(sentinel, this._container.firstChild);
+    this._loadMoreSentinel = sentinel;
+    // Create observer if needed
+    if (!this._loadMoreObserver) {
+      this._loadMoreObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) this._prependBatch();
+        }
+      }, { root: this._container, rootMargin: '200px 0px 0px 0px' });
+    }
+    this._loadMoreObserver.observe(sentinel);
+  },
+
+  /** Remove the sentinel and stop observing. */
+  _removeSentinel() {
+    if (this._loadMoreObserver && this._loadMoreSentinel) {
+      this._loadMoreObserver.unobserve(this._loadMoreSentinel);
+    }
+    if (this._loadMoreSentinel) {
+      this._loadMoreSentinel.remove();
+      this._loadMoreSentinel = null;
+    }
+  },
+
+  /** Prepend the next batch of older blocks above the current rendered range. */
+  _prependBatch() {
+    if (!this._container || !this._sessionId) return;
+    const state = this._getState(this._sessionId);
+    if (this._renderedStartIdx <= 0) {
+      this._removeSentinel();
+      return;
+    }
+    const newStart = Math.max(0, this._renderedStartIdx - this._BATCH_SIZE);
+    const batch = state.blocks.slice(newStart, this._renderedStartIdx);
+    // Save scroll position before prepending
+    const savedHeight = this._container.scrollHeight;
+    const savedTop = this._container.scrollTop;
+    // Remove sentinel temporarily so prepended blocks go before it
+    const sentinelRef = this._loadMoreSentinel;
+    if (sentinelRef) sentinelRef.remove();
+    // Create a document fragment with blocks in chronological order
+    const frag = document.createDocumentFragment();
+    // We need to render blocks through _appendBlock but into the fragment, not the container.
+    // Use a temporary container to capture what _appendBlock generates.
+    const tempContainer = document.createElement('div');
+    const realContainer = this._container;
+    this._container = tempContainer;
+    // Save and reset tracking state so prepended blocks don't merge with tail groups
+    const savedThinkingBubble = this._thinkingBubbleEl;
+    const savedPendingToolUses = this._pendingToolUses;
+    const savedLastSkillLaunch = this._lastSkillLaunch;
+    this._thinkingBubbleEl = null;
+    this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
+    for (const block of batch) {
+      this._appendBlock(block, false);
+    }
+    this._thinkingBubbleEl = savedThinkingBubble;
+    this._pendingToolUses = savedPendingToolUses;
+    this._lastSkillLaunch = savedLastSkillLaunch;
+    this._container = realContainer;
+    // Move all children from temp into the fragment
+    while (tempContainer.firstChild) {
+      frag.appendChild(tempContainer.firstChild);
+    }
+    // Re-insert sentinel at the top if there are still more blocks, then the batch
+    if (newStart > 0 && sentinelRef) {
+      realContainer.insertBefore(sentinelRef, realContainer.firstChild);
+    } else {
+      this._loadMoreSentinel = null;
+      if (this._loadMoreObserver && sentinelRef) this._loadMoreObserver.unobserve(sentinelRef);
+    }
+    // Insert the batch after the sentinel (or at the top if no sentinel)
+    const insertBefore = this._loadMoreSentinel ? this._loadMoreSentinel.nextSibling : realContainer.firstChild;
+    realContainer.insertBefore(frag, insertBefore);
+    // Restore scroll position so viewport doesn't jump
+    const heightAdded = realContainer.scrollHeight - savedHeight;
+    realContainer.scrollTop = savedTop + heightAdded;
+    this._renderedStartIdx = newStart;
+  },
+
+  /** Render only the tail batch of blocks and set up lazy loading for older ones. */
+  _renderTailBatch(blocks) {
+    if (!this._container) return;
+    this._container.textContent = '';
+    this._pendingToolUses = {};
+    this._lastSkillLaunch = null;
+    this._compactingEl = null;
+    this._removeSentinel();
+    const startIdx = Math.max(0, blocks.length - this._BATCH_SIZE);
+    this._renderedStartIdx = startIdx;
+    const tail = blocks.slice(startIdx);
+    for (const block of tail) this._appendBlock(block, false);
+    // Insert sentinel if there are older blocks
+    if (startIdx > 0) this._insertSentinel();
   },
 
   /** Show or hide the "Claude is thinking" typing indicator (in-flow bubble) */
