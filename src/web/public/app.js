@@ -2143,7 +2143,7 @@ const CommandPanel = {
     requestAnimationFrame(() => this._panel.classList.add('open'));
     PanelBackdrop.show();
     this._scrollToBottom();
-    setTimeout(() => this._input?.focus(), 300);
+    setTimeout(() => this._input?.focus(), 200);
   },
 
   close() {
@@ -2151,7 +2151,7 @@ const CommandPanel = {
     this._panel.classList.remove('open');
     PanelBackdrop.hide();
     const panel = this._panel;
-    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 200);
   },
 
   toggle() {
