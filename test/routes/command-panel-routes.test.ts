@@ -1,12 +1,16 @@
 /**
  * @fileoverview Tests for command panel routes (GET /api/command/status,
- * POST /api/command, POST /api/command/confirm).
+ * POST /api/command, POST /api/command/confirm, conversation management).
  *
- * Mocks the dynamic @anthropic-ai/sdk import and work-items module.
+ * Mocks the dynamic @anthropic-ai/sdk import, work-items module, and fs
+ * for persistent conversation storage tests.
  * Uses app.inject() — no real HTTP ports needed.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 // ── Mock @anthropic-ai/sdk (hoisted by Vitest) ──────────────────────────────
 // The route uses `await import('@anthropic-ai/sdk' as string)` — vi.mock still
@@ -33,6 +37,42 @@ vi.mock('../../src/orchestrator.js', () => ({
 
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerCommandPanelRoutes } from '../../src/web/routes/command-panel-routes.js';
+
+/* ── Conversation storage test helpers ───────────────────────────────────── */
+
+const CONVERSATIONS_DIR = join(homedir(), '.codeman', 'data', 'conversations');
+
+/** Write a conversation JSON file directly to disk for testing. */
+function writeTestConversation(conv: {
+  id: string;
+  title: string;
+  messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }>;
+  createdAt: string;
+  updatedAt: string;
+  lastActivity: number;
+}): void {
+  fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(join(CONVERSATIONS_DIR, `${conv.id}.json`), JSON.stringify(conv));
+}
+
+/** Read a conversation from disk. */
+function readTestConversation(id: string): Record<string, unknown> | null {
+  try {
+    const data = fs.readFileSync(join(CONVERSATIONS_DIR, `${id}.json`), 'utf-8');
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a test conversation file. */
+function deleteTestConversation(id: string): void {
+  try {
+    fs.unlinkSync(join(CONVERSATIONS_DIR, `${id}.json`));
+  } catch {
+    /* ignore */
+  }
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
@@ -556,5 +596,367 @@ describe('POST /api/command/confirm', () => {
       payload: { confirmId, conversationId: cmdBody.conversationId },
     });
     expect(res2.statusCode).toBe(404);
+  });
+});
+
+/* ── Conversation management endpoints ───────────────────────────────────── */
+
+describe('GET /api/command/conversations', () => {
+  let harness: RouteTestHarness;
+  const testIds: string[] = [];
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerCommandPanelRoutes);
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    for (const id of testIds) deleteTestConversation(id);
+    testIds.length = 0;
+  });
+
+  it('returns empty list when no conversations exist', async () => {
+    const res = await harness.app.inject({ method: 'GET', url: '/api/command/conversations' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.conversations).toBeInstanceOf(Array);
+  });
+
+  it('returns conversations sorted by updatedAt desc', async () => {
+    const id1 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee01';
+    const id2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee02';
+    testIds.push(id1, id2);
+
+    writeTestConversation({
+      id: id1,
+      title: 'Older',
+      messages: [{ role: 'user', content: 'hi' }],
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      lastActivity: 1,
+    });
+    writeTestConversation({
+      id: id2,
+      title: 'Newer',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hey' },
+      ],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 2,
+    });
+
+    const res = await harness.app.inject({ method: 'GET', url: '/api/command/conversations' });
+    const body = JSON.parse(res.body);
+    expect(body.conversations.length).toBeGreaterThanOrEqual(2);
+    // Find our test conversations
+    const our = body.conversations.filter((c: { id: string }) => [id1, id2].includes(c.id));
+    expect(our).toHaveLength(2);
+    expect(our[0].id).toBe(id2); // newer first
+    expect(our[0].title).toBe('Newer');
+    expect(our[0].messageCount).toBe(2);
+    expect(our[1].id).toBe(id1);
+    expect(our[1].messageCount).toBe(1);
+  });
+});
+
+describe('GET /api/command/conversations/:id', () => {
+  let harness: RouteTestHarness;
+  const testIds: string[] = [];
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerCommandPanelRoutes);
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    for (const id of testIds) deleteTestConversation(id);
+    testIds.length = 0;
+  });
+
+  it('returns full conversation by ID', async () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee03';
+    testIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'Test Conv',
+      messages: [{ role: 'user', content: 'ping' }],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 1,
+    });
+
+    const res = await harness.app.inject({ method: 'GET', url: `/api/command/conversations/${id}` });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.id).toBe(id);
+    expect(body.title).toBe('Test Conv');
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].content).toBe('ping');
+  });
+
+  it('returns 404 for nonexistent conversation', async () => {
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: '/api/command/conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee99',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 400 for invalid conversation ID (non-UUID format)', async () => {
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: '/api/command/conversations/not-a-valid-uuid-at-all!',
+    });
+    expect(res.statusCode).toBe(400);
+    const body = JSON.parse(res.body);
+    expect(body.error).toMatch(/invalid/i);
+  });
+});
+
+describe('DELETE /api/command/conversations/:id', () => {
+  let harness: RouteTestHarness;
+  const testIds: string[] = [];
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerCommandPanelRoutes);
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    for (const id of testIds) deleteTestConversation(id);
+    testIds.length = 0;
+  });
+
+  it('deletes an existing conversation', async () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee04';
+    testIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'To Delete',
+      messages: [],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 1,
+    });
+
+    const res = await harness.app.inject({ method: 'DELETE', url: `/api/command/conversations/${id}` });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+
+    // File should be gone
+    expect(readTestConversation(id)).toBeNull();
+  });
+
+  it('returns 404 for nonexistent conversation', async () => {
+    const res = await harness.app.inject({
+      method: 'DELETE',
+      url: '/api/command/conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee99',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 400 for invalid ID', async () => {
+    const res = await harness.app.inject({
+      method: 'DELETE',
+      url: '/api/command/conversations/not-a-uuid',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('PATCH /api/command/conversations/:id', () => {
+  let harness: RouteTestHarness;
+  const testIds: string[] = [];
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerCommandPanelRoutes);
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    for (const id of testIds) deleteTestConversation(id);
+    testIds.length = 0;
+  });
+
+  it('renames a conversation', async () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee05';
+    testIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'Old Title',
+      messages: [{ role: 'user', content: 'hi' }],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 1,
+    });
+
+    const res = await harness.app.inject({
+      method: 'PATCH',
+      url: `/api/command/conversations/${id}`,
+      payload: { title: 'New Title' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.title).toBe('New Title');
+    expect(body.messageCount).toBe(1);
+
+    // Verify persisted on disk
+    const saved = readTestConversation(id);
+    expect(saved).not.toBeNull();
+    expect((saved as Record<string, unknown>).title).toBe('New Title');
+  });
+
+  it('returns 404 for nonexistent conversation', async () => {
+    const res = await harness.app.inject({
+      method: 'PATCH',
+      url: '/api/command/conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee99',
+      payload: { title: 'New' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 400 when title is missing', async () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee06';
+    testIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'Test',
+      messages: [],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 1,
+    });
+
+    const res = await harness.app.inject({
+      method: 'PATCH',
+      url: `/api/command/conversations/${id}`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/title/i);
+  });
+
+  it('truncates long titles to 100 characters', async () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee07';
+    testIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'Short',
+      messages: [],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: 1,
+    });
+
+    const longTitle = 'A'.repeat(200);
+    const res = await harness.app.inject({
+      method: 'PATCH',
+      url: `/api/command/conversations/${id}`,
+      payload: { title: longTitle },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.title).toHaveLength(100);
+  });
+});
+
+describe('Conversation persistence via POST /api/command', () => {
+  let harness: RouteTestHarness;
+  const createdConvIds: string[] = [];
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerCommandPanelRoutes);
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    for (const id of createdConvIds) deleteTestConversation(id);
+    createdConvIds.length = 0;
+  });
+
+  it('persists conversation to disk after a message exchange', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('Saved!'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: 'test persistence' },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(200);
+    const convId = body.conversationId;
+    createdConvIds.push(convId);
+
+    // Verify the conversation was saved to disk
+    const saved = readTestConversation(convId);
+    expect(saved).not.toBeNull();
+    expect((saved as Record<string, unknown>).id).toBe(convId);
+    expect((saved as Record<string, unknown>).title).toBe('test persistence');
+    const msgs = (saved as Record<string, unknown>).messages as unknown[];
+    expect(msgs.length).toBeGreaterThanOrEqual(2); // user + assistant
+  });
+
+  it('auto-generates title from first user message', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('OK'));
+
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: '**Bold** message with `code` and [link]' },
+    });
+
+    const body = JSON.parse(res.body);
+    const convId = body.conversationId;
+    createdConvIds.push(convId);
+
+    const saved = readTestConversation(convId);
+    // Markdown chars should be stripped from the title
+    expect((saved as Record<string, unknown>).title).toBe('Bold message with code and link');
+  });
+
+  it('loads conversation from disk when not in memory cache', async () => {
+    // Create a conversation on disk that was never in the in-memory cache
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeee08';
+    createdConvIds.push(id);
+
+    writeTestConversation({
+      id,
+      title: 'From Disk',
+      messages: [{ role: 'user', content: 'previous message' }],
+      createdAt: '2026-03-01T00:00:00Z',
+      updatedAt: '2026-03-01T00:00:00Z',
+      lastActivity: Date.now(),
+    });
+
+    mockCreate.mockResolvedValueOnce(textResponse('Follow-up'));
+
+    // Send a message referencing the disk-only conversation
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/command',
+      payload: { message: 'next message', conversationId: id },
+    });
+
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(200);
+    expect(body.conversationId).toBe(id);
+
+    // The LLM should have received conversation history (including the previous message from disk)
+    const apiCall = mockCreate.mock.calls[0][0] as { messages: Array<{ role: string; content: unknown }> };
+    expect(apiCall.messages.length).toBeGreaterThanOrEqual(2); // previous + new user message
   });
 });

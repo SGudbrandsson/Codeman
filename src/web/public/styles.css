@@ -10538,9 +10538,27 @@ kbd {
 .mcp-form-actions{display:flex;gap:8px;padding:14px 20px 16px;border-top:1px solid rgba(255,255,255,.06);margin-top:14px}
 
 /* ── Command Panel (centered overlay) ──────────────────────────────── */
-.command-panel{top:15vh;right:auto;left:50%;width:600px;max-width:calc(100vw - 32px);height:auto;max-height:70vh;border-left:none;border-radius:12px;border:1px solid rgba(255,255,255,.1);box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.05);transform:translate(-50%,-10px) scale(0.97);opacity:0;transition:transform .2s ease,opacity .2s ease;z-index:9500}
+.command-panel{top:15vh;right:auto;left:50%;width:600px;max-width:calc(100vw - 32px);height:auto;max-height:70vh;border-left:none;border-radius:12px;border:1px solid rgba(255,255,255,.1);box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.05);transform:translate(-50%,-10px) scale(0.97);opacity:0;transition:transform .2s ease,opacity .2s ease,width .2s ease;z-index:9500;display:flex;flex-direction:row}
 .command-panel.open{transform:translate(-50%,0) scale(1);opacity:1}
+.command-panel.sidebar-open{width:820px}
+.command-panel-main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .command-panel-messages{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+/* ── Conversation sidebar ── */
+.command-sidebar{width:0;overflow:hidden;transition:width .2s ease;border-right:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;flex-shrink:0}
+.command-panel.sidebar-open .command-sidebar{width:220px}
+.command-sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.08);font-size:.82rem;font-weight:600;color:#e2e8f0;white-space:nowrap}
+.command-sidebar-list{flex:1;overflow-y:auto;overflow-x:hidden}
+.command-sidebar-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.04);position:relative}
+.command-sidebar-item:hover{background:rgba(255,255,255,.05)}
+.command-sidebar-item.active{background:rgba(59,130,246,.15)}
+.command-sidebar-item-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;color:#e2e8f0;line-height:1.3}
+.command-sidebar-item-meta{display:flex;align-items:center;gap:6px;font-size:.65rem;color:#64748b;margin-top:2px}
+.command-sidebar-item-delete{display:none;position:absolute;top:8px;right:6px;width:20px;height:20px;border-radius:4px;background:none;border:none;color:#64748b;font-size:.7rem;cursor:pointer;align-items:center;justify-content:center;padding:0}
+.command-sidebar-item:hover .command-sidebar-item-delete{display:flex}
+.command-sidebar-item-delete:hover{background:rgba(239,68,68,.2);color:#fca5a5}
+.command-sidebar-toggle{background:none;border:1px solid rgba(255,255,255,.1);border-radius:6px;color:#94a3b8;font-size:.9rem;cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;padding:0}
+.command-sidebar-toggle:hover{background:rgba(255,255,255,.08);color:#e2e8f0}
+.command-sidebar-empty{padding:24px 14px;text-align:center;color:#475569;font-size:.75rem;font-style:italic}
 .command-msg{max-width:90%;padding:8px 12px;border-radius:10px;font-size:.82rem;line-height:1.45;word-wrap:break-word;white-space:pre-wrap}
 .command-msg p{margin:0 0 6px}
 .command-msg p:last-child{margin-bottom:0}
@@ -10574,7 +10592,7 @@ kbd {
 .command-typing{align-self:flex-start;color:#64748b;font-size:.75rem;font-style:italic;padding:4px 0}
 .command-msg-time{font-size:.65rem;color:#475569;margin-top:4px}
 .command-msg .command-settings-link{color:#60a5fa;cursor:pointer;text-decoration:underline;background:none;border:none;font:inherit;padding:0}
-@media(max-width:600px){.command-panel{width:calc(100vw - 24px);top:10vh;max-height:80vh}}
+@media(max-width:600px){.command-panel{width:calc(100vw - 24px);top:10vh;max-height:80vh}.command-panel.sidebar-open{width:calc(100vw - 24px)}.command-panel.sidebar-open .command-sidebar{width:100%}.command-panel.sidebar-open .command-panel-main{display:none}}
 
 /* ── Plugins Panel ────────────────────────────────────────────────────── */
 

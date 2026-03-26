@@ -2616,20 +2616,30 @@
 
 <!-- Command Panel (natural language interface) -->
 <div id="commandPanel" class="mcp-panel command-panel" style="display:none" aria-label="Command Panel">
-  <div class="mcp-panel-header">
-    <span class="mcp-panel-title">Command</span>
-    <div class="command-header-actions">
-      <button class="command-new-btn" id="commandNewBtn" title="New conversation">&#x2b;</button>
-      <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+  <div class="command-sidebar" id="commandSidebar">
+    <div class="command-sidebar-header">
+      <span>Conversations</span>
+      <button class="command-new-btn" id="commandSidebarNewBtn" title="New conversation">&#x2b;</button>
     </div>
+    <div class="command-sidebar-list" id="commandSidebarList"></div>
   </div>
-  <div class="command-panel-messages" id="commandMessages"></div>
-  <div class="command-attachments" id="commandAttachments" style="display:none"></div>
-  <div class="command-input-row">
-    <button class="command-attach-btn" id="commandAttachBtn" title="Attach image">&#x1f4ce;</button>
-    <textarea id="commandInput" class="command-input" rows="1" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false"></textarea>
-    <button id="commandSendBtn" class="command-send-btn" title="Send">&#x2191;</button>
-    <input type="file" id="commandFileInput" accept="image/*" style="display:none">
+  <div class="command-panel-main">
+    <div class="mcp-panel-header">
+      <span class="mcp-panel-title">Command</span>
+      <div class="command-header-actions">
+        <button class="command-sidebar-toggle" id="commandSidebarToggle" title="Conversations">&#x2630;</button>
+        <button class="command-new-btn" id="commandNewBtn" title="New conversation">&#x2b;</button>
+        <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+      </div>
+    </div>
+    <div class="command-panel-messages" id="commandMessages"></div>
+    <div class="command-attachments" id="commandAttachments" style="display:none"></div>
+    <div class="command-input-row">
+      <button class="command-attach-btn" id="commandAttachBtn" title="Attach image">&#x1f4ce;</button>
+      <textarea id="commandInput" class="command-input" rows="1" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false"></textarea>
+      <button id="commandSendBtn" class="command-send-btn" title="Send">&#x2191;</button>
+      <input type="file" id="commandFileInput" accept="image/*" style="display:none">
+    </div>
   </div>
 </div>
 

@@ -2108,6 +2108,7 @@ const CommandPanel = {
   _panel: null, _messages: null, _input: null, _sendBtn: null,
   _conversationId: null, _available: false, _sending: false,
   _pendingImages: [], // { dataUrl, file }
+  _sidebarOpen: false, _conversations: [], _sidebarEl: null, _sidebarListEl: null,
 
   init() {
     this._panel = document.getElementById('commandPanel');
@@ -2132,6 +2133,22 @@ const CommandPanel = {
     fileInput?.addEventListener('change', (e) => this._onFileSelected(e));
     // Paste image support
     this._input?.addEventListener('paste', (e) => this._onPaste(e));
+    // Sidebar
+    this._sidebarEl = document.getElementById('commandSidebar');
+    this._sidebarListEl = document.getElementById('commandSidebarList');
+    document.getElementById('commandSidebarToggle')?.addEventListener('click', () => this._toggleSidebar());
+    document.getElementById('commandSidebarNewBtn')?.addEventListener('click', () => {
+      this.clearHistory();
+      this._addMessage('assistant', 'New conversation started. How can I help?');
+      if (this._sidebarOpen) this._loadConversations();
+    });
+    // Keyboard shortcut: Ctrl+Shift+H
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'H' && this._panel?.classList.contains('open')) {
+        e.preventDefault();
+        this._toggleSidebar();
+      }
+    });
     this._conversationId = localStorage.getItem('commandPanelConvId') || null;
     this._restoreHistory();
     this._checkStatus();
@@ -2164,6 +2181,7 @@ const CommandPanel = {
     PanelBackdrop.show();
     this._scrollToBottom();
     setTimeout(() => this._input?.focus(), 200);
+    if (this._sidebarOpen) this._loadConversations();
   },
 
   close() {
@@ -2249,6 +2267,7 @@ const CommandPanel = {
     this._sendBtn.disabled = false;
     this._saveHistory();
     this._scrollToBottom();
+    if (this._sidebarOpen) this._loadConversations();
   },
 
   _addMessage(role, content, actions) {
@@ -2428,6 +2447,7 @@ const CommandPanel = {
     this._pendingImages = [];
     this._clearAttachments();
     if (this._messages) this._messages.textContent = '';
+    if (this._sidebarOpen) this._loadConversations();
   },
 
   /** Make "Settings > Integrations" text clickable (Bug 4) */
@@ -2519,6 +2539,147 @@ const CommandPanel = {
       thumb.appendChild(removeBtn);
       container.appendChild(thumb);
     }
+  },
+
+  _toggleSidebar() {
+    this._sidebarOpen = !this._sidebarOpen;
+    if (this._sidebarOpen) {
+      this._panel?.classList.add('sidebar-open');
+      this._loadConversations();
+    } else {
+      this._panel?.classList.remove('sidebar-open');
+    }
+  },
+
+  async _loadConversations() {
+    try {
+      const res = await fetch('/api/command/conversations');
+      const data = await res.json();
+      this._conversations = data.conversations || [];
+      this._renderSidebar();
+    } catch { /* ignore */ }
+  },
+
+  _renderSidebar() {
+    const list = this._sidebarListEl;
+    if (!list) return;
+    list.textContent = '';
+    if (this._conversations.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'command-sidebar-empty';
+      empty.textContent = 'No conversations yet';
+      list.appendChild(empty);
+      return;
+    }
+    for (const conv of this._conversations) {
+      const item = document.createElement('div');
+      item.className = 'command-sidebar-item';
+      if (conv.id === this._conversationId) item.classList.add('active');
+
+      const title = document.createElement('div');
+      title.className = 'command-sidebar-item-title';
+      title.textContent = conv.title || 'Untitled';
+      item.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'command-sidebar-item-meta';
+      const time = document.createElement('span');
+      time.textContent = this._relativeTime(conv.updatedAt);
+      meta.appendChild(time);
+      const count = document.createElement('span');
+      count.textContent = conv.messageCount + ' msg' + (conv.messageCount !== 1 ? 's' : '');
+      meta.appendChild(count);
+      item.appendChild(meta);
+
+      const del = document.createElement('button');
+      del.className = 'command-sidebar-item-delete';
+      del.textContent = '\u2715';
+      del.title = 'Delete conversation';
+      del.addEventListener('click', (e) => { e.stopPropagation(); this._deleteConversation(conv.id); });
+      item.appendChild(del);
+
+      item.addEventListener('click', () => this._switchConversation(conv.id));
+      item.addEventListener('dblclick', () => this._renameConversation(conv.id, conv.title));
+      list.appendChild(item);
+    }
+  },
+
+  async _switchConversation(id) {
+    if (id === this._conversationId) return;
+    this._saveHistory();
+    try {
+      const res = await fetch('/api/command/conversations/' + encodeURIComponent(id));
+      if (!res.ok) return;
+      const conv = await res.json();
+      this._conversationId = id;
+      localStorage.setItem('commandPanelConvId', id);
+      if (this._messages) this._messages.textContent = '';
+      // Render loaded messages
+      for (const m of (conv.messages || [])) {
+        if (m.role === 'user') {
+          let text = '';
+          if (typeof m.content === 'string') text = m.content;
+          else if (Array.isArray(m.content)) {
+            const tb = m.content.find(b => b.type === 'text');
+            if (tb) text = tb.text || '';
+            else if (m.content[0]?.type === 'tool_result') continue; // skip tool_result messages
+          }
+          if (text) this._addMessage('user', text);
+        } else if (m.role === 'assistant') {
+          let text = '';
+          if (typeof m.content === 'string') text = m.content;
+          else if (Array.isArray(m.content)) {
+            const textBlocks = m.content.filter(b => b.type === 'text');
+            text = textBlocks.map(b => b.text || '').join('');
+            if (!text) continue; // skip tool_use-only messages
+          }
+          if (text) this._addMessage('assistant', text);
+        }
+      }
+      this._saveHistory();
+      this._scrollToBottom();
+      this._renderSidebar();
+      // On mobile, close sidebar after selecting
+      if (window.innerWidth <= 600 && this._sidebarOpen) this._toggleSidebar();
+    } catch { /* ignore */ }
+  },
+
+  async _deleteConversation(id) {
+    if (!confirm('Delete this conversation?')) return;
+    try {
+      await fetch('/api/command/conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (id === this._conversationId) {
+        this.clearHistory();
+        this._addMessage('assistant', 'Conversation deleted. How can I help?');
+      }
+      this._loadConversations();
+    } catch { /* ignore */ }
+  },
+
+  async _renameConversation(id, currentTitle) {
+    const newTitle = prompt('Rename conversation:', currentTitle || '');
+    if (!newTitle || newTitle === currentTitle) return;
+    try {
+      await fetch('/api/command/conversations/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      });
+      this._loadConversations();
+    } catch { /* ignore */ }
+  },
+
+  _relativeTime(dateStr) {
+    if (!dateStr) return '';
+    const now = Date.now();
+    const then = new Date(dateStr).getTime();
+    const diff = now - then;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    if (diff < 172800000) return 'yesterday';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   },
 
   _clearAttachments() {
