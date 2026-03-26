@@ -2557,7 +2557,7 @@ const CommandPanel = {
       const data = await res.json();
       this._conversations = data.conversations || [];
       this._renderSidebar();
-    } catch { /* ignore */ }
+    } catch (err) { console.error('Failed to load conversations:', err); }
   },
 
   _renderSidebar() {
@@ -2641,7 +2641,7 @@ const CommandPanel = {
       this._renderSidebar();
       // On mobile, close sidebar after selecting
       if (window.innerWidth <= 600 && this._sidebarOpen) this._toggleSidebar();
-    } catch { /* ignore */ }
+    } catch (err) { console.error('Failed to switch conversation:', err); }
   },
 
   async _deleteConversation(id) {
@@ -2653,7 +2653,10 @@ const CommandPanel = {
         this._addMessage('assistant', 'Conversation deleted. How can I help?');
       }
       this._loadConversations();
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('Failed to delete conversation:', err);
+      this._addMessage('assistant', 'Failed to delete conversation. Please try again.');
+    }
   },
 
   async _renameConversation(id, currentTitle) {
@@ -2666,7 +2669,10 @@ const CommandPanel = {
         body: JSON.stringify({ title: newTitle }),
       });
       this._loadConversations();
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.error('Failed to rename conversation:', err);
+      this._addMessage('assistant', 'Failed to rename conversation. Please try again.');
+    }
   },
 
   _relativeTime(dateStr) {

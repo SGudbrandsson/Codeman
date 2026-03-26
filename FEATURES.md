@@ -24,9 +24,10 @@ This document is the comprehensive feature reference for **Codeman v0.5.4** (SGu
 16. [SSH Session Chooser (`sc`)](#16-ssh-session-chooser-sc)
 17. [Plan Mode Auto-Accept](#17-plan-mode-auto-accept)
 18. [Terminal Anti-Flicker Pipeline](#18-terminal-anti-flicker-pipeline)
-19. [Security](#19-security)
-20. [API Reference](#20-api-reference)
-21. [Fork Differences vs Ark0N/Codeman v0.3.7](#fork-differences-vs-ark0ncodeman-v037)
+19. [Command Panel](#19-command-panel)
+20. [Security](#20-security)
+21. [API Reference](#21-api-reference)
+22. [Fork Differences vs Ark0N/Codeman v0.3.7](#22-fork-differences-vs-ark0ncodeman-v037)
 
 ---
 
@@ -679,7 +680,56 @@ Reference: [`docs/terminal-anti-flicker.md`](docs/terminal-anti-flicker.md)
 
 ---
 
-## 19. Security
+## 19. Command Panel
+
+A natural language command interface to Codeman, allowing you to interact with sessions and perform administrative tasks through a conversational UI. Built-in Claude model handles requests via API, with persistent conversation history.
+
+### Features
+
+- **Multiple conversation threads** — create, switch between, rename, and delete independent conversations
+- **Persistent storage** — conversations stored as JSON files in `~/.codeman/data/conversations/`, survive server restarts
+- **Conversation sidebar** — collapsible sidebar showing history sorted by most recent, with message counts and relative timestamps
+- **Auto-title generation** — first user message automatically becomes the conversation title (first 60 chars, markdown stripped)
+- **Keyboard shortcut** — `Ctrl+Shift+H` to toggle sidebar when panel is open
+- **File attachments** — support for images and file uploads in conversation
+- **Multimodal support** — handles text and image content seamlessly
+
+### Usage
+
+1. Press `Ctrl+M` or click the command button (⌘) in the header to open the panel
+2. Type a natural language command or question
+3. Click the hamburger icon (☰) to open the conversation sidebar and view history
+4. Click a conversation in the sidebar to switch to it
+5. Double-click a conversation title to rename it
+6. Click the × on hover to delete a conversation
+7. Press `Ctrl+Shift+H` to quickly toggle the sidebar
+
+### Storage
+
+Each conversation is stored as a JSON file:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Help with deployment issue",
+  "messages": [
+    { "role": "user", "content": "..." },
+    { "role": "assistant", "content": "..." }
+  ],
+  "createdAt": "2026-03-26T11:15:22.000Z",
+  "updatedAt": "2026-03-26T11:20:45.000Z",
+  "lastActivity": 1711353645000
+}
+```
+
+### Limits
+
+- **Maximum messages per conversation** — 40 messages (≈20 turns)
+- **Conversation memory** — indefinite (persisted to disk)
+- **Message size** — 64KB per API request (standard Codeman limit)
+
+---
+
+## 20. Security
 
 ### Authentication
 
@@ -716,7 +766,7 @@ Device context (IP, User-Agent) stored on authentication. Full lifecycle log at 
 
 ---
 
-## 20. API Reference
+## 21. API Reference
 
 Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follow `{ success: boolean, data?: ..., error?: string }` shape.
 
@@ -794,9 +844,21 @@ Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follo
 | `GET` | `/q/:code` | QR token redemption |
 | `POST` | `/api/auth/revoke` | Revoke all sessions |
 
+### Command Panel
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/command/status` | Check if command panel is available |
+| `GET` | `/api/command/conversations` | List all saved conversations |
+| `GET` | `/api/command/conversations/:id` | Get full conversation with messages |
+| `POST` | `/api/command` | Send a message (creates/updates conversation) |
+| `POST` | `/api/command/confirm` | Confirm tool use or other action |
+| `DELETE` | `/api/command/conversations/:id` | Delete a conversation |
+| `PATCH` | `/api/command/conversations/:id` | Rename a conversation (body: `{ title: string }`) |
+
 ---
 
-## Fork Differences vs Ark0N/Codeman v0.3.7
+## 22. Fork Differences vs Ark0N/Codeman v0.3.7
 
 This fork (SGudbrandsson/Codeman v0.5.4) is 33 commits ahead of upstream Ark0N/Codeman v0.3.7. The last upstream merge was commit `11150a4` (performance fixes).
 

@@ -14,7 +14,7 @@ import { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { SseEvent } from '../sse-events.js';
 import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/index.js';
@@ -68,13 +68,13 @@ const MAX_MESSAGES = 40; // ~20 turns (user + assistant each)
 
 const CONVERSATIONS_DIR = join(homedir(), '.codeman', 'data', 'conversations');
 
-function ensureConversationsDir(): void {
-  fs.mkdirSync(CONVERSATIONS_DIR, { recursive: true, mode: 0o700 });
+async function ensureConversationsDir(): Promise<void> {
+  await fsp.mkdir(CONVERSATIONS_DIR, { recursive: true, mode: 0o700 });
 }
 
 /** Validate conversation ID to prevent path traversal. */
 function isValidId(id: string): boolean {
-  return /^[a-f0-9-]{36}$/.test(id);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }
 
 /** Generate title from first user message (first 60 chars, strip markdown). */
@@ -95,32 +95,35 @@ function generateTitle(message: string | Array<Record<string, unknown>>): string
   );
 }
 
-function saveConversation(conv: Conversation): void {
-  ensureConversationsDir();
+async function saveConversation(conv: Conversation): Promise<void> {
+  if (!isValidId(conv.id)) return;
+  await ensureConversationsDir();
   const filePath = join(CONVERSATIONS_DIR, `${conv.id}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(conv));
+  await fsp.writeFile(filePath, JSON.stringify(conv));
 }
 
-function loadConversation(id: string): Conversation | null {
+async function loadConversation(id: string): Promise<Conversation | null> {
   if (!isValidId(id)) return null;
   try {
     const filePath = join(CONVERSATIONS_DIR, `${id}.json`);
-    const data = fs.readFileSync(filePath, 'utf-8');
+    const data = await fsp.readFile(filePath, 'utf-8');
     return JSON.parse(data) as Conversation;
   } catch {
     return null;
   }
 }
 
-function listConversations(): Array<{ id: string; title: string; updatedAt: string; messageCount: number }> {
-  ensureConversationsDir();
+async function listConversations(): Promise<
+  Array<{ id: string; title: string; updatedAt: string; messageCount: number }>
+> {
+  await ensureConversationsDir();
   const results: Array<{ id: string; title: string; updatedAt: string; messageCount: number }> = [];
   try {
-    const files = fs.readdirSync(CONVERSATIONS_DIR);
+    const files = await fsp.readdir(CONVERSATIONS_DIR);
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
       try {
-        const data = fs.readFileSync(join(CONVERSATIONS_DIR, file), 'utf-8');
+        const data = await fsp.readFile(join(CONVERSATIONS_DIR, file), 'utf-8');
         const conv = JSON.parse(data) as Conversation;
         results.push({
           id: conv.id,
@@ -139,10 +142,10 @@ function listConversations(): Array<{ id: string; title: string; updatedAt: stri
   return results;
 }
 
-function deleteConversationFile(id: string): boolean {
+async function deleteConversationFile(id: string): Promise<boolean> {
   if (!isValidId(id)) return false;
   try {
-    fs.unlinkSync(join(CONVERSATIONS_DIR, `${id}.json`));
+    await fsp.unlink(join(CONVERSATIONS_DIR, `${id}.json`));
     return true;
   } catch {
     return false;
@@ -581,7 +584,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
     let conversation = conversationId ? conversations.get(conversationId) : undefined;
     // Try loading from disk if not in memory
     if (!conversation && conversationId) {
-      const loaded = loadConversation(conversationId);
+      const loaded = await loadConversation(conversationId);
       if (loaded) {
         conversation = loaded;
         conversations.set(conversationId, conversation);
@@ -642,7 +645,6 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       // Dynamic import — SDK is optional, not in package.json
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Anthropic = ((await import('@anthropic-ai/sdk' as string)) as any).default;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const client = new Anthropic() as {
         messages: {
           create: (opts: Record<string, unknown>) => Promise<{
@@ -770,7 +772,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       }
 
       // Persist conversation to disk
-      saveConversation(conversation!);
+      await saveConversation(conversation!);
 
       return {
         response:
@@ -798,7 +800,6 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const Anthropic2 = ((await import('@anthropic-ai/sdk' as string)) as any).default;
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           const client2 = new Anthropic2() as {
             messages: {
               create: (opts: Record<string, unknown>) => Promise<{
@@ -828,7 +829,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
             role: 'assistant',
             content: retryResponse.content as unknown as Array<Record<string, unknown>>,
           });
-          saveConversation(conversation!);
+          await saveConversation(conversation!);
           return {
             response: retryText || 'I processed your request.',
             conversationId,
@@ -867,7 +868,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
     // Update conversation with the result
     let conversation = conversations.get(pending.conversationId);
     if (!conversation) {
-      conversation = loadConversation(pending.conversationId) || undefined;
+      conversation = (await loadConversation(pending.conversationId)) || undefined;
       if (conversation) conversations.set(pending.conversationId, conversation);
     }
     if (conversation) {
@@ -880,7 +881,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
         }
       }
       conversation.updatedAt = new Date().toISOString();
-      saveConversation(conversation);
+      await saveConversation(conversation);
     }
 
     return {
@@ -892,7 +893,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
 
   // ── GET /api/command/conversations ────────────────────────────────
   app.get('/api/command/conversations', async () => {
-    return { conversations: listConversations() };
+    return { conversations: await listConversations() };
   });
 
   // ── GET /api/command/conversations/:id ────────────────────────────
@@ -902,7 +903,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       reply.code(400);
       return { error: 'Invalid conversation ID' };
     }
-    const conv = loadConversation(id);
+    const conv = await loadConversation(id);
     if (!conv) {
       reply.code(404);
       return { error: 'Conversation not found' };
@@ -918,7 +919,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       return { error: 'Invalid conversation ID' };
     }
     conversations.delete(id);
-    const deleted = deleteConversationFile(id);
+    const deleted = await deleteConversationFile(id);
     if (!deleted) {
       reply.code(404);
       return { error: 'Conversation not found' };
@@ -938,14 +939,14 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       reply.code(400);
       return { error: 'title is required' };
     }
-    const conv = loadConversation(id);
+    const conv = await loadConversation(id);
     if (!conv) {
       reply.code(404);
       return { error: 'Conversation not found' };
     }
     conv.title = body.title.trim().slice(0, 100);
     conv.updatedAt = new Date().toISOString();
-    saveConversation(conv);
+    await saveConversation(conv);
     // Update in-memory cache if present
     const cached = conversations.get(id);
     if (cached) {
