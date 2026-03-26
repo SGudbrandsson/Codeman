@@ -24,7 +24,7 @@ Single-invocation skill that runs a complete quality assurance pipeline on the c
 10. Final QA gate — typecheck, lint, run tests
 11. Clean commit — bundle all QA work into a single commit
 
-**Safety:** Max 2 code review cycles, max 2 test review cycles. If issues persist after limits, commits with `[NEEDS REVIEW]` prefix.
+**Safety:** Max 5 code review cycles, max 5 test review cycles. If issues persist after limits, commits with `[NEEDS REVIEW]` prefix.
 
 ---
 
@@ -50,8 +50,8 @@ Initialize tracking variables:
 ```
 review_cycle = 0
 test_review_cycle = 0
-MAX_REVIEW_CYCLES = 2
-MAX_TEST_REVIEW_CYCLES = 2
+MAX_REVIEW_CYCLES = 5
+MAX_TEST_REVIEW_CYCLES = 5
 ```
 
 ---
