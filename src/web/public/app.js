@@ -20194,6 +20194,7 @@ const SessionDrawer = {
   _renderTimeout: null,
   /** 'sessions' | 'agents' — which view is currently active in the sidebar */
   _viewMode: localStorage.getItem('sidebarViewMode') || 'sessions',
+  _lastRenderedViewMode: null,
   _getEl() { return this._el || (this._el = document.getElementById('sessionDrawer')); },
   _getOverlay() { return this._overlay || (this._overlay = document.getElementById('sessionDrawerOverlay')); },
   _getList() { return this._list || (this._list = document.getElementById('sessionDrawerList')); },
@@ -20684,6 +20685,9 @@ const SessionDrawer = {
    * Returns true if incremental update was sufficient, false if full rebuild is needed.
    */
   _tryIncrementalUpdate(list) {
+    // Force full rebuild when view mode changed (e.g. agents -> sessions)
+    if (this._viewMode !== this._lastRenderedViewMode) return false;
+
     const existingRows = list.querySelectorAll('.drawer-session-row[data-session-id]');
     if (existingRows.length === 0) return false; // No existing DOM — need full build
 
@@ -20771,6 +20775,7 @@ const SessionDrawer = {
 
     if (this._viewMode === 'agents') {
       this._renderAgentsView(list);
+      this._lastRenderedViewMode = 'agents';
       return;
     }
 
@@ -20999,6 +21004,8 @@ const SessionDrawer = {
     footer.appendChild(cloneBtn);
     footer.appendChild(historyBtn);
     list.appendChild(footer);
+
+    this._lastRenderedViewMode = 'sessions';
   },
 
   /** Resolve the best-matching case for a session (mirrors the resolveCase closure in _render()) */
