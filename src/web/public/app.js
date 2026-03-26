@@ -8179,6 +8179,17 @@ class CodemanApp {
           nameEl.textContent = name;
         }
 
+        // Update tooltip if changed
+        const tooltip = this._getSessionTooltip(session);
+        const currentTitle = tab.getAttribute('title') || '';
+        if (tooltip !== currentTitle) {
+          if (tooltip) {
+            tab.setAttribute('title', tooltip);
+          } else {
+            tab.removeAttribute('title');
+          }
+        }
+
         // Update task badge
         const badgeEl = tab.querySelector('.tab-badge');
         if (hasRunningTasks) {
@@ -8285,7 +8296,8 @@ class CodemanApp {
       const tallTabsEnabled = this._tallTabsEnabled ?? false;
       const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${session.workingDir ? `title="${escapeHtml(session.workingDir)}"` : ''}>
+      const tooltip = this._getSessionTooltip(session);
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tooltip ? `title="${escapeHtml(tooltip)}"` : ''}>
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
@@ -8507,11 +8519,53 @@ class CodemanApp {
     if (session.name) {
       return session.name;
     }
-    // Fall back to directory name
+    // Derive human-readable name from branch or directory
+    if (session.worktreeBranch) {
+      return this._cleanBranchName(session.worktreeBranch);
+    }
     if (session.workingDir) {
-      return session.workingDir.split('/').pop() || session.workingDir;
+      const basename = session.workingDir.split('/').pop() || session.workingDir;
+      const cleaned = this._cleanDirName(basename);
+      return cleaned || basename;
     }
     return this.getShortId(session.id);
+  }
+
+  /** Strip branch type prefix and ticket IDs from a branch name */
+  _cleanBranchName(branch) {
+    // Strip type prefix (feat/, fix/, chore/, hotfix/, etc.)
+    let name = branch.replace(/^[a-z]+\//, '');
+    // Strip work-item ticket IDs like "wi-55196757-" or "wi-05da3211-"
+    name = name.replace(/wi-[0-9a-f]{8}-?/gi, '');
+    // Clean up leading/trailing hyphens
+    name = name.replace(/^-+|-+$/g, '');
+    return name || branch;
+  }
+
+  /** Strip project prefix and ticket IDs from a directory basename */
+  _cleanDirName(basename) {
+    // Try to extract a meaningful suffix after project-type patterns
+    // e.g. "Codeman-feat-wi-55196757-sidebar-session-names" → "sidebar-session-names"
+    const typeMatch = basename.match(/-(feat|fix|chore|hotfix)-/);
+    if (typeMatch) {
+      let suffix = basename.slice(basename.indexOf(`-${typeMatch[1]}-`) + typeMatch[1].length + 2);
+      // Strip ticket IDs
+      suffix = suffix.replace(/wi-[0-9a-f]{8}-?/gi, '');
+      suffix = suffix.replace(/^-+|-+$/g, '');
+      if (suffix) return suffix;
+    }
+    // No type pattern found — strip ticket IDs from the whole name
+    let cleaned = basename.replace(/wi-[0-9a-f]{8}-?/gi, '');
+    cleaned = cleaned.replace(/^-+|-+$/g, '');
+    return cleaned !== basename ? cleaned : '';
+  }
+
+  /** Build tooltip text for a session tab */
+  _getSessionTooltip(session) {
+    if (session.worktreeBranch && session.workingDir) {
+      return `Branch: ${session.worktreeBranch}\n${session.workingDir}`;
+    }
+    return session.workingDir || '';
   }
 
   // ═══════════════════════════════════════════════════════════════
