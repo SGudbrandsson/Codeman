@@ -144,6 +144,7 @@
         Notifications <span id="ovfNotifBadge" style="display:none"></span>
       </button>
       <button class="overflow-item" id="ovfLifecycleBtn" role="menuitem">Lifecycle Log</button>
+      <button class="overflow-item" id="ovfCommandBtn" role="menuitem" style="display:none">Command</button>
       <button class="overflow-item" id="ovfSettingsBtn" role="menuitem">Settings <span id="ovfUpdateBadge" style="display:none">&#11044;</span></button>
       <div class="overflow-font-controls" role="menuitem">
         <button id="ovfFontDec">A-</button>
@@ -2478,6 +2479,19 @@
       <button class="mcp-btn-apply" id="mcpFormSave">Add to session</button>
       <button class="mcp-btn-cancel" id="mcpFormCancel">Cancel</button>
     </div>
+  </div>
+</div>
+
+<!-- Command Panel (natural language interface) -->
+<div id="commandPanel" class="mcp-panel command-panel" style="display:none" aria-label="Command Panel">
+  <div class="mcp-panel-header">
+    <span class="mcp-panel-title">Command</span>
+    <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+  </div>
+  <div class="command-panel-messages" id="commandMessages"></div>
+  <div class="command-input-row">
+    <input type="text" id="commandInput" class="command-input" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false">
+    <button id="commandSendBtn" class="command-send-btn" title="Send">&#x2191;</button>
   </div>
 </div>
 
