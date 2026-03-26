@@ -430,69 +430,71 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       let textResponse = '';
       let needsConfirmation: { confirmId: string; action: string; description: string } | undefined;
 
-      // Process response blocks
+      // Extract text and collect tool_use blocks
+      const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       for (const block of response.content) {
         if (block.type === 'text' && block.text) {
           textResponse += block.text;
-        } else if (block.type === 'tool_use' && block.name && block.input) {
-          const toolName = block.name;
-          const toolInput = block.input;
+        } else if (block.type === 'tool_use' && block.name && block.input && block.id) {
+          toolUseBlocks.push({ id: block.id, name: block.name, input: block.input });
+        }
+      }
 
-          // Check if destructive — require confirmation
-          if (DESTRUCTIVE_TOOLS.has(toolName)) {
-            const confirmId = crypto.randomUUID();
-            const description = `${toolName}(${JSON.stringify(toolInput)})`;
-            pendingConfirmations.set(confirmId, {
-              confirmId,
-              conversationId: conversationId!,
-              toolName,
-              toolInput,
-              description,
-              createdAt: Date.now(),
-            });
-            needsConfirmation = { confirmId, action: toolName, description };
+      if (toolUseBlocks.length > 0) {
+        // Check for destructive tools first
+        const destructiveBlock = toolUseBlocks.find((b) => DESTRUCTIVE_TOOLS.has(b.name));
+        if (destructiveBlock) {
+          const confirmId = crypto.randomUUID();
+          const description = `${destructiveBlock.name}(${JSON.stringify(destructiveBlock.input)})`;
+          pendingConfirmations.set(confirmId, {
+            confirmId,
+            conversationId: conversationId!,
+            toolName: destructiveBlock.name,
+            toolInput: destructiveBlock.input,
+            description,
+            createdAt: Date.now(),
+          });
+          needsConfirmation = { confirmId, action: destructiveBlock.name, description };
 
-            // Add tool_use and a placeholder tool_result to conversation so Claude can continue
-            conversation.messages.push({
-              role: 'assistant',
-              content: response.content as unknown as Array<Record<string, unknown>>,
-            });
-            conversation.messages.push({
-              role: 'user',
-              content: [
-                {
-                  type: 'tool_result',
-                  tool_use_id: block.id,
-                  content: 'Awaiting user confirmation for this destructive action.',
-                },
-              ],
-            });
-
-            // Don't execute — wait for confirmation
-            break;
-          }
-
-          // Non-destructive: execute immediately
-          const result = await executeTool(toolName, toolInput, ctx);
-          actions.push({ tool: toolName, ...result });
-
-          // Add the assistant's tool_use and the tool_result to conversation
+          // Add assistant response + placeholder tool_results for ALL tool_uses
           conversation.messages.push({
             role: 'assistant',
             content: response.content as unknown as Array<Record<string, unknown>>,
           });
           conversation.messages.push({
             role: 'user',
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: JSON.stringify(result),
-              },
-            ],
+            content: toolUseBlocks.map((b) => ({
+              type: 'tool_result' as const,
+              tool_use_id: b.id,
+              content: DESTRUCTIVE_TOOLS.has(b.name)
+                ? 'Awaiting user confirmation for this destructive action.'
+                : 'Skipped — waiting for confirmation on destructive action in same response.',
+            })),
+          });
+        } else {
+          // Execute ALL tool calls, collect results
+          const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
+          for (const block of toolUseBlocks) {
+            const result = await executeTool(block.name, block.input, ctx);
+            actions.push({ tool: block.name, ...result });
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(result),
+            });
+          }
+
+          // Push assistant response (with all tool_uses) + user response (with all tool_results)
+          conversation.messages.push({
+            role: 'assistant',
+            content: response.content as unknown as Array<Record<string, unknown>>,
+          });
+          conversation.messages.push({
+            role: 'user',
+            content: toolResults,
           });
 
-          // Make a follow-up call to get the text summary
+          // Follow-up call to get text summary of the tool results
           const followUp = await client.messages.create({
             model: 'claude-haiku-4-5-20251001',
             max_tokens: 1024,
@@ -504,26 +506,19 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
             })),
           });
 
-          // Extract text from follow-up
           for (const fb of followUp.content) {
             if (fb.type === 'text' && fb.text) {
               textResponse += fb.text;
             }
           }
 
-          // Save assistant follow-up response
           conversation.messages.push({
             role: 'assistant',
             content: followUp.content as unknown as Array<Record<string, unknown>>,
           });
-
-          // Only process first tool call for simplicity
-          break;
         }
-      }
-
-      // If no tool was used, save the plain text response
-      if (actions.length === 0 && !needsConfirmation) {
+      } else {
+        // No tools — save plain text response
         conversation.messages.push({
           role: 'assistant',
           content: response.content as unknown as Array<Record<string, unknown>>,
