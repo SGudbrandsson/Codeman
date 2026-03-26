@@ -850,7 +850,30 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
   async checkStalls(): Promise<void> {
     const config = this.getConfig();
     const inProgress = listWorkItems({ status: 'in_progress' });
+    const blocked = listWorkItems({ status: 'blocked' });
     const now = Date.now();
+
+    // Also check blocked items for TASK.md completion — they may have been
+    // prematurely marked blocked before the task actually finished.
+    for (const item of blocked) {
+      if (!item.worktreePath) continue;
+      const taskMdPath = join(item.worktreePath, 'TASK.md');
+      try {
+        const taskMdContent = await fs.readFile(taskMdPath, 'utf-8');
+        const taskStatus = parseTaskMdStatus(taskMdContent);
+        if (taskStatus === 'done') {
+          console.log(`[orchestrator] unblocking ${item.id} — TASK.md status is 'done'`);
+          updateWorkItem(item.id, { status: 'review' as 'review' });
+          this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'review' });
+          this.handleCompletionFlow(item.id).catch((err) => {
+            console.error(`[orchestrator] completion flow failed for ${item.id}:`, getErrorMessage(err));
+          });
+          this.nudgedItems.delete(item.id);
+        }
+      } catch {
+        // TASK.md not found — stay blocked
+      }
+    }
 
     for (const item of inProgress) {
       if (!item.worktreePath) continue;
