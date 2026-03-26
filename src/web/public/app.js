@@ -2107,6 +2107,7 @@ const SessionSwitcher = {
 const CommandPanel = {
   _panel: null, _messages: null, _input: null, _sendBtn: null,
   _conversationId: null, _available: false, _sending: false,
+  _pendingImages: [], // { dataUrl, file }
 
   init() {
     this._panel = document.getElementById('commandPanel');
@@ -2115,13 +2116,32 @@ const CommandPanel = {
     this._sendBtn = document.getElementById('commandSendBtn');
     if (!this._panel) return;
     document.getElementById('commandPanelClose')?.addEventListener('click', () => this.close());
+    document.getElementById('commandNewBtn')?.addEventListener('click', () => {
+      this.clearHistory();
+      this._addMessage('assistant', 'New conversation started. How can I help?');
+    });
     this._sendBtn?.addEventListener('click', () => this._send());
     this._input?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._send(); }
     });
+    // Auto-grow textarea
+    this._input?.addEventListener('input', () => this._autoGrow());
+    // File attachment
+    const fileInput = document.getElementById('commandFileInput');
+    document.getElementById('commandAttachBtn')?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', (e) => this._onFileSelected(e));
+    // Paste image support
+    this._input?.addEventListener('paste', (e) => this._onPaste(e));
     this._conversationId = localStorage.getItem('commandPanelConvId') || null;
     this._restoreHistory();
     this._checkStatus();
+  },
+
+  _autoGrow() {
+    const ta = this._input;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 150) + 'px';
   },
 
   async _checkStatus() {
@@ -2159,13 +2179,21 @@ const CommandPanel = {
     else this.open();
   },
 
-  async _send() {
+  async _send(retryMessage) {
     if (this._sending || !this._input) return;
-    const message = this._input.value.trim();
+    const message = retryMessage || this._input.value.trim();
     if (!message) return;
-    this._input.value = '';
+    if (!retryMessage) {
+      this._input.value = '';
+      this._input.style.height = '';
+    }
     this._sending = true;
     this._sendBtn.disabled = true;
+
+    // Collect pending images
+    const images = this._pendingImages.map(img => ({ dataUrl: img.dataUrl }));
+    this._clearAttachments();
+
     this._addMessage('user', message);
     this._saveHistory();
     const typing = document.createElement('div');
@@ -2177,11 +2205,33 @@ const CommandPanel = {
       const res = await fetch('/api/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversationId: this._conversationId }),
+        body: JSON.stringify({ message, conversationId: this._conversationId, images: images.length > 0 ? images : undefined }),
       });
       const data = await res.json();
       typing.remove();
+
+      // Bug 5: detect stale conversation / tool_use mismatch errors
+      if (data.conversationCleared) {
+        // Server cleared the conversation for us, reset local state
+        localStorage.removeItem('commandPanelHistory');
+        if (this._messages) this._messages.textContent = '';
+        this._addMessage('assistant', 'Previous conversation had errors and was reset. Here is the response to your latest message:');
+      }
+
       if (data.error) {
+        const errStr = String(data.error);
+        if (errStr.includes('tool_use') || errStr.includes('tool_result') || res.status === 400) {
+          // Stale conversation — clear and retry once
+          this.clearHistory();
+          this._addMessage('error', 'Conversation was corrupted. Starting fresh...');
+          this._saveHistory();
+          this._sending = false;
+          this._sendBtn.disabled = false;
+          if (!retryMessage) {
+            this._send(message);
+          }
+          return;
+        }
         this._addMessage('error', data.error);
       } else {
         if (data.conversationId) {
@@ -2215,6 +2265,13 @@ const CommandPanel = {
       }
       div.appendChild(actDiv);
     }
+    // Timestamp
+    const timeEl = document.createElement('div');
+    timeEl.className = 'command-msg-time';
+    timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    div.appendChild(timeEl);
+    // Make "Settings > Integrations" clickable (Bug 4)
+    this._linkifySettings(div);
     this._messages.appendChild(div);
     this._scrollToBottom();
     return div;
@@ -2331,7 +2388,12 @@ const CommandPanel = {
       for (const el of this._messages.children) {
         if (el.classList.contains('command-typing')) continue;
         const role = el.classList.contains('command-msg-user') ? 'user' : el.classList.contains('command-msg-error') ? 'error' : 'assistant';
-        msgs.push({ role, text: el.textContent || '' });
+        const timeEl = el.querySelector('.command-msg-time');
+        const time = timeEl ? timeEl.textContent : '';
+        const clone = el.cloneNode(true);
+        const cloneTime = clone.querySelector('.command-msg-time');
+        if (cloneTime) cloneTime.remove();
+        msgs.push({ role, text: clone.textContent || '', time });
       }
       localStorage.setItem('commandPanelHistory', JSON.stringify(msgs.slice(-50)));
     } catch { /* quota exceeded */ }
@@ -2346,7 +2408,14 @@ const CommandPanel = {
       for (const m of msgs) {
         const div = document.createElement('div');
         div.className = 'command-msg command-msg-' + m.role;
-        div.textContent = m.text || '';
+        div.appendChild(this._renderMarkdownSafe(m.text || ''));
+        if (m.time) {
+          const timeEl = document.createElement('div');
+          timeEl.className = 'command-msg-time';
+          timeEl.textContent = m.time;
+          div.appendChild(timeEl);
+        }
+        this._linkifySettings(div);
         this._messages.appendChild(div);
       }
     } catch { /* corrupted */ }
@@ -2356,7 +2425,106 @@ const CommandPanel = {
     localStorage.removeItem('commandPanelHistory');
     localStorage.removeItem('commandPanelConvId');
     this._conversationId = null;
+    this._pendingImages = [];
+    this._clearAttachments();
     if (this._messages) this._messages.textContent = '';
+  },
+
+  /** Make "Settings > Integrations" text clickable (Bug 4) */
+  _linkifySettings(container) {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const text = node.textContent;
+      const pattern = /Settings\s*>\s*Integrations/g;
+      const match = pattern.exec(text);
+      if (match) {
+        const before = text.slice(0, match.index);
+        const after = text.slice(match.index + match[0].length);
+        const frag = document.createDocumentFragment();
+        if (before) frag.appendChild(document.createTextNode(before));
+        const link = document.createElement('button');
+        link.className = 'command-settings-link';
+        link.textContent = 'Settings > Integrations';
+        link.addEventListener('click', () => {
+          if (window.app && app.openAppSettings) app.openAppSettings();
+          setTimeout(() => { if (window.app && app.switchSettingsTab) app.switchSettingsTab('settings-integrations'); }, 100);
+        });
+        frag.appendChild(link);
+        if (after) frag.appendChild(document.createTextNode(after));
+        node.parentNode.replaceChild(frag, node);
+      }
+    }
+  },
+
+  /** Handle file input selection */
+  _onFileSelected(e) {
+    const files = e.target?.files;
+    if (!files || files.length === 0) return;
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        this._pendingImages.push({ dataUrl: ev.target.result, file });
+        this._renderAttachments();
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  },
+
+  /** Handle paste events for images */
+  _onPaste(e) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          this._pendingImages.push({ dataUrl: ev.target.result, file });
+          this._renderAttachments();
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  },
+
+  _renderAttachments() {
+    const container = document.getElementById('commandAttachments');
+    if (!container) return;
+    container.textContent = '';
+    if (this._pendingImages.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+    container.style.display = '';
+    for (let i = 0; i < this._pendingImages.length; i++) {
+      const thumb = document.createElement('div');
+      thumb.className = 'command-attach-thumb';
+      const img = document.createElement('img');
+      img.src = this._pendingImages[i].dataUrl;
+      thumb.appendChild(img);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'command-attach-remove';
+      removeBtn.textContent = '\u2715';
+      const idx = i;
+      removeBtn.addEventListener('click', () => {
+        this._pendingImages.splice(idx, 1);
+        this._renderAttachments();
+      });
+      thumb.appendChild(removeBtn);
+      container.appendChild(thumb);
+    }
+  },
+
+  _clearAttachments() {
+    this._pendingImages = [];
+    const container = document.getElementById('commandAttachments');
+    if (container) { container.textContent = ''; container.style.display = 'none'; }
   },
 };
 

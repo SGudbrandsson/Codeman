@@ -2618,12 +2618,18 @@
 <div id="commandPanel" class="mcp-panel command-panel" style="display:none" aria-label="Command Panel">
   <div class="mcp-panel-header">
     <span class="mcp-panel-title">Command</span>
-    <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+    <div class="command-header-actions">
+      <button class="command-new-btn" id="commandNewBtn" title="New conversation">&#x2b;</button>
+      <button class="mcp-panel-close" id="commandPanelClose" title="Close">&#x2715;</button>
+    </div>
   </div>
   <div class="command-panel-messages" id="commandMessages"></div>
+  <div class="command-attachments" id="commandAttachments" style="display:none"></div>
   <div class="command-input-row">
-    <input type="text" id="commandInput" class="command-input" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false">
+    <button class="command-attach-btn" id="commandAttachBtn" title="Attach image">&#x1f4ce;</button>
+    <textarea id="commandInput" class="command-input" rows="1" placeholder="Ask Codeman anything..." autocomplete="off" spellcheck="false"></textarea>
     <button id="commandSendBtn" class="command-send-btn" title="Send">&#x2191;</button>
+    <input type="file" id="commandFileInput" accept="image/*" style="display:none">
   </div>
 </div>
 

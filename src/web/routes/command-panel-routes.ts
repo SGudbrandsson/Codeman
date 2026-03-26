@@ -478,7 +478,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
   app.post('/api/command', async (req, reply) => {
     pruneExpired();
 
-    const body = req.body as { message?: string; conversationId?: string };
+    const body = req.body as { message?: string; conversationId?: string; images?: Array<{ dataUrl: string }> };
     const message = body?.message?.trim();
     if (!message) {
       reply.code(400);
@@ -495,8 +495,29 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
     }
     conversation.lastActivity = Date.now();
 
+    // Build user message content — multimodal if images are attached
+    const images = body.images || [];
+    let userContent: string | Array<Record<string, unknown>>;
+    if (images.length > 0) {
+      const contentBlocks: Array<Record<string, unknown>> = [];
+      for (const img of images) {
+        // dataUrl format: "data:image/png;base64,iVBOR..."
+        const match = img.dataUrl?.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) {
+          contentBlocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: match[1], data: match[2] },
+          });
+        }
+      }
+      contentBlocks.push({ type: 'text', text: message });
+      userContent = contentBlocks;
+    } else {
+      userContent = message;
+    }
+
     // Add user message
-    conversation.messages.push({ role: 'user', content: message });
+    conversation.messages.push({ role: 'user', content: userContent });
 
     // Trim if too long
     if (conversation.messages.length > MAX_MESSAGES) {
@@ -651,6 +672,56 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
         reply.code(503);
         return { error: 'Anthropic SDK not available' };
       }
+
+      // Bug 5: detect tool_use/tool_result mismatch — clear conversation and retry
+      if (errMsg.includes('tool_use') && (errMsg.includes('tool_result') || errMsg.includes('400'))) {
+        // Clear the corrupted conversation, keep only the latest user message
+        const lastUserMsg = conversation!.messages.filter((m) => m.role === 'user').pop();
+        conversation!.messages = lastUserMsg ? [lastUserMsg] : [];
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const Anthropic2 = ((await import('@anthropic-ai/sdk' as string)) as any).default;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          const client2 = new Anthropic2() as {
+            messages: {
+              create: (opts: Record<string, unknown>) => Promise<{
+                content: Array<{
+                  type: string;
+                  text?: string;
+                  id?: string;
+                  name?: string;
+                  input?: Record<string, unknown>;
+                }>;
+                stop_reason: string;
+              }>;
+            };
+          };
+          const retryResponse = await client2.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1024,
+            system: SYSTEM_PROMPT,
+            tools: TOOLS,
+            messages: conversation!.messages.map((m) => ({ role: m.role, content: m.content })),
+          });
+          let retryText = '';
+          for (const block of retryResponse.content) {
+            if (block.type === 'text' && block.text) retryText += block.text;
+          }
+          conversation!.messages.push({
+            role: 'assistant',
+            content: retryResponse.content as unknown as Array<Record<string, unknown>>,
+          });
+          return {
+            response: retryText || 'I processed your request.',
+            conversationId,
+            conversationCleared: true,
+          };
+        } catch (retryErr) {
+          reply.code(500);
+          return { error: `Command failed after recovery: ${String(retryErr)}`, conversationCleared: true };
+        }
+      }
+
       reply.code(500);
       return { error: `Command failed: ${errMsg}` };
     }
