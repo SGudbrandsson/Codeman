@@ -12538,6 +12538,9 @@ class CodemanApp {
     // Load orchestrator configuration
     this.loadOrchestratorConfigForSettings();
 
+    // Load integration settings
+    this.loadIntegrationSettings();
+
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
     const modal = document.getElementById('appSettingsModal');
@@ -13386,6 +13389,9 @@ class CodemanApp {
       // Save orchestrator configuration separately
       await this.saveOrchestratorConfig();
 
+      // Save integration settings separately (tokens go to server config)
+      await this.saveIntegrationSettings();
+
       this.showToast('Settings saved', 'success');
 
       // Show tunnel-specific feedback if toggled on
@@ -13514,6 +13520,120 @@ class CodemanApp {
       });
     } catch (err) {
       console.warn('Failed to save orchestrator config:', err);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Integration Settings (Asana, GitHub, Sentry, Slack)
+  // ═══════════════════════════════════════════════════════════════
+
+  async loadIntegrationSettings() {
+    try {
+      const res = await fetch('/api/integrations/config');
+      const json = await res.json();
+      if (!json.success) return;
+      const data = json.data || {};
+
+      // Asana
+      const asana = data.asana || {};
+      const asanaEnabledEl = document.getElementById('intgAsanaEnabled');
+      if (asanaEnabledEl) asanaEnabledEl.checked = asana.enabled ?? false;
+      const asanaStatusEl = document.getElementById('intgAsanaStatus');
+      if (asanaStatusEl) asanaStatusEl.textContent = asana.hasToken ? 'Token set' : 'Not configured';
+      // Don't populate token field — it's masked server-side
+
+      // GitHub
+      const github = data.github || {};
+      const ghEnabledEl = document.getElementById('intgGithubEnabled');
+      if (ghEnabledEl) ghEnabledEl.checked = github.enabled ?? false;
+      const ghStatusEl = document.getElementById('intgGithubStatus');
+      if (ghStatusEl) ghStatusEl.textContent = github.hasToken ? 'Token set' : 'Using gh CLI';
+
+      // Sentry
+      const sentry = data.sentry || {};
+      const sentryEnabledEl = document.getElementById('intgSentryEnabled');
+      if (sentryEnabledEl) sentryEnabledEl.checked = sentry.enabled ?? false;
+      const sentryOrgEl = document.getElementById('intgSentryOrg');
+      if (sentryOrgEl && sentry.org) sentryOrgEl.value = sentry.org;
+      const sentryStatusEl = document.getElementById('intgSentryStatus');
+      if (sentryStatusEl) sentryStatusEl.textContent = sentry.hasToken ? 'Token set' : 'Not configured';
+
+      // Slack
+      const slack = data.slack || {};
+      const slackEnabledEl = document.getElementById('intgSlackEnabled');
+      if (slackEnabledEl) slackEnabledEl.checked = slack.enabled ?? false;
+      const slackTeamEl = document.getElementById('intgSlackTeamId');
+      if (slackTeamEl && slack.teamId) slackTeamEl.value = slack.teamId;
+      const slackStatusEl = document.getElementById('intgSlackStatus');
+      if (slackStatusEl) slackStatusEl.textContent = slack.hasToken ? 'Token set' : 'Not configured';
+    } catch (err) {
+      console.warn('Failed to load integration settings:', err);
+    }
+  }
+
+  async saveIntegrationSettings() {
+    const config = {};
+
+    // Asana
+    const asanaToken = document.getElementById('intgAsanaToken')?.value?.trim();
+    config.asana = {
+      enabled: document.getElementById('intgAsanaEnabled')?.checked ?? false,
+      ...(asanaToken ? { token: asanaToken } : {}),
+    };
+
+    // GitHub
+    const ghToken = document.getElementById('intgGithubToken')?.value?.trim();
+    config.github = {
+      enabled: document.getElementById('intgGithubEnabled')?.checked ?? false,
+      ...(ghToken ? { token: ghToken } : {}),
+    };
+
+    // Sentry
+    const sentryToken = document.getElementById('intgSentryToken')?.value?.trim();
+    config.sentry = {
+      enabled: document.getElementById('intgSentryEnabled')?.checked ?? false,
+      ...(sentryToken ? { token: sentryToken } : {}),
+      org: document.getElementById('intgSentryOrg')?.value?.trim() || undefined,
+    };
+
+    // Slack
+    const slackToken = document.getElementById('intgSlackToken')?.value?.trim();
+    config.slack = {
+      enabled: document.getElementById('intgSlackEnabled')?.checked ?? false,
+      ...(slackToken ? { token: slackToken } : {}),
+      teamId: document.getElementById('intgSlackTeamId')?.value?.trim() || undefined,
+    };
+
+    try {
+      await fetch('/api/integrations/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+    } catch (err) {
+      console.warn('Failed to save integration settings:', err);
+    }
+  }
+
+  async testIntegration(service) {
+    const statusEl = document.getElementById(`intg${service.charAt(0).toUpperCase() + service.slice(1)}Status`);
+    if (statusEl) statusEl.textContent = 'Testing...';
+
+    // Save first so the server has the latest tokens
+    await this.saveIntegrationSettings();
+
+    try {
+      const res = await fetch(`/api/integrations/test/${service}`, { method: 'POST' });
+      const json = await res.json();
+      if (statusEl) {
+        statusEl.textContent = json.success ? 'Connected' : (json.error || 'Failed');
+        statusEl.style.color = json.success ? 'var(--success-color, #4caf50)' : 'var(--error-color, #f44336)';
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = 'Error';
+        statusEl.style.color = 'var(--error-color, #f44336)';
+      }
     }
   }
 

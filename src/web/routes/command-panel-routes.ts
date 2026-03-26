@@ -16,6 +16,7 @@ import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/ind
 import { SseEvent } from '../sse-events.js';
 import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/index.js';
 import type { WorkItemStatus } from '../../work-items/index.js';
+import { fetchAsanaTask, fetchGitHubContext, fetchSentryIssue, fetchSlackMessage } from '../../integrations/index.js';
 
 type CommandPanelCtx = SessionPort & EventPort & ConfigPort & InfraPort;
 
@@ -183,6 +184,60 @@ const TOOLS = [
     description: 'Get system-level information: total sessions, uptime, server port, SSE client count.',
     input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
   },
+  {
+    name: 'fetch_asana_task',
+    description:
+      'Fetch an Asana task by ID or URL. Returns task details (title, description, URL). Use when user references an Asana task or pastes an Asana URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id_or_url: { type: 'string', description: 'Asana task GID or full Asana task URL' },
+      },
+      required: ['task_id_or_url'],
+    },
+  },
+  {
+    name: 'fetch_github_context',
+    description:
+      'Fetch a GitHub PR or issue by URL. Returns title, body, state, diff summary, and review comments. Use when user pastes a GitHub PR or issue URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Full GitHub PR or issue URL (e.g. https://github.com/owner/repo/pull/123)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'fetch_sentry_issue',
+    description:
+      'Fetch a Sentry issue by ID. Returns error title, culprit, stack trace, occurrence count. Use when user references a Sentry issue.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        issue_id: { type: 'string', description: 'Sentry issue ID (numeric)' },
+      },
+      required: ['issue_id'],
+    },
+  },
+  {
+    name: 'fetch_slack_message',
+    description:
+      'Fetch a Slack message and its thread by URL. Returns message text, author, channel, and thread replies. Use when user pastes a Slack message URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Slack message URL (e.g. https://team.slack.com/archives/C123/p1234567890)',
+        },
+      },
+      required: ['url'],
+    },
+  },
 ];
 
 const SYSTEM_PROMPT = `You are Codeman's command assistant — a manager's interface for delegating work to AI agents. You help create tasks, monitor progress, and take action through tools.
@@ -190,8 +245,8 @@ const SYSTEM_PROMPT = `You are Codeman's command assistant — a manager's inter
 You have tools to interact with Codeman: create work items, list sessions, check orchestrator status, and more. ALWAYS prefer action over asking questions. When the user asks you to do something, DO IT using tools.
 
 Key behaviors:
-- **When the user pastes a URL (Asana, Sentry, GitHub, Slack, etc.):** You cannot browse URLs, but you CAN create a work item from the context the user provides. Extract what you can from the URL (task ID, project name, issue number) and create a work item. Include the URL in the description so the agent can access it.
-- **When the user says "fix X" or "create a task for X":** Use create_work_item immediately. Include "caseId" in the description if you can infer the project.
+- **When the user pastes a URL (Asana, Sentry, GitHub, Slack):** Use the appropriate fetch tool (fetch_asana_task, fetch_github_context, fetch_sentry_issue, fetch_slack_message) to get context FIRST, then offer to create a work item from it.
+- **When the user says "fix X" or "create a task for X":** Use create_work_item immediately. Include caseId if you can infer the project.
 - **When asked about status:** Use list_work_items, orchestrator_status, or list_sessions to give a real answer, not a guess.
 - **Be concise.** This is a utility chat, not a conversation. Lead with action.
 - When referring to sessions, include the name AND first 8 chars of ID.
@@ -340,6 +395,60 @@ async function executeTool(
             testMode: ctx.testMode,
           },
         };
+      }
+
+      case 'fetch_asana_task': {
+        const integrations = ctx.store.getConfig().integrations;
+        const asanaCfg = integrations?.asana;
+        if (!asanaCfg?.enabled || !asanaCfg.token) {
+          return {
+            success: false,
+            error: 'Asana integration not configured. Go to Settings > Integrations to add your Asana token.',
+          };
+        }
+        const task = await fetchAsanaTask(toolInput.task_id_or_url as string, asanaCfg.token);
+        return {
+          success: true,
+          result: {
+            title: task.name || '(Untitled)',
+            description: task.notes || '',
+            url: task.permalink_url || null,
+            gid: task.gid,
+          },
+        };
+      }
+
+      case 'fetch_github_context': {
+        const integrations = ctx.store.getConfig().integrations;
+        const ghToken = integrations?.github?.token;
+        const context = await fetchGitHubContext(toolInput.url as string, ghToken);
+        return { success: true, result: context };
+      }
+
+      case 'fetch_sentry_issue': {
+        const integrations = ctx.store.getConfig().integrations;
+        const sentryCfg = integrations?.sentry;
+        if (!sentryCfg?.enabled || !sentryCfg.token || !sentryCfg.org) {
+          return {
+            success: false,
+            error: 'Sentry integration not configured. Go to Settings > Integrations to add your Sentry token and org.',
+          };
+        }
+        const issue = await fetchSentryIssue(toolInput.issue_id as string, sentryCfg.token, sentryCfg.org);
+        return { success: true, result: issue };
+      }
+
+      case 'fetch_slack_message': {
+        const integrations = ctx.store.getConfig().integrations;
+        const slackCfg = integrations?.slack;
+        if (!slackCfg?.enabled || !slackCfg.token) {
+          return {
+            success: false,
+            error: 'Slack integration not configured. Go to Settings > Integrations to add your Slack bot token.',
+          };
+        }
+        const msg = await fetchSlackMessage(toolInput.url as string, slackCfg.token);
+        return { success: true, result: msg };
       }
 
       default:

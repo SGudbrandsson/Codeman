@@ -24,6 +24,7 @@ import type { TaskState } from './task.js';
 import type { RalphLoopState } from './ralph.js';
 import type { RespawnConfig } from './respawn.js';
 import type { OrchestratorConfig } from './orchestrator.js';
+import type { IntegrationsConfig } from '../integrations/types.js';
 
 // ========== Global Stats Types ==========
 
@@ -98,6 +99,8 @@ export interface AppConfig {
   clockworkWebhook?: { url: string; secret?: string | null };
   /** Automated orchestrator configuration */
   orchestrator?: OrchestratorConfig;
+  /** External integration tokens and config (Asana, GitHub, Sentry, Slack) */
+  integrations?: IntegrationsConfig;
 }
 
 /**

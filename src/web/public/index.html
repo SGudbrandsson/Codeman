@@ -1037,6 +1037,7 @@
           <button class="modal-tab-btn" data-tab="settings-shortcuts">Shortcuts</button>
           <button class="modal-tab-btn" id="settingsUpdatesTabBtn" data-tab="settings-updates">Updates</button>
           <button class="modal-tab-btn" data-tab="settings-orchestrator">Orchestrator</button>
+          <button class="modal-tab-btn" data-tab="settings-integrations">Integrations</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1623,6 +1624,112 @@
                   <span class="settings-item-desc">Minimum score gap for a clear winner in agent capability matching</span>
                 </div>
                 <input type="number" id="orchMatchingThreshold" class="settings-input" min="1" max="20" step="1" style="width:80px;">
+              </div>
+            </div>
+          </div>
+          <!-- Integrations Tab -->
+          <div class="modal-tab-content hidden" id="settings-integrations">
+            <div class="settings-grid">
+              <!-- Asana -->
+              <div class="settings-section-header">Asana</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgAsanaEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Personal Access Token</span>
+                  <span class="settings-item-desc">From Asana Developer Console</span>
+                </div>
+                <input type="password" id="intgAsanaToken" class="settings-input" placeholder="Bearer token" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgAsanaStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('asana')">Test</button>
+              </div>
+
+              <!-- GitHub -->
+              <div class="settings-section-header">GitHub</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgGithubEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Token (optional)</span>
+                  <span class="settings-item-desc">Falls back to gh CLI auth if empty</span>
+                </div>
+                <input type="password" id="intgGithubToken" class="settings-input" placeholder="ghp_..." style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgGithubStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('github')">Test</button>
+              </div>
+
+              <!-- Sentry -->
+              <div class="settings-section-header">Sentry</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgSentryEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Auth Token</span>
+                  <span class="settings-item-desc">From Sentry Settings > Auth Tokens</span>
+                </div>
+                <input type="password" id="intgSentryToken" class="settings-input" placeholder="Auth token" style="width:220px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Organization Slug</span>
+                  <span class="settings-item-desc">Your Sentry organization URL slug</span>
+                </div>
+                <input type="text" id="intgSentryOrg" class="settings-input" placeholder="my-org" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgSentryStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('sentry')">Test</button>
+              </div>
+
+              <!-- Slack -->
+              <div class="settings-section-header">Slack</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Enabled</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="intgSlackEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Bot Token</span>
+                  <span class="settings-item-desc">xoxb-... from Slack App settings</span>
+                </div>
+                <input type="password" id="intgSlackToken" class="settings-input" placeholder="xoxb-..." style="width:220px;">
+              </div>
+              <div class="settings-item settings-item-multiline">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Team ID (optional)</span>
+                  <span class="settings-item-desc">Workspace team ID for API calls</span>
+                </div>
+                <input type="text" id="intgSlackTeamId" class="settings-input" placeholder="T0123456" style="width:220px;">
+              </div>
+              <div class="settings-item">
+                <span class="settings-item-label">Status</span>
+                <span id="intgSlackStatus" class="integration-status">--</span>
+                <button class="btn-toolbar btn-sm" onclick="app.testIntegration('slack')">Test</button>
               </div>
             </div>
           </div>
