@@ -4599,6 +4599,25 @@ class CodemanApp {
     ModelPicker.init();
     OverflowMenu.init();
     CommandPanel.init();
+    // Global paste handler: intercept image/file paste events regardless of focus.
+    // When the terminal has focus, xterm ignores clipboard file data — this catches it.
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
+      const fileItems = items.filter(it => it.kind === 'file');
+      if (!fileItems.length) return; // No files — let normal text paste proceed
+      e.preventDefault();
+      e.stopPropagation();
+      // Route to CommandPanel if it's open, otherwise to InputPanel (compose bar)
+      if (CommandPanel._panel?.classList.contains('open')) {
+        CommandPanel._onPaste(e);
+      } else {
+        const imageFiles = fileItems.filter(it => it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
+        const nonImageFiles = fileItems.filter(it => it.type && !it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
+        if (!InputPanel._open) InputPanel.open();
+        if (imageFiles.length) InputPanel._onFilesFromPaste(imageFiles);
+        if (nonImageFiles.length) InputPanel._uploadNonImageFiles(nonImageFiles);
+      }
+    }, true); // Use capture phase to intercept before xterm's handler
     SessionIndicatorBar.init();
     PanelBackdrop.init();
     TerminalSearch.init();
