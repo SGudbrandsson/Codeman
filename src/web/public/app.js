@@ -2644,9 +2644,12 @@ const TranscriptView = {
     }
 
     try {
-      const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
+      const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript?tail=' + (this._BATCH_SIZE * 2));
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const blocks = await res.json();
+      const totalBlocks = parseInt(res.headers.get('X-Total-Blocks') || '0', 10);
+      // Store total so lazy-load knows there are older blocks on the server
+      state.totalServerBlocks = totalBlocks || blocks.length;
       // Abort if a newer load() was started (user switched sessions mid-fetch)
       if (myGen !== this._loadGen) return;
 
@@ -2728,7 +2731,8 @@ const TranscriptView = {
       // Scroll to bottom unless the user explicitly scrolled up during the fetch.
       if (!state.scrolledUp) this._container.scrollTop = this._container.scrollHeight;
       if (!hadCache) this._container.style.opacity = '';
-    } catch {
+    } catch (err) {
+      console.error('[TranscriptView] load failed for', sessionId, err);
       this._container.style.opacity = '';
       this._setPlaceholder('Could not load session history.');
     }
@@ -3155,15 +3159,53 @@ const TranscriptView = {
   },
 
   /** Prepend the next batch of older blocks above the current rendered range. */
-  _prependBatch() {
+  async _prependBatch() {
     if (!this._container || !this._sessionId) return;
     const state = this._getState(this._sessionId);
-    if (this._renderedStartIdx <= 0) {
+    if (this._renderedStartIdx <= 0 && state.blocks.length >= (state.totalServerBlocks || state.blocks.length)) {
       this._removeSentinel();
       return;
     }
-    const newStart = Math.max(0, this._renderedStartIdx - this._BATCH_SIZE);
-    const batch = state.blocks.slice(newStart, this._renderedStartIdx);
+
+    let batch;
+    let newStart;
+
+    if (this._renderedStartIdx > 0) {
+      // We have older blocks in the local cache — use them
+      newStart = Math.max(0, this._renderedStartIdx - this._BATCH_SIZE);
+      batch = state.blocks.slice(newStart, this._renderedStartIdx);
+    } else if (state.totalServerBlocks && state.totalServerBlocks > state.blocks.length) {
+      // Local cache exhausted but server has more — fetch older blocks
+      try {
+        if (this._loadMoreSentinel) this._loadMoreSentinel.textContent = 'Loading older messages\u2026';
+        const need = Math.min(this._BATCH_SIZE, state.totalServerBlocks - state.blocks.length);
+        // Fetch a range that includes what we have plus the next batch
+        const fetchCount = state.blocks.length + need;
+        const res = await fetch('/api/sessions/' + encodeURIComponent(this._sessionId) + '/transcript?tail=' + fetchCount);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const allBlocks = await res.json();
+        const totalFromHeader = parseInt(res.headers.get('X-Total-Blocks') || '0', 10);
+        if (totalFromHeader) state.totalServerBlocks = totalFromHeader;
+        // The new blocks are at the beginning of allBlocks (before what we already have)
+        const newBlocks = allBlocks.slice(0, allBlocks.length - state.blocks.length);
+        if (newBlocks.length === 0) {
+          this._removeSentinel();
+          return;
+        }
+        // Prepend to local cache
+        state.blocks = [...newBlocks, ...state.blocks];
+        this._renderedStartIdx = newBlocks.length; // shift index since we prepended to cache
+        newStart = 0;
+        batch = newBlocks;
+      } catch (err) {
+        console.error('[TranscriptView] fetch older blocks failed:', err);
+        this._removeSentinel();
+        return;
+      }
+    } else {
+      this._removeSentinel();
+      return;
+    }
     // Save scroll position before prepending
     const savedHeight = this._container.scrollHeight;
     const savedTop = this._container.scrollTop;
@@ -3196,7 +3238,8 @@ const TranscriptView = {
       frag.appendChild(tempContainer.firstChild);
     }
     // Re-insert sentinel at the top if there are still more blocks, then the batch
-    if (newStart > 0 && sentinelRef) {
+    const hasMoreBlocks = newStart > 0 || (state.totalServerBlocks && state.totalServerBlocks > state.blocks.length);
+    if (hasMoreBlocks && sentinelRef) {
       realContainer.insertBefore(sentinelRef, realContainer.firstChild);
     } else {
       this._loadMoreSentinel = null;
@@ -3223,8 +3266,10 @@ const TranscriptView = {
     this._renderedStartIdx = startIdx;
     const tail = blocks.slice(startIdx);
     for (const block of tail) this._appendBlock(block, false);
-    // Insert sentinel if there are older blocks
-    if (startIdx > 0) this._insertSentinel();
+    // Insert sentinel if there are older blocks (local or on server)
+    const state = this._getState(this._sessionId);
+    const hasMoreOnServer = state && state.totalServerBlocks && state.totalServerBlocks > blocks.length;
+    if (startIdx > 0 || hasMoreOnServer) this._insertSentinel();
   },
 
   /** Show or hide the "Claude is thinking" typing indicator (in-flow bubble) */
