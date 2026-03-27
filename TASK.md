@@ -108,11 +108,41 @@ All provider config (Deepgram key, language, Web Speech API fallback) already ex
 
 **5. `src/web/public/app.js`** — Added click handler for `#composeMicBtn` in `InputPanel.init()`. On click: if recording, calls `VoiceInput.stop()`; otherwise opens compose panel if needed, sets `VoiceInput._composeBarMode = true`, and calls `VoiceInput.start()`.
 
+### Continuous recording fix (voice-input.js only)
+
+**Bug:** Mic button stopped listening after the first speech result — both Deepgram `onResult` and `_onWebSpeechResult` called `this.stop()` on first final result.
+
+**Fix:**
+- **Don't stop on result:** Removed `this.stop()` from both Deepgram `onResult` (isFinal branch) and `_onWebSpeechResult` (finalText branch). Final results now insert text immediately and reset for next utterance.
+- **Auto-restart on unexpected end:** `_onWebSpeechEnd` restarts `recognition.start()` unless `_userRequestedStop` is true. Deepgram `onEnd` calls `_startDeepgram()` to reconnect unless user requested stop.
+- **`_userRequestedStop` flag:** New flag distinguishes user-initiated stop from browser/network-initiated end events. Cleared in `start()`, set in `stop()`.
+- **Interim results in compose textarea:** New `_showInterimInCompose()` appends interim text to compose textarea. `_clearInterimFromCompose()` removes it before inserting final text (tracked via `_lastInterimLength`).
+- **Silence timeout removed:** Removed `_resetSilenceTimeout()` from both `DeepgramProvider` and `VoiceInput`. Recording is purely user-controlled (press to start, press to stop).
+- **`no-speech`/`aborted` errors ignored:** These fire naturally during silence pauses in continuous mode and are harmless — recognition auto-restarts via `_onWebSpeechEnd`.
+- **iOS Safari:** `_iosStabilityCheck` inserts stable text as final segment but keeps listening instead of stopping.
+
 ### No new settings needed
 All voice/STT provider config (Deepgram key, language, Web Speech API fallback) already exists in the Voice settings tab.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
+
+### Review attempt 2 — APPROVED (continuous recording fix)
+
+**Files reviewed:** voice-input.js (only changed file)
+
+**Findings:**
+- All 6 continuous recording requirements verified correct: `continuous=true` (already set), `interimResults=true` (already set), no stop on result, auto-restart on unexpected end, interim results in compose textarea, toggle button state.
+- `_userRequestedStop` flag lifecycle correct: cleared in `start()`, set in `stop()`, checked in both `_onWebSpeechEnd` and Deepgram `onEnd`.
+- `_lastInterimLength` tracking correct: reset in `start()` and `_clearInterimFromCompose()`, properly guards with `_composeBarMode` check.
+- Deepgram WebSocket drop handled: `onEnd` restarts `_startDeepgram()` unless user requested stop. WS handler nullification prevents race conditions.
+- iOS Safari stability check updated: inserts stable text as final segment but keeps listening.
+- Non-compose-bar mode (toolbar buttons with direct/compose insert) unaffected — `_showInterimInCompose` and `_clearInterimFromCompose` guard with `_composeBarMode`.
+- Silence timeout fully removed from both `DeepgramProvider` and `VoiceInput` — clean removal with no orphaned references.
+- `no-speech`/`aborted` errors now always ignored (correct for continuous mode — recognition auto-restarts via `_onWebSpeechEnd`).
+- No memory leaks: streams, timers, AudioContext properly cleaned up.
+
+No issues found. Approved.
 
 ### Review attempt 1 — APPROVED
 
@@ -172,3 +202,6 @@ No committed changes on branch yet (changes are uncommitted).
 - Reuse existing `voice-pulse` keyframes for recording animation to keep visual consistency with toolbar voice buttons.
 - Desktop: shifted expand button from `right: 44px` to `right: 76px` to accommodate mic button at `right: 44px` (left of send button at `right: 4px`).
 - Added `@keyframes voice-pulse` in mobile.css because styles.css is behind a desktop media query and doesn't load on mobile.
+- Continuous recording: removed all silence auto-stop behavior rather than making it configurable, because the spec is clear: only stop when user presses button.
+- Deepgram reconnect on unexpected close: reuses `_startDeepgram()` which re-acquires mic stream and opens new WebSocket. Timer resets on reconnect (acceptable trade-off vs adding reconnect-only logic).
+- Interim text tracking in compose textarea uses `_lastInterimLength` to slice off previous interim before appending new one, avoiding accumulation of stale text.
