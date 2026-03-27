@@ -38,7 +38,6 @@ const DeepgramProvider = {
   _ws: null,
   _mediaRecorder: null,
   _stream: null,
-  _silenceTimeout: null,
   _keepAliveInterval: null,
   _onResult: null,
   _onError: null,
@@ -143,7 +142,6 @@ const DeepgramProvider = {
           if (transcript) {
             const isFinal = data.is_final === true;
             this._onResult?.(transcript, isFinal);
-            this._resetSilenceTimeout();
           }
         }
       } catch (_e) {
@@ -190,7 +188,6 @@ const DeepgramProvider = {
     };
 
     this._mediaRecorder.start(250); // Send chunks every 250ms
-    this._resetSilenceTimeout();
   },
 
   _stopRecording() {
@@ -203,16 +200,7 @@ const DeepgramProvider = {
     }
   },
 
-  _resetSilenceTimeout() {
-    clearTimeout(this._silenceTimeout);
-    this._silenceTimeout = setTimeout(() => {
-      this.stop();
-    }, 3000);
-  },
-
   stop() {
-    clearTimeout(this._silenceTimeout);
-    this._silenceTimeout = null;
     clearInterval(this._keepAliveInterval);
     this._keepAliveInterval = null;
     this._stopRecording();
@@ -269,6 +257,8 @@ const VoiceInput = {
   _audioContext: null, // AudioContext for level meter
   _levelAnimFrame: null, // rAF handle for level meter
   _composeBarMode: false, // when true, insert text into compose textarea instead of PTY
+  _userRequestedStop: false, // true when user explicitly clicked stop (vs unexpected end)
+  _lastInterimLength: 0, // chars of interim text appended to compose textarea
 
   init() {
     this._initRecognition();
@@ -334,6 +324,8 @@ const VoiceInput = {
       return;
     }
     this._retryCount = 0;
+    this._userRequestedStop = false;
+    this._lastInterimLength = 0;
 
     if (this._shouldUseDeepgram()) {
       this._startDeepgram();
@@ -368,13 +360,13 @@ const VoiceInput = {
         if (!this.isRecording) return;
         this._hasReceivedResult = true;
         if (isFinal) {
-          this._accumulatedFinal += text;
-          this._hidePreview();
-          this._insertText(this._accumulatedFinal);
-          this.stop();
+          this._clearInterimFromCompose();
+          this._insertText(text);
+          this._accumulatedFinal = '';
+          this._showPreview('Listening...', 'deepgram');
         } else {
-          const display = this._accumulatedFinal + text;
-          this._showPreview(display, 'deepgram');
+          this._showPreview(text, 'deepgram');
+          this._showInterimInCompose(text);
         }
       },
       onError: (msg) => {
@@ -383,11 +375,9 @@ const VoiceInput = {
         if (wasRecording) app.showToast(msg, 'error');
       },
       onEnd: () => {
-        if (this.isRecording) {
-          if (this._accumulatedFinal) {
-            this._insertText(this._accumulatedFinal);
-          }
-          this.stop();
+        if (this.isRecording && !this._userRequestedStop) {
+          // Connection dropped unexpectedly — restart Deepgram
+          this._startDeepgram();
         }
       }
     });
@@ -426,7 +416,6 @@ const VoiceInput = {
         return;
       }
     }
-    this._resetSilenceTimeout();
     // Get mic stream for level meter (non-blocking — level meter is cosmetic)
     navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
       if (this.isRecording && this._activeProvider === 'webspeech') {
@@ -442,6 +431,8 @@ const VoiceInput = {
 
   stop() {
     if (!this.isRecording) return;
+    this._userRequestedStop = true;
+    this._clearInterimFromCompose();
     this.isRecording = false;
     clearTimeout(this.silenceTimeout);
     clearTimeout(this._stabilityTimer);
@@ -477,7 +468,6 @@ const VoiceInput = {
   _onWebSpeechResult(event) {
     if (!this.isRecording) return;
     this._hasReceivedResult = true;
-    this._resetSilenceTimeout();
     let interim = '';
     let finalText = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -490,22 +480,27 @@ const VoiceInput = {
     }
 
     if (finalText) {
-      this._accumulatedFinal += finalText;
-      this._hidePreview();
-      this._insertText(this._accumulatedFinal);
-      this.stop();
-    } else if (interim) {
-      const display = this._accumulatedFinal + interim;
-      this._showPreview(display);
+      this._clearInterimFromCompose();
+      this._insertText(finalText);
+      this._accumulatedFinal = '';
+      this._lastTranscript = '';
+      clearTimeout(this._stabilityTimer);
+    }
+    if (interim) {
+      this._showPreview(interim);
+      this._showInterimInCompose(interim);
       // iOS Safari workaround: isFinal is always false.
       // Detect when interim results stop changing for 750ms → treat as final.
       this._iosStabilityCheck(interim);
+    } else if (finalText) {
+      this._showPreview('Listening...');
     }
   },
 
   _onWebSpeechError(event) {
-    // During auto-retry, 'aborted' and 'no-speech' errors are expected — ignore them
-    if (this._retryCount > 0 && (event.error === 'aborted' || event.error === 'no-speech')) return;
+    // In continuous mode, 'no-speech' and 'aborted' are expected during silence — ignore them
+    // (recognition will auto-restart via _onWebSpeechEnd)
+    if (event.error === 'no-speech' || event.error === 'aborted') return;
 
     const wasRecording = this.isRecording;
     this.stop();
@@ -515,14 +510,8 @@ const VoiceInput = {
       case 'not-allowed':
         app.showToast('Microphone access denied. Check browser settings.', 'error');
         break;
-      case 'no-speech':
-        // Silent — auto-stop is enough feedback
-        break;
       case 'network':
         app.showToast('Voice input requires internet connection.', 'error');
-        break;
-      case 'aborted':
-        // User cancelled — no message needed
         break;
       default:
         app.showToast('Voice input error: ' + event.error, 'error');
@@ -532,27 +521,15 @@ const VoiceInput = {
   _onWebSpeechEnd() {
     // Recognition ended (browser auto-stopped or we called stop())
     if (!this.isRecording) return;
+    if (this._userRequestedStop) return;
 
-    const elapsed = Date.now() - this._recordingStartedAt;
-    // Web Speech API often fires onend prematurely on the first attempt (< 500ms, no results).
-    // Auto-retry up to 2 times to avoid the "needs two clicks" problem.
-    if (elapsed < 500 && !this._hasReceivedResult && this._retryCount < 2) {
-      this._retryCount++;
-      try {
-        this.recognition.start();
-      } catch (_e) {
-        // If restart fails, fall through to stop
-        if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
-        this.stop();
-      }
-      return;
+    // Auto-restart recognition — browser often stops after silence or between utterances
+    try {
+      this.recognition.start();
+    } catch (_e) {
+      // If restart fails, stop gracefully
+      this.stop();
     }
-
-    // Genuine end — finalize any accumulated text
-    if (this._accumulatedFinal) {
-      this._insertText(this._accumulatedFinal);
-    }
-    this.stop();
   },
 
   _insertText(text) {
@@ -681,17 +658,33 @@ const VoiceInput = {
     textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
   },
 
-  _resetSilenceTimeout() {
-    clearTimeout(this.silenceTimeout);
-    this.silenceTimeout = setTimeout(() => {
-      if (this.isRecording) {
-        // Finalize any accumulated text before stopping
-        if (this._accumulatedFinal) {
-          this._insertText(this._accumulatedFinal);
-        }
-        this.stop();
+  // Silence timeout removed — recording is continuous until user presses stop
+
+  /** Show interim transcription in compose textarea (live preview as user speaks) */
+  _showInterimInCompose(text) {
+    if (!this._composeBarMode) return;
+    const ta = document.getElementById('composeTextarea');
+    if (!ta) return;
+    this._clearInterimFromCompose();
+    const interimText = text.trim();
+    if (interimText) {
+      const spacer = ta.value && !ta.value.endsWith(' ') ? ' ' : '';
+      ta.value += spacer + interimText;
+      this._lastInterimLength = spacer.length + interimText.length;
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      if (typeof InputPanel !== 'undefined' && InputPanel._autoGrow) {
+        InputPanel._autoGrow(ta);
       }
-    }, 3000);
+    }
+  },
+
+  /** Remove interim text from compose textarea (before inserting final or stopping) */
+  _clearInterimFromCompose() {
+    if (!this._composeBarMode || this._lastInterimLength <= 0) return;
+    const ta = document.getElementById('composeTextarea');
+    if (!ta) return;
+    ta.value = ta.value.slice(0, -this._lastInterimLength);
+    this._lastInterimLength = 0;
   },
 
   _iosStabilityCheck(transcript) {
@@ -700,10 +693,11 @@ const VoiceInput = {
       clearTimeout(this._stabilityTimer);
       this._stabilityTimer = setTimeout(() => {
         if (this.isRecording) {
-          const finalText = this._accumulatedFinal + transcript;
-          this._hidePreview();
-          this._insertText(finalText);
-          this.stop();
+          // iOS Safari: treat stable interim as final segment, but keep listening
+          this._clearInterimFromCompose();
+          this._insertText(transcript);
+          this._lastTranscript = '';
+          this._showPreview('Listening...');
         }
       }, 750);
     }
