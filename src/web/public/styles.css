@@ -6629,7 +6629,8 @@ kbd {
 
 .subagents-panel-body {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0; /* Allow flex child to shrink below content size */
+  overflow: hidden; /* Let inner .subagent-list handle scrolling */
   padding: 0.5rem;
 }
 
@@ -6670,11 +6671,12 @@ kbd {
   display: flex;
   gap: 0.5rem;
   height: 100%;
-  min-height: 280px;
+  min-height: 0; /* Allow flex shrinking so overflow-y activates on children */
 }
 
 .subagent-list {
   flex: 0 0 200px;
+  min-height: 0; /* Required for flex child scrolling */
   overflow-y: auto;
   border-right: 1px solid var(--border);
   padding-right: 0.5rem;
@@ -6682,6 +6684,7 @@ kbd {
 
 .subagent-detail {
   flex: 1;
+  min-height: 0; /* Required for flex child scrolling */
   overflow-y: auto;
   padding-left: 0.5rem;
 }

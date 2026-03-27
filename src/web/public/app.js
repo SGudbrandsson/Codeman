@@ -8763,6 +8763,8 @@ class CodemanApp {
     if (_msCliInfo && _msCliInfo.cliModel) ModelPicker.setModel(_msCliInfo.cliModel);
     else if (_msCliInfo && _msCliInfo.currentModel) ModelPicker.setModel(_msCliInfo.currentModel);
     this.renderElicitationPanel();
+    // Re-render subagent panel so it shows agents for the newly active session
+    this.renderSubagentPanel();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mark-active`, { method: 'POST' }).catch(() => {});
     this.hideWelcome();
@@ -16366,7 +16368,11 @@ class CodemanApp {
 
   updateSubagentBadge() {
     const badge = this.$('subagentCountBadge');
-    const activeCount = Array.from(this.subagents.values()).filter(s => s.status === 'active' || s.status === 'idle').length;
+    const activeSessionId = this.activeSessionId;
+    const activeCount = Array.from(this.subagents.values()).filter(s =>
+      (s.status === 'active' || s.status === 'idle') &&
+      this.subagentParentMap.get(s.agentId) === activeSessionId
+    ).length;
 
     // Update badge with active count
     if (badge) {
@@ -16399,14 +16405,21 @@ class CodemanApp {
       return;
     }
 
+    // Filter subagents to only show agents belonging to the active session
+    const activeSessionId = this.activeSessionId;
+    const sessionAgents = Array.from(this.subagents.values()).filter(agent => {
+      const parentSession = this.subagentParentMap.get(agent.agentId);
+      return parentSession === activeSessionId;
+    });
+
     // Render subagent list
-    if (this.subagents.size === 0) {
+    if (sessionAgents.length === 0) {
       list.innerHTML = '<div class="subagent-empty">No background agents detected</div>';
       return;
     }
 
     const html = [];
-    const sorted = Array.from(this.subagents.values()).sort((a, b) => {
+    const sorted = sessionAgents.sort((a, b) => {
       // Active first, then by last activity
       if (a.status === 'active' && b.status !== 'active') return -1;
       if (b.status === 'active' && a.status !== 'active') return 1;
@@ -19393,7 +19406,11 @@ class CodemanApp {
     const stats = document.getElementById('monitorSubagentStats');
     if (!body) return;
 
-    const subagents = Array.from(this.subagents.values());
+    // Filter to active session's agents only
+    const activeSessionId = this.activeSessionId;
+    const subagents = Array.from(this.subagents.values()).filter(agent =>
+      this.subagentParentMap.get(agent.agentId) === activeSessionId
+    );
     const activeCount = subagents.filter(s => s.status === 'active' || s.status === 'idle').length;
 
     if (stats) {
