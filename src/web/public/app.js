@@ -2819,8 +2819,11 @@ const TranscriptView = {
 
     this._loadFetchInProgress = true;
     try {
-      const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript');
+      const tailCount = this._BATCH_SIZE * 2;
+      const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript?tail=' + tailCount);
       if (!res.ok) throw new Error('HTTP ' + res.status);
+      const totalHeader = res.headers.get('X-Total-Blocks');
+      if (totalHeader) state.totalServerBlocks = parseInt(totalHeader, 10);
       const blocks = await res.json();
       // Abort if a newer load() was started (user switched sessions mid-fetch)
       if (myGen !== this._loadGen) { this._loadFetchInProgress = false; return; }
