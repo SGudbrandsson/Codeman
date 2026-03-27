@@ -15,10 +15,13 @@
  */
 
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import { join } from 'node:path';
 
 const PORT_RANGE_MIN = 1024;
 const PORT_RANGE_MAX = 65535;
+/** Default base port when no project ports are detected. */
+const DEFAULT_FALLBACK_BASE = 3100;
 
 /** Ordered list of regex patterns to detect port numbers. Each captures the port in group 1. */
 const PORT_PATTERNS: RegExp[] = [
@@ -92,24 +95,43 @@ export async function detectPortsFromDir(workingDir: string): Promise<number[]> 
 }
 
 /**
+ * Check whether a TCP port is free by attempting to bind to it.
+ * Returns true if the port is available, false if in use.
+ */
+export function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, '0.0.0.0');
+  });
+}
+
+/**
  * Allocate the next available port for a new worktree session.
  *
  * Strategy:
  *   - basePorts: ports the project already uses (detected from CLAUDE.md etc.)
  *   - usedPorts: ports already assigned to other sessions in this project
  *   - Returns: max(basePorts, usedPorts) + 1, skipping any still-used ports
+ *   - When basePorts is empty, falls back to DEFAULT_FALLBACK_BASE (3100)
+ *   - Probes TCP to ensure the port is actually free on the system
  *
- * Returns null if basePorts is empty (unknown project port config — skip allocation).
+ * Returns null only if no free port can be found below PORT_RANGE_MAX.
  */
-export function allocateNextPort(basePorts: number[], usedPorts: number[]): number | null {
-  if (basePorts.length === 0) return null;
-
-  const allKnown = new Set([...basePorts, ...usedPorts]);
-  const start = Math.max(...basePorts, ...(usedPorts.length ? usedPorts : [0])) + 1;
+export async function allocateNextPort(basePorts: number[], usedPorts: number[]): Promise<number | null> {
+  const effectiveBase = basePorts.length > 0 ? basePorts : [DEFAULT_FALLBACK_BASE];
+  const allKnown = new Set([...effectiveBase, ...usedPorts]);
+  const start = Math.max(...effectiveBase, ...(usedPorts.length ? usedPorts : [0])) + 1;
 
   let port = start;
-  while (allKnown.has(port) && port <= PORT_RANGE_MAX) {
+  while (port <= PORT_RANGE_MAX) {
+    if (!allKnown.has(port) && (await isPortFree(port))) {
+      return port;
+    }
     port++;
   }
-  return port <= PORT_RANGE_MAX ? port : null;
+  return null;
 }

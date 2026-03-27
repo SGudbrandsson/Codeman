@@ -285,12 +285,18 @@ Dispatch a fresh subagent with this prompt:
 >    All tests must pass.
 >
 > **Targeted check based on `affected_area`:**
+>
+> First, determine the QA port:
+> 1. Read TASK.md and look for `assignedPort` in the frontmatter or a line matching `Assigned dev port for this worktree: <N>` in the worktreeNotes / description.
+> 2. If found, use that port. If not found, find a free port by running: `node -e "const s=require('net').createServer();s.listen(0,'0.0.0.0',()=>{console.log(s.address().port);s.close()})"` and use the output.
+> 3. Store the chosen port in a variable (e.g., `QA_PORT`) and use it in all commands below.
+>
 > - `backend` → start the dev server in the background, curl the affected endpoint, verify the response matches expected behaviour, kill the server.
->   Start command: `nohup npx tsx src/index.ts web --port 3099 > /tmp/codeman-3099.log 2>&1 &`
->   Then wait and verify: `sleep 6 && curl -s http://localhost:3099/api/status`
+>   Start command: `nohup npx tsx src/index.ts web --port $QA_PORT > /tmp/codeman-$QA_PORT.log 2>&1 &`
+>   Then wait and verify: `sleep 6 && curl -s http://localhost:$QA_PORT/api/status`
 >   **IMPORTANT: there is no `--host` flag** — the server always binds to `0.0.0.0` automatically. Never pass `--host`.
->   Kill when done: `pkill -f "tsx src/index.ts web --port 3099"`
-> - `frontend` → start the dev server the same way (port 3099), use Playwright to load the page with `waitUntil: 'domcontentloaded'`, wait 3–4 seconds for async data, assert the UI change is visible and correct. Kill server when done.
+>   Kill when done: `pkill -f "tsx src/index.ts web --port $QA_PORT"`
+> - `frontend` → start the dev server the same way (using $QA_PORT), use Playwright to load the page with `waitUntil: 'domcontentloaded'`, wait 3–4 seconds for async data, assert the UI change is visible and correct. Kill server when done.
 > - `logic` → run the relevant vitest test file: `npx vitest run test/<file>.test.ts`
 > - `unknown` → run only typecheck + lint (no targeted check).
 >
