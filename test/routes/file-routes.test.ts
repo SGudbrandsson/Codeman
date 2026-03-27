@@ -489,6 +489,20 @@ describe('file-routes', () => {
       expect(body.error).toContain('too large');
     });
 
+    it('returns 400 when symlink resolves to a non-image extension in an allowed directory', async () => {
+      // rawPath has .png extension but resolves to a .txt file in /tmp
+      mockedRealpathSync.mockReturnValue('/tmp/data.txt' as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/trick.png',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Not an image file');
+    });
+
     it('returns 200 with correct Content-Type for a PNG in /tmp', async () => {
       const content = Buffer.from('fake png data');
       mockedRealpathSync.mockReturnValue('/tmp/screenshot.png' as never);

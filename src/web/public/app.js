@@ -395,12 +395,11 @@ function inlineMarkdown(escaped, safeHref, esc) {
  * @returns {string} HTML with image previews injected
  */
 function replaceImagePaths(html) {
-  // Match absolute paths starting with /tmp, /home, or /Users ending in an image extension.
-  // Operates on the HTML string, so avoid matching inside tag attributes.
-  return html.replace(/(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match) {
-    var encoded = encodeURIComponent(match);
+  return html.replace(/(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match, codeBlock, imgPath) {
+    if (codeBlock) return codeBlock;
+    var encoded = encodeURIComponent(imgPath);
     var src = '/api/files/preview?path=' + encoded;
-    return '<span class="tv-img-path">' + match + '</span>' +
+    return '<span class="tv-img-path">' + imgPath + '</span>' +
       '<span class="tv-img-preview">' +
       '<img src="' + src + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
       '</span>';

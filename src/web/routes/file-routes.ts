@@ -420,6 +420,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       return;
     }
 
+    const resolvedExt = extname(resolvedPath).slice(1).toLowerCase();
+    if (!allowedImageExts.has(resolvedExt)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
+      return;
+    }
+
     // Security allowlist: /tmp or user home directory
     const inTmp = resolvedPath.startsWith('/tmp/') || resolvedPath === '/tmp';
     const inHome = resolvedPath.startsWith(homeDir + '/') || resolvedPath === homeDir;
@@ -449,7 +455,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       }
 
       const content = await fs.readFile(resolvedPath);
-      reply.header('Content-Type', imageMimeTypes[ext] || 'application/octet-stream');
+      reply.header('Content-Type', imageMimeTypes[resolvedExt] || 'application/octet-stream');
       reply.header('Cache-Control', 'private, max-age=60');
       reply.send(content);
     } catch (err) {
