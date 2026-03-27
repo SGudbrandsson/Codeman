@@ -19,6 +19,7 @@ import { FastifyInstance } from 'fastify';
 import type { EventPort } from '../ports/event-port.js';
 import type { ConfigPort } from '../ports/config-port.js';
 import { SseEvent } from '../sse-events.js';
+import { getOrchestrator } from '../../orchestrator.js';
 import {
   createWorkItem,
   getWorkItem,
@@ -81,6 +82,7 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
     });
 
     ctx.broadcast(SseEvent.WorkItemCreated, item);
+    getOrchestrator()?.triggerTick();
 
     reply.code(201);
     return { success: true, data: item };

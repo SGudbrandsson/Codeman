@@ -18,6 +18,7 @@ import fsp from 'node:fs/promises';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { SseEvent } from '../sse-events.js';
 import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/index.js';
+import { getOrchestrator } from '../../orchestrator.js';
 import type { WorkItemStatus } from '../../work-items/index.js';
 import { fetchAsanaTask, fetchGitHubContext, fetchSentryIssue, fetchSlackMessage } from '../../integrations/index.js';
 
@@ -445,6 +446,7 @@ async function executeTool(
         if (toolInput.caseId && item.id) {
           updateWorkItem(item.id, { caseId: toolInput.caseId as string } as Record<string, unknown>);
         }
+        getOrchestrator()?.triggerTick();
         return { success: true, result: { ...item, caseId: (toolInput.caseId as string) || null } };
       }
 

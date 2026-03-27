@@ -25,6 +25,7 @@ import type { EventPort } from '../ports/event-port.js';
 import type { ConfigPort } from '../ports/config-port.js';
 import { SseEvent } from '../sse-events.js';
 import { createWorkItem, listWorkItems, getWorkItem } from '../../work-items/index.js';
+import { getOrchestrator } from '../../orchestrator.js';
 import type { WorkItemSource } from '../../work-items/index.js';
 import { broadcastMessage, sendMessage } from '../../messages/index.js';
 import type { AgentProfile } from '../../types/session.js';
@@ -108,6 +109,7 @@ export function registerClockworkRoutes(app: FastifyInstance, ctx: ClockworkRout
 
     ctx.broadcast(SseEvent.WorkItemCreated, item);
     ctx.broadcast(SseEvent.ClockworkWorkItemPushed, item);
+    getOrchestrator()?.triggerTick();
 
     reply.code(201);
     return { success: true, data: item };

@@ -13580,9 +13580,9 @@ class CodemanApp {
       const modeEl = document.getElementById('orchMode');
       const matchEl = document.getElementById('orchMatchingThreshold');
       if (pollEl) pollEl.value = Math.round((config.pollIntervalMs || 30000) / 1000);
-      if (stallEl) stallEl.value = Math.round((config.stallThresholdMs || 900000) / 60000);
-      if (nudgeEl) nudgeEl.value = Math.round((config.nudgeThresholdMs || 1800000) / 60000);
-      if (maxEl) maxEl.value = config.maxConcurrentDispatches || 5;
+      if (stallEl) stallEl.value = Math.round((config.stallThresholdMs || 600000) / 60000);
+      if (nudgeEl) nudgeEl.value = Math.round((config.nudgeThresholdMs || 1200000) / 60000);
+      if (maxEl) maxEl.value = config.maxConcurrentDispatches || 10;
       if (modeEl) modeEl.value = config.mode || 'hybrid';
       if (matchEl) matchEl.value = config.matchingThreshold || 3;
     } catch (err) {
@@ -13601,9 +13601,9 @@ class CodemanApp {
 
     const config = {
       pollIntervalMs: (parseInt(pollEl.value) || 30) * 1000,
-      stallThresholdMs: (parseInt(stallEl.value) || 15) * 60000,
-      nudgeThresholdMs: (parseInt(nudgeEl.value) || 30) * 60000,
-      maxConcurrentDispatches: parseInt(maxEl.value) || 5,
+      stallThresholdMs: (parseInt(stallEl.value) || 10) * 60000,
+      nudgeThresholdMs: (parseInt(nudgeEl.value) || 20) * 60000,
+      maxConcurrentDispatches: parseInt(maxEl.value) || 10,
       mode: modeEl.value || 'hybrid',
       matchingThreshold: parseInt(matchEl.value) || 3,
     };
