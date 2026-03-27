@@ -3472,7 +3472,8 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .btn-toolbar.btn-voice.recording,
-  .btn-voice-mobile.recording {
+  .btn-voice-mobile.recording,
+  .compose-mic-btn.recording {
     animation: none;
   }
 }
@@ -9233,8 +9234,8 @@ kbd {
     color: #e2e8f0;
     border: none;
     border-radius: 0; /* wrapper clips corners via overflow:hidden; removing radius eliminates double-border antialiasing artifact */
-    /* left: + btn; right: expand + send */
-    padding: 10px 76px 10px 44px;
+    /* left: + btn; right: expand + mic + send */
+    padding: 10px 108px 10px 44px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 0.875rem;
     line-height: 1.45;
@@ -9277,10 +9278,22 @@ kbd {
   .compose-send-btn .compose-send-icon { display: flex; }
 
   /* Expand button: show on desktop (inline style="display:none" is overridden) */
+  .compose-mic-btn {
+    right: 44px;   /* Left of send button */
+    color: #94a3b8;
+  }
+  .compose-mic-btn:hover { color: #e2e8f0; }
+  .compose-mic-btn.recording {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border-radius: 50%;
+    animation: voice-pulse 1.2s ease-in-out infinite;
+  }
+
   .compose-expand-btn {
     position: absolute;
     display: inline-flex !important;
-    right: 44px;   /* Left of send button */
+    right: 76px;   /* Left of mic button */
     bottom: 7px;
     color: #94a3b8;
   }

@@ -2279,6 +2279,19 @@
         </svg>
       </button>
 
+      <!-- Mic button — voice-to-text into compose textarea -->
+      <button class="compose-inset-btn compose-mic-btn" id="composeMicBtn"
+              type="button" aria-label="Voice input"
+              onmousedown="event.preventDefault()"
+              ontouchstart="event.preventDefault()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+
       <!-- Send button — always send (stop button removed) -->
       <button class="compose-inset-btn compose-send-btn" id="composeSendBtn"
               type="button" aria-label="Send"

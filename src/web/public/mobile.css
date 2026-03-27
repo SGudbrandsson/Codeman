@@ -2913,8 +2913,8 @@ html.mobile-init .file-browser-panel {
   -webkit-appearance: none;
   outline: 0;
   -webkit-tap-highlight-color: transparent;
-  /* left padding leaves room for + btn; right padding leaves room for send btn */
-  padding: 10px 52px 10px 44px;
+  /* left padding leaves room for + btn; right padding leaves room for mic + send btn */
+  padding: 10px 80px 10px 44px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 15px;
   line-height: 1.45;
@@ -2966,6 +2966,28 @@ html.mobile-init .file-browser-panel {
   transform: none;
 }
 .compose-send-btn:active { background: #2563eb; }
+.compose-mic-btn {
+  right: 44px;
+  bottom: 7px;
+  color: #94a3b8;
+}
+.compose-mic-btn:active { color: #e2e8f0; }
+.compose-mic-btn.recording {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border-radius: 50%;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+    background: rgba(239, 68, 68, 0.3);
+  }
+}
 
 /* Slash command popup */
 .compose-slash-popup {

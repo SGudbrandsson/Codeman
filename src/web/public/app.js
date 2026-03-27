@@ -19979,6 +19979,20 @@ const InputPanel = {
     const sendBtn = document.getElementById('composeSendBtn');
     if (sendBtn) sendBtn.addEventListener('click', () => this.send());
 
+    // Mic button — voice-to-text into compose textarea
+    const micBtn = document.getElementById('composeMicBtn');
+    if (micBtn) micBtn.addEventListener('click', () => {
+      if (typeof VoiceInput === 'undefined') return;
+      if (VoiceInput.isRecording) {
+        VoiceInput.stop();
+      } else {
+        // Open compose panel if not already open
+        if (!this._open) this.open();
+        VoiceInput._composeBarMode = true;
+        VoiceInput.start();
+      }
+    });
+
     // Expand/collapse button — desktop only
     const expandBtn = document.getElementById('composeExpandBtn');
     if (expandBtn) {
