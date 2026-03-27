@@ -4486,6 +4486,11 @@ class CodemanApp {
     this.boardView = BoardView;
     BoardView.init();
 
+    // Action Needed Dashboard singleton and flag
+    this._actionDashboardVisible = false;
+    this.actionDashboard = ActionDashboard;
+    ActionDashboard.init();
+
     // Attention Queue: items waiting for human input
     // Map<string, {sessionId, sessionName, itemType, hookType, context, timestamp}>
     // key = `${sessionId}:${hookType}` or `${sessionId}:review:${workItemId}`
@@ -4647,6 +4652,8 @@ class CodemanApp {
   }
 
   _renderAttentionQueue() {
+    // Also notify ActionDashboard of attention changes
+    if (typeof ActionDashboard !== 'undefined') ActionDashboard.markDirty();
     const btn = document.getElementById('attentionBtn');
     const badge = document.getElementById('attentionBadge');
     const list = document.getElementById('attentionQueueList');
@@ -6243,6 +6250,7 @@ class CodemanApp {
         message: `Exited with code ${data.code}`,
       });
     }
+    if (typeof ActionDashboard !== 'undefined') ActionDashboard.markDirty();
   }
 
   _onSessionIdle(data) {
@@ -7941,7 +7949,11 @@ class CodemanApp {
 
     // Load work items and render agent dashboard (fire-and-forget, non-blocking)
     this.workItems.clear();
-    this._loadWorkItemsForDashboard().then(() => this.renderAgentDashboard());
+    this._loadWorkItemsForDashboard().then(() => {
+      this.renderAgentDashboard();
+      // Initial ActionDashboard badge update (fetches latest data)
+      if (typeof ActionDashboard !== 'undefined') ActionDashboard.refresh();
+    });
 
     this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
     this.totalCost += data.scheduledRuns.reduce((sum, r) => sum + (r.totalCost || 0), 0);
@@ -8698,8 +8710,9 @@ class CodemanApp {
 
   async selectSession(sessionId) {
     if (this.activeSessionId === sessionId) return;
-    // Hide board view when switching to a session
+    // Hide board view / action dashboard when switching to a session
     if (this._boardVisible) this.hideBoard();
+    if (this._actionDashboardVisible) this.hideActionDashboard();
     const _selStart = performance.now();
     const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
     _crashDiag.log(`SELECT: ${_selName}`);
@@ -9280,6 +9293,7 @@ class CodemanApp {
 
   showBoard() {
     this.hideWelcome();
+    if (this._actionDashboardVisible) this.hideActionDashboard();
     const boardEl = document.getElementById('boardView');
     const termEl = document.getElementById('terminalContainer');
     const transEl = document.getElementById('transcriptView');
@@ -9306,6 +9320,50 @@ class CodemanApp {
     const transEl = document.getElementById('transcriptView');
     if (termEl) termEl.style.display = '';
     if (transEl) transEl.style.display = '';
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Action Needed Dashboard — toggle / show / hide
+  // ═══════════════════════════════════════════════════════════════
+
+  toggleActionDashboard() {
+    if (this._actionDashboardVisible) {
+      this.hideActionDashboard();
+      // Restore the active session view
+      const s = this.sessions.get(this.activeSessionId);
+      if (s) this.selectSession(s.id);
+      return;
+    }
+    this.showActionDashboard();
+  }
+
+  showActionDashboard() {
+    this.hideWelcome();
+    // Hide board if visible
+    if (this._boardVisible) this.hideBoard();
+    const dashEl = document.getElementById('actionDashboard');
+    const termEl = document.getElementById('terminalContainer');
+    const transEl = document.getElementById('transcriptView');
+    if (dashEl) dashEl.style.display = 'flex';
+    if (termEl) termEl.style.display = 'none';
+    if (transEl) transEl.style.display = 'none';
+    this._actionDashboardVisible = true;
+    document.getElementById('actionDashboardBtn')?.classList.add('active');
+    ActionDashboard.refresh();
+    ActionDashboard.startPolling();
+  }
+
+  hideActionDashboard() {
+    const dashEl = document.getElementById('actionDashboard');
+    if (dashEl) dashEl.style.display = 'none';
+    this._actionDashboardVisible = false;
+    document.getElementById('actionDashboardBtn')?.classList.remove('active');
+    // Restore containers
+    const termEl = document.getElementById('terminalContainer');
+    const transEl = document.getElementById('transcriptView');
+    if (termEl) termEl.style.display = '';
+    if (transEl) transEl.style.display = '';
+    ActionDashboard.stopPolling();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -14674,6 +14732,8 @@ class CodemanApp {
       this._renderAgentDashboardDebounced = null;
       this.renderAgentDashboard();
     }, 120);
+    // Also notify Action Dashboard of data changes
+    if (typeof ActionDashboard !== 'undefined') ActionDashboard.markDirty();
   }
 
   /** Fetch work items for agent dashboard cache */
@@ -22603,6 +22663,497 @@ const BoardView = {
   },
 };
 
+// ActionDashboard — aggregated "needs human attention" view
+// ═══════════════════════════════════════════════════════════════
+const ActionDashboard = {
+  _items: [],           // ActionItem[] — derived on each refresh
+  _sessions: [],        // cached /api/sessions response
+  _workItems: [],       // cached /api/work-items response
+  _dormantWorktrees: [], // cached /api/worktrees response
+  _initialized: false,
+  _pollTimer: null,
+  _dirtyFromSSE: false,
+
+  // Priority order constants
+  PRIORITIES: {
+    permission: 0,
+    question: 1,
+    idle: 2,
+    review: 3,
+    error: 3,
+    blocked: 4,
+    stopped_worktree: 5,
+    stale_worktree: 6,
+    dormant: 7,
+  },
+
+  TYPE_LABELS: {
+    permission: 'Permission',
+    question: 'Question',
+    idle: 'Idle',
+    review: 'Review',
+    error: 'Error',
+    blocked: 'Blocked',
+    stopped_worktree: 'Stopped',
+    stale_worktree: 'Stale',
+    dormant: 'Dormant',
+  },
+
+  TYPE_DESCRIPTIONS: {
+    permission: 'Approve or deny permission',
+    question: "Answer Claude's question",
+    idle: 'Provide input to continue',
+    review: 'Review code changes',
+    error: 'Investigate session error',
+    blocked: 'Unblock this work item',
+    stopped_worktree: 'Restart or merge this worktree session',
+    stale_worktree: 'Check progress or merge',
+    dormant: 'Resume or delete dormant worktree',
+  },
+
+  init() {
+    if (this._initialized) return;
+    this._initialized = true;
+  },
+
+  async refresh() {
+    // Fetch all three data sources in parallel
+    const [sessRes, wiRes, wtRes] = await Promise.allSettled([
+      fetch('/api/sessions').then(r => r.ok ? r.json() : []),
+      fetch('/api/work-items').then(r => r.ok ? r.json() : { data: [] }),
+      fetch('/api/worktrees').then(r => r.ok ? r.json() : []),
+    ]);
+
+    this._sessions = Array.isArray(sessRes.value) ? sessRes.value :
+                     (sessRes.value?.data ? sessRes.value.data : []);
+    const wiData = wiRes.value;
+    this._workItems = Array.isArray(wiData) ? wiData :
+                      (Array.isArray(wiData?.data) ? wiData.data : []);
+    this._dormantWorktrees = Array.isArray(wtRes.value) ? wtRes.value :
+                             (Array.isArray(wtRes.value?.worktrees) ? wtRes.value.worktrees :
+                             (Array.isArray(wtRes.value?.data) ? wtRes.value.data : []));
+
+    this._dirtyFromSSE = false;
+    this._deriveItems();
+    this.render();
+  },
+
+  _deriveItems() {
+    const items = [];
+    const now = Date.now();
+
+    // 1. Attention items (hook-based: permission, question, idle, review)
+    if (typeof app !== 'undefined' && app.attentionItems) {
+      for (const [, item] of app.attentionItems) {
+        let actionType = 'idle';
+        if (item.hookType === 'permission_prompt') actionType = 'permission';
+        else if (item.hookType === 'elicitation_dialog' || item.hookType === 'ask_user_question') actionType = 'question';
+        else if (item.hookType === 'idle_prompt') actionType = 'idle';
+        else if (item.hookType === 'review') actionType = 'review';
+
+        items.push({
+          id: 'attn:' + item.sessionId + ':' + item.hookType,
+          sessionId: item.sessionId,
+          sessionName: item.sessionName,
+          actionType,
+          priority: this.PRIORITIES[actionType] ?? 5,
+          context: item.context || this.TYPE_DESCRIPTIONS[actionType],
+          timestamp: item.timestamp || now,
+          workItemId: item.workItemId || null,
+          extra: {},
+        });
+      }
+    }
+
+    // Build set of session IDs already covered by attention items
+    const coveredSessions = new Set(items.map(i => i.sessionId));
+
+    // 2. Work items: review / blocked (not already in attention)
+    for (const wi of this._workItems) {
+      if (wi.status === 'review') {
+        // Don't duplicate attention items that already cover this
+        const alreadyCovered = items.some(i => i.workItemId === wi.id);
+        if (!alreadyCovered) {
+          const session = this._sessions.find(s => s.id === wi.assignedAgentId) ||
+                          this._sessions.find(s => s.worktreePath && wi.worktreePath && s.worktreePath === wi.worktreePath);
+          items.push({
+            id: 'wi:review:' + wi.id,
+            sessionId: session?.id || null,
+            sessionName: session?.name || wi.title || (wi.id ? wi.id.slice(0, 8) : ''),
+            actionType: 'review',
+            priority: this.PRIORITIES.review,
+            context: wi.title || 'Work item needs review',
+            timestamp: wi.updatedAt ? new Date(wi.updatedAt).getTime() : now,
+            workItemId: wi.id,
+            extra: { branchName: wi.branchName },
+          });
+        }
+      } else if (wi.status === 'blocked') {
+        items.push({
+          id: 'wi:blocked:' + wi.id,
+          sessionId: wi.assignedAgentId || null,
+          sessionName: wi.title || (wi.id ? wi.id.slice(0, 8) : ''),
+          actionType: 'blocked',
+          priority: this.PRIORITIES.blocked,
+          context: wi.title || 'Work item is blocked',
+          timestamp: wi.updatedAt ? new Date(wi.updatedAt).getTime() : now,
+          workItemId: wi.id,
+          extra: { branchName: wi.branchName },
+        });
+      }
+    }
+
+    // 3. Sessions: error, stopped worktree, stale worktree
+    for (const s of this._sessions) {
+      if (s.status === 'error' && !coveredSessions.has(s.id)) {
+        items.push({
+          id: 'sess:error:' + s.id,
+          sessionId: s.id,
+          sessionName: s.name || (s.id ? s.id.slice(0, 8) : ''),
+          actionType: 'error',
+          priority: this.PRIORITIES.error,
+          context: 'Session encountered an error',
+          timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : now,
+          extra: {},
+        });
+      }
+      if (s.status === 'stopped' && s.worktreePath) {
+        items.push({
+          id: 'sess:stopped:' + s.id,
+          sessionId: s.id,
+          sessionName: s.name || (s.id ? s.id.slice(0, 8) : ''),
+          actionType: 'stopped_worktree',
+          priority: this.PRIORITIES.stopped_worktree,
+          context: 'Stopped worktree: ' + (s.worktreeBranch || 'unknown branch'),
+          timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : now,
+          extra: { branch: s.worktreeBranch, worktreePath: s.worktreePath },
+        });
+      }
+      // Stale worktree: idle, has worktree branch, last activity > 30 min ago
+      if (s.status === 'idle' && s.worktreeBranch && !coveredSessions.has(s.id)) {
+        const lastActive = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+        if (lastActive && (now - lastActive) > 30 * 60 * 1000) {
+          items.push({
+            id: 'sess:stale:' + s.id,
+            sessionId: s.id,
+            sessionName: s.name || (s.id ? s.id.slice(0, 8) : ''),
+            actionType: 'stale_worktree',
+            priority: this.PRIORITIES.stale_worktree,
+            context: 'Idle worktree: ' + s.worktreeBranch,
+            timestamp: lastActive,
+            extra: { branch: s.worktreeBranch, originSessionId: s.worktreeOriginId },
+          });
+        }
+      }
+    }
+
+    // 4. Dormant worktrees
+    for (const wt of this._dormantWorktrees) {
+      items.push({
+        id: 'dormant:' + (wt.id || wt.path),
+        sessionId: wt.originSessionId || null,
+        sessionName: wt.branch || (wt.path ? wt.path.split('/').pop() : '') || 'Unknown',
+        actionType: 'dormant',
+        priority: this.PRIORITIES.dormant,
+        context: 'Dormant worktree: ' + (wt.branch || wt.path || 'unknown'),
+        timestamp: wt.savedAt ? new Date(wt.savedAt).getTime() : now,
+        extra: { worktreeId: wt.id, path: wt.path, branch: wt.branch },
+      });
+    }
+
+    // Sort by priority (ascending), then by timestamp (newest first)
+    items.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return b.timestamp - a.timestamp;
+    });
+
+    this._items = items;
+    this._updateBadge();
+  },
+
+  _updateBadge() {
+    const badge = document.getElementById('actionDashboardBadge');
+    const count = this._items.length;
+    if (badge) {
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+    const countEl = document.getElementById('actionDashboardCount');
+    if (countEl) {
+      countEl.textContent = count + ' item' + (count !== 1 ? 's' : '');
+    }
+  },
+
+  render() {
+    const list = document.getElementById('actionDashboardList');
+    if (!list) return;
+
+    if (this._items.length === 0) {
+      list.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'action-dashboard-empty';
+      const icon = document.createElement('div');
+      icon.className = 'action-dashboard-empty-icon';
+      icon.textContent = '\u2713';
+      const msg = document.createElement('div');
+      msg.textContent = 'No items need attention right now.';
+      empty.appendChild(icon);
+      empty.appendChild(msg);
+      list.appendChild(empty);
+      return;
+    }
+
+    // Build cards using DOM methods for safety
+    const fragment = document.createDocumentFragment();
+    for (const item of this._items) {
+      fragment.appendChild(this._buildCard(item));
+    }
+    list.textContent = '';
+    list.appendChild(fragment);
+  },
+
+  _buildCard(item) {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    card.dataset.itemId = item.id;
+
+    // Color dot
+    const dot = document.createElement('div');
+    dot.className = 'action-card-dot';
+    dot.style.background = this._sessionColor(item.sessionId);
+    card.appendChild(dot);
+
+    // Content area
+    const content = document.createElement('div');
+    content.className = 'action-card-content';
+
+    const top = document.createElement('div');
+    top.className = 'action-card-top';
+    const sessionSpan = document.createElement('span');
+    sessionSpan.className = 'action-card-session';
+    sessionSpan.textContent = item.sessionName || '';
+    top.appendChild(sessionSpan);
+
+    const badge = document.createElement('span');
+    const badgeClass = item.actionType === 'error' ? 'priority-3-error' :
+                       item.actionType === 'review' ? 'priority-3-review' :
+                       'priority-' + item.priority;
+    badge.className = 'action-card-badge ' + badgeClass;
+    badge.textContent = this.TYPE_LABELS[item.actionType] || item.actionType;
+    top.appendChild(badge);
+    content.appendChild(top);
+
+    const ctx = document.createElement('div');
+    ctx.className = 'action-card-context';
+    ctx.textContent = item.context || '';
+    content.appendChild(ctx);
+
+    const time = document.createElement('div');
+    time.className = 'action-card-time';
+    time.textContent = this._relativeTime(item.timestamp);
+    content.appendChild(time);
+
+    card.appendChild(content);
+
+    // Action buttons
+    const actions = document.createElement('div');
+    actions.className = 'action-card-actions';
+    const buttonDefs = this._getActionButtonDefs(item);
+    for (const def of buttonDefs) {
+      const btn = document.createElement('button');
+      btn.className = 'action-card-btn' + (def.cls ? ' ' + def.cls : '');
+      btn.textContent = def.label;
+      btn.addEventListener('click', def.handler);
+      actions.appendChild(btn);
+    }
+    card.appendChild(actions);
+
+    return card;
+  },
+
+  _getActionButtonDefs(item) {
+    const sid = item.sessionId;
+    const btns = [];
+
+    switch (item.actionType) {
+      case 'permission':
+      case 'question':
+      case 'error':
+        if (sid) btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
+        break;
+      case 'idle':
+        if (sid) {
+          btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
+          btns.push({ label: 'Send Input', cls: '', handler: () => this.openSessionCompose(sid) });
+        }
+        break;
+      case 'review':
+        if (sid) {
+          btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
+          btns.push({ label: 'View Diff', cls: '', handler: () => this.openSession(sid) });
+        }
+        break;
+      case 'blocked':
+        if (sid) btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
+        btns.push({ label: 'Unblock', cls: '', handler: () => { if (typeof app !== 'undefined') app.toggleBoard(); } });
+        break;
+      case 'stopped_worktree':
+        if (sid) {
+          btns.push({ label: 'Restart', cls: 'primary', handler: () => this.restartSession(sid) });
+          btns.push({ label: 'Merge', cls: '', handler: () => this.mergeWorktree(sid, item.extra?.branch || '') });
+        }
+        break;
+      case 'stale_worktree':
+        if (sid) {
+          btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
+          const origin = item.extra?.originSessionId || sid;
+          btns.push({ label: 'Merge', cls: '', handler: () => this.mergeWorktree(origin, item.extra?.branch || '') });
+        }
+        break;
+      case 'dormant': {
+        const wtId = item.extra?.worktreeId;
+        if (wtId) {
+          btns.push({ label: 'Resume', cls: 'primary', handler: () => this.resumeDormant(wtId) });
+          btns.push({ label: 'Delete', cls: 'danger', handler: () => this.deleteDormant(wtId) });
+        }
+        break;
+      }
+    }
+    return btns;
+  },
+
+  // Quick action: open session
+  openSession(sessionId) {
+    if (typeof app !== 'undefined') {
+      app.hideActionDashboard();
+      app.selectSession(sessionId);
+    }
+  },
+
+  // Quick action: open session and focus compose
+  openSessionCompose(sessionId) {
+    if (typeof app !== 'undefined') {
+      app.hideActionDashboard();
+      app.selectSession(sessionId);
+      // Focus compose area after a tick so the session loads
+      setTimeout(() => {
+        const input = document.getElementById('composeInput') || document.querySelector('.compose-input');
+        if (input) input.focus();
+      }, 200);
+    }
+  },
+
+  // Quick action: restart session
+  async restartSession(sessionId) {
+    try {
+      const res = await fetch('/api/sessions/' + sessionId + '/interactive', { method: 'POST' });
+      if (res.ok) {
+        if (typeof app !== 'undefined') app.showToast('Session restarted', 'success');
+        this.refresh();
+      } else {
+        if (typeof app !== 'undefined') app.showToast('Failed to restart session', 'error');
+      }
+    } catch (e) {
+      if (typeof app !== 'undefined') app.showToast('Failed to restart session', 'error');
+    }
+  },
+
+  // Quick action: merge worktree
+  async mergeWorktree(sessionId, branch) {
+    if (!confirm('Merge worktree branch "' + (branch || 'unknown') + '" into master?')) return;
+    try {
+      const res = await fetch('/api/sessions/' + sessionId + '/worktree/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch }),
+      });
+      if (res.ok) {
+        if (typeof app !== 'undefined') app.showToast('Merge initiated', 'success');
+        this.refresh();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        if (typeof app !== 'undefined') app.showToast(data.error || 'Merge failed', 'error');
+      }
+    } catch (e) {
+      if (typeof app !== 'undefined') app.showToast('Merge failed', 'error');
+    }
+  },
+
+  // Quick action: resume dormant worktree
+  async resumeDormant(worktreeId) {
+    try {
+      const res = await fetch('/api/worktrees/' + worktreeId + '/resume', { method: 'POST' });
+      if (res.ok) {
+        if (typeof app !== 'undefined') app.showToast('Worktree resumed', 'success');
+        this.refresh();
+      } else {
+        if (typeof app !== 'undefined') app.showToast('Failed to resume worktree', 'error');
+      }
+    } catch (e) {
+      if (typeof app !== 'undefined') app.showToast('Failed to resume worktree', 'error');
+    }
+  },
+
+  // Quick action: delete dormant worktree
+  async deleteDormant(worktreeId) {
+    if (!confirm('Delete this dormant worktree? This will remove the worktree from disk.')) return;
+    try {
+      const res = await fetch('/api/worktrees/' + worktreeId, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removeDisk: true }),
+      });
+      if (res.ok) {
+        if (typeof app !== 'undefined') app.showToast('Worktree deleted', 'success');
+        this.refresh();
+      } else {
+        if (typeof app !== 'undefined') app.showToast('Failed to delete worktree', 'error');
+      }
+    } catch (e) {
+      if (typeof app !== 'undefined') app.showToast('Failed to delete worktree', 'error');
+    }
+  },
+
+  // Helper: get session color dot
+  _sessionColor(sessionId) {
+    if (!sessionId || typeof app === 'undefined') return '#475569';
+    const session = app.sessions?.get(sessionId);
+    return session?.color || '#475569';
+  },
+
+  // Helper: relative time string
+  _relativeTime(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - ts;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    return Math.floor(diff / 86400000) + 'd ago';
+  },
+
+  // SSE hook: mark dirty for lightweight re-derive
+  markDirty() {
+    this._dirtyFromSSE = true;
+    // If the dashboard is visible, re-derive immediately from cached data
+    if (typeof app !== 'undefined' && app._actionDashboardVisible) {
+      this._deriveItems();
+      this.render();
+    }
+  },
+
+  startPolling() {
+    this.stopPolling();
+    this._pollTimer = setInterval(() => this.refresh(), 30000);
+  },
+
+  stopPolling() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
+  },
+};
+
 // Initialize
 const app = new CodemanApp();
 
@@ -22611,6 +23162,7 @@ window.app = app;
 window.MobileDetection = MobileDetection;
 window.TranscriptView = TranscriptView;
 window.InputPanel = InputPanel;
+window.ActionDashboard = ActionDashboard;
 
 // ─── AgentPanel ────────────────────────────────────────────────────────────
 // Note: innerHTML is used consistently throughout app.js (128 existing usages).

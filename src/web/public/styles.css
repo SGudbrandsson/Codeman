@@ -11491,6 +11491,218 @@ kbd {
   min-width: 0;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Action Needed Dashboard
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Badge on the header button */
+.btn-action-dashboard {
+  position: relative;
+}
+.action-dashboard-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-left: 4px;
+}
+
+/* Dashboard container — matches .board-view layout */
+.action-dashboard {
+  display: none;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+/* Header bar */
+.action-dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.action-dashboard-count {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-right: 8px;
+}
+
+/* Scrollable list of action cards */
+.action-dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Empty state */
+.action-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  color: #475569;
+  font-size: 0.85rem;
+  text-align: center;
+}
+.action-dashboard-empty-icon {
+  font-size: 2rem;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+/* Individual action card */
+.action-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.action-card:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.1);
+}
+
+/* Color dot for session */
+.action-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+/* Card content area */
+.action-card-content {
+  flex: 1;
+  min-width: 0;
+}
+.action-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.action-card-session {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.action-card-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.action-card-badge.priority-0,
+.action-card-badge.priority-3-error {
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
+}
+.action-card-badge.priority-1 {
+  background: rgba(245,158,11,0.15);
+  color: #f59e0b;
+}
+.action-card-badge.priority-2,
+.action-card-badge.priority-3-review {
+  background: rgba(234,179,8,0.15);
+  color: #eab308;
+}
+.action-card-badge.priority-4 {
+  background: rgba(245,158,11,0.15);
+  color: #f59e0b;
+}
+.action-card-badge.priority-5,
+.action-card-badge.priority-6 {
+  background: rgba(100,116,139,0.15);
+  color: #94a3b8;
+}
+.action-card-badge.priority-7 {
+  background: rgba(71,85,105,0.15);
+  color: #64748b;
+}
+.action-card-context {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.action-card-time {
+  font-size: 0.65rem;
+  color: #475569;
+}
+
+/* Quick action buttons */
+.action-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: flex-start;
+  margin-top: 2px;
+}
+.action-card-btn {
+  padding: 3px 8px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.action-card-btn:hover {
+  background: rgba(255,255,255,0.06);
+  color: #e2e8f0;
+  border-color: rgba(255,255,255,0.2);
+}
+.action-card-btn.primary {
+  background: rgba(96,165,250,0.12);
+  border-color: rgba(96,165,250,0.25);
+  color: #60a5fa;
+}
+.action-card-btn.primary:hover {
+  background: rgba(96,165,250,0.2);
+}
+.action-card-btn.danger {
+  color: #ef4444;
+  border-color: rgba(239,68,68,0.2);
+}
+.action-card-btn.danger:hover {
+  background: rgba(239,68,68,0.1);
+}
+
 /* Work item detail panel overlay */
 .work-item-panel-overlay {
   display: none;

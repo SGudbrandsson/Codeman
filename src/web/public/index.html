@@ -54,6 +54,10 @@
         <span class="logo" onclick="app.goHome()" title="Go to main page">Codeman</span>
       </div>
       <button class="btn-board-view" id="boardViewBtn" onclick="app.toggleBoard()" title="Board view" aria-label="Toggle board view">Board</button>
+      <button class="btn-board-view btn-action-dashboard" id="actionDashboardBtn" onclick="app.toggleActionDashboard()" title="Action needed" aria-label="Toggle action needed dashboard">
+        Action
+        <span class="action-dashboard-badge" id="actionDashboardBadge" style="display:none;">0</span>
+      </button>
 
       <!-- Session Tabs (moved to sidebar/hamburger menu) -->
       <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs" style="display:none">
@@ -346,6 +350,21 @@
           <div class="board-timeline-feed" id="boardTimelineFeed">
             <!-- Events rendered by BoardView._renderTimeline() -->
           </div>
+        </div>
+      </div>
+
+      <!-- Action Needed Dashboard -->
+      <div class="action-dashboard" id="actionDashboard" style="display:none;" aria-label="Action needed dashboard">
+        <div class="action-dashboard-header">
+          <button class="board-btn-back" onclick="app.toggleActionDashboard()" title="Close dashboard" aria-label="Close action dashboard">&larr; Back</button>
+          <h2 class="board-title">Action Needed</h2>
+          <div class="board-header-actions">
+            <span class="action-dashboard-count" id="actionDashboardCount">0 items</span>
+            <button class="board-btn-refresh" onclick="ActionDashboard.refresh()">Refresh</button>
+          </div>
+        </div>
+        <div class="action-dashboard-list" id="actionDashboardList">
+          <!-- Cards rendered by ActionDashboard.render() -->
         </div>
       </div>
 
