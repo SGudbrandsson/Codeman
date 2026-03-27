@@ -268,6 +268,7 @@ const VoiceInput = {
   _analyserSource: null, // MediaStreamSource for level meter
   _audioContext: null, // AudioContext for level meter
   _levelAnimFrame: null, // rAF handle for level meter
+  _composeBarMode: false, // when true, insert text into compose textarea instead of PTY
 
   init() {
     this._initRecognition();
@@ -467,6 +468,7 @@ const VoiceInput = {
       }
     }
     this._activeProvider = null;
+    this._composeBarMode = false;
 
     // Haptic feedback on mobile
     if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
@@ -556,6 +558,25 @@ const VoiceInput = {
   _insertText(text) {
     if (!app.activeSessionId || !text.trim()) return;
     const trimmed = text.trim();
+
+    // Compose-bar mode: insert into #composeTextarea instead of PTY/overlay
+    if (this._composeBarMode) {
+      const ta = document.getElementById('composeTextarea');
+      if (ta) {
+        // Append with a space separator if textarea already has content
+        const existing = ta.value;
+        ta.value = existing ? existing.trimEnd() + ' ' + trimmed : trimmed;
+        ta.focus();
+        ta.selectionStart = ta.selectionEnd = ta.value.length;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        // Trigger auto-grow
+        if (typeof InputPanel !== 'undefined' && InputPanel._autoGrow) {
+          InputPanel._autoGrow(ta);
+        }
+      }
+      return;
+    }
+
     const mode = this._getDeepgramConfig().insertMode || 'direct';
 
     if (mode === 'compose') {
@@ -760,6 +781,7 @@ const VoiceInput = {
   },
 
   _showPreview(text, provider) {
+    if (this._composeBarMode) return;
     if (!this.previewEl) {
       this.previewEl = document.createElement('div');
       this.previewEl.className = 'voice-preview';
@@ -830,6 +852,13 @@ const VoiceInput = {
       mobileToolbarBtn.classList.toggle('recording', isRecording);
       mobileToolbarBtn.setAttribute('aria-pressed', String(isRecording));
       mobileToolbarBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
+    }
+    // Compose bar mic button
+    const composeMicBtn = document.getElementById('composeMicBtn');
+    if (composeMicBtn) {
+      composeMicBtn.classList.toggle('recording', isRecording);
+      composeMicBtn.setAttribute('aria-pressed', String(isRecording));
+      composeMicBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Voice input');
     }
   },
 
