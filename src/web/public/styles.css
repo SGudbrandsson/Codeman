@@ -12193,3 +12193,73 @@ kbd {
   background: rgba(96,165,250,0.3);
 }
 
+/* ── Image preview thumbnails & lightbox ── */
+.tv-img-path {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: var(--text-muted, #888);
+  word-break: break-all;
+}
+.tv-img-preview {
+  display: inline-block;
+  margin: 4px 0;
+  cursor: pointer;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  overflow: hidden;
+  vertical-align: middle;
+  transition: box-shadow 0.15s ease;
+}
+.tv-img-preview:hover {
+  box-shadow: 0 0 8px rgba(96,165,250,0.45);
+}
+.tv-img-preview img {
+  display: block;
+  max-height: 120px;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+/* Lightbox overlay */
+.tv-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.85);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.tv-lightbox.open {
+  display: flex;
+}
+.tv-lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.tv-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 2rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 10px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.tv-lightbox-close:hover {
+  opacity: 1;
+}
+.tv-lightbox-close:focus-visible {
+  outline: 2px solid var(--accent, #60a5fa);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+

@@ -27,6 +27,15 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
+// Mock homedir for preview endpoint allowlist tests
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return {
+    ...actual,
+    homedir: vi.fn(() => '/home/testuser'),
+  };
+});
+
 // Mock fileStreamManager
 vi.mock('../../src/file-stream-manager.js', () => ({
   fileStreamManager: {
@@ -360,6 +369,210 @@ describe('file-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(false);
+    });
+  });
+
+  // ========== GET /api/files/preview ==========
+
+  describe('GET /api/files/preview', () => {
+    it('returns 400 when path query param is missing', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Missing or non-absolute path');
+    });
+
+    it('returns 400 when path is not absolute', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=relative/image.png',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Missing or non-absolute path');
+    });
+
+    it('returns 400 when file extension is not an allowed image type', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/document.pdf',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Not an image file');
+    });
+
+    it('returns 400 for a file with no extension', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/noextension',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Not an image file');
+    });
+
+    it('returns 404 when file does not exist (realpathSync throws)', async () => {
+      mockedRealpathSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/nonexistent.png',
+      });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('File not found');
+    });
+
+    it('returns 403 when resolved path is outside the allowlist', async () => {
+      mockedRealpathSync.mockReturnValue('/etc/shadow.png' as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/etc/shadow.png',
+      });
+      expect(res.statusCode).toBe(403);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Path outside allowed directories');
+    });
+
+    it('returns 403 when symlink resolves outside the allowlist', async () => {
+      // Path looks like it's in /tmp but resolves to /etc via symlink
+      mockedRealpathSync.mockReturnValue('/etc/secrets/image.png' as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/sneaky-link.png',
+      });
+      expect(res.statusCode).toBe(403);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Path outside allowed directories');
+    });
+
+    it('returns 400 when file is not a regular file', async () => {
+      mockedRealpathSync.mockReturnValue('/tmp/somedir.png' as never);
+      mockedStat.mockResolvedValue({ size: 100, isFile: () => false } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/somedir.png',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('Not a regular file');
+    });
+
+    it('returns 400 when file exceeds 50MB size cap', async () => {
+      mockedRealpathSync.mockReturnValue('/tmp/huge.png' as never);
+      mockedStat.mockResolvedValue({ size: 60 * 1024 * 1024, isFile: () => true } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/huge.png',
+      });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('too large');
+    });
+
+    it('returns 200 with correct Content-Type for a PNG in /tmp', async () => {
+      const content = Buffer.from('fake png data');
+      mockedRealpathSync.mockReturnValue('/tmp/screenshot.png' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/screenshot.png',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/png');
+      expect(res.headers['cache-control']).toBe('private, max-age=60');
+    });
+
+    it('returns 200 with correct Content-Type for a JPEG in homedir', async () => {
+      const content = Buffer.from('fake jpeg data');
+      mockedRealpathSync.mockReturnValue('/home/testuser/photos/cat.jpg' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/home/testuser/photos/cat.jpg',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/jpeg');
+      expect(res.headers['cache-control']).toBe('private, max-age=60');
+    });
+
+    it('returns 200 with correct Content-Type for SVG', async () => {
+      const content = Buffer.from('<svg></svg>');
+      mockedRealpathSync.mockReturnValue('/tmp/icon.svg' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/icon.svg',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/svg+xml');
+    });
+
+    it('returns 200 with correct Content-Type for WebP', async () => {
+      const content = Buffer.from('fake webp data');
+      mockedRealpathSync.mockReturnValue('/home/testuser/img.webp' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/home/testuser/img.webp',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/webp');
+    });
+
+    it('returns 200 with correct Content-Type for GIF', async () => {
+      const content = Buffer.from('fake gif data');
+      mockedRealpathSync.mockReturnValue('/tmp/anim.gif' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/anim.gif',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/gif');
+    });
+
+    it('returns file content as the response body', async () => {
+      const content = Buffer.from('PNG raw bytes here');
+      mockedRealpathSync.mockReturnValue('/tmp/test.png' as never);
+      mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
+      mockedReadFile.mockResolvedValue(content as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/files/preview?path=/tmp/test.png',
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.rawPayload).toEqual(content);
     });
   });
 });
