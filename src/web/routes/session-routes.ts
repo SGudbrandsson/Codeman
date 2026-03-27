@@ -1170,34 +1170,45 @@ ${contextLines.join('\n')}`;
 
   // ========== GET /api/sessions/:id/transcript ==========
 
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/transcript', async (req, reply) => {
-    const { id } = req.params;
-    let transcriptPath = ctx.getTranscriptPath(id);
-    // Fallback: if claudeResumeId was never persisted (e.g. Claude finished before the
-    // conversationId event could fire), look for a JSONL named after the session ID itself.
-    if (!transcriptPath) {
-      const session = ctx.sessions.get(id);
-      if (session?.workingDir) {
-        const { homedir } = await import('node:os');
-        const escapedDir = session.workingDir.replace(/\//g, '-');
-        const candidate = join(homedir(), '.claude', 'projects', escapedDir, `${id}.jsonl`);
-        if (existsSync(candidate)) transcriptPath = candidate;
+  app.get<{ Params: { id: string }; Querystring: { tail?: string } }>(
+    '/api/sessions/:id/transcript',
+    async (req, reply) => {
+      const { id } = req.params;
+      let transcriptPath = ctx.getTranscriptPath(id);
+      // Fallback: if claudeResumeId was never persisted (e.g. Claude finished before the
+      // conversationId event could fire), look for a JSONL named after the session ID itself.
+      if (!transcriptPath) {
+        const session = ctx.sessions.get(id);
+        if (session?.workingDir) {
+          const { homedir } = await import('node:os');
+          const escapedDir = session.workingDir.replace(/\//g, '-');
+          const candidate = join(homedir(), '.claude', 'projects', escapedDir, `${id}.jsonl`);
+          if (existsSync(candidate)) transcriptPath = candidate;
+        }
+      }
+      if (!transcriptPath) {
+        return reply.send([]);
+      }
+      try {
+        const content = await fs.readFile(transcriptPath, 'utf-8');
+        const blocks = parseTranscriptJSONL(content);
+        // Ensure watcher is running so new blocks are streamed live via SSE.
+        // startTranscriptWatcher is idempotent — safe to call even if already watching.
+        ctx.startTranscriptWatcher(id, transcriptPath);
+        const totalBlocks = blocks.length;
+        const tailParam = parseInt(req.query.tail as string, 10);
+        if (tailParam > 0 && tailParam < totalBlocks) {
+          const sliced = blocks.slice(totalBlocks - tailParam);
+          reply.header('X-Total-Blocks', String(totalBlocks));
+          return reply.send(sliced);
+        }
+        reply.header('X-Total-Blocks', String(totalBlocks));
+        return reply.send(blocks);
+      } catch {
+        return reply.send([]);
       }
     }
-    if (!transcriptPath) {
-      return reply.send([]);
-    }
-    try {
-      const content = await fs.readFile(transcriptPath, 'utf-8');
-      const blocks = parseTranscriptJSONL(content);
-      // Ensure watcher is running so new blocks are streamed live via SSE.
-      // startTranscriptWatcher is idempotent — safe to call even if already watching.
-      ctx.startTranscriptWatcher(id, transcriptPath);
-      return reply.send(blocks);
-    } catch {
-      return reply.send([]);
-    }
-  });
+  );
 
   // ========== GET /api/sessions/:id/draft ==========
 

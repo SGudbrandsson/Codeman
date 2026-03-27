@@ -62,4 +62,68 @@ describe('GET /api/sessions/:id/transcript', () => {
     expect(blocks[1]).toMatchObject({ type: 'text', role: 'assistant', text: 'Hi there!' });
     expect(blocks[2]).toMatchObject({ type: 'result', cost: 0.001, durationMs: 1000 });
   });
+
+  it('sets X-Total-Blocks header on full response', async () => {
+    harness.ctx.getTranscriptPath = (_id: string) => tmpFile;
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/transcript',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-total-blocks']).toBe('3');
+    expect(JSON.parse(response.body)).toHaveLength(3);
+  });
+
+  it('?tail=N returns only the last N blocks', async () => {
+    harness.ctx.getTranscriptPath = (_id: string) => tmpFile;
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/transcript?tail=2',
+    });
+    expect(response.statusCode).toBe(200);
+    const blocks = JSON.parse(response.body);
+    expect(blocks).toHaveLength(2);
+    // Should be the last 2 of the 3 blocks (assistant + result)
+    expect(blocks[0]).toMatchObject({ type: 'text', role: 'assistant', text: 'Hi there!' });
+    expect(blocks[1]).toMatchObject({ type: 'result', cost: 0.001, durationMs: 1000 });
+    expect(response.headers['x-total-blocks']).toBe('3');
+  });
+
+  it('?tail=0 returns all blocks (no slicing)', async () => {
+    harness.ctx.getTranscriptPath = (_id: string) => tmpFile;
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/transcript?tail=0',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toHaveLength(3);
+    expect(response.headers['x-total-blocks']).toBe('3');
+  });
+
+  it('?tail exceeding total returns all blocks', async () => {
+    harness.ctx.getTranscriptPath = (_id: string) => tmpFile;
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/transcript?tail=999',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toHaveLength(3);
+    expect(response.headers['x-total-blocks']).toBe('3');
+  });
+
+  it('?tail with non-numeric value returns all blocks', async () => {
+    harness.ctx.getTranscriptPath = (_id: string) => tmpFile;
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/transcript?tail=abc',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toHaveLength(3);
+    expect(response.headers['x-total-blocks']).toBe('3');
+  });
 });

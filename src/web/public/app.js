@@ -2688,6 +2688,8 @@ const TranscriptView = {
   _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
   _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
   _thinkingPhrases: ['Thinking...','Processing...','Germinating...','Reasoning...','Contemplating...','Synthesizing...','Deliberating...','Cogitating...','Extrapolating...','Formulating...','Consulting the oracle...','Parsing neural patterns...','Reticulating splines...','Traversing thought-space...','Engaging cortex...','Quantum-tunneling...'],
+  _BATCH_SIZE: 50,
+  _renderedStartIdx: 0,
   _animateNextScroll: false,     // when true, _scrollToBottom uses 'smooth' behavior
 
   init() {
@@ -2800,8 +2802,12 @@ const TranscriptView = {
     // is rendered and scrolled, then reveal in one frame — no flash, no jump.
     const hadCache = state.blocks.length > 0;
     if (hadCache) {
-      this._container.textContent = '';
-      for (const block of state.blocks) this._appendBlock(block, false);
+      if (state.blocks.length > this._BATCH_SIZE) {
+        this._renderTailBatch(state.blocks);
+      } else {
+        this._container.textContent = '';
+        for (const block of state.blocks) this._appendBlock(block, false);
+      }
       // Scroll to bottom while still invisible, then reveal
       this._container.scrollTop = this._container.scrollHeight;
       this._container.style.opacity = '';
@@ -2817,7 +2823,7 @@ const TranscriptView = {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const blocks = await res.json();
       // Abort if a newer load() was started (user switched sessions mid-fetch)
-      if (myGen !== this._loadGen) return;
+      if (myGen !== this._loadGen) { this._loadFetchInProgress = false; return; }
 
       const prevCount = state.blocks.length;
       // Defensive: detect if cached blocks belong to a different session's content.
@@ -2872,9 +2878,14 @@ const TranscriptView = {
             this._appendBlock(b, false);
           }
           state._sseBuffer = null;
+          this._loadFetchInProgress = false;
           return;
         }
-        for (const block of blocks) this._appendBlock(block, false);
+        if (blocks.length > this._BATCH_SIZE) {
+          this._renderTailBatch(blocks);
+        } else {
+          for (const block of blocks) this._appendBlock(block, false);
+        }
       }
 
       // Replay any SSE blocks that arrived after the HTTP snapshot was taken
@@ -3153,6 +3164,8 @@ const TranscriptView = {
     if (this._container) this._container.textContent = '';
     this._compactingEl = null;
     this._isCompacting = false;
+    this._removeSentinel();
+    this._renderedStartIdx = 0;
     if (this._sessionId) this.load(this._sessionId, { pendingOptimisticText: pendingText });
   },
 
@@ -3187,6 +3200,8 @@ const TranscriptView = {
       this._setPlaceholder('Clearing\u2026');
     }
     this._compactingEl = null;
+    this._removeSentinel();
+    this._renderedStartIdx = 0;
 
     // Fallback: if transcript:clear SSE never arrives (e.g. /clear creates a new
     // conversation but the server only learns the new transcript path on the next hook
