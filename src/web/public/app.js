@@ -388,6 +388,63 @@ function inlineMarkdown(escaped, safeHref, esc) {
   return s;
 }
 
+/**
+ * Post-process rendered markdown HTML to detect absolute image file paths
+ * and inject inline thumbnails with lightbox support.
+ * @param {string} html - rendered markdown HTML
+ * @returns {string} HTML with image previews injected
+ */
+function replaceImagePaths(html) {
+  return html.replace(/(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match, codeBlock, imgPath) {
+    if (codeBlock) return codeBlock;
+    var encoded = encodeURIComponent(imgPath);
+    var src = '/api/files/preview?path=' + encoded;
+    return '<span class="tv-img-path">' + imgPath + '</span>' +
+      '<span class="tv-img-preview">' +
+      '<img src="' + src + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
+      '</span>';
+  });
+}
+
+/** Global lightbox for image previews — created lazily on first use. */
+var _imgLightbox = null;
+function _getImageLightbox() {
+  if (_imgLightbox) return _imgLightbox;
+  var overlay = document.createElement('div');
+  overlay.className = 'tv-lightbox';
+  var closeBtn = document.createElement('button');
+  closeBtn.className = 'tv-lightbox-close';
+  closeBtn.setAttribute('aria-label', 'Close preview');
+  closeBtn.textContent = '\u00d7';
+  var img = document.createElement('img');
+  img.alt = 'Full size preview';
+  overlay.appendChild(closeBtn);
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay || e.target === closeBtn) {
+      overlay.classList.remove('open');
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && overlay.classList.contains('open')) {
+      overlay.classList.remove('open');
+    }
+  });
+  _imgLightbox = { overlay: overlay, img: img };
+  return _imgLightbox;
+}
+
+// Delegate click on image preview thumbnails to open the lightbox
+document.addEventListener('click', function (e) {
+  var target = e.target;
+  if (target.tagName === 'IMG' && target.closest('.tv-img-preview')) {
+    var lb = _getImageLightbox();
+    lb.img.src = target.src;
+    lb.overlay.classList.add('open');
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // TranscriptView — rich web view of the Claude Code JSONL transcript
 // ═══════════════════════════════════════════════════════════════
@@ -3507,7 +3564,7 @@ const TranscriptView = {
         requestAnimationFrame(tick);
       } else {
         // Final pass: render full markdown
-        content.innerHTML = renderMarkdown(text); // eslint-disable-line no-unsanitized/property
+        content.innerHTML = replaceImagePaths(renderMarkdown(text)); // eslint-disable-line no-unsanitized/property
         this._scrollToBottom(false);
       }
     };
@@ -3829,7 +3886,7 @@ const TranscriptView = {
 
         const body = document.createElement('div');
         body.className = 'tv-compact-body tv-markdown';
-        body.innerHTML = renderMarkdown(block.text);
+        body.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
 
         hdr.addEventListener('click', () => {
           const open = hdr.classList.toggle('open');
@@ -3872,7 +3929,7 @@ const TranscriptView = {
       // renderMarkdown escapes all user/assistant text via esc() before processing.
       // Link hrefs are protocol-validated (only http/https/relative allowed).
       // The resulting HTML is safe to assign on .tv-markdown elements.
-      content.innerHTML = renderMarkdown(block.text);
+      content.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
       div.appendChild(label);
       div.appendChild(content);
       const tsText = this._formatTimestamp(block.timestamp);

@@ -4,9 +4,10 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { join, resolve, relative, isAbsolute, extname } from 'node:path';
 import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import { findSessionOrFail } from '../route-helpers.js';
@@ -381,5 +382,86 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     findSessionOrFail(ctx, id); // Validates session exists
     const closed = fileStreamManager.closeStream(streamId);
     return { success: closed };
+  });
+
+  // Serve image files for inline chat preview (session-agnostic)
+  const imageMimeTypes: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+  };
+  const allowedImageExts = new Set(Object.keys(imageMimeTypes));
+  const homeDir = homedir();
+
+  app.get('/api/files/preview', async (req, reply) => {
+    const { path: rawPath } = req.query as { path?: string };
+
+    if (!rawPath || !isAbsolute(rawPath)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
+      return;
+    }
+
+    // Check extension before touching the filesystem
+    const ext = extname(rawPath).slice(1).toLowerCase();
+    if (!allowedImageExts.has(ext)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
+      return;
+    }
+
+    // Resolve symlinks to prevent traversal
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(rawPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+
+    const resolvedExt = extname(resolvedPath).slice(1).toLowerCase();
+    if (!allowedImageExts.has(resolvedExt)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
+      return;
+    }
+
+    // Security allowlist: /tmp or user home directory
+    const inTmp = resolvedPath.startsWith('/tmp/') || resolvedPath === '/tmp';
+    const inHome = resolvedPath.startsWith(homeDir + '/') || resolvedPath === homeDir;
+    if (!inTmp && !inHome) {
+      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
+      return;
+    }
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (!stat.isFile()) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
+        return;
+      }
+
+      const MAX_IMAGE_SIZE = 50 * 1024 * 1024; // 50MB
+      if (stat.size > MAX_IMAGE_SIZE) {
+        reply
+          .code(400)
+          .send(
+            createErrorResponse(
+              ApiErrorCode.INVALID_INPUT,
+              `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_IMAGE_SIZE / 1024 / 1024}MB limit)`
+            )
+          );
+        return;
+      }
+
+      const content = await fs.readFile(resolvedPath);
+      reply.header('Content-Type', imageMimeTypes[resolvedExt] || 'application/octet-stream');
+      reply.header('Cache-Control', 'private, max-age=60');
+      reply.send(content);
+    } catch (err) {
+      reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+    }
   });
 }
