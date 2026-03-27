@@ -405,6 +405,57 @@ function inlineMarkdown(escaped, safeHref, esc) {
  *   { type:'result', cost, durationMs, error, timestamp }
  */
 // ===================================================================
+// Overlay History — browser History API integration for overlays
+// ===================================================================
+const OverlayHistory = {
+  _stack: [],        // Array of { id: string, close: Function }
+  _ignorePopstate: false,
+
+  init() {
+    history.replaceState({ overlay: null }, '');
+    window.addEventListener('popstate', (e) => this._onPopState(e));
+  },
+
+  push(id, closeFn) {
+    if (this._stack.length && this._stack[this._stack.length - 1].id === id) return;
+    this._stack.push({ id, close: closeFn });
+    history.pushState({ overlay: id }, '');
+  },
+
+  pop(id) {
+    const idx = this._stack.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    this._stack.splice(idx, 1);
+    this._ignorePopstate = true;
+    history.back();
+  },
+
+  _onPopState(e) {
+    if (this._ignorePopstate) {
+      this._ignorePopstate = false;
+      return;
+    }
+    const entry = this._stack.pop();
+    if (entry) {
+      entry.close();
+    }
+  },
+
+  has(id) {
+    return this._stack.some(e => e.id === id);
+  },
+
+  clear() {
+    const count = this._stack.length;
+    this._stack = [];
+    if (count > 0) {
+      this._ignorePopstate = true;
+      history.go(-count);
+    }
+  }
+};
+
+// ===================================================================
 // MCP Panel
 // ===================================================================
 const McpPanel = {
@@ -466,14 +517,20 @@ const McpPanel = {
     this._chip?.classList.add('active');
     PanelBackdrop.show();
     await this._loadServers();
+    OverlayHistory.push('mcp', () => this._closeInternal());
   },
 
-  close() {
+  _closeInternal() {
     this._panel.classList.remove('open');
     this._chip?.classList.remove('active');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('mcp');
   },
 
   toggle() {
@@ -919,6 +976,7 @@ const PluginsPanel = {
     PanelBackdrop.show();
     this._loadInstalled();
     this._updateInstallScopeDefault();
+    OverlayHistory.push('plugins', () => this._closeInternal());
   },
 
   _updateInstallScopeDefault() {
@@ -933,12 +991,17 @@ const PluginsPanel = {
     }
   },
 
-  close() {
+  _closeInternal() {
     this._panel.classList.remove('open');
     this._chip?.classList.remove('active');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('plugins');
   },
 
   toggle() {
@@ -1484,15 +1547,21 @@ const ContextBar = {
         .then(d => { if (d && d.pct != null && sid === app.activeSessionId) { this._data.set(sid, d); this._renderPanel(d); } })
         .catch(() => {});
     }
+    OverlayHistory.push('context', () => this._closeInternal());
   },
 
-  close() {
+  _closeInternal() {
     if (!this._panel) return;
     this._panel.classList.remove('open');
     this._arcBtn?.classList.remove('active');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 260);
+  },
+
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('context');
   },
 
   toggle() {
@@ -2181,14 +2250,20 @@ const CommandPanel = {
     this._scrollToBottom();
     setTimeout(() => this._input?.focus(), 200);
     if (this._sidebarOpen) this._loadConversations();
+    OverlayHistory.push('command', () => this._closeInternal());
   },
 
-  close() {
+  _closeInternal() {
     if (!this._panel) return;
     this._panel.classList.remove('open');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 200);
+  },
+
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('command');
   },
 
   toggle() {
@@ -4797,6 +4872,7 @@ class CodemanApp {
     }, true); // Use capture phase to intercept before xterm's handler
     SessionIndicatorBar.init();
     PanelBackdrop.init();
+    OverlayHistory.init();
     TerminalSearch.init();
     SessionSwitcher.init();
     // Always-visible compose bar on mobile and desktop
@@ -9294,9 +9370,10 @@ class CodemanApp {
     } else {
       this.boardView.refresh();
     }
+    OverlayHistory.push('board', () => this._hideBoardInternal());
   }
 
-  hideBoard() {
+  _hideBoardInternal() {
     const boardEl = document.getElementById('boardView');
     if (boardEl) boardEl.style.display = 'none';
     this._boardVisible = false;
@@ -9306,6 +9383,11 @@ class CodemanApp {
     const transEl = document.getElementById('transcriptView');
     if (termEl) termEl.style.display = '';
     if (transEl) transEl.style.display = '';
+  }
+
+  hideBoard() {
+    this._hideBoardInternal();
+    OverlayHistory.pop('board');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -10680,6 +10762,7 @@ class CodemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+    OverlayHistory.push('session-options', () => this._closeSessionOptionsInternal());
   }
 
   openNewPicker() {
@@ -11753,7 +11836,7 @@ class CodemanApp {
     }
   }
 
-  closeSessionOptions() {
+  _closeSessionOptionsInternal() {
     this.editingSessionId = null;
     // Stop run summary auto-refresh if it was running
     this.stopRunSummaryAutoRefresh();
@@ -11764,6 +11847,11 @@ class CodemanApp {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
     }
+  }
+
+  closeSessionOptions() {
+    this._closeSessionOptionsInternal();
+    OverlayHistory.pop('session-options');
   }
 
   setupColorPicker() {
@@ -12651,6 +12739,7 @@ class CodemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+    OverlayHistory.push('settings', () => this._closeAppSettingsInternal());
   }
 
   switchSettingsTab(tabName) {
@@ -12665,7 +12754,7 @@ class CodemanApp {
     });
   }
 
-  closeAppSettings() {
+  _closeAppSettingsInternal() {
     document.getElementById('appSettingsModal').classList.remove('active');
 
     // Deactivate focus trap and restore focus
@@ -12673,6 +12762,11 @@ class CodemanApp {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
     }
+  }
+
+  closeAppSettings() {
+    this._closeAppSettingsInternal();
+    OverlayHistory.pop('settings');
   }
 
   async loadTunnelStatus() {
@@ -14231,9 +14325,10 @@ class CodemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+    OverlayHistory.push('help', () => this._closeHelpInternal());
   }
 
-  closeHelp() {
+  _closeHelpInternal() {
     document.getElementById('helpModal').classList.remove('active');
 
     // Deactivate focus trap and restore focus
@@ -14241,6 +14336,11 @@ class CodemanApp {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
     }
+  }
+
+  closeHelp() {
+    this._closeHelpInternal();
+    OverlayHistory.pop('help');
   }
 
   closeAllPanels() {
@@ -14259,6 +14359,7 @@ class CodemanApp {
     this.subagentPanelVisible = false;
     if (typeof TerminalSearch !== 'undefined') TerminalSearch.close();
     if (typeof SessionSwitcher !== 'undefined') SessionSwitcher.close();
+    OverlayHistory.clear();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -18594,9 +18695,10 @@ class CodemanApp {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+    OverlayHistory.push('kill-all', () => this._closeKillAllModalInternal());
   }
 
-  closeKillAllModal() {
+  _closeKillAllModalInternal() {
     document.getElementById('killAllModal').classList.remove('active');
 
     // Deactivate focus trap and restore focus
@@ -18604,6 +18706,11 @@ class CodemanApp {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
     }
+  }
+
+  closeKillAllModal() {
+    this._closeKillAllModalInternal();
+    OverlayHistory.pop('kill-all');
   }
 
   async confirmKillAll(killMux) {
@@ -20521,8 +20628,9 @@ const SessionDrawer = {
         titleEl.appendChild(pinBtn);
       }
     }
+    OverlayHistory.push('drawer', () => this._closeInternal());
   },
-  close() {
+  _closeInternal() {
     if (document.body.classList.contains('sidebar-pinned')) return;
     this._getOverlay()?.classList.remove('open');
     const drawer = this._getEl();
@@ -20538,6 +20646,10 @@ const SessionDrawer = {
       searchEl.removeEventListener('input', this._searchInputListener);
       this._searchInputListener = null;
     }
+  },
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('drawer');
   },
   toggle() {
     if (this._getEl()?.classList.contains('open')) this.close(); else this.open();
@@ -22094,13 +22206,19 @@ const BoardView = {
     if (!alreadyOpen) {
       panelEl?.classList.add('open');
       document.getElementById('workItemPanelOverlay')?.classList.add('open');
+      OverlayHistory.push('board-detail', () => this._closeDetailPanelInternal());
     }
   },
 
-  closeDetailPanel() {
+  _closeDetailPanelInternal() {
     this._detailItem = null;
     document.getElementById('workItemPanel')?.classList.remove('open');
     document.getElementById('workItemPanelOverlay')?.classList.remove('open');
+  },
+
+  closeDetailPanel() {
+    this._closeDetailPanelInternal();
+    OverlayHistory.pop('board-detail');
   },
 
   _renderDetailPanel(item, agent) {
@@ -22633,6 +22751,7 @@ const AgentPanel = {
     this._render();
     document.getElementById('agentPanel').classList.add('open');
     document.getElementById('agentPanelOverlay').classList.add('open');
+    OverlayHistory.push('agent', () => this._closeInternal());
   },
 
   openNew() {
@@ -22642,14 +22761,20 @@ const AgentPanel = {
     this._render();
     document.getElementById('agentPanel').classList.add('open');
     document.getElementById('agentPanelOverlay').classList.add('open');
+    OverlayHistory.push('agent', () => this._closeInternal());
   },
 
-  close() {
+  _closeInternal() {
     document.getElementById('agentPanel').classList.remove('open');
     document.getElementById('agentPanelOverlay').classList.remove('open');
     this._agentId = null;
     this._pendingMcp = [];
     this._showMcpLibrary = false;
+  },
+
+  close() {
+    this._closeInternal();
+    OverlayHistory.pop('agent');
   },
 
   _render() {
