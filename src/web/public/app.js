@@ -19984,6 +19984,7 @@ const InputPanel = {
     if (micBtn) micBtn.addEventListener('click', () => {
       if (typeof VoiceInput === 'undefined') return;
       if (VoiceInput.isRecording) {
+        VoiceInput._composeBarMode = true;
         VoiceInput.stop();
       } else {
         // Open compose panel if not already open

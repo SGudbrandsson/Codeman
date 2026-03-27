@@ -568,6 +568,7 @@ const VoiceInput = {
         ta.value = existing ? existing.trimEnd() + ' ' + trimmed : trimmed;
         ta.focus();
         ta.selectionStart = ta.selectionEnd = ta.value.length;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
         // Trigger auto-grow
         if (typeof InputPanel !== 'undefined' && InputPanel._autoGrow) {
           InputPanel._autoGrow(ta);
@@ -780,6 +781,7 @@ const VoiceInput = {
   },
 
   _showPreview(text, provider) {
+    if (this._composeBarMode) return;
     if (!this.previewEl) {
       this.previewEl = document.createElement('div');
       this.previewEl.className = 'voice-preview';
