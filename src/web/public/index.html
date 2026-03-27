@@ -54,6 +54,10 @@
         <span class="logo" onclick="app.goHome()" title="Go to main page">Codeman</span>
       </div>
       <button class="btn-board-view" id="boardViewBtn" onclick="app.toggleBoard()" title="Board view" aria-label="Toggle board view">Board</button>
+      <button class="btn-command-chat" id="commandChatBtn" onclick="CommandPanel.toggle()" title="Command chat (Ctrl+Shift+K)" aria-label="Toggle command chat" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Command</span>
+      </button>
 
       <!-- Session Tabs (moved to sidebar/hamburger menu) -->
       <div class="session-tabs" id="sessionTabs" role="tablist" aria-label="Session tabs" style="display:none">

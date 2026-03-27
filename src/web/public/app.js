@@ -2167,6 +2167,8 @@ const CommandPanel = {
       this._available = !!data.available;
       const btn = document.getElementById('ovfCommandBtn');
       if (btn) btn.style.display = this._available ? '' : 'none';
+      const hdrBtn = document.getElementById('commandChatBtn');
+      if (hdrBtn) hdrBtn.style.display = this._available ? '' : 'none';
     } catch { this._available = false; }
   },
 
@@ -2177,6 +2179,7 @@ const CommandPanel = {
     if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) ContextBar.close();
     this._panel.style.display = '';
     requestAnimationFrame(() => this._panel.classList.add('open'));
+    document.getElementById('commandChatBtn')?.classList.add('active');
     PanelBackdrop.show();
     this._scrollToBottom();
     setTimeout(() => this._input?.focus(), 200);
@@ -2186,6 +2189,7 @@ const CommandPanel = {
   close() {
     if (!this._panel) return;
     this._panel.classList.remove('open');
+    document.getElementById('commandChatBtn')?.classList.remove('active');
     PanelBackdrop.hide();
     const panel = this._panel;
     setTimeout(() => { if (!panel.classList.contains('open')) panel.style.display = 'none'; }, 200);
