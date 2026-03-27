@@ -287,13 +287,27 @@ describe('TmuxManager (unit)', () => {
     });
 
     it('should update respawn config', () => {
-      const config = { enabled: true, idleTimeoutMs: 5000, updatePrompt: 'test', interStepDelayMs: 1000, sendClear: true, sendInit: true };
+      const config = {
+        enabled: true,
+        idleTimeoutMs: 5000,
+        updatePrompt: 'test',
+        interStepDelayMs: 1000,
+        sendClear: true,
+        sendInit: true,
+      };
       manager.updateRespawnConfig('meta-test', config);
       expect(manager.getSession('meta-test')?.respawnConfig).toEqual(config);
     });
 
     it('should clear respawn config', () => {
-      manager.updateRespawnConfig('meta-test', { enabled: true, idleTimeoutMs: 5000, updatePrompt: 'test', interStepDelayMs: 1000, sendClear: true, sendInit: true });
+      manager.updateRespawnConfig('meta-test', {
+        enabled: true,
+        idleTimeoutMs: 5000,
+        updatePrompt: 'test',
+        interStepDelayMs: 1000,
+        sendClear: true,
+        sendInit: true,
+      });
       manager.clearRespawnConfig('meta-test');
       expect(manager.getSession('meta-test')?.respawnConfig).toBeUndefined();
     });
@@ -327,8 +341,8 @@ describe('TmuxManager (unit)', () => {
 
       const sessions = manager.getSessions();
       expect(sessions).toHaveLength(2);
-      expect(sessions.map(s => s.sessionId)).toContain('s1');
-      expect(sessions.map(s => s.sessionId)).toContain('s2');
+      expect(sessions.map((s) => s.sessionId)).toContain('s1');
+      expect(sessions.map((s) => s.sessionId)).toContain('s2');
     });
   });
 
@@ -340,5 +354,53 @@ describe('TmuxManager (unit)', () => {
       // No error thrown
     });
   });
-});
 
+  describe('remapSessionId', () => {
+    it('should remap a session from old ID to new ID', () => {
+      manager.registerSession({
+        sessionId: 'restored-abc12345',
+        muxName: 'codeman-abc12345',
+        pid: 1,
+        createdAt: Date.now(),
+        workingDir: '/tmp/test',
+        mode: 'claude',
+        attached: false,
+      });
+
+      const result = manager.remapSessionId('restored-abc12345', 'abc12345-full-uuid');
+      expect(result).toBe(true);
+
+      // Old ID should be gone
+      expect(manager.getSession('restored-abc12345')).toBeUndefined();
+
+      // New ID should have the session with updated sessionId
+      const session = manager.getSession('abc12345-full-uuid');
+      expect(session).toBeDefined();
+      expect(session!.sessionId).toBe('abc12345-full-uuid');
+      expect(session!.muxName).toBe('codeman-abc12345');
+      expect(session!.workingDir).toBe('/tmp/test');
+    });
+
+    it('should return false when old ID does not exist', () => {
+      const result = manager.remapSessionId('nonexistent-id', 'new-id');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('destroy', () => {
+    it('should not throw when called', () => {
+      manager.registerSession({
+        sessionId: 'sess-destroy-test',
+        muxName: 'codeman-desttest',
+        pid: 1,
+        createdAt: Date.now(),
+        workingDir: '/tmp',
+        mode: 'claude',
+        attached: false,
+      });
+
+      // destroy() calls saveSessionsSync() which is a no-op in test mode
+      expect(() => manager.destroy()).not.toThrow();
+    });
+  });
+});
