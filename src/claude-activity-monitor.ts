@@ -58,6 +58,7 @@ export class ClaudeActivityMonitor extends EventEmitter {
     const lines = fileContent.split('\n');
     let lastUserIdx = -1;
     let lastTurnDurationIdx = -1;
+    let lastStopHookIdx = -1;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -67,12 +68,15 @@ export class ClaudeActivityMonitor extends EventEmitter {
           lastUserIdx = i;
         } else if (obj.type === 'system' && obj.subtype === 'turn_duration') {
           lastTurnDurationIdx = i;
+        } else if (obj.type === 'system' && obj.subtype === 'stop_hook_summary') {
+          lastStopHookIdx = i;
         }
       } catch {
         /* skip malformed lines */
       }
     }
-    if (lastUserIdx > lastTurnDurationIdx) {
+    const lastIdleIdx = Math.max(lastTurnDurationIdx, lastStopHookIdx);
+    if (lastUserIdx > lastIdleIdx) {
       // Claude was mid-turn when we last saw this file — treat as busy
       this._isBusy = true;
       this.emit('working');
@@ -154,7 +158,7 @@ export class ClaudeActivityMonitor extends EventEmitter {
           this.emit('working');
           this._startCrashRecoveryTimer();
         }
-      } else if (obj.type === 'system' && obj.subtype === 'turn_duration') {
+      } else if (obj.type === 'system' && (obj.subtype === 'turn_duration' || obj.subtype === 'stop_hook_summary')) {
         if (this._isBusy) {
           this._isBusy = false;
           if (this._crashRecoveryTimer) {
