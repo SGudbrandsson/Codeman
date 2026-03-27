@@ -58,7 +58,7 @@ async function selectSession(page: Page, sessionId: string): Promise<void> {
 }
 
 async function mockTranscript(page: Page, sessionId: string, blocks: unknown[]): Promise<void> {
-  await page.route(`**/api/sessions/${sessionId}/transcript`, (route) => {
+  await page.route(`**/api/sessions/${sessionId}/transcript**`, (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blocks) });
   });
 }

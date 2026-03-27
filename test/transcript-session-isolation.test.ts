@@ -144,7 +144,7 @@ async function selectSession(page: Page, sessionId: string): Promise<void> {
 }
 
 async function mockTranscript(page: Page, sessionId: string, blocks: unknown[]): Promise<void> {
-  await page.route(`**/api/sessions/${sessionId}/transcript`, (route) => {
+  await page.route(`**/api/sessions/${sessionId}/transcript**`, (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(blocks) });
   });
 }
@@ -348,7 +348,7 @@ describe('TranscriptView session isolation — frontend', () => {
     expect(staleText).toContain('SESSION B USER MESSAGE');
 
     // Now fix the backend: session A endpoint returns A's correct blocks
-    await page.unroute(`**/api/sessions/${sessionAId}/transcript`);
+    await page.unroute(`**/api/sessions/${sessionAId}/transcript**`);
     await mockTranscript(page, sessionAId, SESSION_A_BLOCKS);
 
     // Switch away and back to trigger a fresh load

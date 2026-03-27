@@ -174,6 +174,7 @@ export function registerSecurityHeaders(app: FastifyInstance, https: boolean): v
           reply.header('Access-Control-Allow-Origin', origin);
           reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
           reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          reply.header('Access-Control-Expose-Headers', 'X-Total-Blocks');
           reply.header('Access-Control-Max-Age', '86400');
         }
       } catch {

@@ -56,7 +56,7 @@ async function selectSession(page: Page, sessionId: string): Promise<void> {
 
 /** Mock the transcript endpoint to return an empty transcript */
 async function mockEmptyTranscript(page: Page, sessionId: string): Promise<void> {
-  await page.route(`**/api/sessions/${sessionId}/transcript`, (route) => {
+  await page.route(`**/api/sessions/${sessionId}/transcript**`, (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
   });
 }

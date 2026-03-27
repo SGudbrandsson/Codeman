@@ -25,6 +25,10 @@ function turnDurationLine() {
   return { type: 'system', subtype: 'turn_duration', durationMs: 1000 };
 }
 
+function stopHookSummaryLine() {
+  return { type: 'system', subtype: 'stop_hook_summary', hooks: [] };
+}
+
 function monitorOn(filePath: string): ClaudeActivityMonitor {
   // Create monitor pointing at a specific file path via internal override
   const m = new ClaudeActivityMonitor('test-id', '/test/workdir');
@@ -47,6 +51,35 @@ describe('startup state — _determineInitialState', () => {
     const f = tmpFile();
     writeLine(f, userLine());
     writeLine(f, turnDurationLine());
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('working', () => events.push('working'));
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    m.stop();
+    expect(events).toEqual([]);
+    expect((m as any)._isBusy).toBe(false);
+  });
+
+  it('file ends with user then stop_hook_summary (no turn_duration) → idle, not busy', async () => {
+    const f = tmpFile();
+    writeLine(f, userLine());
+    writeLine(f, stopHookSummaryLine());
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('working', () => events.push('working'));
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    m.stop();
+    expect(events).toEqual([]);
+    expect((m as any)._isBusy).toBe(false);
+  });
+
+  it('stop_hook_summary after turn_duration, both after last user → still idle', async () => {
+    const f = tmpFile();
+    writeLine(f, userLine());
+    writeLine(f, turnDurationLine());
+    writeLine(f, stopHookSummaryLine());
     const m = monitorOn(f);
     const events: string[] = [];
     m.on('working', () => events.push('working'));
@@ -146,6 +179,51 @@ describe('runtime event detection', () => {
     expect(events).toEqual([]);
   });
 
+  it('stop_hook_summary appended while busy → emits idle', async () => {
+    const f = tmpFile();
+    writeLine(f, userLine()); // start busy
+    const m = monitorOn(f);
+    await m.start();
+    expect((m as any)._isBusy).toBe(true);
+    const p = waitForEvent(m, 'idle');
+    writeLine(f, stopHookSummaryLine());
+    await p;
+    expect((m as any)._isBusy).toBe(false);
+    expect((m as any)._crashRecoveryTimer).toBeNull();
+    m.stop();
+  });
+
+  it('stop_hook_summary followed by turn_duration → emits idle once', async () => {
+    const f = tmpFile();
+    writeLine(f, userLine()); // start busy
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    expect((m as any)._isBusy).toBe(true);
+    const p = waitForEvent(m, 'idle');
+    writeLine(f, stopHookSummaryLine());
+    await p;
+    // Now write turn_duration — should be a no-op (already idle)
+    writeLine(f, turnDurationLine());
+    await new Promise((r) => setTimeout(r, 300));
+    m.stop();
+    expect(events).toEqual(['idle']);
+  });
+
+  it('stop_hook_summary while already idle → no event', async () => {
+    const f = tmpFile();
+    fs.writeFileSync(f, '');
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+    writeLine(f, stopHookSummaryLine());
+    await new Promise((r) => setTimeout(r, 300));
+    m.stop();
+    expect(events).toEqual([]);
+  });
+
   it('test 9: turn_duration while already idle → no event', async () => {
     const f = tmpFile();
     fs.writeFileSync(f, '');
@@ -157,6 +235,31 @@ describe('runtime event detection', () => {
     await new Promise((r) => setTimeout(r, 300));
     m.stop();
     expect(events).toEqual([]);
+  });
+
+  it('interrupted turn then normal turn — full cycle with mixed idle signals', async () => {
+    const f = tmpFile();
+    fs.writeFileSync(f, '');
+    const m = monitorOn(f);
+    const events: string[] = [];
+    m.on('working', () => events.push('working'));
+    m.on('idle', () => events.push('idle'));
+    await m.start();
+
+    // Interrupted turn: user → busy → stop_hook_summary (no turn_duration) → idle
+    writeLine(f, userLine());
+    await waitForEvent(m, 'working');
+    writeLine(f, stopHookSummaryLine());
+    await waitForEvent(m, 'idle');
+
+    // Normal turn: user → busy → turn_duration → idle
+    writeLine(f, userLine());
+    await waitForEvent(m, 'working');
+    writeLine(f, turnDurationLine());
+    await waitForEvent(m, 'idle');
+
+    m.stop();
+    expect(events).toEqual(['working', 'idle', 'working', 'idle']);
   });
 
   it('test 13: stop() prevents further events', async () => {
