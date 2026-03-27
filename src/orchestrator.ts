@@ -602,7 +602,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       .filter((s) => s.worktreePath && s.worktreePath.startsWith(dirname(gitRoot)))
       .map((s) => s.assignedPort)
       .filter((p): p is number => p !== undefined);
-    const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
+    const assignedPort = (await allocateNextPort(basePorts, usedPorts)) ?? undefined;
 
     const newSession = new Session({
       workingDir: worktreePath,

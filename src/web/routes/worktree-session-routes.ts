@@ -275,7 +275,7 @@ export function registerWorktreeSessionRoutes(
       .filter((s) => s.worktreePath && s.worktreePath.startsWith(dirname(gitRoot)))
       .map((s) => s.assignedPort)
       .filter((p): p is number => p !== undefined);
-    const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
+    const assignedPort = (await allocateNextPort(basePorts, usedPorts)) ?? undefined;
 
     const finalNotes = assignedPort
       ? `${notes ? notes + '\n\n' : ''}Assigned dev port for this worktree: ${assignedPort}. Start the dev server with --port ${assignedPort} (or set PORT=${assignedPort}).`
@@ -565,7 +565,7 @@ export function registerWorktreeSessionRoutes(
       .filter((s) => s.worktreePath && s.worktreePath.startsWith(dirname(gitRoot)))
       .map((s) => s.assignedPort)
       .filter((p): p is number => p !== undefined);
-    const assignedPort = allocateNextPort(basePorts, usedPorts) ?? undefined;
+    const assignedPort = (await allocateNextPort(basePorts, usedPorts)) ?? undefined;
     const finalNotes = assignedPort
       ? `${notes ? notes + '\n\n' : ''}Assigned dev port for this worktree: ${assignedPort}. Start the dev server with --port ${assignedPort} (or set PORT=${assignedPort}).`
       : notes;
