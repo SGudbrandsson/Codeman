@@ -18,11 +18,11 @@
 export interface OrchestratorConfig {
   /** Polling interval for the orchestration loop (ms). Default 30000. */
   pollIntervalMs: number;
-  /** Idle threshold before sending a nudge prompt (ms). Default 900000 (15 min). */
+  /** Idle threshold before sending a nudge prompt (ms). Default 600000 (10 min). */
   stallThresholdMs: number;
-  /** Idle threshold after nudge before marking blocked (ms). Default 1800000 (30 min). */
+  /** Idle threshold after nudge before marking blocked (ms). Default 1200000 (20 min). */
   nudgeThresholdMs: number;
-  /** Maximum concurrent dispatched work items. Default 5. */
+  /** Maximum concurrent dispatched work items. Default 10. */
   maxConcurrentDispatches: number;
   /** Orchestrator mode. Default 'hybrid'. */
   mode: 'hybrid' | 'autonomous';
@@ -59,9 +59,9 @@ export interface MergePrepResult {
 
 export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
   pollIntervalMs: 30000,
-  stallThresholdMs: 900000,
-  nudgeThresholdMs: 1800000,
-  maxConcurrentDispatches: 5,
+  stallThresholdMs: 600000,
+  nudgeThresholdMs: 1200000,
+  maxConcurrentDispatches: 10,
   mode: 'hybrid',
   matchingThreshold: 3,
 };

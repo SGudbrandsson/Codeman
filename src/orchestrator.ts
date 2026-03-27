@@ -176,7 +176,7 @@ async function isCaseOrchestrationEnabled(caseName: string): Promise<boolean> {
 
 const MAX_RECENT_DECISIONS = 50;
 const STALL_CHECK_INTERVAL_MS = 300_000; // 5 minutes
-const DISPATCH_RECOVERY_THRESHOLD_MS = 300_000; // 5 minutes
+const DISPATCH_RECOVERY_THRESHOLD_MS = 120_000; // 2 minutes
 const MERGE_PREP_TIMEOUT_MS = 60_000; // 60 seconds for tsc/lint
 
 const YAML_FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---/;
@@ -297,18 +297,30 @@ export class Orchestrator extends EventEmitter {
 
     // Step 5: Process eligible items up to capacity
     const toProcess = eligible.slice(0, available);
-    for (const item of toProcess) {
-      try {
+    const results = await Promise.allSettled(
+      toProcess.map(async (item) => {
         const selection = await this.selectAgent(item);
         if (!selection) {
           console.log(`[orchestrator] no agent available for ${item.id}`);
-          continue;
+          return;
         }
         await this.dispatchWorkItem(item, selection.agentId, selection.method, selection.reasoning);
-      } catch (err) {
-        console.error(`[orchestrator] dispatch failed for ${item.id}:`, getErrorMessage(err));
+      })
+    );
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.error(`[orchestrator] dispatch failed:`, getErrorMessage(result.reason));
       }
     }
+  }
+
+  /**
+   * Trigger an immediate tick — call when new work items are queued
+   * so dispatch happens right away instead of waiting for the next poll.
+   */
+  triggerTick(): void {
+    if (!this.running) return;
+    this.tick().catch((err) => console.error('[orchestrator] triggered tick error:', getErrorMessage(err)));
   }
 
   // ─── Dispatch recovery ───────────────────────────────────────────────────
