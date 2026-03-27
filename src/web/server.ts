@@ -3236,13 +3236,39 @@ export class WebServer extends EventEmitter {
           const muxSession = this.mux.getSession(restoredId);
           if (!muxSession) continue;
 
-          // Find a state.json entry whose ID starts with this fragment and shares workingDir
+          // Find a state.json entry whose ID starts with this fragment and shares workingDir.
+          // Also try matching by claudeResumeId — the tmux session name uses the 8-char
+          // fragment of the conversationId, which may differ from the Codeman session UUID.
           const match = Object.values(storedSessions).find(
-            (s) => s.id.startsWith(fragment) && s.id !== restoredId && s.workingDir === muxSession.workingDir
+            (s) =>
+              s.id !== restoredId &&
+              s.workingDir === muxSession.workingDir &&
+              (s.id.startsWith(fragment) || (s.claudeResumeId && s.claudeResumeId.startsWith(fragment)))
           );
           if (match) {
             console.log(`[Server] Remapping ${restoredId} -> ${match.id} (matched by fragment + workingDir)`);
             this.mux.remapSessionId(restoredId, match.id);
+          }
+        }
+      }
+
+      // Also remap any existing restored-* sessions from prior restarts that are still
+      // persisted in mux-sessions.json. These weren't in `discovered` (they were already
+      // known from the file) but still need remapping to their original IDs.
+      {
+        const storedSessions2 = this.store.getSessions();
+        for (const muxSession of this.mux.getSessions()) {
+          if (!muxSession.sessionId.startsWith('restored-')) continue;
+          const fragment = muxSession.sessionId.replace('restored-', '');
+          const match = Object.values(storedSessions2).find(
+            (s) =>
+              s.id !== muxSession.sessionId &&
+              s.workingDir === muxSession.workingDir &&
+              (s.id.startsWith(fragment) || (s.claudeResumeId && s.claudeResumeId.startsWith(fragment)))
+          );
+          if (match) {
+            console.log(`[Server] Remapping legacy ${muxSession.sessionId} -> ${match.id} (matched by fragment)`);
+            this.mux.remapSessionId(muxSession.sessionId, match.id);
           }
         }
       }
@@ -3477,13 +3503,20 @@ export class WebServer extends EventEmitter {
       //
       // Sessions are sorted parents-first so the UI can correctly group worktree children.
       const storedSessions = this.store.getSessions();
-      // Build a set of workingDirs already covered by mux-recovered sessions.
-      // This prevents creating duplicate sessions from state.json when the mux pass
-      // already recovered a live tmux pane for the same directory.
-      const muxRecoveredDirs = new Set<string>();
+      // Build dedup info from mux-recovered sessions to prevent creating duplicates
+      // from state.json when the mux pass already recovered a live tmux pane.
+      // Uses claudeResumeId (per-conversation) and session ID prefixes — NOT workingDir,
+      // because multiple independent sessions can share the same workingDir.
+      const muxRecoveredResumeIds = new Set<string>();
+      const muxRecoveredIdPrefixes: string[] = [];
       for (const session of this.sessions.values()) {
-        if (session.workingDir) {
-          muxRecoveredDirs.add(session.workingDir);
+        if (session.claudeResumeId) {
+          muxRecoveredResumeIds.add(session.claudeResumeId);
+        }
+        // For restored-* sessions that don't have claudeResumeId yet, extract the
+        // fragment from the session ID to match against state.json entries
+        if (session.id.startsWith('restored-')) {
+          muxRecoveredIdPrefixes.push(session.id.replace('restored-', ''));
         }
       }
 
@@ -3491,11 +3524,20 @@ export class WebServer extends EventEmitter {
         .filter((s) => {
           if (this.sessions.has(s.id)) return false;
           if (!shouldAttemptReattach(s)) return false;
-          // Fix: skip if a mux-recovered session already covers this workingDir
-          if (s.workingDir && muxRecoveredDirs.has(s.workingDir)) {
+          // Skip if a mux-recovered session already covers this conversation
+          if (s.claudeResumeId && muxRecoveredResumeIds.has(s.claudeResumeId)) {
             console.log(
-              `[Server] Skipping state.json session ${s.id}: workingDir already covered by mux-recovered session (${s.workingDir})`
+              `[Server] Skipping state.json session ${s.id}: claudeResumeId already covered by mux-recovered session`
             );
+            return false;
+          }
+          // Also skip if a restored-* session's fragment matches this session's ID or resumeId
+          if (
+            muxRecoveredIdPrefixes.some(
+              (prefix) => s.id.startsWith(prefix) || (s.claudeResumeId && s.claudeResumeId.startsWith(prefix))
+            )
+          ) {
+            console.log(`[Server] Skipping state.json session ${s.id}: matched by restored session fragment`);
             return false;
           }
           return true;

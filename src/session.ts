@@ -2197,9 +2197,12 @@ export class Session extends EventEmitter {
       if (tokenCount > currentTotal) {
         const delta = tokenCount - currentTotal;
 
-        // Safety: Reject suspiciously large jumps (max 100k per update)
+        // Safety: Reject suspiciously large jumps (max 100k per update).
+        // Exception: after a server restart, the first token report from Claude is the
+        // full cumulative count. If our tracked total is very low (< 5k), it means we
+        // just started tracking or restored from stale state — accept the jump.
         const MAX_DELTA_PER_UPDATE = 100_000;
-        if (delta > MAX_DELTA_PER_UPDATE) {
+        if (delta > MAX_DELTA_PER_UPDATE && currentTotal >= 5_000) {
           console.warn(
             `[Session ${this.id}] Rejected suspicious token jump: ${currentTotal} -> ${tokenCount} (delta: ${delta})`
           );
