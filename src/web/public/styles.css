@@ -11543,6 +11543,7 @@ kbd {
 /* Badge on the header button */
 .btn-action-dashboard {
   position: relative;
+  margin-left: 4px;
 }
 .action-dashboard-badge {
   display: inline-flex;
