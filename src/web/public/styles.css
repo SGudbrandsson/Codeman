@@ -11809,7 +11809,7 @@ kbd {
 .agent-note-meta { color: #475569; font-size: 0.72rem; margin-top: 4px; }
 
 /* ── Model chip ───────────────────────────────────────────── */
-.model-chip{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:12px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap;min-height:36px}
+.model-chip{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;margin:6px 0;border-radius:12px;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);color:#22d3ee;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;white-space:nowrap;min-height:36px}
 .model-chip:hover{background:rgba(6,182,212,0.16);border-color:rgba(6,182,212,0.6)}
 .model-chip.active{background:rgba(6,182,212,0.22);border-color:rgba(6,182,212,0.8)}
 .model-chip-caret{font-size:10px;opacity:.7}
