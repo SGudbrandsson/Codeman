@@ -7,10 +7,7 @@
  * replicate the singleton logic and run it against jsdom with mocked
  * history.pushState / history.back / history.go / history.replaceState.
  *
- * Strategy:
- * - Build a thin OverlayHistory replica matching the real method bodies
- * - Mock history methods and manually dispatch popstate events
- * - Assert on stack state, history calls, and close callback invocations
+ * Keep this replica in sync with OverlayHistory in app.js (around line 410).
  *
  * Run: npx vitest run test/overlay-history.test.ts
  */
@@ -31,7 +28,7 @@ interface StackEntry {
 function makeOverlayHistory() {
   const oh = {
     _stack: [] as StackEntry[],
-    _ignorePopstate: false,
+    _skipPopstate: 0,
 
     init() {
       history.replaceState({ overlay: null }, '');
@@ -48,13 +45,13 @@ function makeOverlayHistory() {
       const idx = this._stack.findIndex((e) => e.id === id);
       if (idx === -1) return;
       this._stack.splice(idx, 1);
-      this._ignorePopstate = true;
+      this._skipPopstate++;
       history.back();
     },
 
     _onPopState(_e: PopStateEvent) {
-      if (this._ignorePopstate) {
-        this._ignorePopstate = false;
+      if (this._skipPopstate > 0) {
+        this._skipPopstate--;
         return;
       }
       const entry = this._stack.pop();
@@ -68,11 +65,12 @@ function makeOverlayHistory() {
     },
 
     clear() {
-      const count = this._stack.length;
+      const entries = this._stack.slice();
       this._stack = [];
-      if (count > 0) {
-        this._ignorePopstate = true;
-        history.go(-count);
+      for (const entry of entries) entry.close();
+      if (entries.length > 0) {
+        this._skipPopstate++;
+        history.go(-entries.length);
       }
     },
   };
@@ -89,7 +87,6 @@ describe('OverlayHistory', () => {
   let goSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    // Spy on history methods
     pushStateSpy = vi.spyOn(history, 'pushState').mockImplementation(() => {});
     replaceStateSpy = vi.spyOn(history, 'replaceState').mockImplementation(() => {});
     backSpy = vi.spyOn(history, 'back').mockImplementation(() => {});
@@ -98,8 +95,6 @@ describe('OverlayHistory', () => {
     oh = makeOverlayHistory();
 
     return () => {
-      // Cleanup: remove popstate listeners by replacing window listeners
-      // (jsdom creates a fresh window per environment, but we clean up spies)
       pushStateSpy.mockRestore();
       replaceStateSpy.mockRestore();
       backSpy.mockRestore();
@@ -151,7 +146,7 @@ describe('OverlayHistory', () => {
     it('allows re-push of same id if not on top of stack', () => {
       oh.push('board', vi.fn());
       oh.push('board-detail', vi.fn());
-      oh.push('board', vi.fn()); // board is not on top, so this is allowed
+      oh.push('board', vi.fn());
 
       expect(oh._stack).toHaveLength(3);
       expect(pushStateSpy).toHaveBeenCalledTimes(3);
@@ -167,11 +162,11 @@ describe('OverlayHistory', () => {
       expect(backSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('sets _ignorePopstate flag', () => {
+    it('increments _skipPopstate counter', () => {
       oh.push('settings', vi.fn());
       oh.pop('settings');
 
-      expect(oh._ignorePopstate).toBe(true);
+      expect(oh._skipPopstate).toBe(1);
     });
 
     it('is idempotent — unknown id is a no-op', () => {
@@ -180,7 +175,7 @@ describe('OverlayHistory', () => {
 
       expect(oh._stack).toHaveLength(1);
       expect(backSpy).not.toHaveBeenCalled();
-      expect(oh._ignorePopstate).toBe(false);
+      expect(oh._skipPopstate).toBe(0);
     });
 
     it('removes the correct entry from middle of stack', () => {
@@ -214,31 +209,50 @@ describe('OverlayHistory', () => {
   });
 
   describe('clear()', () => {
-    it('empties the stack and calls history.go(-count)', () => {
-      oh.push('board', vi.fn());
-      oh.push('board-detail', vi.fn());
-      oh.push('settings', vi.fn());
+    it('invokes close functions and calls history.go(-count)', () => {
+      const closeA = vi.fn();
+      const closeB = vi.fn();
+      const closeC = vi.fn();
+      oh.push('board', closeA);
+      oh.push('board-detail', closeB);
+      oh.push('settings', closeC);
 
       oh.clear();
 
       expect(oh._stack).toHaveLength(0);
+      expect(closeA).toHaveBeenCalledTimes(1);
+      expect(closeB).toHaveBeenCalledTimes(1);
+      expect(closeC).toHaveBeenCalledTimes(1);
       expect(goSpy).toHaveBeenCalledWith(-3);
-      expect(oh._ignorePopstate).toBe(true);
+      expect(oh._skipPopstate).toBe(1);
     });
 
-    it('is safe on empty stack — no history.go call', () => {
+    it('invokes close functions in stack order (first to last)', () => {
+      const closeOrder: string[] = [];
+      oh.push('board', () => closeOrder.push('board'));
+      oh.push('detail', () => closeOrder.push('detail'));
+      oh.push('settings', () => closeOrder.push('settings'));
+
+      oh.clear();
+
+      expect(closeOrder).toEqual(['board', 'detail', 'settings']);
+    });
+
+    it('is safe on empty stack — no history.go call, no close calls', () => {
       oh.clear();
 
       expect(oh._stack).toHaveLength(0);
       expect(goSpy).not.toHaveBeenCalled();
-      expect(oh._ignorePopstate).toBe(false);
+      expect(oh._skipPopstate).toBe(0);
     });
 
     it('clears a single-entry stack correctly', () => {
-      oh.push('command', vi.fn());
+      const closeFn = vi.fn();
+      oh.push('command', closeFn);
       oh.clear();
 
       expect(oh._stack).toHaveLength(0);
+      expect(closeFn).toHaveBeenCalledTimes(1);
       expect(goSpy).toHaveBeenCalledWith(-1);
     });
   });
@@ -255,40 +269,37 @@ describe('OverlayHistory', () => {
     });
 
     it('does nothing when stack is empty', () => {
-      // Should not throw
       oh._onPopState(new PopStateEvent('popstate'));
       expect(oh._stack).toHaveLength(0);
     });
 
-    it('skips when _ignorePopstate is true and resets the flag', () => {
+    it('skips when _skipPopstate > 0 and decrements counter', () => {
       const closeFn = vi.fn();
       oh.push('settings', closeFn);
-      oh._ignorePopstate = true;
+      oh._skipPopstate = 1;
 
       oh._onPopState(new PopStateEvent('popstate'));
 
       expect(closeFn).not.toHaveBeenCalled();
-      expect(oh._ignorePopstate).toBe(false);
-      expect(oh._stack).toHaveLength(1); // entry not removed
+      expect(oh._skipPopstate).toBe(0);
+      expect(oh._stack).toHaveLength(1);
     });
   });
 
-  describe('_ignorePopstate flag integration', () => {
-    it('pop() sets flag so next popstate is skipped', () => {
+  describe('_skipPopstate counter integration', () => {
+    it('pop() increments counter so next popstate is skipped', () => {
       const closeFn = vi.fn();
       oh.push('settings', closeFn);
       oh.init();
 
       oh.pop('settings');
-      // Simulate the popstate that history.back() would fire
       window.dispatchEvent(new PopStateEvent('popstate'));
 
-      // closeFn should NOT be called — the flag suppressed it
       expect(closeFn).not.toHaveBeenCalled();
-      expect(oh._ignorePopstate).toBe(false); // flag was reset
+      expect(oh._skipPopstate).toBe(0);
     });
 
-    it('flag only suppresses one popstate event', () => {
+    it('counter only suppresses one popstate event per pop', () => {
       const closeA = vi.fn();
       const closeB = vi.fn();
       oh.push('board', closeA);
@@ -296,13 +307,38 @@ describe('OverlayHistory', () => {
       oh.init();
 
       oh.pop('settings');
-      // First popstate — suppressed by flag
+      // First popstate — suppressed
       window.dispatchEvent(new PopStateEvent('popstate'));
       expect(closeA).not.toHaveBeenCalled();
 
       // Second popstate — NOT suppressed, closes board
       window.dispatchEvent(new PopStateEvent('popstate'));
       expect(closeA).toHaveBeenCalledTimes(1);
+    });
+
+    it('multiple synchronous pops increment counter correctly', () => {
+      const closeA = vi.fn();
+      const closeB = vi.fn();
+      oh.push('mcp', closeA);
+      oh.push('plugins', closeB);
+      oh.init();
+
+      // Simulate closeAllPanels calling close() on two overlays
+      oh.pop('mcp');
+      oh.pop('plugins');
+
+      expect(oh._skipPopstate).toBe(2);
+
+      // Both popstate events should be suppressed
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      expect(closeA).not.toHaveBeenCalled();
+      expect(closeB).not.toHaveBeenCalled();
+      expect(oh._skipPopstate).toBe(0);
+
+      // Third popstate — nothing to close, counter is 0
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      expect(oh._skipPopstate).toBe(0);
     });
   });
 
@@ -313,12 +349,10 @@ describe('OverlayHistory', () => {
       oh.push('board-detail', () => closeOrder.push('board-detail'));
       oh.init();
 
-      // First back — closes board-detail (top of stack)
       window.dispatchEvent(new PopStateEvent('popstate'));
       expect(closeOrder).toEqual(['board-detail']);
       expect(oh._stack).toHaveLength(1);
 
-      // Second back — closes board
       window.dispatchEvent(new PopStateEvent('popstate'));
       expect(closeOrder).toEqual(['board-detail', 'board']);
       expect(oh._stack).toHaveLength(0);
@@ -330,7 +364,6 @@ describe('OverlayHistory', () => {
       oh.push('board-detail', () => closeOrder.push('board-detail'));
       oh.push('settings', () => closeOrder.push('settings'));
 
-      // Simulate three popstate events
       oh._onPopState(new PopStateEvent('popstate'));
       oh._onPopState(new PopStateEvent('popstate'));
       oh._onPopState(new PopStateEvent('popstate'));
@@ -345,11 +378,9 @@ describe('OverlayHistory', () => {
       oh.push('command', () => closeOrder.push('command'));
       oh.push('settings', () => closeOrder.push('settings'));
 
-      // Remove middle entry programmatically
       oh.pop('command');
 
-      // Now popstate unwinds settings then board
-      oh._ignorePopstate = false; // reset after pop
+      oh._skipPopstate = 0; // reset after pop for direct _onPopState calls
       oh._onPopState(new PopStateEvent('popstate'));
       oh._onPopState(new PopStateEvent('popstate'));
 
@@ -361,7 +392,6 @@ describe('OverlayHistory', () => {
     it('popping sibling before pushing new entry keeps stack consistent', () => {
       oh.push('mcp', vi.fn());
 
-      // Simulate CommandPanel.open() closing MCP then pushing itself
       oh.pop('mcp');
       oh.push('command', vi.fn());
 
@@ -371,7 +401,6 @@ describe('OverlayHistory', () => {
     });
 
     it('popping nonexistent sibling is safe before push', () => {
-      // No panel open, CommandPanel opens and tries to close siblings
       oh.pop('mcp');
       oh.pop('plugins');
       oh.pop('context');
@@ -379,6 +408,44 @@ describe('OverlayHistory', () => {
 
       expect(oh._stack).toHaveLength(1);
       expect(oh._stack[0].id).toBe('command');
+    });
+  });
+
+  describe('clear() as batch close (closeAllPanels pattern)', () => {
+    it('closes all overlays and suppresses popstate', () => {
+      const closeA = vi.fn();
+      const closeB = vi.fn();
+      oh.push('settings', closeA);
+      oh.push('help', closeB);
+      oh.init();
+
+      oh.clear();
+
+      expect(closeA).toHaveBeenCalledTimes(1);
+      expect(closeB).toHaveBeenCalledTimes(1);
+      expect(oh._stack).toHaveLength(0);
+      expect(goSpy).toHaveBeenCalledWith(-2);
+
+      // Popstate from history.go should be suppressed
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      expect(oh._skipPopstate).toBe(0);
+    });
+
+    it('is safe after individual _closeInternal calls already cleared DOM', () => {
+      // Simulate closeAllPanels: _closeInternal on each, then clear()
+      // The close functions registered in push() still fire from clear(),
+      // but _closeInternal is idempotent (removes classes from already-closed panels)
+      const closeA = vi.fn();
+      const closeB = vi.fn();
+      oh.push('mcp', closeA);
+      oh.push('command', closeB);
+
+      // clear() calls both close functions
+      oh.clear();
+
+      expect(closeA).toHaveBeenCalledTimes(1);
+      expect(closeB).toHaveBeenCalledTimes(1);
+      expect(oh._stack).toHaveLength(0);
     });
   });
 });

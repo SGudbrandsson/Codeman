@@ -409,30 +409,33 @@ function inlineMarkdown(escaped, safeHref, esc) {
 // ===================================================================
 const OverlayHistory = {
   _stack: [],        // Array of { id: string, close: Function }
-  _ignorePopstate: false,
+  _skipPopstate: 0,  // Counter: number of popstate events to skip
 
   init() {
     history.replaceState({ overlay: null }, '');
     window.addEventListener('popstate', (e) => this._onPopState(e));
   },
 
+  /** Called by overlay open() — pushes a history entry */
   push(id, closeFn) {
     if (this._stack.length && this._stack[this._stack.length - 1].id === id) return;
     this._stack.push({ id, close: closeFn });
     history.pushState({ overlay: id }, '');
   },
 
+  /** Called by overlay close-via-X — triggers history.back() which fires popstate */
   pop(id) {
     const idx = this._stack.findIndex(e => e.id === id);
     if (idx === -1) return;
     this._stack.splice(idx, 1);
-    this._ignorePopstate = true;
+    this._skipPopstate++;
     history.back();
   },
 
+  /** Called on popstate — close the top overlay without calling history.back() again */
   _onPopState(e) {
-    if (this._ignorePopstate) {
-      this._ignorePopstate = false;
+    if (this._skipPopstate > 0) {
+      this._skipPopstate--;
       return;
     }
     const entry = this._stack.pop();
@@ -441,16 +444,19 @@ const OverlayHistory = {
     }
   },
 
+  /** Check if a specific overlay is in the stack */
   has(id) {
     return this._stack.some(e => e.id === id);
   },
 
+  /** Close all overlays and clean up history entries in one batch */
   clear() {
-    const count = this._stack.length;
+    const entries = this._stack.slice();
     this._stack = [];
-    if (count > 0) {
-      this._ignorePopstate = true;
-      history.go(-count);
+    for (const entry of entries) entry.close();
+    if (entries.length > 0) {
+      this._skipPopstate++;
+      history.go(-entries.length);
     }
   }
 };
@@ -5856,7 +5862,6 @@ class CodemanApp {
       // Escape - close panels and modals
       if (e.key === 'Escape') {
         this.closeAllPanels();
-        this.closeHelp();
       }
 
       // Ctrl/Cmd + ? - help
@@ -14344,12 +14349,22 @@ class CodemanApp {
   }
 
   closeAllPanels() {
-    this.closeSessionOptions();
-    this.closeAppSettings();
+    // Use _closeInternal variants for history-tracked overlays so we don't
+    // fire individual history.back() calls — OverlayHistory.clear() handles
+    // the batch history cleanup and invokes close functions for any remaining.
+    this._closeSessionOptionsInternal();
+    this._closeAppSettingsInternal();
+    this._closeHelpInternal();
+    this._closeKillAllModalInternal();
     this.cancelCloseSession();
     this.closeTokenStats();
-    if (typeof SessionDrawer !== 'undefined') SessionDrawer.close();
+    if (typeof SessionDrawer !== 'undefined') SessionDrawer._closeInternal();
     if (typeof InputPanel !== 'undefined') InputPanel.close();
+    if (typeof McpPanel !== 'undefined') McpPanel._closeInternal();
+    if (typeof PluginsPanel !== 'undefined') PluginsPanel._closeInternal();
+    if (typeof ContextBar !== 'undefined') ContextBar._closeInternal();
+    if (typeof CommandPanel !== 'undefined') CommandPanel._closeInternal();
+    if (typeof AgentPanel !== 'undefined') AgentPanel._closeInternal();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');
@@ -14359,6 +14374,8 @@ class CodemanApp {
     this.subagentPanelVisible = false;
     if (typeof TerminalSearch !== 'undefined') TerminalSearch.close();
     if (typeof SessionSwitcher !== 'undefined') SessionSwitcher.close();
+    if (this._boardVisible) this._hideBoardInternal();
+    if (typeof BoardView !== 'undefined') BoardView._closeDetailPanelInternal();
     OverlayHistory.clear();
   }
 
