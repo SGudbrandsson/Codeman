@@ -140,6 +140,9 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Mark session as attached/detached */
   setAttached(sessionId: string, attached: boolean): void;
 
+  /** Remap a session from one ID to another (e.g. restored-abc12345 -> full UUID) */
+  remapSessionId(oldId: string, newId: string): boolean;
+
   /** Register an externally-created session for tracking */
   registerSession(session: MuxSession): void;
 

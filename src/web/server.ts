@@ -3223,6 +3223,28 @@ export class WebServer extends EventEmitter {
 
       if (discovered.length > 0) {
         console.log(`[Server] Discovered ${discovered.length} unknown mux session(s)`);
+
+        // Fix: Remap restored-* sessions back to their original full UUIDs.
+        // When mux-sessions.json is stale (e.g. async save didn't complete before shutdown),
+        // reconcileSessions() creates restored-{fragment} IDs for unknown tmux sessions.
+        // Cross-reference against state.json to find the original session ID by matching
+        // the fragment prefix and workingDir, then remap so Pass 2 won't create a duplicate.
+        const storedSessions = this.store.getSessions();
+        for (const restoredId of discovered) {
+          if (!restoredId.startsWith('restored-')) continue;
+          const fragment = restoredId.replace('restored-', '');
+          const muxSession = this.mux.getSession(restoredId);
+          if (!muxSession) continue;
+
+          // Find a state.json entry whose ID starts with this fragment and shares workingDir
+          const match = Object.values(storedSessions).find(
+            (s) => s.id.startsWith(fragment) && s.id !== restoredId && s.workingDir === muxSession.workingDir
+          );
+          if (match) {
+            console.log(`[Server] Remapping ${restoredId} -> ${match.id} (matched by fragment + workingDir)`);
+            this.mux.remapSessionId(restoredId, match.id);
+          }
+        }
       }
 
       if (alive.length > 0 || discovered.length > 0) {
@@ -3455,8 +3477,29 @@ export class WebServer extends EventEmitter {
       //
       // Sessions are sorted parents-first so the UI can correctly group worktree children.
       const storedSessions = this.store.getSessions();
+      // Build a set of workingDirs already covered by mux-recovered sessions.
+      // This prevents creating duplicate sessions from state.json when the mux pass
+      // already recovered a live tmux pane for the same directory.
+      const muxRecoveredDirs = new Set<string>();
+      for (const session of this.sessions.values()) {
+        if (session.workingDir) {
+          muxRecoveredDirs.add(session.workingDir);
+        }
+      }
+
       const nonMuxSessions = Object.values(storedSessions)
-        .filter((s) => !this.sessions.has(s.id) && shouldAttemptReattach(s))
+        .filter((s) => {
+          if (this.sessions.has(s.id)) return false;
+          if (!shouldAttemptReattach(s)) return false;
+          // Fix: skip if a mux-recovered session already covers this workingDir
+          if (s.workingDir && muxRecoveredDirs.has(s.workingDir)) {
+            console.log(
+              `[Server] Skipping state.json session ${s.id}: workingDir already covered by mux-recovered session (${s.workingDir})`
+            );
+            return false;
+          }
+          return true;
+        })
         .sort((a, b) => {
           // Parents (no worktreeOriginId) first, then by creation time
           if (!a.worktreeOriginId && b.worktreeOriginId) return -1;

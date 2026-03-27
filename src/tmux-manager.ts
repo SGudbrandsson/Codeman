@@ -26,7 +26,7 @@ import { execSync, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync, renameSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -1193,6 +1193,48 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   destroy(): void {
     this.stopStatsCollection();
     this.stopMouseModeSync();
+    // Flush mux-sessions.json synchronously so the mapping is never stale after restart.
+    // The async saveSessions() may not complete before process exit during systemctl restart,
+    // leaving mux-sessions.json stale and causing ghost sessions on the next startup.
+    this.saveSessionsSync();
+  }
+
+  /**
+   * Save sessions to disk synchronously. Used during shutdown to ensure the
+   * mapping file is written before the process exits.
+   */
+  private saveSessionsSync(): void {
+    if (IS_TEST_MODE) return;
+
+    try {
+      const dir = dirname(MUX_SESSIONS_FILE);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const data = Array.from(this.sessions.values());
+      const json = JSON.stringify(data, null, 2);
+
+      const tempPath = MUX_SESSIONS_FILE + '.tmp';
+      writeFileSync(tempPath, json, 'utf-8');
+      renameSync(tempPath, MUX_SESSIONS_FILE);
+    } catch (err) {
+      console.error('[TmuxManager] Failed to save sessions synchronously:', err);
+    }
+  }
+
+  /**
+   * Remap a session from one ID to another (e.g. restored-abc12345 -> full UUID).
+   * Updates the internal map key and the session's sessionId field.
+   * Returns true if the remap succeeded.
+   */
+  remapSessionId(oldId: string, newId: string): boolean {
+    const session = this.sessions.get(oldId);
+    if (!session) return false;
+    this.sessions.delete(oldId);
+    session.sessionId = newId;
+    this.sessions.set(newId, session);
+    this.saveSessions();
+    return true;
   }
 
   registerSession(session: MuxSession): void {

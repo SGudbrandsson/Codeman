@@ -243,6 +243,13 @@ vi.mock('../src/mux-factory.js', async () => {
     getSessions = vi.fn(() => mocks.muxSessions);
     isPaneDead = vi.fn((muxName: string) => mocks.isPaneDeadImpl(muxName));
     getSession = vi.fn();
+    remapSessionId = vi.fn((oldId: string, newId: string) => {
+      // Simulate real remapSessionId: find session in mocks.muxSessions and update it
+      const idx = mocks.muxSessions.findIndex((s) => s.sessionId === oldId);
+      if (idx === -1) return false;
+      mocks.muxSessions[idx].sessionId = newId;
+      return true;
+    });
     registerSession = vi.fn();
     killSession = vi.fn().mockResolvedValue(true);
     updateSessionName = vi.fn();
@@ -1617,5 +1624,254 @@ describe('WebServer.restoreMuxSessions() — non-mux transcript watcher', () => 
     const expectedPath = join(homedir(), '.claude', 'projects', escapedDir, `${resumeId}.jsonl`);
 
     expect(startWatcherSpy).toHaveBeenCalledWith('sess-nonmux-watcher', expectedPath);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix: Ghost sessions on restart — post-reconcile remap
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — restored-* session remap', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('remaps a restored-* session to the original full UUID when state.json has a matching fragment+workingDir', async () => {
+    const fullId = 'e7739c4b-e462-4af0-a1b1-a559d5439338';
+    const restoredId = 'restored-e7739c4b';
+    const workingDir = '/home/user/my-worktree';
+
+    // Mux discovered a restored-* session
+    const muxSession = makeMuxSession({
+      sessionId: restoredId,
+      muxName: 'codeman-e7739c4b',
+      workingDir,
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [restoredId] };
+
+    // getSession returns the mux session when queried by restored ID
+    (server as any).mux.getSession.mockImplementation((id: string) => {
+      if (id === restoredId) return muxSession;
+      // After remap, the session's sessionId changes to fullId
+      if (id === fullId) return { ...muxSession, sessionId: fullId };
+      return undefined;
+    });
+
+    // state.json has the original full-UUID session
+    (getStore() as any).getSessions.mockReturnValue({
+      [fullId]: {
+        id: fullId,
+        workingDir,
+        mode: 'claude',
+        name: 'fix/ghost-sessions-on-restart',
+        status: 'busy',
+        createdAt: 1000,
+      },
+    });
+
+    // Also mock getSession for the full ID (used later in the mux session loop)
+    (getStore() as any).getSession.mockImplementation((id: string) => {
+      if (id === fullId) {
+        return {
+          id: fullId,
+          workingDir,
+          mode: 'claude',
+          name: 'fix/ghost-sessions-on-restart',
+          status: 'busy',
+          createdAt: 1000,
+        };
+      }
+      return null;
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    // remapSessionId should have been called
+    expect((server as any).mux.remapSessionId).toHaveBeenCalledWith(restoredId, fullId);
+  });
+
+  it('does NOT remap when no state.json entry matches the fragment', async () => {
+    const restoredId = 'restored-abcd1234';
+    const workingDir = '/home/user/orphan-worktree';
+
+    const muxSession = makeMuxSession({
+      sessionId: restoredId,
+      muxName: 'codeman-abcd1234',
+      workingDir,
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [restoredId] };
+
+    (server as any).mux.getSession.mockImplementation((id: string) => {
+      if (id === restoredId) return muxSession;
+      return undefined;
+    });
+
+    // state.json has no matching entry
+    (getStore() as any).getSessions.mockReturnValue({});
+
+    await (server as any).restoreMuxSessions();
+
+    // remapSessionId should NOT have been called
+    expect((server as any).mux.remapSessionId).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix: Ghost sessions on restart — non-mux workingDir dedup
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-mux workingDir dedup', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('skips a state.json session whose workingDir is already covered by a mux-recovered session', async () => {
+    const muxSessionId = 'sess-mux-alive';
+    const duplicateId = 'sess-state-duplicate';
+    const sharedDir = '/home/user/shared-worktree';
+
+    // Mux recovered a session for sharedDir
+    const muxSession = makeMuxSession({
+      sessionId: muxSessionId,
+      muxName: 'codeman-muxalive',
+      workingDir: sharedDir,
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: [muxSessionId], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    // state.json has BOTH the mux session AND a duplicate pointing at the same dir
+    (getStore() as any).getSessions.mockReturnValue({
+      [muxSessionId]: {
+        id: muxSessionId,
+        workingDir: sharedDir,
+        mode: 'claude',
+        name: 'Mux Session',
+        status: 'idle',
+        createdAt: 1000,
+      },
+      [duplicateId]: {
+        id: duplicateId,
+        workingDir: sharedDir,
+        mode: 'claude',
+        name: 'Duplicate Session',
+        status: 'idle',
+        createdAt: 2000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    // The mux session should exist
+    expect(sessions.has(muxSessionId)).toBe(true);
+    // The duplicate from state.json should NOT exist
+    expect(sessions.has(duplicateId)).toBe(false);
+  });
+
+  it('restores a state.json session whose workingDir is NOT covered by any mux-recovered session', async () => {
+    const muxSessionId = 'sess-mux-alive';
+    const uniqueId = 'sess-unique-dir';
+
+    // Mux recovered one session
+    const muxSession = makeMuxSession({
+      sessionId: muxSessionId,
+      muxName: 'codeman-muxaliv2',
+      workingDir: '/home/user/mux-project',
+    });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: [muxSessionId], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    // state.json has a session with a different workingDir
+    (getStore() as any).getSessions.mockReturnValue({
+      [muxSessionId]: {
+        id: muxSessionId,
+        workingDir: '/home/user/mux-project',
+        mode: 'claude',
+        name: 'Mux Session',
+        status: 'idle',
+        createdAt: 1000,
+      },
+      [uniqueId]: {
+        id: uniqueId,
+        workingDir: '/home/user/unique-project',
+        mode: 'claude',
+        name: 'Unique Session',
+        status: 'stopped',
+        createdAt: 2000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    // Both should exist — different workingDirs
+    expect(sessions.has(muxSessionId)).toBe(true);
+    expect(sessions.has(uniqueId)).toBe(true);
   });
 });
