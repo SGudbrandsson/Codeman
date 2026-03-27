@@ -6226,14 +6226,17 @@ class CodemanApp {
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
-    // If claudeSessionId was just set, re-check orphan subagents
-    // This connects subagents that were waiting for the session to identify itself
-    if (claudeSessionIdJustSet) {
+    // Re-check orphan subagents on every session update.
+    // This connects subagents that arrived before their parent session was loaded,
+    // or before claudeSessionId was populated.
+    if (this.subagents.size > 0) {
       this.recheckOrphanSubagents();
-      // Update connection lines after DOM settles (ensure tabs are rendered)
-      requestAnimationFrame(() => {
-        this.updateConnectionLines();
-      });
+      if (claudeSessionIdJustSet) {
+        // Update connection lines after DOM settles (ensure tabs are rendered)
+        requestAnimationFrame(() => {
+          this.updateConnectionLines();
+        });
+      }
     }
     this.renderTranscriptStatusBlocks(session.id);
   }
@@ -16943,8 +16946,9 @@ class CodemanApp {
    * Matching strategy (in order):
    * 1. Use existing stored association from subagentParentMap (permanent)
    * 2. Match via claudeSessionId (agent.sessionId === session.claudeSessionId)
-   * 3. FALLBACK: Use the currently active session (since that's where the user typed the command)
    *
+   * If no match is found, the agent stays orphaned until recheckOrphanSubagents()
+   * finds a match (triggered when sessions update or claudeSessionId arrives).
    * Once found, the association is stored PERMANENTLY in subagentParentMap.
    */
   findParentSessionForSubagent(agentId) {
@@ -16987,32 +16991,16 @@ class CodemanApp {
       }
     }
 
-    // Strategy 2: FALLBACK - Use the currently active session
-    // This works because agents spawn from where the user typed the command
-    if (this.activeSessionId && this.sessions.has(this.activeSessionId)) {
-      this.setAgentParentSessionId(agentId, this.activeSessionId);
-      this.updateSubagentWindowParent(agentId);
-      this.updateSubagentWindowVisibility();
-      this.updateConnectionLines();
-      return;
-    }
-
-    // Strategy 3: If no active session, use the first session
-    if (this.sessions.size > 0) {
-      const firstSessionId = this.sessions.keys().next().value;
-      this.setAgentParentSessionId(agentId, firstSessionId);
-      this.updateSubagentWindowParent(agentId);
-      this.updateSubagentWindowVisibility();
-      this.updateConnectionLines();
-    }
+    // No match found — leave as orphan.
+    // recheckOrphanSubagents() will retry when sessions update or claudeSessionId arrives.
   }
 
   /**
    * Re-check all orphan subagents (those without a parent TAB) when a session updates.
-   * Called when session:updated fires with claudeSessionId.
+   * Called on every session update when subagents exist.
    *
-   * Also re-validates existing associations when claudeSessionId becomes available,
-   * in case the fallback association was wrong.
+   * Also re-validates existing stored associations against claudeSessionId,
+   * correcting any legacy wrong mappings from before the fallback strategies were removed.
    */
   recheckOrphanSubagents() {
     let anyChanged = false;
@@ -17025,7 +17013,7 @@ class CodemanApp {
         }
       } else if (agent.sessionId) {
         // Agent has a stored parent, but check if we can now do a proper claudeSessionId match
-        // This handles the case where fallback was used but now the real parent is known
+        // This handles legacy mappings where the wrong parent was stored
         const storedParent = this.subagentParentMap.get(agentId);
         const storedSession = this.sessions.get(storedParent);
 

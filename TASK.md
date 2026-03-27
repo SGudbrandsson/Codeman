@@ -1,149 +1,120 @@
 # Task
 
-type: feature
+type: bug
 status: done
-title: Voice-to-text button in compose bar
-description: Add a speech-to-text microphone button in the compose/input line so users can click to speak and have their voice transcribed into the message input field. Requirements: (1) Add a microphone button in the compose bar next to the send or + button. (2) Click to start recording, click again or auto-stop on silence to stop. (3) Transcribe the audio to text and insert it into the message input field. (4) The STT provider should be configurable in app settings — check what provider settings already exist in the settings panel and use those. Implementation notes: Check the browser Web Speech API (SpeechRecognition / webkitSpeechRecognition) as the simplest option — works in Chrome/Edge without any backend. Alternatively check if there are existing STT provider settings in the app (Whisper API, Deepgram, etc.) and integrate with those. Look at the existing settings panel to understand what voice/STT provider options are already configured. The mic button should show recording state (pulsing, red dot, etc.). Handle permissions (microphone access prompt). Graceful fallback if browser doesn't support speech recognition.
-constraints: Mic button must show clear recording state (pulsing/red). Must handle microphone permissions gracefully. Must fall back gracefully if browser doesn't support speech recognition. Check existing settings panel for any STT/voice provider configuration before adding new settings.
+title: Agent session scoping — subagents bleed between sessions
+description: |
+  Agents are still bleeding between sessions. The first fix (agent-view-bleed) added filtering
+  in renderSubagentPanel but the root cause is in findParentSessionForSubagent (app.js ~line 16775).
+
+  THE BUG: Strategy 2 fallback (~line 16815-16822) assigns orphan agents to the CURRENTLY ACTIVE
+  session when claudeSessionId matching fails. So if you are viewing session A and session B spawns
+  an agent before its claudeSessionId is populated, the agent gets permanently assigned to session A.
+
+  FIX NEEDED:
+  1. Remove or guard Strategy 2 fallback — never assign an agent to a session just because it is active.
+     Wait for claudeSessionId match.
+  2. Keep orphan agents in a pending state until their real parent is found via claudeSessionId match.
+  3. The recheckOrphanSubagents() function should handle delayed matching when claudeSessionId arrives later.
+  4. Consider adding the Codeman session ID to SSE subagent events on the backend (src/session.ts) so
+     matching is deterministic — the backend knows which Codeman session spawned the agent.
+
+  Key files:
+  - src/web/public/app.js — findParentSessionForSubagent, recheckOrphanSubagents, renderSubagentPanel
+  - src/session.ts — SSE event emission for subagents
+  - src/web/routes/session-routes.ts — SSE event broadcasting
 affected_area: frontend
 work_item_id: none
 fix_cycles: 0
 test_fix_cycles: 0
 
+## Reproduction
+
+**Steps to reproduce:**
+1. Open Codeman with multiple sessions (session A, session B) in the sidebar.
+2. Switch to session A so it is the active/viewed session.
+3. In session B (running in background), trigger a command that spawns a subagent (e.g., a Task tool call).
+4. The subagent SSE event (`subagent:discovered`) arrives on the frontend.
+5. `findParentSessionForSubagent()` runs:
+   - Strategy 1 tries to match `agent.sessionId` against `session.claudeSessionId` for all sessions.
+   - If Strategy 1 succeeds, the agent is correctly assigned. But if it fails (see race conditions below), execution falls through.
+   - Strategy 2 (line 16817) assigns the agent to `this.activeSessionId` — which is session A, not session B.
+6. The agent now permanently appears under session A's subagent panel instead of session B's.
+
+**Race conditions that cause Strategy 1 to fail:**
+- During initial page load: subagent SSE events can arrive before session data is fully loaded into `this.sessions`, so the loop at line 16803-16812 finds no match.
+- During session recovery: if a session is being restored, its entry in `this.sessions` may not exist yet when the subagent event fires.
+- The `recheckOrphanSubagents()` correction mechanism (line 16842) only runs when `claudeSessionIdJustSet` transitions from null to a value (line 6064/6093). Since `_claudeSessionId = this.id` is set in the Session constructor (session.ts line 474), `claudeSessionId` is already populated in the first API response, so `claudeSessionIdJustSet` may never trigger as a transition — the recheck never fires.
+
+**Note:** Even when `recheckOrphanSubagents` does run and detects the mismatch (line 16858), the damage is already done — the wrong assignment was stored permanently in `subagentParentMap` and the UI rendered the agent under the wrong session.
+
 ## Root Cause / Spec
 
-### Existing Infrastructure
+**Root cause:** `findParentSessionForSubagent()` in `app.js` (line 16775) has two fallback strategies (Strategy 2: active session, Strategy 3: first session) that eagerly assign an orphan agent to a wrong session when the correct `claudeSessionId` match fails. The assignment is stored permanently in `subagentParentMap`, causing the agent to appear under the wrong session tab permanently.
 
-Voice input is **already fully implemented** in `src/web/public/voice-input.js`:
-- `VoiceInput` singleton: toggle recording, auto-stop on 3s silence, preview overlay with red dot + level meter + timer
-- `DeepgramProvider` singleton: streams audio via WebSocket to Deepgram Nova-3
-- Web Speech API fallback when no Deepgram key configured
-- Settings panel already has a **Voice tab** (`settings-voice` in index.html lines 1503-1548) with:
-  - Active provider display
-  - Insert mode selector (direct / compose dialog)
-  - Deepgram API key, language, domain keywords
-- Voice config stored in `localStorage` key `codeman-voice-settings`
-- Keyboard shortcut: `Ctrl+Shift+B` (app.js line 5840)
+The fallback strategies are fundamentally flawed — they assume the active session spawned the agent, but agents spawn from background sessions regularly in multi-session workflows.
 
-### Current Button Placement (NOT in compose bar)
+**Fix spec:**
 
-Voice buttons are currently in the **header toolbar**, not the compose bar:
-1. **Desktop**: `#voiceInputBtn` in `.toolbar-center` (index.html line 557)
-2. **Mobile**: `#voiceInputBtnMobile` in the mobile toolbar row (index.html line 518)
+1. **Remove Strategy 2 and Strategy 3 from `findParentSessionForSubagent()`** (lines 16815-16832). If Strategy 1 (claudeSessionId match) fails, do NOT assign a parent. Leave the agent as an orphan.
 
-Neither is in the compose/input panel (`#mobileInputPanel`).
+2. **Keep orphan agents in a pending/unassigned state.** When `findParentSessionForSubagent()` finds no claudeSessionId match, simply return without setting any parent. The agent stays in `this.subagents` but not in `subagentParentMap`. The `renderSubagentPanel` should handle unassigned agents gracefully (hide them or show them in a separate "unassigned" area).
 
-### Compose Bar Layout
+3. **Ensure `recheckOrphanSubagents()` handles delayed matching.** It already loops over agents without a parent in `subagentParentMap` (line 16846) and calls `findParentSessionForSubagent`. With Strategy 2/3 removed, this will only assign when a real match is found. The recheck is called when `claudeSessionIdJustSet` fires — but also needs to be called when new sessions appear (e.g., after initial load completes).
 
-The compose bar (`div.compose-textarea-wrap` inside `#mobileInputPanel`, index.html lines 2234-2293) contains:
-- `#composePlusBtn` (`.compose-plus-btn`) — bottom-left, attach files
-- `#composeExpandBtn` (`.compose-expand-btn`) — desktop only, right of textarea (right: 44px)
-- `#composeSendBtn` (`.compose-send-btn`) — bottom-right, circular blue send button
+4. **Add a recheck trigger after session list loads.** During `_initializeApp()` or after `_onSessionUpdated`, call `recheckOrphanSubagents()` to catch agents that arrived before their parent session was loaded. This is the key missing piece — currently it only fires on `claudeSessionIdJustSet` transitions.
 
-All are absolutely positioned inside `.compose-textarea-wrap` using the `.compose-inset-btn` base class. Desktop styles in `styles.css` (line 9251+), mobile styles in `mobile.css` (line 2937+).
+5. **Backend enhancement (optional but recommended):** The backend `SubagentWatcher` already includes `sessionId` (the Claude session ID from the file path) in `SubagentInfo`. Since Codeman sets `_claudeSessionId = this.id`, this sessionId already equals the Codeman session ID. The matching infrastructure exists — the frontend just needs to not fall back to wrong assignments when the match temporarily fails.
 
-### Insert Behavior
+**Key files to modify:**
+- `src/web/public/app.js` — `findParentSessionForSubagent()`: remove Strategy 2 and 3; `recheckOrphanSubagents()`: ensure it is called after session list loads; `_onSubagentDiscovered()`: no changes needed (already calls `findParentSessionForSubagent`).
 
-`VoiceInput._insertText()` has two modes:
-- **direct**: sends text straight to PTY via `app.sendInput(text)`, then shows a temporary green "Enter" button replacing the settings gear
-- **compose**: opens a full-screen overlay (`_showComposeOverlay`) with edit + send + re-record
-
-**Neither mode inserts into the compose bar textarea** (`#composeTextarea`). This is the key gap.
-
-### Implementation Spec
-
-**Goal**: Add a mic button inside the compose bar that, when used, inserts transcribed text into `#composeTextarea` (the compose bar textarea) rather than sending to PTY or opening a separate overlay.
-
-#### 1. Add mic button to compose bar HTML (index.html)
-
-Insert a new `<button class="compose-inset-btn compose-mic-btn" id="composeMicBtn">` between the expand button and the send button (after line 2280, before line 2282). Use the same mic SVG icon already used elsewhere. Position it to the left of the send button.
-
-#### 2. Style the mic button (styles.css + mobile.css)
-
-- **Desktop** (`styles.css`): position `right: 44px` (where expand btn is now; shift expand to `right: 76px`). Or simpler: position mic at `right: 44px` and move expand to `right: 76px`.
-- **Mobile** (`mobile.css`): position `right: 44px` (to the left of the 36px send button at right: 4px). Expand button is hidden on mobile so no conflict.
-- Add `.compose-mic-btn.recording` styles: red/pulsing background, white icon color. Reuse the existing `@keyframes pulse-recording` animation from the voice button styles if present, or add a new one.
-- Default state: subtle icon color matching `.compose-plus-btn` (#94a3b8).
-
-#### 3. Wire up the button (app.js InputPanel.init)
-
-In `InputPanel.init()` (app.js ~line 19978 area), add a click handler for `#composeMicBtn` that:
-- Calls a new method `InputPanel._toggleVoiceInput()` (or similar)
-- This method uses VoiceInput's existing infrastructure but overrides the insert behavior to target `#composeTextarea` instead of PTY/overlay
-
-#### 4. New insert mode: "composeBar" in VoiceInput
-
-Add logic so when voice input is triggered from the compose bar mic button:
-- Set a flag like `VoiceInput._composeBarMode = true`
-- Override `_insertText()` to check this flag: if true, insert/append text into `#composeTextarea`, trigger `_autoGrow()`, and focus the textarea — do NOT send to PTY
-- On stop, clear the flag
-- Update `_updateButtons()` to also toggle `.recording` class on `#composeMicBtn`
-
-Alternatively (simpler): have the compose mic button call `VoiceInput.toggle()` but temporarily set `insertMode` to a new value `'composeBar'`, and add a branch in `_insertText()` for that mode.
-
-#### 5. Recording state visual on compose mic button
-
-- Add/toggle `.recording` class on `#composeMicBtn` in `VoiceInput._updateButtons()`
-- CSS: `.compose-mic-btn.recording { background: #ef4444; color: #fff; border-radius: 50%; animation: pulse-recording 1.5s infinite; }`
-
-#### 6. Textarea padding adjustment
-
-The textarea already has padding-right for the send button. Adding another button means increasing `padding-right` on `.compose-textarea` to avoid text overlapping the mic button. Currently it needs space for send (36-40px) + mic (~32px). Adjust to ~`padding-right: 80px` on mobile and similar on desktop (accounting for expand button too).
-
-#### 7. No new settings needed
-
-All provider config (Deepgram key, language, Web Speech API fallback) already exists in the Voice settings tab. No backend changes needed.
+**No backend changes required.** The `sessionId` field in SSE subagent events already contains the correct Claude/Codeman session ID. The bug is purely in the frontend matching logic.
 
 ## Fix / Implementation Notes
 
-### Changes made (4 files)
+**File changed:** `src/web/public/app.js`
 
-**1. `src/web/public/index.html`** — Added `#composeMicBtn` button (`.compose-inset-btn .compose-mic-btn`) between the expand button and the send button inside `.compose-textarea-wrap`. Uses the same mic SVG icon as the existing toolbar voice buttons.
+**Change 1 — Remove Strategy 2 and Strategy 3 from `findParentSessionForSubagent()`** (was lines 16815-16832):
+Deleted the two fallback strategies that assigned orphan agents to the active session or the first session. If Strategy 1 (claudeSessionId match) fails, the function now returns without assigning any parent. The agent remains orphaned in `this.subagents` but is not added to `subagentParentMap`. Updated the JSDoc comment to reflect the new behavior.
 
-**2. `src/web/public/styles.css`** (desktop) — Added `.compose-mic-btn` styles at `right: 44px` (left of send button). Shifted `.compose-expand-btn` from `right: 44px` to `right: 76px` to make room. Added `.compose-mic-btn.recording` with red pulsing animation reusing `voice-pulse` keyframes. Increased `.compose-textarea` `padding-right` from `76px` to `108px` to prevent text from overlapping the new button. Added `.compose-mic-btn.recording` to the `prefers-reduced-motion` rule.
+**Change 2 — Broaden `recheckOrphanSubagents()` trigger in `_onSessionUpdated()`** (line ~6091):
+Previously `recheckOrphanSubagents()` only ran when `claudeSessionIdJustSet` was true (a one-time transition). Now it runs on every `_onSessionUpdated` call (guarded by `this.subagents.size > 0` to avoid unnecessary work when no subagents exist). This handles the case where subagent SSE events arrived before their parent session was loaded into `this.sessions` — the recheck fires as soon as the session appears via an update event.
 
-**3. `src/web/public/mobile.css`** — Added `.compose-mic-btn` styles at `right: 44px`, `bottom: 7px` (left of 36px send button). Added `.compose-mic-btn.recording` with `voice-pulse` animation. Added `@keyframes voice-pulse` definition (needed because `styles.css` keyframes don't load on mobile). Increased `.compose-textarea` `padding-right` from `52px` to `80px`.
-
-**4. `src/web/public/voice-input.js`** — Added `_composeBarMode` flag (default `false`). In `_insertText()`, added a branch that checks `_composeBarMode`: when true, inserts/appends text into `#composeTextarea` with space separator, triggers `InputPanel._autoGrow()`, and returns without sending to PTY or opening overlay. Flag is cleared in `stop()`. Updated `_updateButtons()` to toggle `.recording` class on `#composeMicBtn`.
-
-**5. `src/web/public/app.js`** — Added click handler for `#composeMicBtn` in `InputPanel.init()`. On click: if recording, calls `VoiceInput.stop()`; otherwise opens compose panel if needed, sets `VoiceInput._composeBarMode = true`, and calls `VoiceInput.start()`.
-
-### No new settings needed
-All voice/STT provider config (Deepgram key, language, Web Speech API fallback) already exists in the Voice settings tab.
+**No backend changes needed.** The `sessionId` field in SSE subagent events already contains the correct Claude/Codeman session ID. The fix is purely frontend.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Files reviewed:** index.html, styles.css, mobile.css, voice-input.js, app.js
+**Changes reviewed:** 2 modifications in `src/web/public/app.js`
 
-**Findings:**
-- All 7 spec items implemented correctly: HTML button, desktop/mobile CSS, click handler, composeBar insert mode, recording state visuals, textarea padding, no new settings.
-- `_composeBarMode` flag approach is clean — only set from compose bar click handler, cleared on `stop()`, doesn't interfere with toolbar voice buttons.
-- Recording state toggling added to `_updateButtons()` for all three buttons (desktop toolbar, mobile toolbar, compose bar).
-- `voice-pulse` keyframes correctly duplicated in mobile.css since styles.css is desktop-only.
-- `prefers-reduced-motion` rule updated to include compose mic button.
-- Aria attributes (`aria-label`, `aria-pressed`) properly managed.
-- Text appending with space separator handles multi-phrase dictation correctly.
-- Auto-grow triggered after insertion to keep textarea sized properly.
-- No TypeScript/lint concerns (all changes are in plain JS/CSS/HTML frontend files).
-- No security issues — microphone permissions handled by browser, no new data flows.
+**Correctness:**
+- Strategy 2 (active session fallback) and Strategy 3 (first session fallback) correctly removed from `findParentSessionForSubagent()`. The function now only assigns via claudeSessionId match (Strategy 1) or returns without assignment.
+- `recheckOrphanSubagents()` trigger broadened from `claudeSessionIdJustSet` to `this.subagents.size > 0`, ensuring orphans are rechecked on every session update. The `updateConnectionLines()` RAF call remains correctly gated on `claudeSessionIdJustSet`.
 
-No issues found. Approved for test gap analysis.
+**Edge cases verified:**
+- All 4 callers of `findParentSessionForSubagent()` handle the case where no parent is assigned (checked lines 7261, 8019, 16779, 16835).
+- `renderSubagentPanel()` filters by `subagentParentMap` match — orphaned agents (not in map) are simply not displayed in any session panel, which is correct behavior per the spec.
+- The `recheckOrphanSubagents()` corrective logic (re-assigning wrongly mapped agents) is preserved for legacy localStorage data from before this fix.
+- Guard `this.subagents.size > 0` prevents unnecessary work when no subagents exist.
+
+**No issues found.** The fix is minimal, focused, and directly addresses the root cause.
 
 ## Test Gap Analysis
 
-### Verdict: NO GAPS
+**Changed files:** `src/web/public/app.js`
 
-**Changed files:**
-- `src/web/public/index.html` — HTML template (not unit-testable)
-- `src/web/public/styles.css` — CSS styles (not unit-testable)
-- `src/web/public/mobile.css` — CSS styles (not unit-testable)
-- `src/web/public/voice-input.js` — Browser-side singleton with DOM/WebSocket/Web Speech API dependencies (not vitest-testable without heavy browser mocking)
-- `src/web/public/app.js` — Browser-side InputPanel with DOM dependencies (same)
+**Existing coverage:**
+- `test/agent-view-session-filter.test.ts` — Tests that `_renderSubagentPanelImmediate()` only renders agents belonging to the active session, and that orphan agents (no entry in `subagentParentMap`) are excluded from the panel. This validates the rendering behavior our fix depends on.
 
-**Rationale:** All changes are in browser-side frontend code that relies on DOM APIs (`document.getElementById`, `classList.toggle`), browser-specific APIs (`SpeechRecognition`, `MediaStream`), and global singletons (`VoiceInput`, `InputPanel`, `app`). The project's existing test pattern for compose features (see `compose-slash-commands.test.ts`) mirrors pure logic in vitest, but the voice-to-text changes are primarily wiring and DOM manipulation with no extractable pure-logic functions. Writing meaningful unit tests would require mocking the entire browser environment, which doesn't match the project's testing style. The feature is best verified through manual testing or Playwright integration tests.
+**Gap assessment:**
+- `findParentSessionForSubagent()` and `recheckOrphanSubagents()` have no direct unit tests. However, testing them would require stubbing the entire CodemanApp class (these are methods on a monolithic ~17k-line class with deep interdependencies: `this.sessions`, `this.subagents`, `this.subagentParentMap`, `this.setAgentParentSessionId()`, `this.updateSubagentWindowParent()`, etc.).
+- The change is a **code removal** (deleting Strategy 2 and 3 fallback paths) plus a **trigger broadening** (calling `recheckOrphanSubagents` on all session updates instead of only `claudeSessionIdJustSet`). Both are straightforward and low-risk.
+- The existing test at line 298 (`excludes orphan agents with no parent map entry`) already validates the critical downstream behavior: orphaned agents are not shown in the wrong session's panel.
+
+**Verdict: NO GAPS** — The change is a removal of incorrect fallback logic. The existing test coverage for orphan agent rendering behavior adequately covers the downstream effect of this fix. Adding unit tests for `findParentSessionForSubagent` would require substantial test infrastructure for marginal value given the simplicity of the change.
 
 ## Test Writing Notes
 <!-- filled by test writing subagent -->
@@ -153,22 +124,17 @@ No issues found. Approved for test gap analysis.
 
 ## QA Results
 
-### TypeScript typecheck: PASS
-`tsc --noEmit` completed with zero errors.
-
-### ESLint: PASS (pre-existing issue only)
-1 error in `src/orchestrator.ts:878` (`@typescript-eslint/prefer-as-const`) — confirmed pre-existing on base branch, not introduced by this change. Changed files are all plain JS/CSS/HTML in `src/web/public/`, not covered by ESLint's `src/**/*.ts` glob.
-
-### Frontend check: SKIPPED
-Voice input feature relies on browser-specific APIs (Web Speech API, MediaStream) that cannot be automated without a real microphone. Manual testing required.
+| Check | Result |
+|-------|--------|
+| `tsc --noEmit` | PASS (zero errors) |
+| `npm run lint` | PASS (1 pre-existing error in `orchestrator.ts`, not introduced by this change) |
+| `vitest run test/agent-view-session-filter.test.ts` | PASS (12/12 tests) |
 
 ### Docs Staleness: none
-No committed changes on branch yet (changes are uncommitted).
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
-- Used `_composeBarMode` flag approach rather than adding a new `insertMode` setting value, because compose bar insertion is a UI-level behavior triggered by which button was clicked, not a persistent user preference.
-- Append transcribed text with space separator when textarea already has content, so users can dictate multiple phrases without losing prior input.
-- Reuse existing `voice-pulse` keyframes for recording animation to keep visual consistency with toolbar voice buttons.
-- Desktop: shifted expand button from `right: 44px` to `right: 76px` to accommodate mic button at `right: 44px` (left of send button at `right: 4px`).
-- Added `@keyframes voice-pulse` in mobile.css because styles.css is behind a desktop media query and doesn't load on mobile.
+
+- **No backend changes:** The backend already includes `sessionId` in subagent SSE events and it matches the Codeman session ID. The bug was purely in the frontend fallback logic.
+- **Kept `recheckOrphanSubagents()` corrective logic for existing wrong associations** (lines 16851-16872 of the original): This handles legacy data in `subagentParentMap` that was stored with wrong associations from before this fix. With Strategy 2/3 removed, new wrong associations won't be created, but old stored ones in localStorage will be corrected on recheck.
+- **Guarded recheck with `this.subagents.size > 0`:** Avoids calling `recheckOrphanSubagents()` on every session update when there are no subagents, which is the common case for most users.
