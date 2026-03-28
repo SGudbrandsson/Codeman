@@ -87,6 +87,7 @@
 html.mobile-init .header-font-controls,
 html.mobile-init .header-system-stats,
 html.mobile-init .header-tokens,
+html.mobile-init .subagents-panel,
 html.mobile-init .project-insights-panel,
 html.mobile-init .file-browser-panel {
   display: none !important;
@@ -104,12 +105,11 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
-   Monitor Panel & Subagents Panel — Mobile bottom-sheets
-   Both removed from the display:none list above so they can be toggled via
-   existing header/JS controls. Styled as bottom sheets on mobile.
+   Monitor Panel — Mobile bottom-sheet
+   Removed from the display:none list above so it can be toggled via the
+   existing header button. Styled as a bottom sheet on mobile.
    ============================================================================ */
-.monitor-panel,
-.subagents-panel {
+.monitor-panel {
   right: 0 !important;
   left: 0 !important;
   width: 100% !important;
