@@ -283,9 +283,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // First check linked cases
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
-      const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
+        await fs.readFile(linkedCasesFile, 'utf-8')
+      );
       if (linkedCases[name]) {
-        const linkedPath = linkedCases[name];
+        const entry = linkedCases[name];
+        const linkedPath = typeof entry === 'string' ? entry : entry.path;
         return {
           name,
           path: linkedPath,

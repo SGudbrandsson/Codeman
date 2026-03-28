@@ -614,6 +614,25 @@ describe('case-routes', () => {
       expect(body.name).toBe('regular-case');
     });
 
+    it('returns correct path for linked case with object-format entry', async () => {
+      mockedReadFile.mockResolvedValue(
+        JSON.stringify({
+          'my-project': { path: '/home/user/projects/my-project', orchestrationEnabled: true },
+        }) as never
+      );
+      mockedExistsSync.mockReturnValue(true);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/cases/my-project',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.name).toBe('my-project');
+      expect(body.path).toBe('/home/user/projects/my-project');
+      expect(body.linked).toBe(true);
+    });
+
     it('returns error when case not found anywhere', async () => {
       mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockedExistsSync.mockReturnValue(false);

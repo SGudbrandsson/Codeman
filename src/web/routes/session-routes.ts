@@ -8,6 +8,7 @@ import { FastifyInstance } from 'fastify';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { homedir } from 'node:os';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -1029,14 +1030,31 @@ ${contextLines.join('\n')}`;
       }
     }
 
-    const casePath = join(CASES_DIR, caseName);
+    // Check linked cases first — linked case paths may live outside CASES_DIR
+    let casePath: string | undefined;
+    const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
+    try {
+      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
+        await fs.readFile(linkedCasesFile, 'utf-8')
+      );
+      if (linkedCases[caseName] !== undefined) {
+        const entry = linkedCases[caseName];
+        casePath = typeof entry === 'string' ? entry : entry.path;
+      }
+    } catch {
+      // ENOENT or parse errors — fall through to CASES_DIR
+    }
 
-    // Security: Path traversal protection - use relative path check
-    const resolvedPath = resolve(casePath);
-    const resolvedBase = resolve(CASES_DIR);
-    const relPath = relative(resolvedBase, resolvedPath);
-    if (relPath.startsWith('..') || isAbsolute(relPath)) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+    if (!casePath) {
+      casePath = join(CASES_DIR, caseName);
+
+      // Security: Path traversal protection - only applied for CASES_DIR paths
+      const resolvedPath = resolve(casePath);
+      const resolvedBase = resolve(CASES_DIR);
+      const relPath = relative(resolvedBase, resolvedPath);
+      if (relPath.startsWith('..') || isAbsolute(relPath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
     }
 
     // Create case folder and CLAUDE.md if it doesn't exist
