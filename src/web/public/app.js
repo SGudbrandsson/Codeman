@@ -2235,6 +2235,27 @@ const SessionSwitcher = {
 
 // CommandPanel — natural language command interface to Codeman
 // See command-panel-routes.ts for backend. This singleton manages the slide-out panel UI.
+async function readImagesFromClipboardAPI() {
+  const files = [];
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+      const clipItems = await navigator.clipboard.read();
+      for (const ci of clipItems) {
+        for (const mimeType of ci.types) {
+          if (mimeType.startsWith('image/')) {
+            const blob = await ci.getType(mimeType);
+            const ext = mimeType.split('/')[1] || 'png';
+            files.push(new File([blob], `clipboard.${ext}`, { type: mimeType }));
+          }
+        }
+      }
+    }
+  } catch (clipErr) {
+    console.warn('[paste] Clipboard API fallback failed:', clipErr);
+  }
+  return files;
+}
+
 const CommandPanel = {
   _panel: null, _messages: null, _input: null, _sendBtn: null,
   _conversationId: null, _available: false, _sending: false,
@@ -2659,28 +2680,15 @@ const CommandPanel = {
     // Fallback: if items had images but getAsFile() returned null, try Clipboard API
     if (hadImageItem && !gotFile) {
       console.warn('[CommandPanel] getAsFile() returned null — trying clipboard.read() fallback');
-      try {
-        if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
-          const clipItems = await navigator.clipboard.read();
-          for (const ci of clipItems) {
-            for (const mimeType of ci.types) {
-              if (mimeType.startsWith('image/')) {
-                const blob = await ci.getType(mimeType);
-                const ext = mimeType.split('/')[1] || 'png';
-                const file = new File([blob], `clipboard.${ext}`, { type: mimeType });
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                  this._pendingImages.push({ dataUrl: ev.target.result, file });
-                  this._renderAttachments();
-                };
-                reader.readAsDataURL(file);
-                gotFile = true;
-              }
-            }
-          }
-        }
-      } catch (clipErr) {
-        console.warn('[CommandPanel] Clipboard API fallback failed:', clipErr);
+      const fallbackFiles = await readImagesFromClipboardAPI();
+      for (const file of fallbackFiles) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          this._pendingImages.push({ dataUrl: ev.target.result, file });
+          this._renderAttachments();
+        };
+        reader.readAsDataURL(file);
+        gotFile = true;
       }
       if (!gotFile && typeof app !== 'undefined' && app.showToast) {
         app.showToast('Could not read image from clipboard — please try pasting again', 'warn');
@@ -5149,7 +5157,7 @@ class CodemanApp {
       e.stopPropagation();
       // Route to CommandPanel if it's open, otherwise to InputPanel (compose bar)
       if (CommandPanel._panel?.classList.contains('open')) {
-        CommandPanel._onPaste(e);
+        await CommandPanel._onPaste(e);
       } else {
         // Treat items with empty MIME type as potential images (some Linux clipboard
         // providers / screenshot tools don't set the type correctly)
@@ -5163,23 +5171,8 @@ class CodemanApp {
         // more reliable in some environments (e.g. Wayland, remote desktop).
         if (imageItems.length > 0 && imageFiles.length === 0) {
           console.warn('[paste] getAsFile() returned null for', imageItems.length, 'item(s) — trying navigator.clipboard.read() fallback');
-          try {
-            if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
-              const clipItems = await navigator.clipboard.read();
-              for (const ci of clipItems) {
-                for (const mimeType of ci.types) {
-                  if (mimeType.startsWith('image/')) {
-                    const blob = await ci.getType(mimeType);
-                    const ext = mimeType.split('/')[1] || 'png';
-                    imageFiles.push(new File([blob], `clipboard.${ext}`, { type: mimeType }));
-                  }
-                }
-              }
-            }
-          } catch (clipErr) {
-            console.warn('[paste] Clipboard API fallback failed:', clipErr);
-          }
-          // If still nothing after fallback, show user feedback
+          const fallbackFiles = await readImagesFromClipboardAPI();
+          imageFiles.push(...fallbackFiles);
           if (imageFiles.length === 0) {
             console.warn('[paste] All getAsFile() calls returned null and clipboard fallback failed');
             if (typeof app !== 'undefined' && app.showToast) {
