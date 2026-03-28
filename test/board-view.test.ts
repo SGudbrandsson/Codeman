@@ -1584,3 +1584,383 @@ describe('Bug 4 — SSE updates reflected when board becomes visible', () => {
     expect(title).toContain('Hidden SSE Card');
   });
 });
+
+// ─── Gap: Blocked card shows blocker indicator from _blockerMap ───────────────
+
+describe('Blocked card shows blocker indicator from _blockerMap', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const blockedItem = {
+    id: 'wi-blocked-card',
+    title: 'Blocked Card Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+
+    // Mock GET /api/work-items to return a blocked item
+    await mockWorkItemsRoute(page, [blockedItem]);
+
+    // Mock GET /api/work-items/:id/dependencies so _blockerMap is populated
+    await page.route('**/api/work-items/wi-blocked-card/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [
+                {
+                  id: 'wi-blocker-source',
+                  title: 'Upstream Blocker',
+                  status: 'in_progress',
+                  depId: 'wi-blocker-source',
+                },
+              ],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('blocked card renders in Queued column', async () => {
+    const count = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').count();
+    expect(count).toBe(1);
+  });
+
+  it('blocked card shows "Blocked by:" indicator text', async () => {
+    const cardText = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().textContent();
+    expect(cardText).toContain('Blocked by:');
+  });
+
+  it('blocked card indicator includes the blocker title', async () => {
+    const cardText = await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().textContent();
+    expect(cardText).toContain('Upstream Blocker');
+  });
+});
+
+// ─── Gap: Detail panel shows Blocked By section for blocked items ─────────────
+
+describe('Detail panel — Blocked By section renders with blocker info', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const blockedItem = {
+    id: 'wi-panel-blocked',
+    title: 'Panel Blocked Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [blockedItem]);
+
+    // Mock deps route — returns one blocker
+    await page.route('**/api/work-items/wi-panel-blocked/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [
+                { id: 'wi-blocker-dep', title: 'Blocking Task', status: 'in_progress', depId: 'wi-blocker-dep' },
+              ],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    // Click the blocked card to open detail panel
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('detail panel is open after clicking blocked card', async () => {
+    const hasOpen = await page.evaluate(() => {
+      return document.getElementById('workItemPanel')?.classList.contains('open') ?? false;
+    });
+    expect(hasOpen).toBe(true);
+  });
+
+  it('detail panel shows "Blocked By" section header', async () => {
+    const panelText = await page.locator('#workItemPanel').textContent();
+    expect(panelText).toContain('Blocked By');
+  });
+
+  it('detail panel shows blocker title in Blocked By section', async () => {
+    const panelText = await page.locator('#workItemPanel').textContent();
+    expect(panelText).toContain('Blocking Task');
+  });
+
+  it('detail panel shows #wipUnblockBtn (Unblock All button) for blocked item', async () => {
+    const exists = await page.evaluate(() => !!document.getElementById('wipUnblockBtn'));
+    expect(exists).toBe(true);
+  });
+
+  it('detail panel shows .wip-remove-blocker button for each blocker', async () => {
+    const count = await page.locator('#workItemPanel .wip-remove-blocker').count();
+    expect(count).toBe(1);
+  });
+});
+
+// ─── Gap: .wip-remove-blocker calls DELETE and refreshes panel ────────────────
+
+describe('Detail panel — .wip-remove-blocker calls DELETE /api/work-items/:id/dependencies/:blockerId', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let deleteCalled = false;
+  let deleteUrl = '';
+
+  const blockedItem = {
+    id: 'wi-remove-blocker',
+    title: 'Remove Blocker Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [blockedItem]);
+
+    // Mock GET deps — one blocker
+    await page.route('**/api/work-items/wi-remove-blocker/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [{ id: 'wi-dep-source', title: 'Dep Source', status: 'queued', depId: 'wi-dep-source' }],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Mock DELETE deps/:blockerId — separate URL with the blocker id segment
+    await page.route('**/api/work-items/wi-remove-blocker/dependencies/wi-dep-source', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteCalled = true;
+        deleteUrl = route.request().url();
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(500);
+    // Click the remove blocker button
+    await page.locator('#workItemPanel .wip-remove-blocker').first().click();
+    await page.waitForTimeout(400);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('.wip-remove-blocker click calls DELETE on the dependency', () => {
+    expect(deleteCalled).toBe(true);
+  });
+
+  it('DELETE URL includes the blocker id', () => {
+    expect(deleteUrl).toContain('wi-dep-source');
+  });
+});
+
+// ─── Gap: #wipUnblockBtn removes all blockers, PATCHes to queued ──────────────
+
+describe('Detail panel — #wipUnblockBtn removes blockers and patches status to queued', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let deleteCalled = false;
+  let patchBody: Record<string, unknown> | null = null;
+
+  const blockedItem = {
+    id: 'wi-unblock-all',
+    title: 'Unblock All Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [blockedItem]);
+
+    // Mock GET deps
+    await page.route('**/api/work-items/wi-unblock-all/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [{ id: 'wi-blocker-unblock', title: 'Blocker', status: 'queued', depId: 'wi-blocker-unblock' }],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Mock DELETE deps/:blockerId — the Unblock All handler deletes each blocker by id
+    await page.route('**/api/work-items/wi-unblock-all/dependencies/wi-blocker-unblock', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteCalled = true;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Mock PATCH to capture status update
+    await page.route('**/api/work-items/wi-unblock-all', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        patchBody = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { ...blockedItem, status: 'queued' } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(500);
+    // Click Unblock All
+    await page.locator('#workItemPanel #wipUnblockBtn').click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#wipUnblockBtn click calls DELETE on each blocker dependency', () => {
+    expect(deleteCalled).toBe(true);
+  });
+
+  it('#wipUnblockBtn click sends PATCH with status queued', () => {
+    expect(patchBody).not.toBeNull();
+    expect(patchBody!['status']).toBe('queued');
+  });
+});
+
+// ─── Gap: #wipOpenSessionBtn disabled when no worktreePath and no assignedAgentId ─
+
+describe('Detail panel — #wipOpenSessionBtn is disabled when no session is linked', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  const itemNoSession = {
+    id: 'wi-no-session',
+    title: 'No Session Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+    worktreePath: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [itemNoSession]);
+
+    await page.route('**/api/work-items/wi-no-session/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { blockers: [], blockedBy: [] } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(500);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#wipOpenSessionBtn exists in the detail panel', async () => {
+    const exists = await page.evaluate(() => !!document.getElementById('wipOpenSessionBtn'));
+    expect(exists).toBe(true);
+  });
+
+  it('#wipOpenSessionBtn is disabled when worktreePath and assignedAgentId are both null', async () => {
+    const isDisabled = await page.evaluate(() => {
+      const btn = document.getElementById('wipOpenSessionBtn') as HTMLButtonElement | null;
+      return btn?.disabled ?? false;
+    });
+    expect(isDisabled).toBe(true);
+  });
+});

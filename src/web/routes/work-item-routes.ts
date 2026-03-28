@@ -30,6 +30,7 @@ import {
   addDependency,
   removeDependency,
   deleteWorkItem,
+  listDependencies,
 } from '../../work-items/index.js';
 import type { WorkItemSource, WorkItemStatus } from '../../work-items/index.js';
 import { deliverWebhookIfRegistered } from '../../clockwork-webhook.js';
@@ -215,6 +216,35 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       reply.code(400);
       return { success: false, error: e.message };
     }
+  });
+
+  // ── GET /api/work-items/:id/dependencies ─────────────────────────────────
+  app.get('/api/work-items/:id/dependencies', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getWorkItem(id)) {
+      reply.code(404);
+      return { success: false, error: 'Work item not found' };
+    }
+    const deps = listDependencies(id);
+    // blockers: items where this item is the one being blocked (to_id = id → from_id blocks id)
+    const blockers = deps
+      .filter((d) => d.toId === id)
+      .map((d) => {
+        const blocker = getWorkItem(d.fromId);
+        return blocker
+          ? { id: blocker.id, title: blocker.title, status: blocker.status, depId: d.fromId }
+          : { id: d.fromId, title: d.fromId, status: 'unknown', depId: d.fromId };
+      });
+    // blockedBy: items that this item is blocking (from_id = id → id blocks to_id)
+    const blockedBy = deps
+      .filter((d) => d.fromId === id)
+      .map((d) => {
+        const blocked = getWorkItem(d.toId);
+        return blocked
+          ? { id: blocked.id, title: blocked.title, status: blocked.status }
+          : { id: d.toId, title: d.toId, status: 'unknown' };
+      });
+    return { success: true, data: { blockers, blockedBy } };
   });
 
   // ── DELETE /api/work-items/:id ─────────────────────────────────────────────

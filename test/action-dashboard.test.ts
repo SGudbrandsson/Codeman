@@ -1595,3 +1595,211 @@ describe('unblockSession sends prompt with retry (Gap 14)', () => {
     expect(result.toastMsg).toBe('Unblock prompt sent');
   });
 });
+
+// ─── Gap 15: unblockSession(null, item) — sessionless unblock path ────────────
+
+describe('unblockSession(null, item) — removes dep edges and patches to queued (Gap 15)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockDashboardRoutes(page);
+  });
+
+  afterAll(async () => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('unblockSession(null, item) calls DELETE on each blocker dep edge', async () => {
+    let deleteCalled = false;
+    await page.route('**/api/work-items/wi-null-unblock/dependencies/wi-blocking-dep', (route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteCalled = true;
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        route.continue();
+      }
+    });
+    await page.route('**/api/work-items/wi-null-unblock/dependencies', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [{ id: 'wi-blocking-dep', title: 'Blocker', status: 'queued', depId: 'wi-blocking-dep' }],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+    await page.route('**/api/work-items/wi-null-unblock', (route) => {
+      if (route.request().method() === 'PATCH') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { id: 'wi-null-unblock', status: 'queued' } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      const origToast = (app as any).showToast;
+      (app as any).showToast = () => {};
+      await AD.unblockSession(null, { workItemId: 'wi-null-unblock', extra: {} });
+      (app as any).showToast = origToast;
+    });
+
+    expect(deleteCalled).toBe(true);
+  });
+
+  it('unblockSession(null, item) sends PATCH with status queued', async () => {
+    let patchBody: Record<string, unknown> | null = null;
+    await page.route('**/api/work-items/wi-null-patch/dependencies', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { blockers: [], blockedBy: [] } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+    await page.route('**/api/work-items/wi-null-patch', (route) => {
+      if (route.request().method() === 'PATCH') {
+        patchBody = JSON.parse(route.request().postData() || '{}');
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { id: 'wi-null-patch', status: 'queued' } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      const origToast = (app as any).showToast;
+      (app as any).showToast = () => {};
+      await AD.unblockSession(null, { workItemId: 'wi-null-patch', extra: {} });
+      (app as any).showToast = origToast;
+    });
+
+    expect(patchBody).not.toBeNull();
+    expect(patchBody!['status']).toBe('queued');
+  });
+
+  it('unblockSession(null, item) does NOT call /input or /interactive', async () => {
+    let inputCalled = false;
+    let interactiveCalled = false;
+    await page.route('**/api/sessions/**/input', (route) => {
+      inputCalled = true;
+      route.continue();
+    });
+    await page.route('**/api/sessions/**/interactive', (route) => {
+      interactiveCalled = true;
+      route.continue();
+    });
+    await page.route('**/api/work-items/wi-null-noinput/dependencies', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { blockers: [], blockedBy: [] } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+    await page.route('**/api/work-items/wi-null-noinput', (route) => {
+      if (route.request().method() === 'PATCH') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { id: 'wi-null-noinput', status: 'queued' } }),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      const origToast = (app as any).showToast;
+      (app as any).showToast = () => {};
+      await AD.unblockSession(null, { workItemId: 'wi-null-noinput', extra: {} });
+      (app as any).showToast = origToast;
+    });
+
+    expect(inputCalled).toBe(false);
+    expect(interactiveCalled).toBe(false);
+  });
+});
+
+// ─── Gap 16: _getActionButtonDefs blocked with null sessionId shows Unblock ───
+
+describe('_getActionButtonDefs blocked item with sessionId=null shows Unblock button (Gap 16)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('blocked item with sessionId=null still produces Unblock button', async () => {
+    const labels = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      const item = {
+        id: 'btn-null-sess',
+        sessionId: null,
+        actionType: 'blocked',
+        priority: 4,
+        context: '',
+        timestamp: Date.now(),
+        extra: {},
+      };
+      const defs = AD._getActionButtonDefs(item);
+      return defs.map((d: any) => d.label);
+    });
+    expect(labels).toContain('Unblock');
+  });
+
+  it('blocked item with sessionId=null does NOT produce Open Session button', async () => {
+    const labels = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      const item = {
+        id: 'btn-null-sess-2',
+        sessionId: null,
+        actionType: 'blocked',
+        priority: 4,
+        context: '',
+        timestamp: Date.now(),
+        extra: {},
+      };
+      const defs = AD._getActionButtonDefs(item);
+      return defs.map((d: any) => d.label);
+    });
+    // Open Session requires a real sessionId
+    expect(labels).not.toContain('Open Session');
+  });
+});

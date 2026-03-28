@@ -39,6 +39,7 @@ import {
   getReadyWorkItems,
   addDependency,
   removeDependency,
+  listDependencies,
 } from '../../src/work-items/index.js';
 import { deliverWebhookIfRegistered } from '../../src/clockwork-webhook.js';
 
@@ -51,6 +52,7 @@ const mockClaim = vi.mocked(claimWorkItem);
 const mockReady = vi.mocked(getReadyWorkItems);
 const mockAddDep = vi.mocked(addDependency);
 const mockRemoveDep = vi.mocked(removeDependency);
+const mockListDeps = vi.mocked(listDependencies);
 const mockDeliverWebhook = vi.mocked(deliverWebhookIfRegistered);
 
 /** Minimal WorkItem stub for test responses */
@@ -104,6 +106,7 @@ describe('work-item-routes', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     mockRemoveDep.mockReturnValue(false);
+    mockListDeps.mockReturnValue([]);
     mockDeliverWebhook.mockResolvedValue(undefined);
   });
 
@@ -474,6 +477,88 @@ describe('work-item-routes', () => {
 
       // Verify correct edge direction passed to removeDependency (depId blocks id)
       expect(mockRemoveDep).toHaveBeenCalledWith('wi-blocker', 'wi-target');
+    });
+  });
+
+  // ── GET /api/work-items/:id/dependencies ──────────────────────────────────
+
+  describe('GET /api/work-items/:id/dependencies', () => {
+    it('returns 404 when work item does not exist', async () => {
+      mockGet.mockReturnValue(null);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/work-items/wi-ghost/dependencies',
+      });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('returns empty blockers and blockedBy arrays when item has no dependencies', async () => {
+      mockGet.mockReturnValue(makeItem({ id: 'wi-nodeps' }));
+      mockListDeps.mockReturnValue([]);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/work-items/wi-nodeps/dependencies',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.blockers).toEqual([]);
+      expect(body.data.blockedBy).toEqual([]);
+    });
+
+    it('returns { blockers, blockedBy } when item exists and has deps', async () => {
+      const targetId = 'wi-blocked-item';
+      const blockerId = 'wi-blocker-item';
+      const downstreamId = 'wi-downstream';
+
+      mockGet
+        .mockReturnValueOnce(makeItem({ id: targetId })) // guard check
+        .mockReturnValueOnce(makeItem({ id: blockerId, title: 'Blocker Task', status: 'in_progress' })) // enrichment of blocker
+        .mockReturnValueOnce(makeItem({ id: downstreamId, title: 'Downstream Task', status: 'queued' })); // enrichment of blockedBy
+
+      mockListDeps.mockReturnValue([
+        // blockerId blocks targetId (to_id = targetId)
+        { fromId: blockerId, toId: targetId, type: 'blocks' as const, createdAt: '2026-01-01T00:00:00.000Z' },
+        // targetId blocks downstreamId (from_id = targetId)
+        { fromId: targetId, toId: downstreamId, type: 'blocks' as const, createdAt: '2026-01-01T00:00:00.000Z' },
+      ]);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/work-items/${targetId}/dependencies`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.blockers).toHaveLength(1);
+      expect(body.data.blockedBy).toHaveLength(1);
+    });
+
+    it('blocker objects are enriched with title and status from getWorkItem', async () => {
+      const targetId = 'wi-enrich-target';
+      const blockerId = 'wi-enrich-blocker';
+
+      mockGet
+        .mockReturnValueOnce(makeItem({ id: targetId })) // guard check
+        .mockReturnValueOnce(makeItem({ id: blockerId, title: 'Enriched Blocker', status: 'review' })); // enrichment
+
+      mockListDeps.mockReturnValue([
+        { fromId: blockerId, toId: targetId, type: 'blocks' as const, createdAt: '2026-01-01T00:00:00.000Z' },
+      ]);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/work-items/${targetId}/dependencies`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.blockers[0].id).toBe(blockerId);
+      expect(body.data.blockers[0].title).toBe('Enriched Blocker');
+      expect(body.data.blockers[0].status).toBe('review');
     });
   });
 });

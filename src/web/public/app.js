@@ -22348,6 +22348,7 @@ const BoardView = {
   _detailItem: null,   // WorkItem | null
   _initialized: false,
   _dirtyFromSSE: false, // set true by SSE handlers; showBoard uses render() instead of refresh()
+  _blockerMap: new Map(), // itemId → string[] of blocker titles
 
   // Column definitions — maps API status values to display columns
   COLUMNS: [
@@ -22422,6 +22423,27 @@ const BoardView = {
       this._showMockBanner();
     } else {
       this._hideMockBanner();
+    }
+
+    // Fetch blocker data for blocked items in parallel
+    const blockedItems = this._workItems.filter(w => w.status === 'blocked');
+    if (blockedItems.length > 0) {
+      const blockerMap = new Map();
+      await Promise.all(blockedItems.map(async wi => {
+        try {
+          const res = await fetch(`/api/work-items/${wi.id}/dependencies`);
+          if (res.ok) {
+            const data = await res.json();
+            const blockers = data.data?.blockers || [];
+            if (blockers.length > 0) {
+              blockerMap.set(wi.id, blockers.map(b => b.title || b.id));
+            }
+          }
+        } catch (_) { /* ignore */ }
+      }));
+      this._blockerMap = blockerMap;
+    } else {
+      this._blockerMap = new Map();
     }
 
     // Seed timeline with mock events if empty
@@ -22552,6 +22574,18 @@ const BoardView = {
     card.appendChild(meta);
     card.appendChild(nextAction);
 
+    // Blocker indicator for blocked items
+    if (item.status === 'blocked') {
+      const blockerTitles = this._blockerMap ? this._blockerMap.get(item.id) : null;
+      if (blockerTitles && blockerTitles.length > 0) {
+        const blockerEl = document.createElement('div');
+        blockerEl.className = 'board-card-blocker';
+        blockerEl.style.cssText = 'font-size:0.68rem;color:#ef4444;margin-top:4px;opacity:0.85;';
+        blockerEl.textContent = 'Blocked by: ' + blockerTitles.join(', ');
+        card.appendChild(blockerEl);
+      }
+    }
+
     // Inline status select for moving card between columns without opening detail panel
     const STATUSES = ['queued', 'blocked', 'assigned', 'in_progress', 'review', 'done', 'cancelled'];
     const statusSelect = document.createElement('select');
@@ -22654,7 +22688,16 @@ const BoardView = {
         } catch (_) { /* ignore */ }
       }
     }
-    this._renderDetailPanel(item, agent);
+    // Fetch dependencies for blocker list
+    let deps = { blockers: [], blockedBy: [] };
+    try {
+      const depsRes = await fetch(`/api/work-items/${item.id}/dependencies`);
+      if (depsRes.ok) {
+        const depsData = await depsRes.json();
+        if (depsData.success && depsData.data) deps = depsData.data;
+      }
+    } catch (_) { /* ignore */ }
+    this._renderDetailPanel(item, agent, deps);
     if (!alreadyOpen) {
       panelEl?.classList.add('open');
       document.getElementById('workItemPanelOverlay')?.classList.add('open');
@@ -22673,9 +22716,10 @@ const BoardView = {
     OverlayHistory.pop('board-detail');
   },
 
-  _renderDetailPanel(item, agent) {
+  _renderDetailPanel(item, agent, deps) {
     const panel = document.getElementById('workItemPanel');
     if (!panel) return;
+    if (!deps) deps = { blockers: [], blockedBy: [] };
 
     const statusColor = this.STATUS_COLORS[item.status] || '#475569';
 
@@ -22699,6 +22743,26 @@ const BoardView = {
       <div class="wip-section-label">Description</div>
       <div class="wip-description">${this._esc(item.description || 'No description.')}</div>
     </div>`;
+
+    // Blockers section — show if item is blocked or has any blockers
+    if (item.status === 'blocked' || (deps.blockers && deps.blockers.length > 0)) {
+      html += `<div class="wip-section" id="wipBlockersSection">
+        <div class="wip-section-label" style="color:#ef4444;">Blocked By</div>`;
+      if (deps.blockers && deps.blockers.length > 0) {
+        for (const blocker of deps.blockers) {
+          const bColor = this.STATUS_COLORS[blocker.status] || '#475569';
+          html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+            <span style="width:7px;height:7px;border-radius:50%;background:${bColor};flex-shrink:0;display:inline-block;"></span>
+            <span style="flex:1;font-size:0.78rem;color:#e2e8f0;">${this._esc(blocker.title)}</span>
+            <span style="font-size:0.65rem;color:${bColor};background:${bColor}22;border:1px solid ${bColor}44;border-radius:3px;padding:1px 5px;">${this._esc(blocker.status)}</span>
+            <button class="wip-remove-blocker board-btn-delete" data-blocker-id="${this._esc(blocker.id)}" style="font-size:0.7rem;padding:1px 7px;color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">Remove</button>
+          </div>`;
+        }
+      } else {
+        html += `<div style="font-size:0.75rem;color:#475569;">No dependency data found — the work item may be marked blocked manually.</div>`;
+      }
+      html += `</div>`;
+    }
 
     // Assigned agent activity
     html += `<div class="wip-section">
@@ -22754,19 +22818,26 @@ const BoardView = {
 
     // Action buttons
     const claimDisabled = item.status !== 'queued' ? ' disabled style="opacity:0.4;cursor:not-allowed;"' : '';
+    const hasSession = !!(item.worktreePath || item.assignedAgentId);
+    const openSessionLabel = hasSession ? 'Open Session' : 'No Session';
+    const openSessionDisabledAttr = hasSession ? '' : ' disabled style="opacity:0.4;cursor:not-allowed;"';
+    const showUnblock = item.status === 'blocked';
     html += `<div class="wip-actions" id="wipActions">
       <button class="board-btn-refresh" id="wipCloseBtn">Close</button>
       <button class="board-btn-new" id="wipClaimBtn"${claimDisabled}>Claim</button>
       <button class="board-btn-new" id="wipChangeStatusBtn">Change Status</button>
       <button class="board-btn-refresh" id="wipAddDepBtn">Add Dependency</button>
+      <button class="board-btn-refresh" id="wipOpenSessionBtn"${openSessionDisabledAttr}>${openSessionLabel}</button>
+      ${showUnblock ? '<button class="board-btn-new" id="wipUnblockBtn" style="color:#f59e0b;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);">Unblock All</button>' : ''}
       <button class="board-btn-delete" id="wipDeleteBtn" style="margin-left:auto;color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">Delete</button>
     </div>`;
 
     panel.innerHTML = html;
-    this._wireDetailPanelActions(panel, item);
+    this._wireDetailPanelActions(panel, item, deps);
   },
 
-  _wireDetailPanelActions(panel, item) {
+  _wireDetailPanelActions(panel, item, deps) {
+    if (!deps) deps = { blockers: [], blockedBy: [] };
     panel.querySelector('#wipCloseBtn').addEventListener('click', () => this.closeDetailPanel());
 
     panel.querySelector('#wipClaimBtn').addEventListener('click', () => {
@@ -22917,6 +22988,108 @@ const BoardView = {
         app.showToast('Failed to delete work item', 'error');
       }
     });
+
+    // Wire remove-blocker buttons
+    panel.querySelectorAll('.wip-remove-blocker').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const blockerId = btn.dataset.blockerId;
+        if (!blockerId) return;
+        try {
+          const res = await fetch(`/api/work-items/${item.id}/dependencies/${blockerId}`, { method: 'DELETE' });
+          if (res.ok) {
+            app.showToast('Dependency removed', 'success');
+            this.openDetailPanel(item);
+          } else {
+            const data = await res.json().catch(() => ({}));
+            app.showToast(data.error || 'Failed to remove dependency', 'error');
+          }
+        } catch (e) {
+          app.showToast('Failed to remove dependency', 'error');
+        }
+      });
+    });
+
+    // Wire Open Session button
+    const openSessionBtn = panel.querySelector('#wipOpenSessionBtn');
+    if (openSessionBtn) {
+      openSessionBtn.addEventListener('click', async () => {
+        // Try worktreePath first
+        if (item.worktreePath) {
+          try {
+            const res = await fetch('/api/sessions');
+            if (res.ok) {
+              const data = await res.json();
+              const sessions = Array.isArray(data) ? data : (data.sessions || data.data || []);
+              const found = sessions.find(s => s.workingDir === item.worktreePath || s.worktreePath === item.worktreePath);
+              if (found) {
+                if (typeof app !== 'undefined') app.selectSession(found.id);
+                this.closeDetailPanel();
+                return;
+              }
+            }
+            // No matching session — create one
+            const createRes = await fetch('/api/sessions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ workingDir: item.worktreePath, name: item.title || item.id }),
+            });
+            if (createRes.ok) {
+              const createData = await createRes.json();
+              const newSession = createData.session || createData.data || createData;
+              if (newSession && newSession.id && typeof app !== 'undefined') {
+                app.selectSession(newSession.id);
+                this.closeDetailPanel();
+              }
+            } else {
+              app.showToast('Failed to create session for worktree', 'error');
+            }
+          } catch (e) {
+            app.showToast('Failed to open session', 'error');
+          }
+          return;
+        }
+        // Try assignedAgentId as session
+        if (item.assignedAgentId && typeof app !== 'undefined') {
+          app.selectSession(item.assignedAgentId);
+          this.closeDetailPanel();
+          return;
+        }
+        app.showToast('No session linked — set a worktree path first.', 'error');
+      });
+    }
+
+    // Wire Unblock All button
+    const unblockBtn = panel.querySelector('#wipUnblockBtn');
+    if (unblockBtn) {
+      unblockBtn.addEventListener('click', async () => {
+        const blockers = deps.blockers || [];
+        try {
+          // Remove all blocker dependencies
+          for (const blocker of blockers) {
+            await fetch(`/api/work-items/${item.id}/dependencies/${blocker.id}`, { method: 'DELETE' });
+          }
+          // PATCH status to queued
+          const res = await fetch(`/api/work-items/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'queued' }),
+          });
+          if (res.ok) {
+            const resp = await res.json();
+            const idx = this._workItems.findIndex(w => w.id === item.id);
+            if (idx >= 0) this._workItems[idx] = resp.data;
+            this.render();
+            app.showToast('Item unblocked and set to queued', 'success');
+            this.openDetailPanel(resp.data);
+          } else {
+            app.showToast('Failed to update status after unblock', 'error');
+          }
+        } catch (e) {
+          app.showToast('Failed to unblock work item', 'error');
+        }
+      });
+    }
   },
 
   _esc(str) {
@@ -23803,7 +23976,7 @@ const ActionDashboard = {
         break;
       case 'blocked':
         if (sid) btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
-        if (sid) btns.push({ label: 'Unblock', cls: '', handler: () => this.unblockSession(sid, item) });
+        btns.push({ label: 'Unblock', cls: '', handler: () => this.unblockSession(sid, item) });
         break;
       case 'stopped_worktree':
         if (sid) {
@@ -23931,7 +24104,38 @@ const ActionDashboard = {
   },
 
   // Quick action: unblock a stuck session by sending a resume prompt
+  // If sessionId is null (no assigned session), removes dependency edges directly and sets status to queued.
   async unblockSession(sessionId, item) {
+    const workItemId = item?.workItemId;
+    // No session: remove dependency edges and set status to queued
+    if (!sessionId) {
+      if (!workItemId) {
+        if (typeof app !== 'undefined') app.showToast('No work item linked — cannot unblock', 'error');
+        return;
+      }
+      try {
+        // Fetch current dependencies to find blockers
+        const depsRes = await fetch('/api/work-items/' + workItemId + '/dependencies');
+        if (depsRes.ok) {
+          const depsData = await depsRes.json();
+          const blockers = (depsData.data?.blockers) || [];
+          for (const blocker of blockers) {
+            await fetch('/api/work-items/' + workItemId + '/dependencies/' + blocker.id, { method: 'DELETE' });
+          }
+        }
+        // Set work item status to queued
+        await fetch('/api/work-items/' + workItemId, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'queued' }),
+        });
+        if (typeof app !== 'undefined') app.showToast('Item unblocked and set to queued', 'success');
+        this.refresh();
+      } catch (e) {
+        if (typeof app !== 'undefined') app.showToast('Failed to unblock work item', 'error');
+      }
+      return;
+    }
     const wiTitle = item?.extra?.workItemTitle || item?.context || 'the current task';
     const branch = item?.extra?.branch || item?.extra?.branchName || '';
     const branchNote = branch ? ' (branch: ' + branch + ')' : '';
@@ -23956,8 +24160,8 @@ const ActionDashboard = {
       if (res && res.ok) {
         if (typeof app !== 'undefined') app.showToast('Unblock prompt sent', 'success');
         // Also update work item status if we have one
-        if (item?.workItemId) {
-          fetch('/api/work-items/' + item.workItemId, {
+        if (workItemId) {
+          fetch('/api/work-items/' + workItemId, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: 'in_progress' }),
