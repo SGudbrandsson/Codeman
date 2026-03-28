@@ -117,7 +117,7 @@ html.mobile-init .file-browser-panel {
   max-height: 55vh;
   bottom: calc(var(--safe-area-bottom, 0px) + 44px + var(--mobile-compose-height, 52px)) !important;
   border-radius: 12px 12px 0 0;
-  z-index: 200;
+  z-index: 200; /* above compose bar + content; base is 100 in styles.css */
 }
 
 /* ============================================================================
