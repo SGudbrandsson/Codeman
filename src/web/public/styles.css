@@ -1693,6 +1693,7 @@ body {
   .ctx-banner { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .keyboard-accessory-bar { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .mobile-input-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  /* NB: these override base transitions — keep transform/width in sync with each panel's base rule */
   .monitor-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, width 0.2s ease; }
   .subagents-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, width 0.2s ease; }
   .agent-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4,0,0.2,1); }
