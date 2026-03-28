@@ -20337,6 +20337,8 @@ const InputPanel = {
     let _dedupeText = '';
     let _dedupeTime = 0;
     ta.addEventListener('beforeinput', (e) => {
+      // Only guard text-insertion inputTypes — ignore deletes, formatting, etc.
+      if (e.inputType !== 'insertText' && e.inputType !== 'insertFromPaste' && e.inputType !== 'insertFromDrop' && e.inputType !== 'insertReplacementText') return;
       const text = e.data ?? e.dataTransfer?.getData('text/plain') ?? '';
       // Only deduplicate multi-character insertions (not single keystrokes)
       if (text.length <= 1) return;

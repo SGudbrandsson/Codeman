@@ -7,9 +7,10 @@
  * The deduplication logic in InputPanel.init() prevents the second insertion.
  *
  * This test mirrors the deduplication algorithm from app.js InputPanel.init().
+ * If the algorithm in InputPanel.init() changes, update this mirror accordingly.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // ── Mirrored deduplication logic from app.js InputPanel.init() ──────────────
 
@@ -92,7 +93,7 @@ describe('Input deduplication (Wispr Flow double-paste fix)', () => {
     expect(isDuplicate('third phrase')).toBe(false);
   });
 
-  it('blocks duplicate at boundary (exactly 300ms is still within window)', () => {
+  it('allows duplicate at exactly 300ms (boundary is exclusive)', () => {
     // The check is `< 300`, so exactly 300ms should NOT be blocked
     expect(isDuplicate('test text')).toBe(false);
     clock += 300;
