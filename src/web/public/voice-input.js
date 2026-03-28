@@ -691,6 +691,9 @@ const VoiceInput = {
     const interimText = text.trim();
     if (interimText) {
       const spacer = ta.value && !ta.value.endsWith(' ') ? ' ' : '';
+      // Track the exact insertion offset so _clearInterimFromCompose removes
+      // the correct characters even if the user types after the interim text.
+      this._interimInsertOffset = ta.value.length;
       ta.value += spacer + interimText;
       this._lastInterimLength = spacer.length + interimText.length;
       ta.selectionStart = ta.selectionEnd = ta.value.length;
@@ -705,8 +708,17 @@ const VoiceInput = {
     if (!this._composeBarMode || this._lastInterimLength <= 0) return;
     const ta = document.getElementById('composeTextarea');
     if (!ta) return;
-    ta.value = ta.value.slice(0, -this._lastInterimLength);
+    // Use tracked insertion offset to remove exactly the interim characters,
+    // even if the user typed additional text after the interim was inserted.
+    const offset = this._interimInsertOffset ?? (ta.value.length - this._lastInterimLength);
+    if (offset >= 0 && offset + this._lastInterimLength <= ta.value.length) {
+      ta.value = ta.value.slice(0, offset) + ta.value.slice(offset + this._lastInterimLength);
+    } else {
+      // Fallback: remove from end (original behavior) if offset is invalid
+      ta.value = ta.value.slice(0, -this._lastInterimLength);
+    }
     this._lastInterimLength = 0;
+    this._interimInsertOffset = undefined;
   },
 
   _iosStabilityCheck(transcript) {

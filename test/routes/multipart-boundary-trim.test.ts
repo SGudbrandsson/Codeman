@@ -183,6 +183,43 @@ describe('Multipart boundary .trim() fix', () => {
     });
   });
 
+  // ────── POST /api/screenshots — quoted boundary ──────
+
+  describe('POST /api/screenshots — quoted boundary values', () => {
+    it('succeeds when boundary is double-quoted', async () => {
+      const boundary = 'QuotedBoundary123';
+      const { body } = buildMultipartWithBoundary('image.png', Buffer.from('png-data'), boundary);
+      const contentType = `multipart/form-data; boundary="${boundary}"`;
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/screenshots',
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(true);
+      expect(data.path).toBeDefined();
+    });
+
+    it('succeeds when boundary is single-quoted', async () => {
+      const boundary = 'SingleQuoteBoundary';
+      const { body } = buildMultipartWithBoundary('image.jpg', Buffer.from('jpg-data'), boundary);
+      const contentType = `multipart/form-data; boundary='${boundary}'`;
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/screenshots',
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(true);
+    });
+  });
+
   // ────── POST /api/sessions/:id/upload ──────
 
   describe('POST /api/sessions/:id/upload — boundary with trailing whitespace', () => {
@@ -222,6 +259,43 @@ describe('Multipart boundary .trim() fix', () => {
     it('succeeds with clean boundary (baseline)', async () => {
       const boundary = 'CleanUploadBoundary';
       const { body, contentType } = buildMultipartWithBoundary('notes.md', Buffer.from('md-data'), boundary);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(true);
+    });
+  });
+
+  // ────── POST /api/sessions/:id/upload — quoted boundary ──────
+
+  describe('POST /api/sessions/:id/upload — quoted boundary values', () => {
+    it('succeeds when boundary is double-quoted', async () => {
+      const boundary = 'QuotedUploadBoundary';
+      const { body } = buildMultipartWithBoundary('doc.pdf', Buffer.from('pdf-data'), boundary);
+      const contentType = `multipart/form-data; boundary="${boundary}"`;
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/upload`,
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.success).toBe(true);
+      expect(data.filename).toBe('doc.pdf');
+    });
+
+    it('succeeds when boundary is single-quoted', async () => {
+      const boundary = 'SingleQuoteUpload';
+      const { body } = buildMultipartWithBoundary('report.txt', Buffer.from('text-data'), boundary);
+      const contentType = `multipart/form-data; boundary='${boundary}'`;
 
       const res = await harness.app.inject({
         method: 'POST',

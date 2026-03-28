@@ -5152,13 +5152,19 @@ class CodemanApp {
     document.addEventListener('paste', async (e) => {
       const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
       const fileItems = items.filter(it => it.kind === 'file');
-      if (!fileItems.length) return; // No files — let normal text paste proceed
+      // Also check clipboardData.files — some clipboard providers put images there
+      // but not in items (e.g. certain Android browsers, Electron apps)
+      const cdFiles = e.clipboardData?.files ? Array.from(e.clipboardData.files) : [];
+      if (!fileItems.length && !cdFiles.length) return; // No files — let normal text paste proceed
       e.preventDefault();
       e.stopPropagation();
       // Route to CommandPanel if it's open, otherwise to InputPanel (compose bar)
       if (CommandPanel._panel?.classList.contains('open')) {
         await CommandPanel._onPaste(e);
       } else {
+        // Helper: check if a file looks like an image by extension when MIME is empty
+        const _imageExts = /\.(png|jpe?g|webp|gif|bmp|svg|ico|tiff?)$/i;
+        const _looksLikeImage = (f) => f.type.startsWith('image/') || (!f.type && (!f.name || _imageExts.test(f.name)));
         // Treat items with empty MIME type as potential images (some Linux clipboard
         // providers / screenshot tools don't set the type correctly)
         const imageItems = fileItems.filter(it => it.type.startsWith('image/') || !it.type);
@@ -5166,15 +5172,25 @@ class CodemanApp {
         let imageFiles = imageItems.map(it => it.getAsFile()).filter(Boolean);
         const nonImageFiles = nonImageItems.map(it => it.getAsFile()).filter(Boolean);
 
-        // Fallback: if getAsFile() returned null for all image items, try the
-        // async Clipboard API which reads from a different browser path and is
-        // more reliable in some environments (e.g. Wayland, remote desktop).
-        if (imageItems.length > 0 && imageFiles.length === 0) {
-          console.warn('[paste] getAsFile() returned null for', imageItems.length, 'item(s) — trying navigator.clipboard.read() fallback');
+        // Fallback 1: if getAsFile() returned null for items, OR if items had no
+        // file entries at all, try clipboardData.files directly. Some clipboard
+        // providers put images in files but not items.
+        if (imageFiles.length === 0 && cdFiles.length > 0) {
+          console.warn('[paste] getAsFile() returned null or no file items — trying clipboardData.files fallback');
+          const cdImageFiles = cdFiles.filter(f => _looksLikeImage(f));
+          const cdNonImageFiles = cdFiles.filter(f => !_looksLikeImage(f));
+          imageFiles.push(...cdImageFiles);
+          nonImageFiles.push(...cdNonImageFiles);
+        }
+
+        // Fallback 2: if still no images, try the async Clipboard API which reads
+        // from a different browser path (more reliable in Wayland, remote desktop).
+        if (imageFiles.length === 0 && (imageItems.length > 0 || cdFiles.length > 0)) {
+          console.warn('[paste] getAsFile() and clipboardData.files both failed — trying navigator.clipboard.read() fallback');
           const fallbackFiles = await readImagesFromClipboardAPI();
           imageFiles.push(...fallbackFiles);
           if (imageFiles.length === 0) {
-            console.warn('[paste] All getAsFile() calls returned null and clipboard fallback failed');
+            console.warn('[paste] All fallbacks failed');
             if (typeof app !== 'undefined' && app.showToast) {
               app.showToast('Could not read image from clipboard — please try pasting again', 'warn');
             }
@@ -20246,9 +20262,14 @@ const InputPanel = {
     }
     // Clear textarea and images between save and load so _loadDraft doesn't
     // mistake the previous session's leftover text as in-progress user input.
+    // However, if the user is actively composing text (document has focus and
+    // textarea has content), migrate that text to the new session's draft
+    // instead of discarding it. This protects against SSE-triggered session
+    // switches (e.g. auto-clear creating a child session) clobbering user input.
     const ta = this._getTextarea();
-    if (ta) { ta.value = ''; }
-    this._restoreImages([]);
+    const userHasText = ta && ta.value && document.activeElement === ta;
+    if (ta && !userHasText) { ta.value = ''; }
+    if (!userHasText) this._restoreImages([]);
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
@@ -20652,8 +20673,11 @@ const InputPanel = {
     const files = Array.from(input.files || []);
     input.value = '';
     if (!files.length) return;
-    const imageFiles = files.filter(f => f.type.startsWith('image/'));
-    const nonImageFiles = files.filter(f => !f.type.startsWith('image/'));
+    // File.type can be empty on some platforms — fall back to extension check
+    const _imageExts = /\.(png|jpe?g|webp|gif|bmp|svg|ico|tiff?)$/i;
+    const _isImage = (f) => f.type.startsWith('image/') || (!f.type && f.name && _imageExts.test(f.name));
+    const imageFiles = files.filter(f => _isImage(f));
+    const nonImageFiles = files.filter(f => !_isImage(f));
     if (imageFiles.length) await this._uploadFiles(imageFiles);
     if (nonImageFiles.length) await this._uploadNonImageFiles(nonImageFiles);
   },
