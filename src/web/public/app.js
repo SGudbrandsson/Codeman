@@ -23202,6 +23202,28 @@ const ActionDashboard = {
     this.render();
   },
 
+  // Helper: enrich action item extra with session + work-item metadata
+  _enrichExtra(extra, sessionId) {
+    const s = sessionId ? this._sessions.find(ss => ss.id === sessionId) : null;
+    if (s) {
+      extra.branch = extra.branch || s.worktreeBranch || null;
+      extra.worktreePath = extra.worktreePath || s.worktreePath || null;
+      extra.workingDir = s.workingDir || null;
+      extra.sessionStatus = s.status || null;
+    }
+    return extra;
+  },
+
+  // Helper: find the work item matching a session (by worktreePath or assignedAgentId)
+  _findWorkItemForSession(sessionId) {
+    const s = sessionId ? this._sessions.find(ss => ss.id === sessionId) : null;
+    if (!s) return null;
+    return this._workItems.find(wi =>
+      (wi.assignedAgentId && wi.assignedAgentId === sessionId) ||
+      (wi.worktreePath && s.worktreePath && wi.worktreePath === s.worktreePath)
+    ) || null;
+  },
+
   _deriveItems() {
     const items = [];
     const now = Date.now();
@@ -23215,6 +23237,18 @@ const ActionDashboard = {
         else if (item.hookType === 'idle_prompt') actionType = 'idle';
         else if (item.hookType === 'review') actionType = 'review';
 
+        // Find matching work item for this session
+        let wiId = item.workItemId || null;
+        const matchedWi = wiId ? this._workItems.find(w => w.id === wiId) : this._findWorkItemForSession(item.sessionId);
+        if (!wiId && matchedWi) wiId = matchedWi.id;
+
+        const extra = this._enrichExtra({
+          workItemTitle: matchedWi?.title || null,
+          workItemDescription: matchedWi?.description || null,
+          workItemStatus: matchedWi?.status || null,
+          branchName: matchedWi?.branchName || null,
+        }, item.sessionId);
+
         items.push({
           id: 'attn:' + item.sessionId + ':' + item.hookType,
           sessionId: item.sessionId,
@@ -23223,8 +23257,8 @@ const ActionDashboard = {
           priority: this.PRIORITIES[actionType] ?? 5,
           context: item.context || this.TYPE_DESCRIPTIONS[actionType],
           timestamp: item.timestamp || now,
-          workItemId: item.workItemId || null,
-          extra: {},
+          workItemId: wiId,
+          extra,
         });
       }
     }
@@ -23240,6 +23274,12 @@ const ActionDashboard = {
         if (!alreadyCovered) {
           const session = this._sessions.find(s => s.id === wi.assignedAgentId) ||
                           this._sessions.find(s => s.worktreePath && wi.worktreePath && s.worktreePath === wi.worktreePath);
+          const extra = this._enrichExtra({
+            branchName: wi.branchName,
+            workItemTitle: wi.title || null,
+            workItemDescription: wi.description || null,
+            workItemStatus: wi.status,
+          }, session?.id);
           items.push({
             id: 'wi:review:' + wi.id,
             sessionId: session?.id || null,
@@ -23249,20 +23289,28 @@ const ActionDashboard = {
             context: wi.title || 'Work item needs review',
             timestamp: wi.updatedAt ? new Date(wi.updatedAt).getTime() : now,
             workItemId: wi.id,
-            extra: { branchName: wi.branchName },
+            extra,
           });
         }
       } else if (wi.status === 'blocked') {
+        const session = this._sessions.find(s => s.id === wi.assignedAgentId) ||
+                        this._sessions.find(s => s.worktreePath && wi.worktreePath && s.worktreePath === wi.worktreePath);
+        const extra = this._enrichExtra({
+          branchName: wi.branchName,
+          workItemTitle: wi.title || null,
+          workItemDescription: wi.description || null,
+          workItemStatus: wi.status,
+        }, session?.id || wi.assignedAgentId);
         items.push({
           id: 'wi:blocked:' + wi.id,
-          sessionId: wi.assignedAgentId || null,
-          sessionName: wi.title || (wi.id ? wi.id.slice(0, 8) : ''),
+          sessionId: session?.id || wi.assignedAgentId || null,
+          sessionName: session?.name || wi.title || (wi.id ? wi.id.slice(0, 8) : ''),
           actionType: 'blocked',
           priority: this.PRIORITIES.blocked,
           context: wi.title || 'Work item is blocked',
           timestamp: wi.updatedAt ? new Date(wi.updatedAt).getTime() : now,
           workItemId: wi.id,
-          extra: { branchName: wi.branchName },
+          extra,
         });
       }
     }
@@ -23270,6 +23318,13 @@ const ActionDashboard = {
     // 3. Sessions: error, stopped worktree, stale worktree
     for (const s of this._sessions) {
       if (s.status === 'error' && !coveredSessions.has(s.id)) {
+        const wi = this._findWorkItemForSession(s.id);
+        const extra = this._enrichExtra({
+          workItemTitle: wi?.title || null,
+          workItemDescription: wi?.description || null,
+          workItemStatus: wi?.status || null,
+          branchName: wi?.branchName || null,
+        }, s.id);
         items.push({
           id: 'sess:error:' + s.id,
           sessionId: s.id,
@@ -23278,10 +23333,18 @@ const ActionDashboard = {
           priority: this.PRIORITIES.error,
           context: 'Session encountered an error',
           timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : now,
-          extra: {},
+          workItemId: wi?.id || null,
+          extra,
         });
       }
       if (s.status === 'stopped' && s.worktreePath) {
+        const wi = this._findWorkItemForSession(s.id);
+        const extra = this._enrichExtra({
+          workItemTitle: wi?.title || null,
+          workItemDescription: wi?.description || null,
+          workItemStatus: wi?.status || null,
+          branchName: wi?.branchName || null,
+        }, s.id);
         items.push({
           id: 'sess:stopped:' + s.id,
           sessionId: s.id,
@@ -23290,13 +23353,22 @@ const ActionDashboard = {
           priority: this.PRIORITIES.stopped_worktree,
           context: 'Stopped worktree: ' + (s.worktreeBranch || 'unknown branch'),
           timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : now,
-          extra: { branch: s.worktreeBranch, worktreePath: s.worktreePath },
+          workItemId: wi?.id || null,
+          extra,
         });
       }
       // Stale worktree: idle, has worktree branch, last activity > 30 min ago
       if (s.status === 'idle' && s.worktreeBranch && !coveredSessions.has(s.id)) {
         const lastActive = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
         if (lastActive && (now - lastActive) > 30 * 60 * 1000) {
+          const wi = this._findWorkItemForSession(s.id);
+          const extra = this._enrichExtra({
+            originSessionId: s.worktreeOriginId,
+            workItemTitle: wi?.title || null,
+            workItemDescription: wi?.description || null,
+            workItemStatus: wi?.status || null,
+            branchName: wi?.branchName || null,
+          }, s.id);
           items.push({
             id: 'sess:stale:' + s.id,
             sessionId: s.id,
@@ -23305,7 +23377,8 @@ const ActionDashboard = {
             priority: this.PRIORITIES.stale_worktree,
             context: 'Idle worktree: ' + s.worktreeBranch,
             timestamp: lastActive,
-            extra: { branch: s.worktreeBranch, originSessionId: s.worktreeOriginId },
+            workItemId: wi?.id || null,
+            extra,
           });
         }
       }
@@ -23321,6 +23394,7 @@ const ActionDashboard = {
         priority: this.PRIORITIES.dormant,
         context: 'Dormant worktree: ' + (wt.branch || wt.path || 'unknown'),
         timestamp: wt.savedAt ? new Date(wt.savedAt).getTime() : now,
+        workItemId: null,
         extra: { worktreeId: wt.id, path: wt.path, branch: wt.branch },
       });
     }
@@ -23387,9 +23461,13 @@ const ActionDashboard = {
     dot.style.background = this._sessionColor(item.sessionId);
     card.appendChild(dot);
 
-    // Content area
+    // Content area — clickable to expand detail
     const content = document.createElement('div');
     content.className = 'action-card-content';
+    content.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleDetail(card, item);
+    });
 
     const top = document.createElement('div');
     top.className = 'action-card-top';
@@ -23412,6 +23490,15 @@ const ActionDashboard = {
     ctx.textContent = item.context || '';
     content.appendChild(ctx);
 
+    // Show branch inline if available
+    const branch = item.extra?.branch || item.extra?.branchName;
+    if (branch) {
+      const branchEl = document.createElement('div');
+      branchEl.className = 'action-card-branch';
+      branchEl.textContent = branch;
+      content.appendChild(branchEl);
+    }
+
     const time = document.createElement('div');
     time.className = 'action-card-time';
     time.textContent = this._relativeTime(item.timestamp);
@@ -23427,12 +23514,223 @@ const ActionDashboard = {
       const btn = document.createElement('button');
       btn.className = 'action-card-btn' + (def.cls ? ' ' + def.cls : '');
       btn.textContent = def.label;
-      btn.addEventListener('click', def.handler);
+      btn.addEventListener('click', (e) => { e.stopPropagation(); def.handler(); });
       actions.appendChild(btn);
     }
     card.appendChild(actions);
 
     return card;
+  },
+
+  // Toggle detail panel below an action card
+  _toggleDetail(card, item) {
+    const existing = card.querySelector('.action-detail');
+    if (existing) {
+      existing.remove();
+      card.classList.remove('expanded');
+      return;
+    }
+    // Close any other open detail panels
+    const list = card.parentElement;
+    if (list) {
+      for (const other of list.querySelectorAll('.action-detail')) other.remove();
+      for (const other of list.querySelectorAll('.action-card.expanded')) other.classList.remove('expanded');
+    }
+    card.classList.add('expanded');
+    const detail = document.createElement('div');
+    detail.className = 'action-detail';
+    this._renderDetail(detail, item);
+    card.appendChild(detail);
+    // Fetch TASK.md content asynchronously if we have a session
+    if (item.sessionId) this._loadTaskMd(detail, item);
+  },
+
+  // Build a labeled row for the detail panel (all DOM, no innerHTML)
+  _detailRow(label, value, opts) {
+    const section = document.createElement('div');
+    section.className = 'action-detail-section';
+    if (opts?.className) section.classList.add(opts.className);
+    const lbl = document.createElement('div');
+    lbl.className = 'action-detail-label';
+    lbl.textContent = label;
+    section.appendChild(lbl);
+    if (typeof value === 'string') {
+      const val = document.createElement('div');
+      val.className = 'action-detail-value';
+      if (opts?.mono) val.classList.add('action-detail-mono');
+      if (opts?.color) val.style.color = opts.color;
+      if (opts?.fontSize) val.style.fontSize = opts.fontSize;
+      val.textContent = value;
+      section.appendChild(val);
+    } else if (value instanceof Node) {
+      section.appendChild(value);
+    }
+    return section;
+  },
+
+  _renderDetail(detail, item) {
+    const ex = item.extra || {};
+    const branch = ex.branch || ex.branchName || null;
+    const worktreePath = ex.worktreePath || null;
+    const sessionStatus = ex.sessionStatus || null;
+    const wiTitle = ex.workItemTitle || null;
+    const wiDesc = ex.workItemDescription || null;
+    const wiStatus = ex.workItemStatus || null;
+
+    const grid = document.createElement('div');
+    grid.className = 'action-detail-grid';
+
+    // Action needed
+    const whyVal = document.createElement('div');
+    const whyText = document.createElement('div');
+    whyText.className = 'action-detail-value action-detail-why';
+    whyText.textContent = this.TYPE_DESCRIPTIONS[item.actionType] || item.actionType;
+    whyVal.appendChild(whyText);
+    if (item.context) {
+      const ctxText = document.createElement('div');
+      ctxText.className = 'action-detail-value action-detail-muted';
+      ctxText.textContent = item.context;
+      whyVal.appendChild(ctxText);
+    }
+    grid.appendChild(this._detailRow('Action Needed', whyVal));
+
+    // Git branch
+    if (branch) grid.appendChild(this._detailRow('Branch', branch, { mono: true }));
+
+    // Worktree path
+    if (worktreePath) grid.appendChild(this._detailRow('Worktree', worktreePath, { mono: true }));
+
+    // Session info
+    if (item.sessionId) {
+      const sessVal = document.createElement('div');
+      sessVal.className = 'action-detail-value';
+      sessVal.textContent = item.sessionName || item.sessionId.slice(0, 8);
+      if (sessionStatus) {
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'action-detail-status-dot ' + sessionStatus;
+        sessVal.appendChild(statusSpan);
+        const statusText = document.createElement('span');
+        statusText.className = 'action-detail-small';
+        statusText.textContent = sessionStatus;
+        sessVal.appendChild(statusText);
+      }
+      grid.appendChild(this._detailRow('Session', sessVal));
+    }
+
+    // Work item info
+    if (wiTitle || item.workItemId) {
+      const wiVal = document.createElement('div');
+      if (wiTitle) {
+        const t = document.createElement('div');
+        t.className = 'action-detail-value';
+        t.textContent = wiTitle;
+        wiVal.appendChild(t);
+      }
+      if (wiDesc) {
+        const d = document.createElement('div');
+        d.className = 'action-detail-value action-detail-small-muted';
+        d.textContent = wiDesc.length > 200 ? wiDesc.slice(0, 200) + '...' : wiDesc;
+        wiVal.appendChild(d);
+      }
+      if (wiStatus) {
+        const sWrap = document.createElement('div');
+        sWrap.className = 'action-detail-value';
+        sWrap.style.marginTop = '2px';
+        const sBadge = document.createElement('span');
+        sBadge.className = 'action-detail-wi-status';
+        sBadge.textContent = wiStatus;
+        sWrap.appendChild(sBadge);
+        wiVal.appendChild(sWrap);
+      }
+      grid.appendChild(this._detailRow('Work Item', wiVal));
+    }
+
+    // Task status placeholder (filled by _loadTaskMd)
+    const taskSection = document.createElement('div');
+    taskSection.className = 'action-detail-task-section';
+    grid.appendChild(taskSection);
+
+    detail.appendChild(grid);
+
+    // Detail action row
+    const actRow = document.createElement('div');
+    actRow.className = 'action-detail-actions';
+    if (item.sessionId) {
+      const openBtn = document.createElement('button');
+      openBtn.className = 'action-card-btn primary';
+      openBtn.textContent = 'Open Session';
+      openBtn.addEventListener('click', (e) => { e.stopPropagation(); this.openSession(item.sessionId); });
+      actRow.appendChild(openBtn);
+    }
+    if (item.workItemId) {
+      const boardBtn = document.createElement('button');
+      boardBtn.className = 'action-card-btn';
+      boardBtn.textContent = 'View on Board';
+      boardBtn.addEventListener('click', (e) => { e.stopPropagation(); this._openBoardItem(item.workItemId); });
+      actRow.appendChild(boardBtn);
+    }
+    detail.appendChild(actRow);
+  },
+
+  // Open the board detail panel for a specific work item
+  _openBoardItem(workItemId) {
+    if (!workItemId || typeof app === 'undefined') return;
+    const wi = this._workItems.find(w => w.id === workItemId);
+    if (wi && app.boardView) {
+      app.hideActionDashboard();
+      app.showBoard();
+      app.boardView.openDetailPanel(wi);
+    }
+  },
+
+  // Async: fetch TASK.md from session working dir and show task status
+  async _loadTaskMd(detailEl, item) {
+    if (!item.sessionId) return;
+    const section = detailEl.querySelector('.action-detail-task-section');
+    if (!section) return;
+    try {
+      const res = await fetch('/api/sessions/' + item.sessionId + '/file-content?path=TASK.md&lines=40');
+      if (!res.ok) return;
+      const data = await res.json();
+      const content = data.content || data.data?.content || '';
+      if (!content) return;
+      // Parse frontmatter-style fields from TASK.md
+      const statusMatch = content.match(/^status:\s*(.+)$/m);
+      const titleMatch = content.match(/^title:\s*(.+)$/m);
+      const typeMatch = content.match(/^type:\s*(.+)$/m);
+      const taskStatus = statusMatch ? statusMatch[1].trim() : null;
+      const taskTitle = titleMatch ? titleMatch[1].trim() : null;
+      const taskType = typeMatch ? typeMatch[1].trim() : null;
+
+      if (!taskStatus && !taskTitle) return;
+
+      const lbl = document.createElement('div');
+      lbl.className = 'action-detail-label';
+      lbl.textContent = 'Task Status';
+      section.appendChild(lbl);
+      if (taskTitle) {
+        const t = document.createElement('div');
+        t.className = 'action-detail-value';
+        t.textContent = taskTitle;
+        section.appendChild(t);
+      }
+      if (taskType) {
+        const tp = document.createElement('div');
+        tp.className = 'action-detail-value action-detail-small';
+        tp.textContent = 'Type: ' + taskType;
+        section.appendChild(tp);
+      }
+      if (taskStatus) {
+        const ph = document.createElement('div');
+        ph.className = 'action-detail-value';
+        const phBadge = document.createElement('span');
+        phBadge.className = 'action-detail-task-phase';
+        phBadge.textContent = taskStatus;
+        ph.appendChild(phBadge);
+        section.appendChild(ph);
+      }
+      section.classList.add('action-detail-section');
+    } catch (_) { /* ignore — TASK.md not available */ }
   },
 
   _getActionButtonDefs(item) {
@@ -23459,7 +23757,7 @@ const ActionDashboard = {
         break;
       case 'blocked':
         if (sid) btns.push({ label: 'Open Session', cls: 'primary', handler: () => this.openSession(sid) });
-        btns.push({ label: 'Unblock', cls: '', handler: () => { if (typeof app !== 'undefined') app.toggleBoard(); } });
+        if (sid) btns.push({ label: 'Unblock', cls: '', handler: () => this.unblockSession(sid, item) });
         break;
       case 'stopped_worktree':
         if (sid) {
@@ -23490,6 +23788,11 @@ const ActionDashboard = {
   openSession(sessionId) {
     if (typeof app !== 'undefined') {
       app.hideActionDashboard();
+      // Force selectSession to run even when the session is already active —
+      // the dashboard hid the terminal, so we need the full load path.
+      if (app.activeSessionId === sessionId) {
+        app.activeSessionId = null;
+      }
       app.selectSession(sessionId);
     }
   },
@@ -23498,6 +23801,9 @@ const ActionDashboard = {
   openSessionCompose(sessionId) {
     if (typeof app !== 'undefined') {
       app.hideActionDashboard();
+      if (app.activeSessionId === sessionId) {
+        app.activeSessionId = null;
+      }
       app.selectSession(sessionId);
       // Focus compose area after a tick so the session loads
       setTimeout(() => {
@@ -23575,6 +23881,48 @@ const ActionDashboard = {
       }
     } catch (e) {
       if (typeof app !== 'undefined') app.showToast('Failed to delete worktree', 'error');
+    }
+  },
+
+  // Quick action: unblock a stuck session by sending a resume prompt
+  async unblockSession(sessionId, item) {
+    const wiTitle = item?.extra?.workItemTitle || item?.context || 'the current task';
+    const branch = item?.extra?.branch || item?.extra?.branchName || '';
+    const branchNote = branch ? ' (branch: ' + branch + ')' : '';
+    const prompt = 'You appear to be blocked on ' + wiTitle + branchNote + '. Re-read TASK.md in this directory, check the current status, and resume from where you left off. If you need a dependency or permission, describe exactly what is blocking you so I can help.\r';
+    try {
+      // First restart the session if it's stopped
+      const session = this._sessions.find(s => s.id === sessionId);
+      if (session && (session.status === 'stopped' || session.status === 'idle')) {
+        await fetch('/api/sessions/' + sessionId + '/interactive', { method: 'POST' });
+      }
+      // Retry sending input — session may need time to start after /interactive
+      let res;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+        res = await fetch('/api/sessions/' + sessionId + '/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: prompt, useMux: true }),
+        });
+        if (res.ok) break;
+      }
+      if (res && res.ok) {
+        if (typeof app !== 'undefined') app.showToast('Unblock prompt sent', 'success');
+        // Also update work item status if we have one
+        if (item?.workItemId) {
+          fetch('/api/work-items/' + item.workItemId, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'in_progress' }),
+          }).catch(() => {});
+        }
+        this.refresh();
+      } else {
+        if (typeof app !== 'undefined') app.showToast('Failed to send unblock prompt', 'error');
+      }
+    } catch (e) {
+      if (typeof app !== 'undefined') app.showToast('Failed to unblock session', 'error');
     }
   },
 

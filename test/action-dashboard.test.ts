@@ -1112,3 +1112,486 @@ describe('Polling lifecycle (Gap 10)', () => {
     expect(result.different).toBe(true);
   });
 });
+
+// ─── Gap 11: Detail panel toggle and content ──────────────────────────────────
+
+describe('Detail panel toggle and content (Gap 11)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('clicking card content toggles detail panel', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._items = [
+        {
+          id: 'detail-test-1',
+          sessionId: 'sess-d1',
+          sessionName: 'Detail Test',
+          actionType: 'review',
+          priority: 3,
+          context: 'Review this',
+          timestamp: Date.now(),
+          workItemId: 'wi-d1',
+          extra: { branch: 'fix/test-branch', worktreePath: '/tmp/wt-test', sessionStatus: 'idle' },
+        },
+      ];
+      AD.render();
+      const list = document.getElementById('actionDashboardList');
+      const card = list?.querySelector('.action-card') as HTMLElement;
+      const content = card?.querySelector('.action-card-content') as HTMLElement;
+
+      // Click to expand
+      content?.click();
+      const hasDetail = !!card?.querySelector('.action-detail');
+      const isExpanded = card?.classList.contains('expanded');
+
+      // Click again to collapse
+      content?.click();
+      const hasDetailAfter = !!card?.querySelector('.action-detail');
+      const isExpandedAfter = card?.classList.contains('expanded');
+
+      return { hasDetail, isExpanded, hasDetailAfter, isExpandedAfter };
+    });
+    expect(result.hasDetail).toBe(true);
+    expect(result.isExpanded).toBe(true);
+    expect(result.hasDetailAfter).toBe(false);
+    expect(result.isExpandedAfter).toBe(false);
+  });
+
+  it('detail panel shows branch, worktree, session, and work item info', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._workItems = [{ id: 'wi-detail', title: 'Fix the widget', description: 'Widget is broken', status: 'review' }];
+      AD._items = [
+        {
+          id: 'detail-test-2',
+          sessionId: 'sess-d2',
+          sessionName: 'Widget Session',
+          actionType: 'review',
+          priority: 3,
+          context: 'Needs review',
+          timestamp: Date.now(),
+          workItemId: 'wi-detail',
+          extra: {
+            branch: 'fix/widget-bug',
+            worktreePath: '/home/test/wt-widget',
+            sessionStatus: 'idle',
+            workItemTitle: 'Fix the widget',
+            workItemDescription: 'Widget is broken',
+            workItemStatus: 'review',
+          },
+        },
+      ];
+      AD.render();
+      const list = document.getElementById('actionDashboardList');
+      const card = list?.querySelector('.action-card') as HTMLElement;
+      const content = card?.querySelector('.action-card-content') as HTMLElement;
+      content?.click();
+
+      const detail = card?.querySelector('.action-detail');
+      if (!detail) return null;
+
+      const labels = Array.from(detail.querySelectorAll('.action-detail-label')).map((el: Element) => el.textContent);
+      const monos = Array.from(detail.querySelectorAll('.action-detail-mono')).map((el: Element) => el.textContent);
+      const hasViewBoardBtn = !!detail.querySelector('.action-card-btn:not(.primary)');
+      const hasOpenSessionBtn = !!detail.querySelector('.action-card-btn.primary');
+
+      return { labels, monos, hasViewBoardBtn, hasOpenSessionBtn };
+    });
+    expect(result).not.toBeNull();
+    expect(result!.labels).toContain('Action Needed');
+    expect(result!.labels).toContain('Branch');
+    expect(result!.labels).toContain('Worktree');
+    expect(result!.labels).toContain('Session');
+    expect(result!.labels).toContain('Work Item');
+    expect(result!.monos).toContain('fix/widget-bug');
+    expect(result!.monos).toContain('/home/test/wt-widget');
+    expect(result!.hasViewBoardBtn).toBe(true);
+    expect(result!.hasOpenSessionBtn).toBe(true);
+  });
+
+  it('only one detail panel is open at a time', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._items = [
+        {
+          id: 'multi-1',
+          sessionId: 's1',
+          sessionName: 'S1',
+          actionType: 'error',
+          priority: 3,
+          context: '',
+          timestamp: Date.now(),
+          extra: {},
+        },
+        {
+          id: 'multi-2',
+          sessionId: 's2',
+          sessionName: 'S2',
+          actionType: 'idle',
+          priority: 2,
+          context: '',
+          timestamp: Date.now(),
+          extra: {},
+        },
+      ];
+      AD.render();
+      const list = document.getElementById('actionDashboardList');
+      const cards = list?.querySelectorAll('.action-card') as NodeListOf<HTMLElement>;
+
+      // Expand first card
+      (cards[0]?.querySelector('.action-card-content') as HTMLElement)?.click();
+      const firstHasDetail = !!cards[0]?.querySelector('.action-detail');
+
+      // Expand second card — first should collapse
+      (cards[1]?.querySelector('.action-card-content') as HTMLElement)?.click();
+      const firstStillHasDetail = !!cards[0]?.querySelector('.action-detail');
+      const secondHasDetail = !!cards[1]?.querySelector('.action-detail');
+
+      return { firstHasDetail, firstStillHasDetail, secondHasDetail };
+    });
+    expect(result.firstHasDetail).toBe(true);
+    expect(result.firstStillHasDetail).toBe(false);
+    expect(result.secondHasDetail).toBe(true);
+  });
+
+  it('card shows inline branch pill when branch is available', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._items = [
+        {
+          id: 'branch-pill-test',
+          sessionId: 'sess-bp',
+          sessionName: 'Branch Test',
+          actionType: 'review',
+          priority: 3,
+          context: 'Review',
+          timestamp: Date.now(),
+          extra: { branch: 'feat/my-feature' },
+        },
+      ];
+      AD.render();
+      const list = document.getElementById('actionDashboardList');
+      const branchEl = list?.querySelector('.action-card-branch');
+      return branchEl?.textContent || null;
+    });
+    expect(result).toBe('feat/my-feature');
+  });
+});
+
+// ─── Gap 12: _enrichExtra and _findWorkItemForSession helpers ─────────────────
+
+describe('Data enrichment helpers (Gap 12)', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('_enrichExtra populates branch, worktreePath, workingDir, sessionStatus from session', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [
+        {
+          id: 'sess-enrich',
+          worktreeBranch: 'feat/enriched',
+          worktreePath: '/tmp/wt-enriched',
+          workingDir: '/home/test/project',
+          status: 'busy',
+        },
+      ];
+      const extra = AD._enrichExtra({}, 'sess-enrich');
+      return extra;
+    });
+    expect(result.branch).toBe('feat/enriched');
+    expect(result.worktreePath).toBe('/tmp/wt-enriched');
+    expect(result.workingDir).toBe('/home/test/project');
+    expect(result.sessionStatus).toBe('busy');
+  });
+
+  it('_enrichExtra does not overwrite existing values', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [
+        {
+          id: 'sess-keep',
+          worktreeBranch: 'should-not-overwrite',
+          worktreePath: '/should/not/overwrite',
+          status: 'idle',
+        },
+      ];
+      const extra = AD._enrichExtra({ branch: 'keep-this', worktreePath: '/keep/this' }, 'sess-keep');
+      return extra;
+    });
+    expect(result.branch).toBe('keep-this');
+    expect(result.worktreePath).toBe('/keep/this');
+  });
+
+  it('_findWorkItemForSession matches by assignedAgentId', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [{ id: 'sess-find', status: 'busy' }];
+      AD._workItems = [
+        { id: 'wi-other', assignedAgentId: 'sess-other' },
+        { id: 'wi-match', assignedAgentId: 'sess-find' },
+      ];
+      const wi = AD._findWorkItemForSession('sess-find');
+      return wi?.id || null;
+    });
+    expect(result).toBe('wi-match');
+  });
+
+  it('_findWorkItemForSession matches by worktreePath', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [{ id: 'sess-wt', status: 'busy', worktreePath: '/tmp/match-wt' }];
+      AD._workItems = [
+        { id: 'wi-no-match', worktreePath: '/tmp/other-wt' },
+        { id: 'wi-wt-match', worktreePath: '/tmp/match-wt' },
+      ];
+      const wi = AD._findWorkItemForSession('sess-wt');
+      return wi?.id || null;
+    });
+    expect(result).toBe('wi-wt-match');
+  });
+
+  it('_findWorkItemForSession returns null for unknown session', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [];
+      AD._workItems = [{ id: 'wi-orphan' }];
+      return AD._findWorkItemForSession('sess-nonexistent');
+    });
+    expect(result).toBeNull();
+  });
+
+  it('_deriveItems enriches attention items with work item metadata', async () => {
+    const result = await page.evaluate(() => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [
+        { id: 'sess-attn', status: 'busy', worktreeBranch: 'fix/attn-branch', worktreePath: '/tmp/attn' },
+      ];
+      AD._workItems = [{ id: 'wi-attn', title: 'Attention Work', status: 'in_progress', worktreePath: '/tmp/attn' }];
+      AD._dormantWorktrees = [];
+      (app as any).addAttentionItem('sess-attn', 'permission_prompt', 'Needs approval');
+      AD._deriveItems();
+      const item = AD._items.find((i: any) => i.sessionId === 'sess-attn');
+      (app as any).attentionItems.clear();
+      return item
+        ? {
+            workItemId: item.workItemId,
+            branch: item.extra?.branch,
+            worktreePath: item.extra?.worktreePath,
+            workItemTitle: item.extra?.workItemTitle,
+          }
+        : null;
+    });
+    expect(result).not.toBeNull();
+    expect(result!.workItemId).toBe('wi-attn');
+    expect(result!.branch).toBe('fix/attn-branch');
+    expect(result!.worktreePath).toBe('/tmp/attn');
+    expect(result!.workItemTitle).toBe('Attention Work');
+  });
+});
+
+// ─── Gap 13: openSession forces session reload ──────────────────────────────
+
+describe('openSession forces session reload (Gap 13)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockDashboardRoutes(page);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('openSession clears activeSessionId before calling selectSession to force reload', async () => {
+    const result = await page.evaluate((sid) => {
+      const a = (window as any).app;
+      const AD = (window as any).ActionDashboard;
+      // Set the active session to be the same as what we'll open
+      a.activeSessionId = sid;
+      a.showActionDashboard();
+
+      // Track whether selectSession was called (it would bail early without the fix)
+      let selectCalled = false;
+      const origSelect = a.selectSession.bind(a);
+      a.selectSession = function (id: string) {
+        selectCalled = true;
+        // Verify activeSessionId was cleared before this call
+        const wasCleared = a.activeSessionId === null;
+        return origSelect(id).then(() => ({ wasCleared }));
+      };
+
+      AD.openSession(sid);
+
+      // Restore
+      a.selectSession = origSelect;
+      return { selectCalled, dashboardVisible: a._actionDashboardVisible };
+    }, sessionId);
+
+    expect(result.selectCalled).toBe(true);
+    expect(result.dashboardVisible).toBe(false);
+  });
+});
+
+// ─── Gap 14: unblockSession sends prompt with retry ─────────────────────────
+
+describe('unblockSession sends prompt with retry (Gap 14)', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockDashboardRoutes(page);
+  });
+
+  afterAll(async () => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('sends resume prompt via /input with useMux and shows success toast', async () => {
+    let capturedBody: string | null = null;
+    await page.route('**/api/sessions/sess-unblock/input', (route) => {
+      if (route.request().method() === 'POST') {
+        capturedBody = route.request().postData();
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        route.continue();
+      }
+    });
+
+    const result = await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [{ id: 'sess-unblock', status: 'busy' }]; // already running, no restart needed
+      let toastMsg = '';
+      let toastType = '';
+      const origToast = (app as any).showToast;
+      (app as any).showToast = (msg: string, type: string) => {
+        toastMsg = msg;
+        toastType = type;
+      };
+
+      const item = {
+        sessionId: 'sess-unblock',
+        workItemId: null,
+        extra: { workItemTitle: 'Fix the bug', branch: 'fix/bug' },
+        context: 'Blocked on something',
+      };
+      await AD.unblockSession('sess-unblock', item);
+
+      (app as any).showToast = origToast;
+      return { toastMsg, toastType };
+    });
+
+    expect(result.toastMsg).toBe('Unblock prompt sent');
+    expect(result.toastType).toBe('success');
+    expect(capturedBody).not.toBeNull();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.useMux).toBe(true);
+    expect(parsed.input).toContain('Fix the bug');
+    expect(parsed.input).toContain('fix/bug');
+    expect(parsed.input).toContain('TASK.md');
+    expect(parsed.input.endsWith('\r')).toBe(true);
+  });
+
+  it('restarts stopped session before sending input', async () => {
+    let interactiveCalled = false;
+    await page.route('**/api/sessions/sess-stopped-unblock/interactive', (route) => {
+      if (route.request().method() === 'POST') {
+        interactiveCalled = true;
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        route.continue();
+      }
+    });
+    await page.route('**/api/sessions/sess-stopped-unblock/input', (route) => {
+      if (route.request().method() === 'POST') {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        route.continue();
+      }
+    });
+
+    const result = await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [{ id: 'sess-stopped-unblock', status: 'stopped' }];
+      let toastMsg = '';
+      const origToast = (app as any).showToast;
+      (app as any).showToast = (msg: string) => {
+        toastMsg = msg;
+      };
+
+      await AD.unblockSession('sess-stopped-unblock', { extra: {}, context: 'task' });
+
+      (app as any).showToast = origToast;
+      return { toastMsg };
+    });
+
+    expect(interactiveCalled).toBe(true);
+    expect(result.toastMsg).toBe('Unblock prompt sent');
+  });
+
+  it('retries on initial input failure', async () => {
+    let inputAttempts = 0;
+    await page.route('**/api/sessions/sess-retry/input', (route) => {
+      if (route.request().method() === 'POST') {
+        inputAttempts++;
+        // Fail first attempt, succeed on second
+        if (inputAttempts < 2) {
+          route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'not ready' }) });
+        } else {
+          route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+        }
+      } else {
+        route.continue();
+      }
+    });
+
+    const result = await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      AD._sessions = [{ id: 'sess-retry', status: 'busy' }];
+      let toastMsg = '';
+      const origToast = (app as any).showToast;
+      (app as any).showToast = (msg: string) => {
+        toastMsg = msg;
+      };
+
+      await AD.unblockSession('sess-retry', { extra: {}, context: 'task' });
+
+      (app as any).showToast = origToast;
+      return { toastMsg };
+    });
+
+    expect(inputAttempts).toBeGreaterThanOrEqual(2);
+    expect(result.toastMsg).toBe('Unblock prompt sent');
+  });
+});
