@@ -20329,6 +20329,26 @@ const InputPanel = {
     const ta = this._getTextarea();
     if (!ta) return;
 
+    // Deduplicate text insertion from Android voice-to-text services (e.g. Wispr Flow).
+    // These services can trigger both an IME commitText AND a paste event for the same
+    // text, causing Chrome on Android to fire two separate beforeinput events that each
+    // insert the text independently — resulting in doubled text.  We track the last
+    // multi-character insertion and suppress a duplicate that arrives within 300ms.
+    let _dedupeText = '';
+    let _dedupeTime = 0;
+    ta.addEventListener('beforeinput', (e) => {
+      const text = e.data ?? e.dataTransfer?.getData('text/plain') ?? '';
+      // Only deduplicate multi-character insertions (not single keystrokes)
+      if (text.length <= 1) return;
+      const now = performance.now();
+      if (text === _dedupeText && now - _dedupeTime < 300) {
+        e.preventDefault();
+        return;
+      }
+      _dedupeText = text;
+      _dedupeTime = now;
+    });
+
     // Auto-grow on input (RAF-debounced to avoid forced sync layout per keystroke)
     ta.addEventListener('input', () => {
       this._handleSlashInput(ta.value); // stays synchronous (drives popup visibility)
