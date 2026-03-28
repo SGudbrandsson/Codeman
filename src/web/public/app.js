@@ -20378,18 +20378,30 @@ const InputPanel = {
 
     // Mic button — voice-to-text into compose textarea
     const micBtn = document.getElementById('composeMicBtn');
-    if (micBtn) micBtn.addEventListener('click', () => {
-      if (typeof VoiceInput === 'undefined') return;
-      if (VoiceInput.isRecording) {
-        VoiceInput._composeBarMode = true;
-        VoiceInput.stop();
-      } else {
-        // Open compose panel if not already open
-        if (!this._open) this.open();
-        VoiceInput._composeBarMode = true;
-        VoiceInput.start();
-      }
-    });
+    if (micBtn) {
+      const micHandler = () => {
+        if (typeof VoiceInput === 'undefined') return;
+        if (VoiceInput.isRecording) {
+          VoiceInput._composeBarMode = true;
+          VoiceInput.stop();
+        } else {
+          // Open compose panel if not already open
+          if (!this._open) this.open();
+          VoiceInput._composeBarMode = true;
+          VoiceInput.start();
+        }
+      };
+      micBtn.addEventListener('click', micHandler);
+      // On mobile, touchstart preventDefault (to keep textarea focus) suppresses the
+      // synthesized click event. Use touchend to fire the handler on touch devices.
+      micBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault(); // prevent textarea blur
+      });
+      micBtn.addEventListener('touchend', (e) => {
+        e.preventDefault(); // prevent duplicate click
+        micHandler();
+      });
+    }
 
     // Expand/collapse button — desktop only
     const expandBtn = document.getElementById('composeExpandBtn');

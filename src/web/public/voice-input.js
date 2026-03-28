@@ -63,18 +63,33 @@ const DeepgramProvider = {
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
       });
     } catch (err) {
-      const msg = err.name === 'NotAllowedError'
-        ? 'Microphone access denied. Check browser settings.'
-        : 'Microphone error: ' + err.message;
-      this._onError?.(msg);
-      this._cleanup();
-      return;
+      // Retry without constraints — some mobile devices don't support noiseSuppression etc.
+      if (err.name === 'OverconstrainedError' || err.name === 'NotReadableError') {
+        try {
+          console.warn('[Voice] getUserMedia constraints failed, retrying without constraints:', err.message);
+          this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err2) {
+          const msg = err2.name === 'NotAllowedError'
+            ? 'Microphone access denied. Check browser settings.'
+            : 'Microphone error: ' + err2.message;
+          this._onError?.(msg);
+          this._cleanup();
+          return;
+        }
+      } else {
+        const msg = err.name === 'NotAllowedError'
+          ? 'Microphone access denied. Check browser settings.'
+          : 'Microphone error: ' + err.message;
+        this._onError?.(msg);
+        this._cleanup();
+        return;
+      }
     }
     // Notify caller so it can set up audio level meter
     opts.onStream?.(this._stream);
 
     // 2. Detect best supported MIME type for MediaRecorder
-    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=aac', 'audio/mp4'];
     this._selectedMime = null;
     for (const mt of mimeTypes) {
       if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mt)) {
@@ -82,6 +97,7 @@ const DeepgramProvider = {
         break;
       }
     }
+    console.log('[Voice] Selected MIME type:', this._selectedMime || '(default)');
 
     // 3. Build WebSocket URL (no encoding param — Deepgram auto-detects from container format)
 
@@ -172,7 +188,9 @@ const DeepgramProvider = {
   _startRecording() {
     if (!this._stream || !this._ws || this._ws.readyState !== WebSocket.OPEN) return;
 
-    const recorderOpts = this._selectedMime ? { mimeType: this._selectedMime } : {};
+    const recorderOpts = this._selectedMime
+      ? { mimeType: this._selectedMime, audioBitsPerSecond: 16000 }
+      : { audioBitsPerSecond: 16000 };
     try {
       this._mediaRecorder = new MediaRecorder(this._stream, recorderOpts);
     } catch (err) {
