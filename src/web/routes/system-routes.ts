@@ -717,7 +717,7 @@ export function registerSystemRoutes(
     const body = Buffer.concat(chunks);
 
     // Extract file from multipart body
-    const boundary = '--' + boundaryMatch[1];
+    const boundary = '--' + boundaryMatch[1].trim();
     const boundaryBuf = Buffer.from(boundary);
     const parts: { headers: string; data: Buffer }[] = [];
     let pos = 0;
@@ -852,7 +852,7 @@ export function registerSystemRoutes(
     const body = Buffer.concat(chunks);
 
     // Extract file from multipart body (same parsing as screenshots endpoint)
-    const boundary = '--' + boundaryMatch[1];
+    const boundary = '--' + boundaryMatch[1].trim();
     const boundaryBuf = Buffer.from(boundary);
     const parts: { headers: string; data: Buffer }[] = [];
     let pos = 0;

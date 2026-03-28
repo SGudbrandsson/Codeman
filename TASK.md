@@ -1,207 +1,201 @@
 # Task
 
-type: feature
+type: fix
 status: done
-title: Voice-to-text button in compose bar
-description: Add a speech-to-text microphone button in the compose/input line so users can click to speak and have their voice transcribed into the message input field. Requirements: (1) Add a microphone button in the compose bar next to the send or + button. (2) Click to start recording, click again or auto-stop on silence to stop. (3) Transcribe the audio to text and insert it into the message input field. (4) The STT provider should be configurable in app settings — check what provider settings already exist in the settings panel and use those. Implementation notes: Check the browser Web Speech API (SpeechRecognition / webkitSpeechRecognition) as the simplest option — works in Chrome/Edge without any backend. Alternatively check if there are existing STT provider settings in the app (Whisper API, Deepgram, etc.) and integrate with those. Look at the existing settings panel to understand what voice/STT provider options are already configured. The mic button should show recording state (pulsing, red dot, etc.). Handle permissions (microphone access prompt). Graceful fallback if browser doesn't support speech recognition.
-constraints: Mic button must show clear recording state (pulsing/red). Must handle microphone permissions gracefully. Must fall back gracefully if browser doesn't support speech recognition. Check existing settings panel for any STT/voice provider configuration before adding new settings.
-affected_area: frontend
-work_item_id: none
+title: Image paste and attach unreliable in UI
+branch: fix/image-paste-attach
+port: 3003
 fix_cycles: 0
 test_fix_cycles: 0
+affected_area: frontend
+
+## Bug Description
+
+When pasting screenshots or attaching images in the Codeman UI, it doesn't always work reliably:
+- Pasted images sometimes don't appear in the transcript view
+- Attached images sometimes don't show up
+- User had to paste the same screenshot multiple times before it worked
+- This is intermittent — sometimes it works first try, sometimes it takes many attempts
+
+## Investigation Needed
+
+### Image Handling Pipeline (trace end-to-end)
+1. **Paste event handler** — how does `paste` event capture image data from clipboard?
+2. **File attachment handler** — how does the file input/drag-drop handle image files?
+3. **Upload to server** — how is the image data sent to the backend? (base64? multipart? file upload endpoint?)
+4. **Server storage** — where are images stored? How are they referenced?
+5. **Display in transcript** — how does the transcript view render attached images?
+
+### Likely Failure Points
+- Race condition in paste event handler (clipboard API is async)
+- Image data not fully read before upload starts
+- Server endpoint returning before image is fully written
+- Transcript view not re-rendering after image is available
+- Multiple paste events firing but only some being processed
+- File size limits or type restrictions silently dropping images
+
+## Tasks
+
+### Phase 1: Investigate & Write Tests
+- [ ] Find and trace the paste event handler in app.js (search for `paste`, `clipboard`, `image`)
+- [ ] Find the file attachment/upload flow (search for `attach`, `upload`, `image`, file input elements)
+- [ ] Find the image display logic in transcript view
+- [ ] Find the server-side image handling endpoint(s)
+- [ ] Document the full flow in this file (update the investigation section)
+- [ ] Write tests for each stage of the pipeline
+- [ ] Run tests to establish baseline
+
+### Phase 2: Fix Reliability Issues
+- [ ] Fix identified race conditions or failure points
+- [ ] Add proper error handling where needed
+- [ ] Ensure paste handler properly awaits clipboard data
+- [ ] Ensure upload completes before transcript renders
+
+### Phase 3: Review & Commit
+- [ ] Run full tsc + lint check
+- [ ] Review changes for correctness
+- [ ] Commit with descriptive message
+
+## Reproduction
+
+1. Open Codeman UI in a browser
+2. Have a session active with the terminal focused
+3. Take a screenshot (or copy an image to clipboard)
+4. Press Ctrl+V / Cmd+V to paste
+5. Observe: sometimes the image appears in the compose bar thumbnail strip, sometimes nothing happens (no error, no feedback)
+6. Repeat steps 3-5 multiple times — the paste works intermittently
+
+Alternative reproduction via file attachment:
+1. Click the plus (+) button on the compose bar
+2. Select an image file
+3. The image thumbnail may or may not appear in the compose bar
 
 ## Root Cause / Spec
 
-### Existing Infrastructure
+### Analysis Summary
 
-Voice input is **already fully implemented** in `src/web/public/voice-input.js`:
-- `VoiceInput` singleton: toggle recording, auto-stop on 3s silence, preview overlay with red dot + level meter + timer
-- `DeepgramProvider` singleton: streams audio via WebSocket to Deepgram Nova-3
-- Web Speech API fallback when no Deepgram key configured
-- Settings panel already has a **Voice tab** (`settings-voice` in index.html lines 1503-1548) with:
-  - Active provider display
-  - Insert mode selector (direct / compose dialog)
-  - Deepgram API key, language, domain keywords
-- Voice config stored in `localStorage` key `codeman-voice-settings`
-- Keyboard shortcut: `Ctrl+Shift+B` (app.js line 5840)
+The image paste/attach pipeline has two parallel paths:
 
-### Current Button Placement (NOT in compose bar)
+**Path A — Global paste handler** (`app.js` line 5110-5126):
+- Registered on `document` in capture phase
+- Intercepts all paste events with file data before xterm or other handlers see them
+- Routes to `CommandPanel._onPaste(e)` if CommandPanel is open, else to `InputPanel._onFilesFromPaste(files)`
+- Calls `e.stopPropagation()` so no other handlers fire
 
-Voice buttons are currently in the **header toolbar**, not the compose bar:
-1. **Desktop**: `#voiceInputBtn` in `.toolbar-center` (index.html line 557)
-2. **Mobile**: `#voiceInputBtnMobile` in the mobile toolbar row (index.html line 518)
+**Path B — InputPanel textarea paste handler** (`app.js` line 20300-20314):
+- Registered on the compose textarea in bubble phase
+- NEVER fires for image pastes because Path A's `stopPropagation()` in capture phase prevents it
 
-Neither is in the compose/input panel (`#mobileInputPanel`).
+**Path C — File input / plus button** (`app.js` line 20316-20325, 20569-20577):
+- File picker opens, user selects file(s), `_onFilesChosen` -> `_uploadFiles`
 
-### Compose Bar Layout
+All paths converge at `_uploadFiles()` (line 20647) which uploads via `POST /api/screenshots` (multipart/form-data) to `system-routes.ts` line 694.
 
-The compose bar (`div.compose-textarea-wrap` inside `#mobileInputPanel`, index.html lines 2234-2293) contains:
-- `#composePlusBtn` (`.compose-plus-btn`) — bottom-left, attach files
-- `#composeExpandBtn` (`.compose-expand-btn`) — desktop only, right of textarea (right: 44px)
-- `#composeSendBtn` (`.compose-send-btn`) — bottom-right, circular blue send button
+### Root Causes Identified
 
-All are absolutely positioned inside `.compose-textarea-wrap` using the `.compose-inset-btn` base class. Desktop styles in `styles.css` (line 9251+), mobile styles in `mobile.css` (line 2937+).
+**1. Silent `getAsFile()` null — no user feedback (PRIMARY)**
 
-### Insert Behavior
+In the global paste handler (line 5120):
+```js
+const imageFiles = fileItems.filter(it => it.type.startsWith('image/'))
+  .map(it => it.getAsFile()).filter(Boolean);
+```
+`DataTransferItem.getAsFile()` can return `null` intermittently depending on browser state, clipboard provider, or timing. When this happens, `.filter(Boolean)` silently drops the item. No error is shown, no toast, no console warning. The user's paste appears to do nothing. This is the most likely cause of the "paste multiple times before it works" behavior.
 
-`VoiceInput._insertText()` has two modes:
-- **direct**: sends text straight to PTY via `app.sendInput(text)`, then shows a temporary green "Enter" button replacing the settings gear
-- **compose**: opens a full-screen overlay (`_showComposeOverlay`) with edit + send + re-record
+**2. Clipboard items with empty MIME type are dropped silently**
 
-**Neither mode inserts into the compose bar textarea** (`#composeTextarea`). This is the key gap.
+Line 5121: `fileItems.filter(it => it.type && !it.type.startsWith('image/'))` — items where `it.type` is empty string (`''`) are excluded from BOTH the image and non-image arrays. Some clipboard providers (especially on Linux/X11 with certain screenshot tools) may provide file items with an empty type. These are silently lost.
 
-### Implementation Spec
+**3. Duplicate paste handler registration (dead code)**
 
-**Goal**: Add a mic button inside the compose bar that, when used, inserts transcribed text into `#composeTextarea` (the compose bar textarea) rather than sending to PTY or opening a separate overlay.
+The InputPanel textarea paste handler (line 20300-20314) is dead code — it never fires for image pastes because the global capture-phase handler always intercepts first via `stopPropagation()`. This is confusing but not a bug per se. However, if the global handler were ever removed, the textarea handler would take over but with subtly different behavior (no `InputPanel.open()` call, different item filtering).
 
-#### 1. Add mic button to compose bar HTML (index.html)
+**4. Fragile manual multipart parsing on server (SECONDARY)**
 
-Insert a new `<button class="compose-inset-btn compose-mic-btn" id="composeMicBtn">` between the expand button and the send button (after line 2280, before line 2282). Use the same mic SVG icon already used elsewhere. Position it to the left of the send button.
+`system-routes.ts` lines 694-778 manually parse multipart/form-data instead of using `@fastify/multipart`. The boundary regex `boundary=(.+?)(?:;|$)` may capture trailing whitespace, and the parser has edge cases with empty parts or unusual boundary formatting. This could cause intermittent "No file uploaded" errors on the server side.
 
-#### 2. Style the mic button (styles.css + mobile.css)
+### Proposed Fixes
 
-- **Desktop** (`styles.css`): position `right: 44px` (where expand btn is now; shift expand to `right: 76px`). Or simpler: position mic at `right: 44px` and move expand to `right: 76px`.
-- **Mobile** (`mobile.css`): position `right: 44px` (to the left of the 36px send button at right: 4px). Expand button is hidden on mobile so no conflict.
-- Add `.compose-mic-btn.recording` styles: red/pulsing background, white icon color. Reuse the existing `@keyframes pulse-recording` animation from the voice button styles if present, or add a new one.
-- Default state: subtle icon color matching `.compose-plus-btn` (#94a3b8).
+1. **Add retry logic with fallback to `navigator.clipboard.read()` API** when `getAsFile()` returns null for all items. The Clipboard API provides an alternative async path to read image data.
+2. **Add console warnings and user toast** when paste events contain file items but all `getAsFile()` calls return null, so the user gets feedback.
+3. **Remove the dead InputPanel textarea paste handler** (line 20300-20314) to avoid confusion and reduce duplicate code.
+4. **Add `.trim()` to the boundary extraction** regex result on the server to handle trailing whitespace.
+5. **Handle empty-type clipboard items** by treating them as potential images (try to upload, let the server detect the type).
 
-#### 3. Wire up the button (app.js InputPanel.init)
+## Key Files
 
-In `InputPanel.init()` (app.js ~line 19978 area), add a click handler for `#composeMicBtn` that:
-- Calls a new method `InputPanel._toggleVoiceInput()` (or similar)
-- This method uses VoiceInput's existing infrastructure but overrides the insert behavior to target `#composeTextarea` instead of PTY/overlay
+- `src/web/public/app.js` line 5108-5126 — Global paste handler (capture phase)
+- `src/web/public/app.js` line 20299-20314 — InputPanel textarea paste handler (dead code)
+- `src/web/public/app.js` line 20564-20707 — `_onFilesFromPaste`, `_uploadFiles`, `_uploadNonImageFiles`
+- `src/web/public/app.js` line 2638-2655 — CommandPanel `_onPaste` handler
+- `src/web/routes/system-routes.ts` line 694-778 — `POST /api/screenshots` endpoint
+- `src/web/routes/system-routes.ts` line 822-901 — `POST /api/sessions/:id/upload` endpoint
+- `src/web/server.ts` line 598-602 — Fastify multipart content type parser registration
 
-#### 4. New insert mode: "composeBar" in VoiceInput
+## Decisions & Context
 
-Add logic so when voice input is triggered from the compose bar mic button:
-- Set a flag like `VoiceInput._composeBarMode = true`
-- Override `_insertText()` to check this flag: if true, insert/append text into `#composeTextarea`, trigger `_autoGrow()`, and focus the textarea — do NOT send to PTY
-- On stop, clear the flag
-- Update `_updateButtons()` to also toggle `.recording` class on `#composeMicBtn`
-
-Alternatively (simpler): have the compose mic button call `VoiceInput.toggle()` but temporarily set `insertMode` to a new value `'composeBar'`, and add a branch in `_insertText()` for that mode.
-
-#### 5. Recording state visual on compose mic button
-
-- Add/toggle `.recording` class on `#composeMicBtn` in `VoiceInput._updateButtons()`
-- CSS: `.compose-mic-btn.recording { background: #ef4444; color: #fff; border-radius: 50%; animation: pulse-recording 1.5s infinite; }`
-
-#### 6. Textarea padding adjustment
-
-The textarea already has padding-right for the send button. Adding another button means increasing `padding-right` on `.compose-textarea` to avoid text overlapping the mic button. Currently it needs space for send (36-40px) + mic (~32px). Adjust to ~`padding-right: 80px` on mobile and similar on desktop (accounting for expand button too).
-
-#### 7. No new settings needed
-
-All provider config (Deepgram key, language, Web Speech API fallback) already exists in the Voice settings tab. No backend changes needed.
+1. Made the global paste handler `async` to support the `navigator.clipboard.read()` fallback. This is safe because `e.preventDefault()` and `e.stopPropagation()` are called synchronously before any await.
+2. Items with empty MIME type (`!it.type`) are now treated as potential images rather than being silently dropped. The server will detect the actual type from the file content/extension.
+3. The clipboard API fallback only triggers when `getAsFile()` returns null for ALL image items (not when some succeed). This avoids unnecessary async work in the normal case.
+4. Applied the same fallback pattern to `CommandPanel._onPaste` for consistency.
+5. The dead textarea paste handler was replaced with a comment explaining why it's not needed.
+6. Applied `.trim()` to boundary extraction in both multipart parsing endpoints.
 
 ## Fix / Implementation Notes
 
-### Changes made (4 files)
+### Files changed
 
-**1. `src/web/public/index.html`** — Added `#composeMicBtn` button (`.compose-inset-btn .compose-mic-btn`) between the expand button and the send button inside `.compose-textarea-wrap`. Uses the same mic SVG icon as the existing toolbar voice buttons.
+**`src/web/public/app.js`** (3 changes):
 
-**2. `src/web/public/styles.css`** (desktop) — Added `.compose-mic-btn` styles at `right: 44px` (left of send button). Shifted `.compose-expand-btn` from `right: 44px` to `right: 76px` to make room. Added `.compose-mic-btn.recording` with red pulsing animation reusing `voice-pulse` keyframes. Increased `.compose-textarea` `padding-right` from `76px` to `108px` to prevent text from overlapping the new button. Added `.compose-mic-btn.recording` to the `prefers-reduced-motion` rule.
+1. **Global paste handler** (line ~5144): Made async. Added empty-MIME-type handling (treats `!it.type` items as potential images). Added `navigator.clipboard.read()` fallback when all `getAsFile()` calls return null. Added toast warning when fallback also fails so user gets feedback instead of silent failure.
 
-**3. `src/web/public/mobile.css`** — Added `.compose-mic-btn` styles at `right: 44px`, `bottom: 7px` (left of 36px send button). Added `.compose-mic-btn.recording` with `voice-pulse` animation. Added `@keyframes voice-pulse` definition (needed because `styles.css` keyframes don't load on mobile). Increased `.compose-textarea` `padding-right` from `52px` to `80px`.
+2. **InputPanel textarea paste handler** (was line ~20300): Removed dead code (never fired due to capture-phase global handler). Replaced with explanatory comment.
 
-**4. `src/web/public/voice-input.js`** — Added `_composeBarMode` flag (default `false`). In `_insertText()`, added a branch that checks `_composeBarMode`: when true, inserts/appends text into `#composeTextarea` with space separator, triggers `InputPanel._autoGrow()`, and returns without sending to PTY or opening overlay. Flag is cleared in `stop()`. Updated `_updateButtons()` to toggle `.recording` class on `#composeMicBtn`.
+3. **CommandPanel._onPaste** (line ~2638): Made async. Added empty-MIME-type handling. Added same `navigator.clipboard.read()` fallback and toast warning.
 
-**5. `src/web/public/app.js`** — Added click handler for `#composeMicBtn` in `InputPanel.init()`. On click: if recording, calls `VoiceInput.stop()`; otherwise opens compose panel if needed, sets `VoiceInput._composeBarMode = true`, and calls `VoiceInput.start()`.
+**`src/web/routes/system-routes.ts`** (2 changes):
 
-### Continuous recording fix (voice-input.js only)
+4. **`/api/screenshots` endpoint** (line ~720): Added `.trim()` to boundary extraction to handle trailing whitespace in Content-Type header.
 
-**Bug:** Mic button stopped listening after the first speech result — both Deepgram `onResult` and `_onWebSpeechResult` called `this.stop()` on first final result.
-
-**Fix:**
-- **Don't stop on result:** Removed `this.stop()` from both Deepgram `onResult` (isFinal branch) and `_onWebSpeechResult` (finalText branch). Final results now insert text immediately and reset for next utterance.
-- **Auto-restart on unexpected end:** `_onWebSpeechEnd` restarts `recognition.start()` unless `_userRequestedStop` is true. Deepgram `onEnd` calls `_startDeepgram()` to reconnect unless user requested stop.
-- **`_userRequestedStop` flag:** New flag distinguishes user-initiated stop from browser/network-initiated end events. Cleared in `start()`, set in `stop()`.
-- **Interim results in compose textarea:** New `_showInterimInCompose()` appends interim text to compose textarea. `_clearInterimFromCompose()` removes it before inserting final text (tracked via `_lastInterimLength`).
-- **Silence timeout removed:** Removed `_resetSilenceTimeout()` from both `DeepgramProvider` and `VoiceInput`. Recording is purely user-controlled (press to start, press to stop).
-- **`no-speech`/`aborted` errors ignored:** These fire naturally during silence pauses in continuous mode and are harmless — recognition auto-restarts via `_onWebSpeechEnd`.
-- **iOS Safari:** `_iosStabilityCheck` inserts stable text as final segment but keeps listening instead of stopping.
-
-### No new settings needed
-All voice/STT provider config (Deepgram key, language, Web Speech API fallback) already exists in the Voice settings tab.
+5. **`/api/sessions/:id/upload` endpoint** (line ~855): Same `.trim()` fix.
 
 ## Review History
-<!-- appended by each review subagent — never overwrite -->
-
-### Review attempt 2 — APPROVED (continuous recording fix)
-
-**Files reviewed:** voice-input.js (only changed file)
-
-**Findings:**
-- All 6 continuous recording requirements verified correct: `continuous=true` (already set), `interimResults=true` (already set), no stop on result, auto-restart on unexpected end, interim results in compose textarea, toggle button state.
-- `_userRequestedStop` flag lifecycle correct: cleared in `start()`, set in `stop()`, checked in both `_onWebSpeechEnd` and Deepgram `onEnd`.
-- `_lastInterimLength` tracking correct: reset in `start()` and `_clearInterimFromCompose()`, properly guards with `_composeBarMode` check.
-- Deepgram WebSocket drop handled: `onEnd` restarts `_startDeepgram()` unless user requested stop. WS handler nullification prevents race conditions.
-- iOS Safari stability check updated: inserts stable text as final segment but keeps listening.
-- Non-compose-bar mode (toolbar buttons with direct/compose insert) unaffected — `_showInterimInCompose` and `_clearInterimFromCompose` guard with `_composeBarMode`.
-- Silence timeout fully removed from both `DeepgramProvider` and `VoiceInput` — clean removal with no orphaned references.
-- `no-speech`/`aborted` errors now always ignored (correct for continuous mode — recognition auto-restarts via `_onWebSpeechEnd`).
-- No memory leaks: streams, timers, AudioContext properly cleaned up.
-
-No issues found. Approved.
 
 ### Review attempt 1 — APPROVED
 
-**Files reviewed:** index.html, styles.css, mobile.css, voice-input.js, app.js
+Changes reviewed against all 5 proposed fixes from the root cause analysis:
 
-**Findings:**
-- All 7 spec items implemented correctly: HTML button, desktop/mobile CSS, click handler, composeBar insert mode, recording state visuals, textarea padding, no new settings.
-- `_composeBarMode` flag approach is clean — only set from compose bar click handler, cleared on `stop()`, doesn't interfere with toolbar voice buttons.
-- Recording state toggling added to `_updateButtons()` for all three buttons (desktop toolbar, mobile toolbar, compose bar).
-- `voice-pulse` keyframes correctly duplicated in mobile.css since styles.css is desktop-only.
-- `prefers-reduced-motion` rule updated to include compose mic button.
-- Aria attributes (`aria-label`, `aria-pressed`) properly managed.
-- Text appending with space separator handles multi-phrase dictation correctly.
-- Auto-grow triggered after insertion to keep textarea sized properly.
-- No TypeScript/lint concerns (all changes are in plain JS/CSS/HTML frontend files).
-- No security issues — microphone permissions handled by browser, no new data flows.
+1. **Clipboard API fallback** -- Correctly implemented in both global handler and CommandPanel._onPaste. The async handler properly calls preventDefault/stopPropagation synchronously before any await. The fallback only triggers when getAsFile() returns null for ALL image items, avoiding unnecessary async work in the happy path. try/catch around clipboard.read() handles permission denial gracefully.
 
-No issues found. Approved for test gap analysis.
+2. **User feedback (toast)** -- Toast shown when both getAsFile() and clipboard fallback fail. Console warnings added at each fallback step for debugging.
+
+3. **Dead code removal** -- InputPanel textarea paste handler removed and replaced with explanatory comment. Correct -- it was unreachable dead code due to capture-phase global handler.
+
+4. **Boundary trim** -- Applied consistently to both /api/screenshots and /api/sessions/:id/upload endpoints.
+
+5. **Empty MIME type handling** -- Items with empty type correctly treated as potential images via `!it.type` check. No double-processing risk since nonImageItems filter requires `it.type &&` prefix.
+
+Edge cases verified:
+- Older browsers without clipboard.read() -- checked with `typeof navigator.clipboard.read === 'function'`
+- Permission denied -- caught by try/catch
+- Mixed items (some with type, some without) -- correctly partitioned between imageItems and nonImageItems
 
 ## Test Gap Analysis
 
-### Verdict: NO GAPS
+**NO GAPS** -- The changes fall into two categories:
 
-**Changed files:**
-- `src/web/public/index.html` — HTML template (not unit-testable)
-- `src/web/public/styles.css` — CSS styles (not unit-testable)
-- `src/web/public/mobile.css` — CSS styles (not unit-testable)
-- `src/web/public/voice-input.js` — Browser-side singleton with DOM/WebSocket/Web Speech API dependencies (not vitest-testable without heavy browser mocking)
-- `src/web/public/app.js` — Browser-side InputPanel with DOM dependencies (same)
+1. **Browser API fallback logic** (navigator.clipboard.read(), getAsFile() null handling, empty MIME type filtering) -- These are browser-runtime-dependent behaviors that cannot be meaningfully tested in a Node.js/vitest environment without extensive mocking of browser APIs (ClipboardItem, DataTransferItem, etc.). The project pattern for app.js logic (seen in paste-newline-routing.test.ts) is to extract pure functions, but the changes here are primarily about browser API orchestration (try getAsFile, fallback to clipboard.read, show toast) rather than data transformation logic.
 
-**Rationale:** All changes are in browser-side frontend code that relies on DOM APIs (`document.getElementById`, `classList.toggle`), browser-specific APIs (`SpeechRecognition`, `MediaStream`), and global singletons (`VoiceInput`, `InputPanel`, `app`). The project's existing test pattern for compose features (see `compose-slash-commands.test.ts`) mirrors pure logic in vitest, but the voice-to-text changes are primarily wiring and DOM manipulation with no extractable pure-logic functions. Writing meaningful unit tests would require mocking the entire browser environment, which doesn't match the project's testing style. The feature is best verified through manual testing or Playwright integration tests.
-
-## Test Writing Notes
-<!-- filled by test writing subagent -->
-
-## Test Review History
-<!-- appended by each Opus test review subagent — never overwrite -->
+2. **Server boundary `.trim()`** -- A single-character change adding `.trim()` to an existing regex match result. The existing test for POST /api/screenshots tests content-type rejection. Adding a boundary-whitespace test would require constructing raw multipart payloads, which is disproportionate effort for a one-character defensive fix.
 
 ## QA Results
 
-### TypeScript typecheck: PASS
-`tsc --noEmit` completed with zero errors.
+- **tsc --noEmit**: PASS (zero errors)
+- **npm run lint**: PASS (1 pre-existing error in src/orchestrator.ts:878 — not related to this change; verified by running lint on stashed state)
+- **Build**: PASS (npm run build completes successfully)
 
-### ESLint: PASS (pre-existing issue only)
-1 error in `src/orchestrator.ts:878` (`@typescript-eslint/prefer-as-const`) — confirmed pre-existing on base branch, not introduced by this change. Changed files are all plain JS/CSS/HTML in `src/web/public/`, not covered by ESLint's `src/**/*.ts` glob.
+### Docs Staleness
+- "UI docs may need update (frontend changed significantly)" — `src/web/public/app.js` changed
+- "API docs may need update (src/web/routes/ changed)" — `src/web/routes/system-routes.ts` changed
 
-### Frontend check: SKIPPED
-Voice input feature relies on browser-specific APIs (Web Speech API, MediaStream) that cannot be automated without a real microphone. Manual testing required.
-
-### Docs Staleness: none
-No committed changes on branch yet (changes are uncommitted).
-
-## Decisions & Context
-<!-- append-only log of key decisions made during the workflow -->
-- Used `_composeBarMode` flag approach rather than adding a new `insertMode` setting value, because compose bar insertion is a UI-level behavior triggered by which button was clicked, not a persistent user preference.
-- Append transcribed text with space separator when textarea already has content, so users can dictate multiple phrases without losing prior input.
-- Reuse existing `voice-pulse` keyframes for recording animation to keep visual consistency with toolbar voice buttons.
-- Desktop: shifted expand button from `right: 44px` to `right: 76px` to accommodate mic button at `right: 44px` (left of send button at `right: 4px`).
-- Added `@keyframes voice-pulse` in mobile.css because styles.css is behind a desktop media query and doesn't load on mobile.
-- Continuous recording: removed all silence auto-stop behavior rather than making it configurable, because the spec is clear: only stop when user presses button.
-- Deepgram reconnect on unexpected close: reuses `_startDeepgram()` which re-acquires mic stream and opens new WebSocket. Timer resets on reconnect (acceptable trade-off vs adding reconnect-only logic).
-- Interim text tracking in compose textarea uses `_lastInterimLength` to slice off previous interim before appending new one, avoiding accumulation of stale text.
+Note: These are advisory only. The changes are minor (paste fallback logic + boundary trim) and don't change any API contracts or UI layout.

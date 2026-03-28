@@ -2636,20 +2636,54 @@ const CommandPanel = {
   },
 
   /** Handle paste events for images */
-  _onPaste(e) {
+  async _onPaste(e) {
     const items = e.clipboardData?.items;
     if (!items) return;
+    let gotFile = false;
+    let hadImageItem = false;
     for (const item of items) {
-      if (item.type.startsWith('image/')) {
+      if (item.type.startsWith('image/') || (item.kind === 'file' && !item.type)) {
+        hadImageItem = true;
         e.preventDefault();
         const file = item.getAsFile();
         if (!file) continue;
+        gotFile = true;
         const reader = new FileReader();
         reader.onload = (ev) => {
           this._pendingImages.push({ dataUrl: ev.target.result, file });
           this._renderAttachments();
         };
         reader.readAsDataURL(file);
+      }
+    }
+    // Fallback: if items had images but getAsFile() returned null, try Clipboard API
+    if (hadImageItem && !gotFile) {
+      console.warn('[CommandPanel] getAsFile() returned null — trying clipboard.read() fallback');
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+          const clipItems = await navigator.clipboard.read();
+          for (const ci of clipItems) {
+            for (const mimeType of ci.types) {
+              if (mimeType.startsWith('image/')) {
+                const blob = await ci.getType(mimeType);
+                const ext = mimeType.split('/')[1] || 'png';
+                const file = new File([blob], `clipboard.${ext}`, { type: mimeType });
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                  this._pendingImages.push({ dataUrl: ev.target.result, file });
+                  this._renderAttachments();
+                };
+                reader.readAsDataURL(file);
+                gotFile = true;
+              }
+            }
+          }
+        }
+      } catch (clipErr) {
+        console.warn('[CommandPanel] Clipboard API fallback failed:', clipErr);
+      }
+      if (!gotFile && typeof app !== 'undefined' && app.showToast) {
+        app.showToast('Could not read image from clipboard — please try pasting again', 'warn');
       }
     }
   },
@@ -5107,7 +5141,7 @@ class CodemanApp {
     CommandPanel.init();
     // Global paste handler: intercept image/file paste events regardless of focus.
     // When the terminal has focus, xterm ignores clipboard file data — this catches it.
-    document.addEventListener('paste', (e) => {
+    document.addEventListener('paste', async (e) => {
       const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
       const fileItems = items.filter(it => it.kind === 'file');
       if (!fileItems.length) return; // No files — let normal text paste proceed
@@ -5117,8 +5151,43 @@ class CodemanApp {
       if (CommandPanel._panel?.classList.contains('open')) {
         CommandPanel._onPaste(e);
       } else {
-        const imageFiles = fileItems.filter(it => it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
-        const nonImageFiles = fileItems.filter(it => it.type && !it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
+        // Treat items with empty MIME type as potential images (some Linux clipboard
+        // providers / screenshot tools don't set the type correctly)
+        const imageItems = fileItems.filter(it => it.type.startsWith('image/') || !it.type);
+        const nonImageItems = fileItems.filter(it => it.type && !it.type.startsWith('image/'));
+        let imageFiles = imageItems.map(it => it.getAsFile()).filter(Boolean);
+        const nonImageFiles = nonImageItems.map(it => it.getAsFile()).filter(Boolean);
+
+        // Fallback: if getAsFile() returned null for all image items, try the
+        // async Clipboard API which reads from a different browser path and is
+        // more reliable in some environments (e.g. Wayland, remote desktop).
+        if (imageItems.length > 0 && imageFiles.length === 0) {
+          console.warn('[paste] getAsFile() returned null for', imageItems.length, 'item(s) — trying navigator.clipboard.read() fallback');
+          try {
+            if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+              const clipItems = await navigator.clipboard.read();
+              for (const ci of clipItems) {
+                for (const mimeType of ci.types) {
+                  if (mimeType.startsWith('image/')) {
+                    const blob = await ci.getType(mimeType);
+                    const ext = mimeType.split('/')[1] || 'png';
+                    imageFiles.push(new File([blob], `clipboard.${ext}`, { type: mimeType }));
+                  }
+                }
+              }
+            }
+          } catch (clipErr) {
+            console.warn('[paste] Clipboard API fallback failed:', clipErr);
+          }
+          // If still nothing after fallback, show user feedback
+          if (imageFiles.length === 0) {
+            console.warn('[paste] All getAsFile() calls returned null and clipboard fallback failed');
+            if (typeof app !== 'undefined' && app.showToast) {
+              app.showToast('Could not read image from clipboard — please try pasting again', 'warn');
+            }
+          }
+        }
+
         if (!InputPanel._open) InputPanel.open();
         if (imageFiles.length) InputPanel._onFilesFromPaste(imageFiles);
         if (nonImageFiles.length) InputPanel._uploadNonImageFiles(nonImageFiles);
@@ -20296,22 +20365,8 @@ const InputPanel = {
       }
     });
 
-    // Paste images and non-image files — intercept clipboard file data on both desktop and mobile
-    ta.addEventListener('paste', (e) => {
-      const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
-      const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
-      const nonImageItems = items.filter(it => it.kind === 'file' && it.type && !it.type.startsWith('image/'));
-      if (!imageItems.length && !nonImageItems.length) return; // No files — let default text paste proceed
-      e.preventDefault();
-      if (imageItems.length) {
-        const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
-        if (files.length) this._onFilesFromPaste(files);
-      }
-      if (nonImageItems.length) {
-        const files = nonImageItems.map(it => it.getAsFile()).filter(Boolean);
-        if (files.length) this._uploadNonImageFiles(files);
-      }
-    });
+    // Note: Image/file paste is handled by the global capture-phase handler
+    // registered on document (see init() above). No textarea paste handler needed.
 
     // Plus button — on desktop skip the mobile action sheet, open file picker directly
     const plusBtn = document.getElementById('composePlusBtn');
