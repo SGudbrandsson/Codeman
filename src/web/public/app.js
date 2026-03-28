@@ -398,10 +398,11 @@ function replaceImagePaths(html) {
   return html.replace(/(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match, codeBlock, imgPath) {
     if (codeBlock) return codeBlock;
     var encoded = encodeURIComponent(imgPath);
-    var src = '/api/files/preview?path=' + encoded;
+    var thumbSrc = '/api/files/thumbnail?path=' + encoded + '&width=240';
+    var fullSrc = '/api/files/preview?path=' + encoded;
     return '<span class="tv-img-path">' + imgPath + '</span>' +
       '<span class="tv-img-preview">' +
-      '<img src="' + src + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
+      '<img src="' + thumbSrc + '" data-full-src="' + fullSrc + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
       '</span>';
   });
 }
@@ -440,7 +441,7 @@ document.addEventListener('click', function (e) {
   var target = e.target;
   if (target.tagName === 'IMG' && target.closest('.tv-img-preview')) {
     var lb = _getImageLightbox();
-    lb.img.src = target.src;
+    lb.img.src = target.dataset.fullSrc || target.src;
     lb.overlay.classList.add('open');
   }
 });
@@ -18736,7 +18737,8 @@ class CodemanApp {
       const data = result.data;
 
       if (data.type === 'image') {
-        bodyEl.innerHTML = `<img src="${data.url}" alt="${escapeHtml(filePath)}">`;
+        const thumbUrl = `/api/sessions/${this.activeSessionId}/file-thumbnail?path=${encodeURIComponent(filePath)}&width=600`;
+        bodyEl.innerHTML = `<img src="${thumbUrl}" alt="${escapeHtml(filePath)}" onclick="window.open('${data.url}', '_blank')" style="cursor:pointer" title="Click to open full size">`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'video') {
         bodyEl.innerHTML = `<video src="${data.url}" controls autoplay></video>`;
@@ -19017,9 +19019,11 @@ class CodemanApp {
     // Format file size
     const sizeKB = (size / 1024).toFixed(1);
 
-    // Build image URL using the existing file-raw endpoint
+    // Build image URLs — thumbnail for popup display, full-size for "open in new tab"
     // Use relativePath (path from working dir) instead of fileName (basename) for subdirectory images
-    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(relativePath || fileName)}`;
+    const encodedPath = encodeURIComponent(relativePath || fileName);
+    const imageUrl = `/api/sessions/${sessionId}/file-raw?path=${encodedPath}`;
+    const thumbUrl = `/api/sessions/${sessionId}/file-thumbnail?path=${encodedPath}&width=400`;
 
     // Create window element
     const win = document.createElement('div');
@@ -19038,12 +19042,12 @@ class CodemanApp {
           <span class="size-badge">${sizeKB} KB</span>
         </div>
         <div class="image-popup-actions">
-          <button onclick="app.openImageInNewTab('${escapeHtml(imageUrl)}')" title="Open in new tab">↗</button>
+          <button onclick="app.openImageInNewTab('${escapeHtml(imageUrl)}')" title="Open full size">↗</button>
           <button onclick="app.closeImagePopup('${escapeHtml(imageId)}')" title="Close">×</button>
         </div>
       </div>
       <div class="image-popup-body">
-        <img src="${imageUrl}" alt="${escapeHtml(fileName)}"
+        <img src="${thumbUrl}" alt="${escapeHtml(fileName)}"
              onerror="this.parentElement.innerHTML='<div class=\\'image-error\\'>Failed to load image</div>'"
              onclick="app.openImageInNewTab('${escapeHtml(imageUrl)}')" />
       </div>
@@ -22912,18 +22916,6 @@ const BoardView = {
   _wireDetailPanelActions(panel, item, deps) {
     if (!deps) deps = { blockers: [], blockedBy: [] };
     panel.querySelector('#wipCloseBtn').addEventListener('click', () => this.closeDetailPanel());
-
-    const openSessionBtn = panel.querySelector('#wipOpenSessionBtn');
-    if (openSessionBtn) {
-      openSessionBtn.addEventListener('click', () => {
-        FeatureTracker.track('board-item-open-session');
-        this.closeDetailPanel();
-        if (typeof app !== 'undefined') {
-          app.hideBoard?.();
-          app.selectSession(item.sessionId);
-        }
-      });
-    }
 
     panel.querySelector('#wipClaimBtn').addEventListener('click', () => {
       if (item.status !== 'queued') return;
