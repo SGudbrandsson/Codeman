@@ -5684,6 +5684,11 @@ kbd {
   font-size: 1.1rem;
   margin-left: 0;
   margin-right: 2px;
+  color: var(--text-dim);
+}
+.btn-icon-header.btn-notifications::before {
+  content: '\1F514';
+  font-size: 1rem;
 }
 
 .btn-icon-header.btn-notifications:hover {
