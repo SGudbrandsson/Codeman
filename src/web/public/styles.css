@@ -1679,6 +1679,10 @@ body {
   body.sidebar-pinned .ctx-banner { margin-right: 300px; }
   body.sidebar-pinned .keyboard-accessory-bar { right: 300px; }
   body.sidebar-pinned .mobile-input-panel { right: 300px; }
+  body.sidebar-pinned .monitor-panel:not(.detached) { right: calc(0.5rem + 300px); }
+  body.sidebar-pinned .subagents-panel:not(.detached) { right: calc(0.5rem + 300px); }
+  body.sidebar-pinned .agent-panel { right: 300px; }
+  body.sidebar-pinned .agent-panel-overlay { right: 300px; }
   /* board-view is inside .main which already has margin-right: 300px — no extra margin needed */
   .main { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .header { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -1689,6 +1693,9 @@ body {
   .ctx-banner { transition: margin-right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .keyboard-accessory-bar { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
   .mobile-input-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+  .monitor-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, width 0.2s ease; }
+  .subagents-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, width 0.2s ease; }
+  .agent-panel { transition: right 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4,0,0.2,1); }
   .drawer-pin-btn {
     background: none;
     border: none;

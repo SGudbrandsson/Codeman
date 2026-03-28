@@ -346,6 +346,74 @@ describe('G6b — CSS layout: body.sidebar-pinned applies margin-right: 300px to
   });
 });
 
+// ─── G6c: CSS layout — sidebar-pinned shifts fixed panels right by 300px ────
+
+describe('G6c — CSS layout: body.sidebar-pinned shifts fixed panels right to clear sidebar', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPageWithPinnedState(1280, 800));
+    await navigateTo(page);
+    await page.waitForFunction(() => document.getElementById('sessionDrawer')?.classList.contains('open'), {
+      timeout: 5000,
+    });
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('.monitor-panel (not detached) has right of calc(0.5rem + 300px) when sidebar is pinned', async () => {
+    const right = await page.evaluate(() => {
+      const el = document.querySelector('.monitor-panel') as HTMLElement | null;
+      if (!el) return null;
+      // Ensure it's not detached so the rule applies
+      el.classList.remove('detached');
+      // Force reflow
+      void getComputedStyle(el).right;
+      return getComputedStyle(el).right;
+    });
+    expect(right).not.toBeNull();
+    // calc(0.5rem + 300px) = 8px + 300px = 308px
+    const px = parseFloat(right as string);
+    expect(px).toBe(308);
+  });
+
+  it('.subagents-panel (not detached) has right of calc(0.5rem + 300px) when sidebar is pinned', async () => {
+    const right = await page.evaluate(() => {
+      const el = document.querySelector('.subagents-panel') as HTMLElement | null;
+      if (!el) return null;
+      el.classList.remove('detached');
+      void getComputedStyle(el).right;
+      return getComputedStyle(el).right;
+    });
+    expect(right).not.toBeNull();
+    const px = parseFloat(right as string);
+    expect(px).toBe(308);
+  });
+
+  it('.agent-panel has right of 300px when sidebar is pinned', async () => {
+    const right = await page.evaluate(() => {
+      const el = document.querySelector('.agent-panel') as HTMLElement | null;
+      if (!el) return null;
+      return getComputedStyle(el).right;
+    });
+    expect(right).not.toBeNull();
+    expect(right).toBe('300px');
+  });
+
+  it('.agent-panel-overlay has right of 300px when sidebar is pinned', async () => {
+    const right = await page.evaluate(() => {
+      const el = document.querySelector('.agent-panel-overlay') as HTMLElement | null;
+      if (!el) return null;
+      return getComputedStyle(el).right;
+    });
+    expect(right).not.toBeNull();
+    expect(right).toBe('300px');
+  });
+});
+
 // ─── G8: Transcript view has sufficient bottom padding on desktop ──────────
 
 describe('G8 — CSS layout: .transcript-view has enough bottom padding on desktop (Gap 4)', () => {
