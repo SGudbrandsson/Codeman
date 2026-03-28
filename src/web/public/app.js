@@ -1594,6 +1594,7 @@ const ContextBar = {
   },
 
   open(sessionId) {
+    FeatureTracker.track('context-bar-open');
     if (!this._panel) return;
     if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
@@ -1820,24 +1821,29 @@ const OverflowMenu = {
     });
     // Wire overflow items to their real handlers
     document.getElementById('ovfMcpBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-mcp');
       this.close();
       const sid = window.app ? app.activeSessionId : null;
       if (sid) McpPanel.open(sid);
     });
     document.getElementById('ovfPluginsBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-plugins');
       this.close();
       const sid = window.app ? app.activeSessionId : null;
       if (sid) PluginsPanel.open(sid);
     });
     document.getElementById('ovfHealthBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-health-analyzer');
       this.close();
       if (window.app && app.openHealthAnalyzer) app.openHealthAnalyzer();
     });
     document.getElementById('ovfNotifBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-notifications');
       this.close();
       if (window.app && app.toggleNotifications) app.toggleNotifications();
     });
     document.getElementById('ovfLifecycleBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-lifecycle-log');
       this.close();
       if (window.app && app.openLifecycleLog) app.openLifecycleLog();
     });
@@ -1846,14 +1852,17 @@ const OverflowMenu = {
       CommandPanel.open();
     });
     document.getElementById('ovfSettingsBtn')?.addEventListener('click', () => {
+      FeatureTracker.track('header-settings');
       this.close();
       if (window.app && app.openAppSettings) app.openAppSettings();
     });
     document.getElementById('ovfFontDec')?.addEventListener('click', () => {
+      FeatureTracker.track('header-font-decrease');
       if (window.app && app.decreaseFontSize) app.decreaseFontSize();
       this._syncFontSize();
     });
     document.getElementById('ovfFontInc')?.addEventListener('click', () => {
+      FeatureTracker.track('header-font-increase');
       if (window.app && app.increaseFontSize) app.increaseFontSize();
       this._syncFontSize();
     });
@@ -6801,6 +6810,7 @@ class CodemanApp {
   }
 
   _onSessionAutoClear(data) {
+    FeatureTracker.track('auto-clear-trigger');
     if (data.sessionId === this.activeSessionId) {
       this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
       this.updateRespawnTokens(0);
@@ -13151,7 +13161,7 @@ class CodemanApp {
     this.loadIntegrationSettings();
 
     // Reset to first tab and wire up tab switching
-    this.switchSettingsTab('settings-display');
+    this.switchSettingsTab('settings-display', true);
     const modal = document.getElementById('appSettingsModal');
     modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
       btn.onclick = () => this.switchSettingsTab(btn.dataset.tab);
@@ -13164,8 +13174,8 @@ class CodemanApp {
     OverlayHistory.push('settings', () => this._closeAppSettingsInternal());
   }
 
-  switchSettingsTab(tabName) {
-    FeatureTracker.track('settings-tab-' + tabName.replace(/^settings-/, ''));
+  switchSettingsTab(tabName, skipTrack) {
+    if (!skipTrack) FeatureTracker.track('settings-tab-' + tabName.replace(/^settings-/, ''));
     if (tabName === 'settings-usage') FeatureTracker._renderTable();
     const modal = document.getElementById('appSettingsModal');
     // Toggle active class on tab buttons
@@ -14509,6 +14519,7 @@ class CodemanApp {
   }
 
   toggleSubagentsPanel() {
+    FeatureTracker.track('subagents-panel-open');
     const panel = document.getElementById('subagentsPanel');
     const toggleBtn = document.getElementById('subagentsToggleBtn');
     if (!panel) return;
@@ -18411,6 +18422,7 @@ class CodemanApp {
     }
 
     panel.classList.add('visible');
+    if (!this.projectInsightsPanelVisible) FeatureTracker.track('project-insights-panel');
     this.projectInsightsPanelVisible = true;
 
     // Get working directory for path normalization
@@ -18590,6 +18602,7 @@ class CodemanApp {
         if (type === 'directory') {
           this.toggleFileBrowserFolder(path);
         } else {
+          FeatureTracker.track('file-browser-file-click');
           this.openFilePreview(path);
         }
       });
@@ -19242,6 +19255,7 @@ class CodemanApp {
   }
 
   toggleCaseSettingsMobile() {
+    FeatureTracker.track('mobile-case-settings');
     const popover = document.getElementById('caseSettingsPopoverMobile');
     if (popover.classList.contains('hidden')) {
       const caseName = document.getElementById('quickStartCase').value || 'testcase';
@@ -19490,6 +19504,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   showMobileCasePicker(initialTab = 'projects') {
+    FeatureTracker.track('mobile-case-picker');
     const modal = document.getElementById('mobileCasePickerModal');
     const listContainer = document.getElementById('mobileCaseList');
     const select = document.getElementById('quickStartCase');
@@ -20469,6 +20484,7 @@ const InputPanel = {
     const micBtn = document.getElementById('composeMicBtn');
     if (micBtn) {
       const micHandler = () => {
+        FeatureTracker.track('compose-bar-voice-mic');
         if (typeof VoiceInput === 'undefined') return;
         if (VoiceInput.isRecording) {
           VoiceInput._composeBarMode = true;
@@ -20503,6 +20519,7 @@ const InputPanel = {
           wrap.classList.add('expanded');
         }
         expandBtn.addEventListener('click', () => {
+          FeatureTracker.track('compose-bar-expand');
           const w = document.querySelector('.compose-textarea-wrap');
           if (!w) return;
           const expanded = w.classList.toggle('expanded');
@@ -20802,6 +20819,7 @@ const InputPanel = {
 
   async _uploadFiles(files) {
     if (!files.length) return;
+    FeatureTracker.track('file-upload');
 
     // If replacing an existing image
     const replacing = this._replaceIdx >= 0 && this._replaceIdx < this._images.length;
@@ -21157,6 +21175,7 @@ const SessionDrawer = {
 
   /** Switch between 'sessions' and 'agents' views and persist preference. */
   setViewMode(mode) {
+    if (mode === 'agents') FeatureTracker.track('session-drawer-agents-tab');
     this._viewMode = mode;
     try { localStorage.setItem('sidebarViewMode', mode); } catch(e) {}
     // Update toggle button active state
@@ -22662,6 +22681,7 @@ const BoardView = {
         });
         const resp = await res.json();
         if (res.ok && resp.success) {
+          FeatureTracker.track('board-item-status-change');
           const idx = this._workItems.findIndex(w => w.id === item.id);
           if (idx >= 0) this._workItems[idx] = resp.data;
           this.render();
@@ -22893,6 +22913,18 @@ const BoardView = {
     if (!deps) deps = { blockers: [], blockedBy: [] };
     panel.querySelector('#wipCloseBtn').addEventListener('click', () => this.closeDetailPanel());
 
+    const openSessionBtn = panel.querySelector('#wipOpenSessionBtn');
+    if (openSessionBtn) {
+      openSessionBtn.addEventListener('click', () => {
+        FeatureTracker.track('board-item-open-session');
+        this.closeDetailPanel();
+        if (typeof app !== 'undefined') {
+          app.hideBoard?.();
+          app.selectSession(item.sessionId);
+        }
+      });
+    }
+
     panel.querySelector('#wipClaimBtn').addEventListener('click', () => {
       if (item.status !== 'queued') return;
       const actionsDiv = panel.querySelector('#wipActions');
@@ -22921,6 +22953,7 @@ const BoardView = {
           if (res.status === 409) {
             app.showToast('Already claimed', 'error');
           } else if (res.ok && resp.success) {
+            FeatureTracker.track('board-item-claim');
             const idx = this._workItems.findIndex(w => w.id === item.id);
             if (idx >= 0) this._workItems[idx] = resp.data;
             this.render();
@@ -22968,6 +23001,7 @@ const BoardView = {
           });
           const resp = await res.json();
           if (res.ok && resp.success) {
+            FeatureTracker.track('board-item-status-change');
             const idx = this._workItems.findIndex(w => w.id === item.id);
             if (idx >= 0) this._workItems[idx] = resp.data;
             this.render();

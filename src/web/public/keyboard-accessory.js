@@ -366,6 +366,7 @@ const KeyboardAccessoryBar = {
 
   /** Handle accessory button actions */
   handleAction(action, btn) {
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('keyboard-accessory-bar-action');
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
     switch (action) {

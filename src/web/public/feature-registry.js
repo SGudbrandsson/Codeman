@@ -4,9 +4,6 @@
  */
 window.FeatureRegistry = [
   // header-nav
-  { id: 'header-board-tab',         name: 'Board Tab',              category: 'header-nav',         description: 'Board view (kanban) button in header' },
-  { id: 'header-action-tab',        name: 'Action Tab',             category: 'header-nav',         description: 'Action dashboard button in header' },
-  { id: 'header-command-tab',       name: 'Command Tab',            category: 'header-nav',         description: 'Command panel button in header' },
   { id: 'header-overflow-menu',     name: 'Overflow Menu',          category: 'header-nav',         description: 'Overflow (⋮) menu button' },
   { id: 'header-settings',          name: 'Settings',               category: 'header-nav',         description: 'Settings button in overflow or mobile' },
   { id: 'header-mcp',               name: 'MCP Servers',            category: 'header-nav',         description: 'MCP Servers from overflow menu' },
@@ -27,7 +24,6 @@ window.FeatureRegistry = [
   { id: 'session-create-session',   name: 'Create Session',         category: 'session-management', description: 'Create session flow launched' },
   { id: 'session-create-worktree',  name: 'Create Worktree',        category: 'session-management', description: 'Create worktree flow launched' },
   { id: 'session-close',            name: 'Close Session',          category: 'session-management', description: 'Close session via × button' },
-  { id: 'session-options',          name: 'Session Options',        category: 'session-management', description: 'Per-session options gear opened' },
   { id: 'session-rename',           name: 'Rename Session',         category: 'session-management', description: 'Inline rename via right-click' },
   { id: 'session-drag-reorder',     name: 'Drag Reorder Tabs',      category: 'session-management', description: 'Tab drag-and-drop reorder' },
   { id: 'session-search-open',      name: 'Session Switcher Open',  category: 'session-management', description: 'Session switcher modal opened' },
@@ -58,8 +54,6 @@ window.FeatureRegistry = [
   { id: 'terminal-search-open',        name: 'Terminal Search',          category: 'terminal-chat', description: 'Terminal search opened' },
 
   // voice-input
-  { id: 'voice-desktop-toggle', name: 'Voice Toggle (Desktop)', category: 'voice-input', description: 'Desktop voice button clicked' },
-  { id: 'voice-mobile-toggle',  name: 'Voice Toggle (Mobile)',  category: 'voice-input', description: 'Mobile voice button clicked' },
   { id: 'voice-start',          name: 'Voice Start',            category: 'voice-input', description: 'Voice recording actually started' },
   { id: 'voice-stop',           name: 'Voice Stop',             category: 'voice-input', description: 'Voice recording stopped' },
 

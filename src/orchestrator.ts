@@ -875,7 +875,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
         const taskStatus = parseTaskMdStatus(taskMdContent);
         if (taskStatus === 'done') {
           console.log(`[orchestrator] unblocking ${item.id} — TASK.md status is 'done'`);
-          updateWorkItem(item.id, { status: 'review' as 'review' });
+          updateWorkItem(item.id, { status: 'review' as const });
           this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'review' });
           this.handleCompletionFlow(item.id).catch((err) => {
             console.error(`[orchestrator] completion flow failed for ${item.id}:`, getErrorMessage(err));
