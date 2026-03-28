@@ -1722,6 +1722,7 @@ const ModelPicker = {
   },
 
   open() {
+    FeatureTracker.track('header-model-picker');
     if (!this._picker || !this._chipBtn) return;
     this._render();
     const rect = this._chipBtn.getBoundingClientRect();
@@ -1859,6 +1860,7 @@ const OverflowMenu = {
   },
 
   open() {
+    FeatureTracker.track('header-overflow-menu');
     if (!this._menu || !this._menuBtn) return;
     this._syncAll();
     const rect = this._menuBtn.getBoundingClientRect();
@@ -1952,6 +1954,7 @@ const TerminalSearch = {
   },
 
   open() {
+    FeatureTracker.track('terminal-search-open');
     if (!this._bar) return;
     this._bar.style.display = 'flex';
     this._input.focus();
@@ -2023,6 +2026,7 @@ const SessionSwitcher = {
   },
 
   open() {
+    FeatureTracker.track('session-search-open');
     if (!this._modal) return;
     this._modal.style.display = 'flex';
     this._modal.classList.add('open');
@@ -2149,6 +2153,7 @@ const SessionSwitcher = {
   },
 
   _select(idx) {
+    FeatureTracker.track('session-search-select');
     const s = this._items[idx];
     if (!s) return;
     this.close();
@@ -2326,6 +2331,7 @@ const CommandPanel = {
   },
 
   open() {
+    FeatureTracker.track('command-panel-open');
     if (!this._panel || !this._available) return;
     if (McpPanel._panel?.classList.contains('open')) McpPanel.close();
     if (typeof PluginsPanel !== 'undefined' && PluginsPanel._panel?.classList.contains('open')) PluginsPanel.close();
@@ -2360,6 +2366,7 @@ const CommandPanel = {
   },
 
   async _send(retryMessage) {
+    FeatureTracker.track('command-panel-send');
     if (this._sending || !this._input) return;
     const message = retryMessage || this._input.value.trim();
     if (!message) return;
@@ -5557,8 +5564,12 @@ class CodemanApp {
       }
     };
 
+    let _terminalInputLastTracked = 0;
     this._terminalDisposables.push(this.terminal.onData((data) => {
       if (this.activeSessionId) {
+        // Track terminal input with 5-second cooldown (fires once per typing burst)
+        const _now = Date.now();
+        if (_now - _terminalInputLastTracked > 5000) { _terminalInputLastTracked = _now; FeatureTracker.track('terminal-input'); }
         // Filter out terminal query responses that xterm.js generates automatically.
         // These are responses to DA (Device Attributes), DSR (Device Status Report), etc.
         // sent by tmux when attaching. Without this filter, they appear as typed text.
@@ -6199,24 +6210,28 @@ class CodemanApp {
       // Ctrl/Cmd + W - close active session
       if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-w');
         this.killActiveSession();
       }
 
       // Ctrl/Cmd + Tab - next session
       if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-tab');
         this.nextSession();
       }
 
       // Ctrl/Cmd + K - kill all
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-k');
         this.killAllSessions();
       }
 
       // Ctrl/Cmd + L - clear terminal
       if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-l');
         this.clearTerminal();
       }
 
@@ -6233,18 +6248,21 @@ class CodemanApp {
       // Ctrl/Cmd + Shift + B - toggle voice input
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'B') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-shift-b');
         VoiceInput.toggle();
       }
 
       // Ctrl/Cmd + Shift + K - toggle command panel
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'K') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-shift-k');
         CommandPanel.toggle();
       }
 
       // Ctrl/Cmd + Shift + V - paste text from clipboard
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'V') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-shift-v');
         if (this.activeSessionId) {
           navigator.clipboard.readText().then(text => {
             if (!text) return;
@@ -6263,12 +6281,14 @@ class CodemanApp {
       // Ctrl/Cmd + F - terminal search
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'f') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-f');
         TerminalSearch.toggle();
       }
 
       // Ctrl/Cmd + Shift + F - cross-session switcher
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-shift-f');
         SessionSwitcher.toggle();
       }
 
@@ -8866,6 +8886,7 @@ class CodemanApp {
         }
 
         // Save and re-render
+        FeatureTracker.track('session-drag-reorder');
         this.saveSessionOrder();
         this._fullRenderSessionTabs();
       });
@@ -9112,6 +9133,7 @@ class CodemanApp {
   }
 
   async selectSession(sessionId) {
+    FeatureTracker.track('session-select');
     if (this.activeSessionId === sessionId) return;
     // Hide board view / action dashboard when switching to a session
     if (this._boardVisible) this.hideBoard();
@@ -9543,6 +9565,7 @@ class CodemanApp {
 
   // Request confirmation before closing a session
   requestCloseSession(sessionId) {
+    FeatureTracker.track('session-close');
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -9676,6 +9699,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   goHome() {
+    FeatureTracker.track('header-go-home');
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}
@@ -9697,6 +9721,7 @@ class CodemanApp {
   }
 
   showBoard() {
+    FeatureTracker.track('board-view-open');
     this.hideWelcome();
     if (this._actionDashboardVisible) this.hideActionDashboard();
     const boardEl = document.getElementById('boardView');
@@ -9749,6 +9774,7 @@ class CodemanApp {
   }
 
   showActionDashboard() {
+    FeatureTracker.track('action-dashboard-open');
     this.hideWelcome();
     // Hide board if visible
     if (this._boardVisible) this.hideBoard();
@@ -11049,6 +11075,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   openSessionOptions(sessionId) {
+    FeatureTracker.track('session-options-open');
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -11153,6 +11180,7 @@ class CodemanApp {
   }
 
   openNewPicker() {
+    FeatureTracker.track('session-create-picker');
     document.getElementById('newPickerModal').classList.add('active');
   }
 
@@ -11161,6 +11189,7 @@ class CodemanApp {
   }
 
   async openWorktreeCreator() {
+    FeatureTracker.track('session-create-worktree');
     this.closeNewPicker();
     let dormant = [];
     let allCases = [];
@@ -11195,6 +11224,7 @@ class CodemanApp {
   }
 
   openSessionCreator() {
+    FeatureTracker.track('session-create-session');
     this._sessionCreatorCaseName = null;
     this._sessionCreatorMode = this._runMode || 'claude';
     this._sessionCreatorCases = null;
@@ -11491,6 +11521,7 @@ class CodemanApp {
   }
 
   async _resumeWorktree(id) {
+    FeatureTracker.track('worktree-resume');
     this.closeWorktreeCreator();
     try {
       const res = await fetch(`/api/worktrees/${encodeURIComponent(id)}/resume`, { method: 'POST' });
@@ -12289,6 +12320,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   async openRunSummary(sessionId) {
+    FeatureTracker.track('run-summary-open');
     // Open session options modal and switch to summary tab
     this.openSessionOptions(sessionId);
     this.switchOptionsTab('summary');
@@ -12545,6 +12577,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   switchOptionsTab(tabName) {
+    FeatureTracker.track('session-options-tab-' + tabName);
     // Toggle active class on tab buttons
     document.querySelectorAll('#sessionOptionsModal .modal-tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
@@ -12740,6 +12773,7 @@ class CodemanApp {
 
   // Inline rename on right-click
   startInlineRename(sessionId) {
+    FeatureTracker.track('session-rename');
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -12979,6 +13013,7 @@ class CodemanApp {
   }
 
   openAppSettings() {
+    FeatureTracker.track('settings-open');
     // Load current settings
     const settings = this.loadAppSettingsFromStorage();
     document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
@@ -13130,6 +13165,8 @@ class CodemanApp {
   }
 
   switchSettingsTab(tabName) {
+    FeatureTracker.track('settings-tab-' + tabName.replace(/^settings-/, ''));
+    if (tabName === 'settings-usage') FeatureTracker._renderTable();
     const modal = document.getElementById('appSettingsModal');
     // Toggle active class on tab buttons
     modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
@@ -14706,6 +14743,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   showHelp() {
+    FeatureTracker.track('help-modal-open');
     const modal = document.getElementById('helpModal');
     modal.classList.add('active');
 
@@ -14766,6 +14804,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   async openTokenStats() {
+    FeatureTracker.track('token-stats-open');
     try {
       const response = await fetch('/api/token-stats');
       const data = await response.json();
@@ -14893,6 +14932,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   async toggleMonitorPanel() {
+    FeatureTracker.track('monitor-panel-toggle');
     const panel = document.getElementById('monitorPanel');
     const toggleBtn = document.getElementById('monitorToggleBtn');
     panel.classList.toggle('open');
@@ -14921,6 +14961,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   toggleMonitorDetach() {
+    FeatureTracker.track('monitor-panel-detach');
     const panel = document.getElementById('monitorPanel');
     const detachBtn = document.getElementById('monitorDetachBtn');
 
@@ -15892,6 +15933,7 @@ class CodemanApp {
   }
 
   toggleRalphStatePanel() {
+    FeatureTracker.track('ralph-panel-toggle');
     // Preserve xterm scroll position to prevent jump when panel height changes
     const xtermViewport = this.terminal?.element?.querySelector('.xterm-viewport');
     const scrollTop = xtermViewport?.scrollTop;
@@ -18444,6 +18486,7 @@ class CodemanApp {
   filePreviewContent = '';
 
   async loadFileBrowser(sessionId) {
+    FeatureTracker.track('file-browser-open');
     if (!sessionId) return;
 
     const treeEl = this.$('fileBrowserTree');
@@ -18769,6 +18812,7 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   openLogViewerWindow(filePath, sessionId) {
+    FeatureTracker.track('log-viewer-open');
     sessionId = sessionId || this.activeSessionId;
     if (!sessionId) return;
 
@@ -20065,6 +20109,7 @@ class CodemanApp {
   _toastContainer = null;
 
   toggleNotifications() {
+    FeatureTracker.track('notification-toggle');
     this.notificationManager?.toggleDrawer();
   }
 
@@ -20397,6 +20442,7 @@ const InputPanel = {
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-enter');
         this.send();
       }
     });
@@ -20527,6 +20573,7 @@ const InputPanel = {
 
   /** Send all queued images then the typed text */
   send() {
+    FeatureTracker.track('compose-bar-send');
     const ta = this._getTextarea();
     if (!ta) return;
     const text = ta.value.trim();
@@ -20625,6 +20672,7 @@ const InputPanel = {
   // ── Image handling ──────────────────────────────────────────────────────────
 
   _openActionSheet() {
+    FeatureTracker.track('compose-bar-plus');
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
     // Set display via inline style (overrides HTML style="display:none"), then add
@@ -20666,6 +20714,7 @@ const InputPanel = {
 
   /** Handle files pasted from clipboard (Ctrl+V / Cmd+V with image data) */
   async _onFilesFromPaste(files) {
+    FeatureTracker.track('compose-bar-image-paste');
     await this._uploadFiles(files);
   },
 
@@ -20684,6 +20733,7 @@ const InputPanel = {
 
   /** Upload non-image files to the session's working directory */
   async _uploadNonImageFiles(files) {
+    FeatureTracker.track('compose-bar-file-attach');
     if (!files.length || typeof app === 'undefined' || !app.activeSessionId) return;
 
     for (const file of files) {
@@ -20922,6 +20972,7 @@ const InputPanel = {
         })
       : allCommands;
     if (!matches.length) { this._closeSlashPopup(); return; }
+    FeatureTracker.track('compose-bar-slash-command');
     this._showSlashPopup(matches);
   },
 
@@ -21028,6 +21079,7 @@ const SessionDrawer = {
     }
   },
   open() {
+    FeatureTracker.track('session-drawer-open');
     this._getOverlay()?.classList.add('open');
     const drawer = this._getEl();
     if (drawer) {
@@ -22672,6 +22724,7 @@ const BoardView = {
   },
 
   async openDetailPanel(item) {
+    FeatureTracker.track('board-item-detail');
     const panelEl = document.getElementById('workItemPanel');
     const alreadyOpen = panelEl && panelEl.classList.contains('open');
     this._detailItem = item;
@@ -24006,6 +24059,7 @@ const ActionDashboard = {
 
   // Quick action: open session
   openSession(sessionId) {
+    FeatureTracker.track('action-item-open-session');
     if (typeof app !== 'undefined') {
       app.hideActionDashboard();
       // Force selectSession to run even when the session is already active —
@@ -24107,6 +24161,7 @@ const ActionDashboard = {
   // Quick action: unblock a stuck session by sending a resume prompt
   // If sessionId is null (no assigned session), removes dependency edges directly and sets status to queued.
   async unblockSession(sessionId, item) {
+    FeatureTracker.track('action-item-unblock');
     const workItemId = item?.workItemId;
     // No session: remove dependency edges and set status to queued
     if (!sessionId) {

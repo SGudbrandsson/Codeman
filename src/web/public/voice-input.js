@@ -340,6 +340,7 @@ const VoiceInput = {
   },
 
   start() {
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('voice-start');
     if (this.isRecording) return;
     if (!app.activeSessionId) {
       app.showToast('No active session', 'warning');
@@ -452,6 +453,7 @@ const VoiceInput = {
   },
 
   stop() {
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('voice-stop');
     if (!this.isRecording) return;
     this._userRequestedStop = true;
     this._clearInterimFromCompose();

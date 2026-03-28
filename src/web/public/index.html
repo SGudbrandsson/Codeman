@@ -1060,6 +1060,7 @@
           <button class="modal-tab-btn" id="settingsUpdatesTabBtn" data-tab="settings-updates">Updates</button>
           <button class="modal-tab-btn" data-tab="settings-orchestrator">Orchestrator</button>
           <button class="modal-tab-btn" data-tab="settings-integrations">Integrations</button>
+          <button class="modal-tab-btn" data-tab="settings-usage">Usage</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1744,6 +1745,20 @@
                 <button class="btn-toolbar btn-sm" onclick="app.testIntegration('slack')">Test</button>
               </div>
             </div>
+          </div>
+          <div class="modal-tab-content hidden" id="settings-usage">
+            <div class="settings-grid">
+              <div class="settings-section-header">Feature Usage Analytics</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Track since</span>
+                <span id="featureUsageTrackingSince" class="settings-item-desc">&mdash;</span>
+              </div>
+              <div class="settings-item" style="gap:8px">
+                <button class="btn btn-sm btn-secondary" onclick="FeatureTracker._exportAndDownload()">Export JSON</button>
+                <button class="btn btn-sm btn-danger" onclick="FeatureTracker._resetWithConfirm()">Reset</button>
+              </div>
+            </div>
+            <div id="featureUsageTable" style="margin-top:12px;overflow-y:auto;max-height:60vh"></div>
           </div>
         </div>
         <div class="form-actions">
@@ -2450,6 +2465,8 @@
   </div>
 
   <script defer src="constants.js"></script>
+  <script defer src="feature-registry.js"></script>
+  <script defer src="feature-tracker.js"></script>
   <script defer src="mobile-handlers.js"></script>
   <script defer src="voice-input.js"></script>
   <script defer src="notification-manager.js"></script>

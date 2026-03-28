@@ -754,6 +754,7 @@ const SwipeHandler = {
 
   /** Animate commit: slide .main off-screen, then call selectSession */
   _commitSwipe() {
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('mobile-swipe-session');
     if (!this._element || !this._targetId) {
       this._springBack();
       return;
@@ -1030,6 +1031,7 @@ const DrawerSwipeHandler = {
 
   /** Animate commit: slide list off-screen, switch view mode, slide new content in */
   _commitSwipe() {
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('session-drawer-swipe-tabs');
     if (!this._element) {
       this._springBack();
       return;
