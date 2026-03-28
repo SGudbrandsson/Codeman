@@ -18,6 +18,7 @@ import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
+import { type LinkedCasesMap, resolveLinkedCasePath } from '../utils/linked-cases.js';
 
 export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
   // ═══════════════════════════════════════════════════════════════
@@ -57,11 +58,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // Get linked cases
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
-      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
-        await fs.readFile(linkedCasesFile, 'utf-8')
-      );
+      const linkedCases: LinkedCasesMap = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
       for (const [name, entry] of Object.entries(linkedCases)) {
-        const path = typeof entry === 'string' ? entry : entry.path;
+        const path = resolveLinkedCasePath(entry);
         const orchestrationEnabled = typeof entry === 'object' ? (entry.orchestrationEnabled ?? false) : false;
         // Only add if not already in cases (avoid duplicates) and path exists
         if (!cases.some((c) => c.name === name) && existsSync(path)) {
@@ -283,12 +282,10 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // First check linked cases
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
-      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
-        await fs.readFile(linkedCasesFile, 'utf-8')
-      );
+      const linkedCases: LinkedCasesMap = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
       if (linkedCases[name]) {
         const entry = linkedCases[name];
-        const linkedPath = typeof entry === 'string' ? entry : entry.path;
+        const linkedPath = resolveLinkedCasePath(entry);
         return {
           name,
           path: linkedPath,

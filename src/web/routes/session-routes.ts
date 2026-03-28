@@ -38,6 +38,7 @@ import {
   MuxRebindSchema,
 } from '../schemas.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
+import { type LinkedCasesMap, resolveLinkedCasePath } from '../utils/linked-cases.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { writeHooksConfig, updateCaseEnvVars } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -1034,12 +1035,9 @@ ${contextLines.join('\n')}`;
     let casePath: string | undefined;
     const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
     try {
-      const linkedCases: Record<string, string | { path: string; orchestrationEnabled?: boolean }> = JSON.parse(
-        await fs.readFile(linkedCasesFile, 'utf-8')
-      );
+      const linkedCases: LinkedCasesMap = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
       if (linkedCases[caseName] !== undefined) {
-        const entry = linkedCases[caseName];
-        casePath = typeof entry === 'string' ? entry : entry.path;
+        casePath = resolveLinkedCasePath(linkedCases[caseName]);
       }
     } catch {
       // ENOENT or parse errors — fall through to CASES_DIR
