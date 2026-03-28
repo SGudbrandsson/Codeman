@@ -729,6 +729,410 @@ describe('DrawerSwipeHandler: invalid direction swipe', () => {
   });
 });
 
+// ─── Safety timer cleanup ───────────────────────────────────────────────
+
+describe('DrawerSwipeHandler: safety timer cleanup during animation', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage(375, 812));
+    await navigateMobile(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('cleanup() during active animation clears _slideOutTimer/_slideInTimer/_springBackTimer', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // Set up fake timer IDs to simulate mid-animation state, then call cleanup
+    const result = await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler === 'undefined') return null;
+      const h = DrawerSwipeHandler as any;
+
+      // Simulate active animation with pending timers
+      h._animating = true;
+      h._slideOutTimer = setTimeout(() => {}, 10000);
+      h._slideInTimer = setTimeout(() => {}, 10000);
+      h._springBackTimer = setTimeout(() => {}, 10000);
+
+      const hadTimers = !!(h._slideOutTimer && h._slideInTimer && h._springBackTimer);
+
+      // Call cleanup during "animation"
+      h.cleanup();
+
+      return {
+        hadTimers,
+        slideOutTimer: h._slideOutTimer,
+        slideInTimer: h._slideInTimer,
+        springBackTimer: h._springBackTimer,
+        animating: h._animating,
+        element: h._element,
+      };
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.hadTimers).toBe(true);
+    expect(result!.slideOutTimer).toBeNull();
+    expect(result!.slideInTimer).toBeNull();
+    expect(result!.springBackTimer).toBeNull();
+    expect(result!.animating).toBe(false);
+    expect(result!.element).toBeNull();
+  });
+
+  it('cleanup() during animation prevents stale timer callbacks from executing', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // Start a real commit swipe, then immediately call cleanup
+    const modeBefore = await page.evaluate(() => {
+      if (typeof SessionDrawer === 'undefined') return null;
+      return (SessionDrawer as any)._viewMode;
+    });
+
+    await simulateSwipe(page, {
+      startX: 300,
+      startY: 400,
+      endX: 100,
+      endY: 402,
+      durationMs: 150,
+      steps: 8,
+    });
+
+    // Immediately cleanup to interrupt the animation
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).cleanup();
+    });
+
+    // Wait for what would have been the timer callbacks
+    await page.waitForTimeout(500);
+
+    // _animating should still be false (cleanup cleared it) — no stale callback re-set it
+    const state = await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler === 'undefined') return null;
+      const h = DrawerSwipeHandler as any;
+      return {
+        animating: h._animating,
+        element: h._element,
+      };
+    });
+    expect(state).not.toBeNull();
+    expect(state!.animating).toBe(false);
+    expect(state!.element).toBeNull();
+  });
+});
+
+// ─── Fling velocity commit ──────────────────────────────────────────────
+
+describe('DrawerSwipeHandler: fling velocity commit', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage(375, 812));
+    await navigateMobile(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('short-distance fast swipe commits via fling velocity (below COMMIT_RATIO but above FLING_VELOCITY)', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // 40px in 80ms = 0.5 px/ms velocity (above FLING_VELOCITY of 0.4)
+    // 40px is well below 30% of 375 = 112.5px COMMIT_RATIO threshold
+    await simulateSwipe(page, {
+      startX: 200,
+      startY: 400,
+      endX: 160,
+      endY: 402,
+      durationMs: 80,
+      steps: 4,
+    });
+    await page.waitForTimeout(600);
+
+    const mode = await page.evaluate(() => {
+      if (typeof SessionDrawer === 'undefined') return null;
+      return (SessionDrawer as any)._viewMode;
+    });
+    expect(mode).toBe('agents');
+  });
+});
+
+// ─── Direction reversal mid-swipe ───────────────────────────────────────
+
+describe('DrawerSwipeHandler: direction reversal mid-swipe', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage(375, 812));
+    await navigateMobile(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('start swiping left then reverse to right of start springs back', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // Manually dispatch: start at 200, move left to 170 (locks direction = -1),
+    // then move right past start to 230 (finalDirection = +1, != _direction = -1)
+    await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      if (!el || typeof DrawerSwipeHandler === 'undefined') return;
+
+      function touch(x: number, y: number): Touch {
+        return new Touch({
+          identifier: 0,
+          target: el!,
+          clientX: x,
+          clientY: y,
+          pageX: x,
+          pageY: y,
+          screenX: x,
+          screenY: y,
+        });
+      }
+
+      // touchstart
+      el.dispatchEvent(
+        new TouchEvent('touchstart', {
+          touches: [touch(200, 400)],
+          changedTouches: [touch(200, 400)],
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+
+      // Move left past lock threshold — locks direction = -1
+      el.dispatchEvent(
+        new TouchEvent('touchmove', {
+          touches: [touch(185, 401)],
+          changedTouches: [touch(185, 401)],
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+
+      // Reverse direction — end up right of start
+      el.dispatchEvent(
+        new TouchEvent('touchmove', {
+          touches: [touch(230, 401)],
+          changedTouches: [touch(230, 401)],
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+
+      // Set timing for velocity calc
+      (DrawerSwipeHandler as any).startTime = Date.now() - 200;
+
+      // touchend — final position is right of start, but _direction is -1
+      el.dispatchEvent(
+        new TouchEvent('touchend', {
+          touches: [],
+          changedTouches: [touch(230, 401)],
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    await page.waitForTimeout(400);
+
+    // Should have sprung back — view mode unchanged
+    const mode = await page.evaluate(() => {
+      if (typeof SessionDrawer === 'undefined') return null;
+      return (SessionDrawer as any)._viewMode;
+    });
+    expect(mode).toBe('sessions');
+
+    // Transform should be cleared after spring-back
+    const transform = await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      return el ? el.style.transform : '';
+    });
+    expect(transform).toBe('');
+  });
+});
+
+// ─── _commitSwipe with null _element ────────────────────────────────────
+
+describe('DrawerSwipeHandler: _commitSwipe with null _element', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage(375, 812));
+    await navigateMobile(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('_commitSwipe with null _element falls back to _springBack without error', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+
+    const result = await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler === 'undefined') return null;
+      const h = DrawerSwipeHandler as any;
+
+      // Force null _element while setting up minimal state
+      h._element = null;
+      h._direction = -1;
+      h._animating = false;
+
+      let threw = false;
+      try {
+        h._commitSwipe();
+      } catch {
+        threw = true;
+      }
+
+      // Wait a tick for any async side-effects
+      return { threw, animating: h._animating };
+    });
+
+    // _springBack with null _element calls _resetState — no crash
+    expect(result).not.toBeNull();
+    expect(result!.threw).toBe(false);
+    // _springBack with null _element calls _resetState, does not set _animating
+    expect(result!.animating).toBe(false);
+  });
+});
+
+// ─── drawer-tab-transitioning CSS class ─────────────────────────────────
+
+describe('DrawerSwipeHandler: drawer-tab-transitioning CSS class', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage(375, 812));
+    await navigateMobile(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('drawer-tab-transitioning class is applied during commit animation', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('sessions');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // Start a commit swipe and check for transitioning class before animation completes
+    await simulateSwipe(page, {
+      startX: 300,
+      startY: 400,
+      endX: 100,
+      endY: 402,
+      durationMs: 150,
+      steps: 8,
+    });
+
+    // Check immediately — the transitioning class should be present during animation
+    const hasTransitioning = await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      if (!el) return false;
+      return el.classList.contains('drawer-tab-transitioning');
+    });
+    expect(hasTransitioning).toBe(true);
+
+    // Wait for full two-phase animation to complete (slide-out + slide-in + safety timers)
+    await page.waitForTimeout(1000);
+
+    // After animation, the class should be removed
+    const hasTransitioningAfter = await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      if (!el) return true; // fail safe
+      return el.classList.contains('drawer-tab-transitioning');
+    });
+    expect(hasTransitioningAfter).toBe(false);
+  });
+
+  it('drawer-tab-transitioning class is applied during spring-back', async () => {
+    await openDrawer(page);
+    await page.evaluate(() => {
+      if (typeof SessionDrawer !== 'undefined') SessionDrawer.setViewMode('agents');
+    });
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      if (typeof DrawerSwipeHandler !== 'undefined') (DrawerSwipeHandler as any).init();
+    });
+
+    // Small swipe right (below commit threshold, slow velocity) — triggers spring-back
+    await simulateSwipe(page, {
+      startX: 100,
+      startY: 400,
+      endX: 120,
+      endY: 402,
+      durationMs: 500,
+      steps: 4,
+    });
+
+    // Check immediately for transitioning class
+    const hasTransitioning = await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      if (!el) return false;
+      return el.classList.contains('drawer-tab-transitioning');
+    });
+    expect(hasTransitioning).toBe(true);
+
+    // Wait for spring-back to complete
+    await page.waitForTimeout(500);
+
+    const hasTransitioningAfter = await page.evaluate(() => {
+      const el = document.getElementById('sessionDrawerList');
+      if (!el) return true;
+      return el.classList.contains('drawer-tab-transitioning');
+    });
+    expect(hasTransitioningAfter).toBe(false);
+  });
+});
+
 // ─── Desktop does not attach DrawerSwipeHandler ──────────────────────────
 
 describe('DrawerSwipeHandler: desktop viewport', () => {
