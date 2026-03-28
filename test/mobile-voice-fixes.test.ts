@@ -5,7 +5,7 @@
  *   1. getUserMedia constraint fallback — retry with { audio: true } on OverconstrainedError/NotReadableError
  *   2. MIME type selection with iOS support — audio/mp4;codecs=aac added to priority list
  *   3. composeMicBtn touch/click handler — micHandler toggle logic and event wiring
- *   4. MediaRecorder audioBitsPerSecond — 16000 set in both branches of the ternary
+ *   4. MediaRecorder audioBitsPerSecond — AAC-aware bitrate (64kbps for AAC, 16kbps otherwise)
  *
  * Because voice-input.js and app.js are browser bundles (no exports), the logic is
  * replicated here as pure functions matching the exact expressions in the source.
@@ -383,12 +383,16 @@ describe('MediaRecorder audioBitsPerSecond (voice-input.js lines 191-193)', () =
   /**
    * Replicates the recorder options logic from DeepgramProvider._startRecording():
    *
+   *   const isAac = this._selectedMime && this._selectedMime.includes('aac');
+   *   const bitrate = isAac ? 64000 : 16000;
    *   const recorderOpts = this._selectedMime
-   *     ? { mimeType: this._selectedMime, audioBitsPerSecond: 16000 }
-   *     : { audioBitsPerSecond: 16000 };
+   *     ? { mimeType: this._selectedMime, audioBitsPerSecond: bitrate }
+   *     : { audioBitsPerSecond: bitrate };
    */
   function buildRecorderOpts(selectedMime: string | null): Record<string, unknown> {
-    return selectedMime ? { mimeType: selectedMime, audioBitsPerSecond: 16000 } : { audioBitsPerSecond: 16000 };
+    const isAac = selectedMime && selectedMime.includes('aac');
+    const bitrate = isAac ? 64000 : 16000;
+    return selectedMime ? { mimeType: selectedMime, audioBitsPerSecond: bitrate } : { audioBitsPerSecond: bitrate };
   }
 
   it('includes audioBitsPerSecond: 16000 when MIME type is selected', () => {
@@ -403,9 +407,9 @@ describe('MediaRecorder audioBitsPerSecond (voice-input.js lines 191-193)', () =
     expect(opts).not.toHaveProperty('mimeType');
   });
 
-  it('includes audioBitsPerSecond: 16000 for mp4/aac (iOS path)', () => {
+  it('includes audioBitsPerSecond: 64000 for mp4/aac (iOS path)', () => {
     const opts = buildRecorderOpts('audio/mp4;codecs=aac');
-    expect(opts.audioBitsPerSecond).toBe(16000);
+    expect(opts.audioBitsPerSecond).toBe(64000);
     expect(opts.mimeType).toBe('audio/mp4;codecs=aac');
   });
 

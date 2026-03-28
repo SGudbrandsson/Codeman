@@ -97,7 +97,7 @@ const DeepgramProvider = {
         break;
       }
     }
-    console.log('[Voice] Selected MIME type:', this._selectedMime || '(default)');
+    console.debug('[Voice] Selected MIME type:', this._selectedMime || '(default)');
 
     // 3. Build WebSocket URL (no encoding param — Deepgram auto-detects from container format)
 
@@ -188,9 +188,13 @@ const DeepgramProvider = {
   _startRecording() {
     if (!this._stream || !this._ws || this._ws.readyState !== WebSocket.OPEN) return;
 
+    // AAC (iOS) needs higher bitrate than Opus — 16kbps is fine for opus speech
+    // but AAC minimum usable is ~32-48kbps; use 64kbps for AAC paths.
+    const isAac = this._selectedMime && this._selectedMime.includes('aac');
+    const bitrate = isAac ? 64000 : 16000;
     const recorderOpts = this._selectedMime
-      ? { mimeType: this._selectedMime, audioBitsPerSecond: 16000 }
-      : { audioBitsPerSecond: 16000 };
+      ? { mimeType: this._selectedMime, audioBitsPerSecond: bitrate }
+      : { audioBitsPerSecond: bitrate };
     try {
       this._mediaRecorder = new MediaRecorder(this._stream, recorderOpts);
     } catch (err) {
