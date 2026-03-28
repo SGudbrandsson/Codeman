@@ -232,8 +232,8 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       .map((d) => {
         const blocker = getWorkItem(d.fromId);
         return blocker
-          ? { id: blocker.id, title: blocker.title, status: blocker.status, depId: d.fromId }
-          : { id: d.fromId, title: d.fromId, status: 'unknown', depId: d.fromId };
+          ? { id: blocker.id, title: blocker.title, status: blocker.status }
+          : { id: d.fromId, title: d.fromId, status: 'unknown' };
       });
     // blockedBy: items that this item is blocking (from_id = id → id blocks to_id)
     const blockedBy = deps

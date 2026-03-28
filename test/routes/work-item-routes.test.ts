@@ -560,5 +560,31 @@ describe('work-item-routes', () => {
       expect(body.data.blockers[0].title).toBe('Enriched Blocker');
       expect(body.data.blockers[0].status).toBe('review');
     });
+
+    it('dangling/orphaned blocker: getWorkItem(fromId) returns null falls back to { id, title: id, status: "unknown" }', async () => {
+      const targetId = 'wi-orphan-target';
+      const orphanId = 'wi-orphan-blocker';
+
+      mockGet
+        .mockReturnValueOnce(makeItem({ id: targetId })) // guard check — target exists
+        .mockReturnValueOnce(null); // enrichment — blocker work item is gone (orphaned)
+
+      mockListDeps.mockReturnValue([
+        { fromId: orphanId, toId: targetId, type: 'blocks' as const, createdAt: '2026-01-01T00:00:00.000Z' },
+      ]);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/work-items/${targetId}/dependencies`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.blockers).toHaveLength(1);
+      const fallback = body.data.blockers[0];
+      expect(fallback.id).toBe(orphanId);
+      expect(fallback.title).toBe(orphanId); // falls back to id as title
+      expect(fallback.status).toBe('unknown');
+    });
   });
 });

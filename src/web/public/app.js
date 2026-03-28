@@ -23065,11 +23065,12 @@ const BoardView = {
       unblockBtn.addEventListener('click', async () => {
         const blockers = deps.blockers || [];
         try {
-          // Remove all blocker dependencies
-          for (const blocker of blockers) {
-            await fetch(`/api/work-items/${item.id}/dependencies/${blocker.id}`, { method: 'DELETE' });
-          }
-          // PATCH status to queued
+          // Remove all blocker dependencies — attempt all regardless of individual failures
+          const results = await Promise.allSettled(
+            blockers.map(blocker => fetch(`/api/work-items/${item.id}/dependencies/${blocker.id}`, { method: 'DELETE' }))
+          );
+          const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)).length;
+          // PATCH status to queued regardless of partial DELETE failures
           const res = await fetch(`/api/work-items/${item.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -23080,7 +23081,7 @@ const BoardView = {
             const idx = this._workItems.findIndex(w => w.id === item.id);
             if (idx >= 0) this._workItems[idx] = resp.data;
             this.render();
-            app.showToast('Item unblocked and set to queued', 'success');
+            app.showToast(failed ? `Unblocked with ${failed} removal error(s)` : 'Item unblocked and set to queued', failed ? 'error' : 'success');
             this.openDetailPanel(resp.data);
           } else {
             app.showToast('Failed to update status after unblock', 'error');
@@ -24119,11 +24120,11 @@ const ActionDashboard = {
         if (depsRes.ok) {
           const depsData = await depsRes.json();
           const blockers = (depsData.data?.blockers) || [];
-          for (const blocker of blockers) {
-            await fetch('/api/work-items/' + workItemId + '/dependencies/' + blocker.id, { method: 'DELETE' });
-          }
+          await Promise.allSettled(
+            blockers.map(blocker => fetch('/api/work-items/' + workItemId + '/dependencies/' + blocker.id, { method: 'DELETE' }))
+          );
         }
-        // Set work item status to queued
+        // Set work item status to queued regardless of partial DELETE failures
         await fetch('/api/work-items/' + workItemId, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },

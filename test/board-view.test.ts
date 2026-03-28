@@ -1964,3 +1964,251 @@ describe('Detail panel — #wipOpenSessionBtn is disabled when no session is lin
     expect(isDisabled).toBe(true);
   });
 });
+
+// ─── Gap: #wipOpenSessionBtn enabled — finds session by worktreePath ──────────
+
+describe('Detail panel — #wipOpenSessionBtn finds session by worktreePath', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let selectSessionId: string | null = null;
+
+  const itemWithPath = {
+    id: 'wi-open-sess-wt',
+    title: 'Open by worktree',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+    worktreePath: '/tmp/test-worktree-path',
+  };
+
+  const matchingSession = { id: 'sess-wt-match', name: 'Worktree Session', workingDir: '/tmp/test-worktree-path' };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [itemWithPath]);
+
+    // Deps route — no blockers
+    await page.route('**/api/work-items/wi-open-sess-wt/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { blockers: [], blockedBy: [] } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Sessions list returns a session whose workingDir matches the worktreePath
+    await page.route('**/api/sessions', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([matchingSession]),
+        });
+      } else {
+        route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-card').first().click();
+    await page.waitForTimeout(500);
+
+    // Spy on selectSession, then click Open Session
+    await page.evaluate(() => {
+      const a = (window as any).app;
+      (window as any)._testSelectSessionId = null;
+      const orig = a.selectSession.bind(a);
+      a.selectSession = function (id: string) {
+        (window as any)._testSelectSessionId = id;
+        return orig(id);
+      };
+    });
+
+    await page.locator('#workItemPanel #wipOpenSessionBtn').click();
+    await page.waitForTimeout(400);
+
+    selectSessionId = await page.evaluate(() => (window as any)._testSelectSessionId as string | null);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#wipOpenSessionBtn calls selectSession with the matched session id', () => {
+    expect(selectSessionId).toBe('sess-wt-match');
+  });
+});
+
+// ─── Gap: #wipOpenSessionBtn enabled — uses assignedAgentId fallback ──────────
+
+describe('Detail panel — #wipOpenSessionBtn falls back to assignedAgentId', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let selectSessionId: string | null = null;
+
+  const itemWithAgentId = {
+    id: 'wi-open-sess-agent',
+    title: 'Open by agentId',
+    status: 'queued',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: 'sess-agent-fallback',
+    worktreePath: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [itemWithAgentId]);
+
+    // Deps route — no blockers
+    await page.route('**/api/work-items/wi-open-sess-agent/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { blockers: [], blockedBy: [] } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-card').first().click();
+    await page.waitForTimeout(500);
+
+    await page.evaluate(() => {
+      const a = (window as any).app;
+      (window as any)._testSelectSessionId = null;
+      const orig = a.selectSession.bind(a);
+      a.selectSession = function (id: string) {
+        (window as any)._testSelectSessionId = id;
+        return orig(id);
+      };
+    });
+
+    await page.locator('#workItemPanel #wipOpenSessionBtn').click();
+    await page.waitForTimeout(400);
+
+    selectSessionId = await page.evaluate(() => (window as any)._testSelectSessionId as string | null);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('#wipOpenSessionBtn calls selectSession with assignedAgentId when worktreePath is null', () => {
+    expect(selectSessionId).toBe('sess-agent-fallback');
+  });
+});
+
+// ─── Gap: #wipUnblockBtn partial DELETE failure — PATCH still fires ───────────
+
+describe('Detail panel — #wipUnblockBtn fires PATCH even when one DELETE fails', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let patchFired = false;
+  let patchBody: Record<string, unknown> | null = null;
+
+  const blockedItem = {
+    id: 'wi-partial-fail',
+    title: 'Partial Fail Item',
+    status: 'blocked',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    assignedAgentId: null,
+  };
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await mockWorkItemsRoute(page, [blockedItem]);
+
+    // Two blockers in deps response
+    await page.route('**/api/work-items/wi-partial-fail/dependencies', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: {
+              blockers: [
+                { id: 'wi-blocker-ok', title: 'OK Blocker', status: 'queued', depId: 'wi-blocker-ok' },
+                { id: 'wi-blocker-fail', title: 'Fail Blocker', status: 'queued', depId: 'wi-blocker-fail' },
+              ],
+              blockedBy: [],
+            },
+          }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // First DELETE succeeds
+    await page.route('**/api/work-items/wi-partial-fail/dependencies/wi-blocker-ok', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Second DELETE returns non-ok (500)
+    await page.route('**/api/work-items/wi-partial-fail/dependencies/wi-blocker-fail', async (route) => {
+      if (route.request().method() === 'DELETE') {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'fail' }) });
+      } else {
+        await route.continue();
+      }
+    });
+
+    // PATCH — capture to verify it fires regardless
+    await page.route('**/api/work-items/wi-partial-fail', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        patchFired = true;
+        patchBody = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { ...blockedItem, status: 'queued' } }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await showBoard(page);
+    await page.locator('#boardKanban .board-col[data-col="queued"] .board-card').first().click();
+    await page.waitForTimeout(500);
+    await page.locator('#workItemPanel #wipUnblockBtn').click();
+    await page.waitForTimeout(600);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('PATCH fires even when one DELETE returns non-ok', () => {
+    expect(patchFired).toBe(true);
+  });
+
+  it('PATCH body has status queued', () => {
+    expect(patchBody).not.toBeNull();
+    expect(patchBody!['status']).toBe('queued');
+  });
+});

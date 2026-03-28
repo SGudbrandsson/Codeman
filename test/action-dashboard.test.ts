@@ -1751,6 +1751,41 @@ describe('unblockSession(null, item) — removes dep edges and patches to queued
   });
 });
 
+// ─── Gap 15b: unblockSession(null, item) with missing workItemId makes no calls ─
+
+describe('unblockSession(null, item) with missing workItemId makes no network calls', () => {
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+  });
+
+  afterAll(async () => {
+    await context?.close();
+  });
+
+  it('unblockSession(null, { extra: {} }) makes no fetch calls when workItemId is absent', async () => {
+    let fetchCount = 0;
+    await page.route('**/api/work-items/**', (route) => {
+      fetchCount++;
+      route.continue();
+    });
+
+    await page.evaluate(async () => {
+      const AD = (window as any).ActionDashboard;
+      const origToast = (app as any).showToast;
+      (app as any).showToast = () => {};
+      // item has no workItemId property at all
+      await AD.unblockSession(null, { extra: {} });
+      (app as any).showToast = origToast;
+    });
+
+    expect(fetchCount).toBe(0);
+  });
+});
+
 // ─── Gap 16: _getActionButtonDefs blocked with null sessionId shows Unblock ───
 
 describe('_getActionButtonDefs blocked item with sessionId=null shows Unblock button (Gap 16)', () => {

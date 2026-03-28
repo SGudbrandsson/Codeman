@@ -719,6 +719,7 @@ curl -s -X POST http://localhost:3001/api/clockwork/agents/<agentId>/briefing \
 | `GET` | `/api/work-items/:id` | none | Get single item (404 if missing) |
 | `PATCH` | `/api/work-items/:id` | none | Update any field; fires webhook on status change |
 | `POST` | `/api/work-items/:id/claim` | none | Atomic claim — body: `{ agentId }` — 409 if already claimed |
+| `GET` | `/api/work-items/:id/dependencies` | none | Get blockers/blockedBy — returns `{ blockers: [...], blockedBy: [...] }` |
 | `POST` | `/api/work-items/:id/dependencies` | none | Add dependency — body: `{ dependsOnId }` |
 | `DELETE` | `/api/work-items/:id/dependencies/:depId` | none | Remove dependency |
 
