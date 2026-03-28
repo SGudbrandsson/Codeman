@@ -54,9 +54,12 @@ export function registerFeatureUsageRoutes(app: FastifyInstance): void {
     if (!featureId || typeof featureId !== 'string') {
       return reply.status(400).send({ success: false, error: 'featureId is required' });
     }
+    if (featureId.length > 200) {
+      return reply.status(400).send({ success: false, error: 'featureId exceeds maximum length of 200' });
+    }
 
     const data = readUsageData();
-    const iso = timestamp || new Date().toISOString();
+    const iso = typeof timestamp === 'string' && timestamp ? timestamp : new Date().toISOString();
     const existing = data[featureId];
 
     if (existing) {

@@ -422,6 +422,13 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `GET` | `/api/subagents/:id/transcript` | Full activity transcript |
 | `DELETE` | `/api/subagents/:id` | Kill agent process |
 
+### Feature Usage
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/feature-usage` | All usage data (counts + timestamps) |
+| `POST` | `/api/feature-usage/track` | Record a feature usage event |
+| `POST` | `/api/feature-usage/reset` | Clear all usage data |
+
 ### System
 | Method | Endpoint | Description |
 |--------|----------|-------------|
