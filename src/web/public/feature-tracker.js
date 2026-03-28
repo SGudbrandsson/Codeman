@@ -1,59 +1,45 @@
 /**
- * FeatureTracker — lightweight usage analytics stored in localStorage.
- * All data stays local; no external services.
+ * FeatureTracker — lightweight usage analytics with server-side storage.
+ * Data is stored on the server at ~/.codeman/feature-usage.json so usage
+ * is tracked across all devices.
  */
 window.FeatureTracker = {
-  STORAGE_KEY: 'codeman-feature-usage',
   DEBOUNCE_MS: 1000,
-  _data: null,       // lazy-loaded from localStorage
-  _lastTrack: {},    // { [featureId]: timestamp } for debounce
-
-  _load() {
-    if (this._data !== null) return this._data;
-    try {
-      this._data = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || '{}');
-    } catch (e) {
-      this._data = {};
-    }
-    return this._data;
-  },
-
-  _save() {
-    try {
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this._data));
-    } catch (e) {
-      // localStorage full or unavailable — ignore
-    }
-  },
+  _lastTrack: {},    // { [featureId]: timestamp } for client-side debounce
 
   track(featureId) {
     const now = Date.now();
     if (this._lastTrack[featureId] && (now - this._lastTrack[featureId]) < this.DEBOUNCE_MS) return;
     this._lastTrack[featureId] = now;
-    const data = this._load();
-    const iso = new Date(now).toISOString();
-    if (data[featureId]) {
-      data[featureId].count++;
-      data[featureId].lastUsed = iso;
-    } else {
-      data[featureId] = { count: 1, firstUsed: iso, lastUsed: iso };
+    // Fire-and-forget POST — don't block UI
+    fetch('/api/feature-usage/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ featureId, timestamp: new Date(now).toISOString() }),
+    }).catch(() => { /* silent — analytics should never break the app */ });
+  },
+
+  async getData() {
+    try {
+      const res = await fetch('/api/feature-usage');
+      const json = await res.json();
+      return json.data || {};
+    } catch {
+      return {};
     }
-    this._save();
   },
 
-  getData() {
-    const data = this._load();
-    return Object.assign({}, data);
-  },
-
-  reset() {
-    this._data = {};
+  async reset() {
     this._lastTrack = {};
-    localStorage.removeItem(this.STORAGE_KEY);
+    try {
+      await fetch('/api/feature-usage/reset', { method: 'POST' });
+    } catch {
+      // silent
+    }
   },
 
-  exportJson() {
-    const data = this._load();
+  async exportJson() {
+    const data = await this.getData();
     const rows = (window.FeatureRegistry || []).map(f => ({
       id: f.id,
       name: f.name,
@@ -66,8 +52,8 @@ window.FeatureTracker = {
     return JSON.stringify(rows, null, 2);
   },
 
-  _exportAndDownload() {
-    const json = this.exportJson();
+  async _exportAndDownload() {
+    const json = await this.exportJson();
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -79,18 +65,18 @@ window.FeatureTracker = {
     URL.revokeObjectURL(url);
   },
 
-  _resetWithConfirm() {
+  async _resetWithConfirm() {
     if (!confirm('Reset all feature usage data? This cannot be undone.')) return;
-    this.reset();
-    this._renderTable();
+    await this.reset();
+    await this._renderTable();
     const sinceEl = document.getElementById('featureUsageTrackingSince');
     if (sinceEl) sinceEl.textContent = '\u2014';
   },
 
-  _renderTable() {
+  async _renderTable() {
     const container = document.getElementById('featureUsageTable');
     if (!container) return;
-    const data = this._load();
+    const data = await this.getData();
 
     // Find earliest firstUsed date
     let earliest = null;
