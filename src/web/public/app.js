@@ -21103,11 +21103,19 @@ const SessionDrawer = {
     drawer.addEventListener('touchstart', this._onTouchStart, { passive: true });
     drawer.addEventListener('touchmove', this._onTouchMove, { passive: false });
     drawer.addEventListener('touchend', this._onTouchEnd, { passive: true });
+    // Attach horizontal tab-swipe handler on the list element
+    if (typeof DrawerSwipeHandler !== 'undefined') {
+      DrawerSwipeHandler.init();
+    }
   },
   _detachSwipeHandlers(drawer) {
     if (this._onTouchStart) { drawer.removeEventListener('touchstart', this._onTouchStart); this._onTouchStart = null; }
     if (this._onTouchMove) { drawer.removeEventListener('touchmove', this._onTouchMove); this._onTouchMove = null; }
     if (this._onTouchEnd) { drawer.removeEventListener('touchend', this._onTouchEnd); this._onTouchEnd = null; }
+    // Clean up horizontal tab-swipe handler
+    if (typeof DrawerSwipeHandler !== 'undefined') {
+      DrawerSwipeHandler.cleanup();
+    }
   },
   _esc(str) {
     return String(str ?? '');

@@ -1,7 +1,7 @@
 /**
  * @fileoverview Mobile device support: detection, keyboard handling, and swipe navigation.
  *
- * Defines three singleton objects that manage mobile-specific behavior:
+ * Defines four singleton objects that manage mobile-specific behavior:
  *
  * - MobileDetection — Device type detection (mobile/tablet/desktop), touch capability,
  *   iOS/Safari identification, and body class management for CSS targeting.
@@ -10,6 +10,8 @@
  *   and input scroll-into-view. Uses 100px threshold for iOS address bar drift.
  * - SwipeHandler — Horizontal swipe detection on the terminal area for session switching.
  *   80px minimum distance, 300ms maximum time, 100px max vertical drift.
+ * - DrawerSwipeHandler — Horizontal swipe detection inside the session drawer to switch
+ *   between Sessions and Agents tabs with a sliding animation.
  *
  * All three have init()/cleanup() lifecycle methods. They are re-initialized after SSE
  * reconnect (in handleInit) to prevent stale closures.
@@ -17,6 +19,7 @@
  * @globals {object} MobileDetection
  * @globals {object} KeyboardHandler
  * @globals {object} SwipeHandler
+ * @globals {object} DrawerSwipeHandler
  *
  * @dependency keyboard-accessory.js (KeyboardAccessoryBar reference in KeyboardHandler.onKeyboardShow, soft — guarded with typeof check)
  * @loadorder 2 of 9 — loaded after constants.js, before voice-input.js
@@ -798,6 +801,287 @@ const SwipeHandler = {
     this._cancelled = false;
     this._animating = false;
     this._targetId  = null;
+    this._direction = 0;
+    this._deltaX    = 0;
+  },
+};
+
+/* =============================================================================
+   DrawerSwipeHandler — Horizontal swipe inside the session drawer to switch
+   between the Sessions and Agents tabs.
+
+   Mirrors SwipeHandler's gesture-locking pattern (LOCK_THRESHOLD, COMMIT_RATIO,
+   FLING_VELOCITY) but operates on #sessionDrawerList and calls
+   SessionDrawer.setViewMode() instead of app.selectSession().
+
+   Attaches listeners to the list element (child of the drawer) so it does not
+   conflict with the drawer's own vertical swipe-to-dismiss handler.
+
+   Only active on touch devices.
+   ============================================================================= */
+
+const DrawerSwipeHandler = {
+  // Touch tracking state
+  startX: 0,
+  startY: 0,
+  startTime: 0,
+  _deltaX: 0,
+
+  // Gesture state
+  _locked: false,
+  _cancelled: false,
+  _animating: false,
+  _direction: 0,       // -1 = swiping left, +1 = swiping right
+
+  // Config — same thresholds as SwipeHandler
+  COMMIT_RATIO: 0.30,
+  FLING_VELOCITY: 0.4,
+  LOCK_THRESHOLD: 10,
+  TRANSITION_MS: 250,
+
+  // Listener refs
+  _touchStartHandler: null,
+  _touchMoveHandler: null,
+  _touchEndHandler: null,
+  _element: null,
+
+  /** Attach listeners to #sessionDrawerList. Called when the drawer opens. */
+  init() {
+    if (!MobileDetection.isTouchDevice()) return;
+
+    const el = document.getElementById('sessionDrawerList');
+    if (!el) return;
+
+    this.cleanup(); // remove any stale listeners
+
+    this._element = el;
+    this._touchStartHandler = (e) => this._onTouchStart(e);
+    this._touchMoveHandler  = (e) => this._onTouchMove(e);
+    this._touchEndHandler   = (e) => this._onTouchEnd(e);
+
+    el.addEventListener('touchstart',  this._touchStartHandler, { passive: true });
+    el.addEventListener('touchmove',   this._touchMoveHandler,  { passive: false });
+    el.addEventListener('touchend',    this._touchEndHandler,   { passive: true });
+    el.addEventListener('touchcancel', this._touchEndHandler,   { passive: true });
+  },
+
+  /** Remove swipe listeners. Called when the drawer closes. */
+  cleanup() {
+    if (this._element) {
+      if (this._touchStartHandler) this._element.removeEventListener('touchstart',  this._touchStartHandler);
+      if (this._touchMoveHandler)  this._element.removeEventListener('touchmove',   this._touchMoveHandler);
+      if (this._touchEndHandler) {
+        this._element.removeEventListener('touchend',    this._touchEndHandler);
+        this._element.removeEventListener('touchcancel', this._touchEndHandler);
+      }
+      // Ensure no stale transform remains
+      this._element.classList.remove('drawer-tab-swiping', 'drawer-tab-transitioning');
+      this._element.style.transform = '';
+    }
+    this._touchStartHandler = null;
+    this._touchMoveHandler  = null;
+    this._touchEndHandler   = null;
+    this._element           = null;
+    this._animating         = false;
+    this._locked            = false;
+    this._cancelled         = false;
+    this._direction         = 0;
+    this._deltaX            = 0;
+  },
+
+  /** Get the current view mode from SessionDrawer */
+  _getViewMode() {
+    return (typeof SessionDrawer !== 'undefined' && SessionDrawer._viewMode) || 'sessions';
+  },
+
+  /**
+   * Check whether a swipe in the given direction is valid.
+   * Returns the target mode string or null if the swipe should be ignored.
+   */
+  _resolveTarget(direction) {
+    const mode = this._getViewMode();
+    // direction -1 = swiping left: sessions -> agents
+    if (direction === -1 && mode === 'sessions') return 'agents';
+    // direction +1 = swiping right: agents -> sessions
+    if (direction === 1  && mode === 'agents')   return 'sessions';
+    return null;
+  },
+
+  _onTouchStart(e) {
+    if (this._animating) return;
+    if (!e.touches || e.touches.length !== 1) return;
+
+    this.startX     = e.touches[0].clientX;
+    this.startY     = e.touches[0].clientY;
+    this.startTime  = Date.now();
+    this._deltaX    = 0;
+    this._locked    = false;
+    this._cancelled = false;
+    this._direction = 0;
+  },
+
+  _onTouchMove(e) {
+    if (this._animating || this._cancelled) return;
+    if (!e.touches || e.touches.length !== 1) return;
+
+    const x  = e.touches[0].clientX;
+    const y  = e.touches[0].clientY;
+    const dx = x - this.startX;
+    const dy = y - this.startY;
+    this._deltaX = dx;
+
+    if (!this._locked) {
+      // Wait for enough movement before locking direction
+      if (Math.abs(dx) < this.LOCK_THRESHOLD && Math.abs(dy) < this.LOCK_THRESHOLD) return;
+
+      if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical gesture — let the list scroll normally
+        this._cancelled = true;
+        return;
+      }
+
+      // Horizontal gesture — check if there is a valid target
+      const direction = dx > 0 ? 1 : -1;
+      const target = this._resolveTarget(direction);
+      if (!target) {
+        // No tab in this direction — cancel and allow scroll
+        this._cancelled = true;
+        return;
+      }
+
+      this._locked    = true;
+      this._direction = direction;
+      this._element.classList.add('drawer-tab-swiping');
+    }
+
+    // Prevent vertical scroll while we are handling horizontal swipe
+    e.preventDefault();
+
+    // Apply live drag feedback with resistance at edges
+    if (this._element) {
+      this._element.style.transform = 'translateX(' + dx + 'px)';
+    }
+  },
+
+  _onTouchEnd(e) {
+    if (this._animating) return;
+    if (this._cancelled || !this._locked) {
+      if (this._element) {
+        this._element.style.transform = '';
+        this._element.classList.remove('drawer-tab-swiping');
+      }
+      this._resetState();
+      return;
+    }
+
+    const elapsed   = Date.now() - this.startTime;
+    const dx        = this._deltaX;
+    const velocity  = elapsed > 0 ? Math.abs(dx) / elapsed : 0;
+    const threshold = (this._element ? this._element.offsetWidth : window.innerWidth) * this.COMMIT_RATIO;
+    const shouldCommit = Math.abs(dx) >= threshold || velocity >= this.FLING_VELOCITY;
+
+    // Ensure direction still matches final delta (user may have reversed)
+    const finalDirection = dx > 0 ? 1 : -1;
+    if (finalDirection !== this._direction) {
+      this._springBack();
+      return;
+    }
+
+    if (shouldCommit) {
+      this._commitSwipe();
+    } else {
+      this._springBack();
+    }
+  },
+
+  /** Animate commit: slide list off-screen, switch view mode, slide new content in */
+  _commitSwipe() {
+    if (!this._element) { this._springBack(); return; }
+    this._animating = true;
+
+    const el = this._element;
+    const dir = this._direction;
+    const targetX = dir === 1 ? el.offsetWidth : -el.offsetWidth;
+    const self = this;
+
+    el.classList.remove('drawer-tab-swiping');
+    el.classList.add('drawer-tab-transitioning');
+    el.style.transform = 'translateX(' + targetX + 'px)';
+
+    const onSlideOut = function() {
+      el.removeEventListener('transitionend', onSlideOut);
+      el.classList.remove('drawer-tab-transitioning');
+
+      // Switch view mode — this rebuilds the list content via _render()
+      const target = self._resolveTarget(dir);
+      if (target && typeof SessionDrawer !== 'undefined') {
+        SessionDrawer.setViewMode(target);
+      }
+
+      // Start the new content off-screen on the opposite side and slide it in
+      const entryX = dir === 1 ? -el.offsetWidth : el.offsetWidth;
+      el.style.transform = 'translateX(' + entryX + 'px)';
+
+      // Force reflow so the browser registers the starting position
+      void el.offsetHeight;
+
+      el.classList.add('drawer-tab-transitioning');
+      el.style.transform = 'translateX(0)';
+
+      const onSlideIn = function() {
+        el.removeEventListener('transitionend', onSlideIn);
+        el.classList.remove('drawer-tab-transitioning');
+        el.style.transform = '';
+        self._resetState();
+        self._animating = false;
+      };
+      el.addEventListener('transitionend', onSlideIn, { once: true });
+
+      // Safety timeout
+      setTimeout(function() {
+        if (self._animating) onSlideIn();
+      }, self.TRANSITION_MS + 100);
+    };
+
+    el.addEventListener('transitionend', onSlideOut, { once: true });
+
+    // Safety timeout for slide-out
+    setTimeout(function() {
+      if (self._animating && el.classList.contains('drawer-tab-transitioning')) {
+        onSlideOut();
+      }
+    }, this.TRANSITION_MS + 100);
+  },
+
+  /** Animate cancel: spring list back to origin */
+  _springBack() {
+    if (!this._element) { this._resetState(); return; }
+    this._animating = true;
+    const self = this;
+    const el = this._element;
+
+    el.classList.remove('drawer-tab-swiping');
+    el.classList.add('drawer-tab-transitioning');
+    el.style.transform = 'translateX(0)';
+
+    const onDone = function() {
+      el.removeEventListener('transitionend', onDone);
+      el.classList.remove('drawer-tab-transitioning');
+      el.style.transform = '';
+      self._resetState();
+      self._animating = false;
+    };
+    el.addEventListener('transitionend', onDone, { once: true });
+
+    setTimeout(function() {
+      if (self._animating) onDone();
+    }, this.TRANSITION_MS + 100);
+  },
+
+  /** Reset gesture state (but not listener refs) */
+  _resetState() {
+    this._locked    = false;
+    this._cancelled = false;
     this._direction = 0;
     this._deltaX    = 0;
   },
