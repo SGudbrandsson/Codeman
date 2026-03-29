@@ -264,6 +264,71 @@ describe('discoverCommands', () => {
     });
   });
 
+  // ── Manual skills (~/.claude/skills/) ──────────────────────────────────
+
+  describe('manual skills (~/.claude/skills/)', () => {
+    it('surfaces manually installed skills as /local:skillName', () => {
+      writeSkill(
+        path.join(homeDir, '.claude', 'skills'),
+        'codeman-feature',
+        'codeman-feature',
+        'Create a feature worktree'
+      );
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds).toContainEqual({
+        cmd: '/local:codeman-feature',
+        desc: 'Create a feature worktree',
+        source: 'plugin',
+      });
+    });
+
+    it('skips skill dirs without SKILL.md', () => {
+      const skillDir = path.join(homeDir, '.claude', 'skills', 'orphan-skill');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'README.md'), 'No SKILL.md here');
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds.some((c) => c.cmd.includes('orphan-skill'))).toBe(false);
+    });
+
+    it('returns no manual skills when ~/.claude/skills/ does not exist', () => {
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds.filter((c) => c.cmd.startsWith('/local:'))).toHaveLength(0);
+    });
+  });
+
+  // ── GSD workflow skills ───────────────────────────────────────────────────
+
+  describe('GSD workflow skills (~/.claude/get-shit-done/workflows/)', () => {
+    it('surfaces GSD workflows as /gsd:workflowName', () => {
+      const wfDir = path.join(homeDir, '.claude', 'get-shit-done', 'workflows');
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(wfDir, 'new-project.md'), '<purpose>Initialize a new project</purpose>\nBody.');
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds).toContainEqual({ cmd: '/gsd:new-project', desc: 'Initialize a new project', source: 'plugin' });
+    });
+
+    it('returns empty description when no <purpose> tag', () => {
+      const wfDir = path.join(homeDir, '.claude', 'get-shit-done', 'workflows');
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(wfDir, 'plain.md'), '# Plain workflow\nNo purpose tag.');
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds).toContainEqual({ cmd: '/gsd:plain', desc: '', source: 'plugin' });
+    });
+
+    it('ignores non-.md files in workflows dir', () => {
+      const wfDir = path.join(homeDir, '.claude', 'get-shit-done', 'workflows');
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(wfDir, 'notes.txt'), 'not a workflow');
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds.filter((c) => c.cmd.startsWith('/gsd:'))).toHaveLength(0);
+    });
+
+    it('returns no GSD skills when workflows dir does not exist', () => {
+      const cmds = discoverCommands(projectDir, homeDir);
+      expect(cmds.filter((c) => c.cmd.startsWith('/gsd:'))).toHaveLength(0);
+    });
+  });
+
   // ── Naming conventions ─────────────────────────────────────────────────────
 
   describe('command naming', () => {
@@ -378,7 +443,7 @@ describe('discoverCommands', () => {
       expect(cmds.some((c) => c.cmd === '/hidden')).toBe(false);
     });
 
-    it('returns all three sources together', () => {
+    it('returns all five sources together', () => {
       const installPath = path.join(tmpDir, 'plugin-multi');
       writeCmd(path.join(projectDir, '.claude', 'commands'), 'proj.md', 'proj', 'Project');
       writeCmd(path.join(homeDir, '.claude', 'commands'), 'user.md', 'user', 'User');
@@ -391,11 +456,20 @@ describe('discoverCommands', () => {
           skills: [{ dir: 'myskill', name: 'myskill', desc: 'Skill' }],
         },
       ]);
+      // Manual skill
+      writeSkill(path.join(homeDir, '.claude', 'skills'), 'my-manual', 'my-manual', 'Manual skill');
+      // GSD workflow
+      const wfDir = path.join(homeDir, '.claude', 'get-shit-done', 'workflows');
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(wfDir, 'plan.md'), '<purpose>Plan a project</purpose>');
+
       const cmds = discoverCommands(projectDir, homeDir);
       expect(cmds).toContainEqual({ cmd: '/proj', desc: 'Project', source: 'project' });
       expect(cmds).toContainEqual({ cmd: '/user', desc: 'User', source: 'user' });
       expect(cmds).toContainEqual({ cmd: '/plugin', desc: 'Plugin', source: 'plugin' });
       expect(cmds).toContainEqual({ cmd: '/myplugin:myskill', desc: 'Skill', source: 'plugin' });
+      expect(cmds).toContainEqual({ cmd: '/local:my-manual', desc: 'Manual skill', source: 'plugin' });
+      expect(cmds).toContainEqual({ cmd: '/gsd:plan', desc: 'Plan a project', source: 'plugin' });
     });
 
     it('returns empty array when no commands exist anywhere', () => {

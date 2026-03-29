@@ -1,11 +1,13 @@
 /**
  * @fileoverview Commands route — returns available slash commands and skills for a session.
  *
- * Discovers commands from three sources, in order:
+ * Discovers commands from five sources, in order:
  *   1. Project-level: {session_cwd}/.claude/commands/
  *   2. User-level:    ~/.claude/commands/
  *   3. Plugin-level:  ~/.claude/plugins/installed_plugins.json → each applicable plugin's
  *                     commands/ (slash commands) and skills/ (skill invocations)
+ *   4. Manual skills: ~/.claude/skills/ (manually installed skills with SKILL.md)
+ *   5. GSD workflows: ~/.claude/get-shit-done/workflows/ (.md workflow files)
  *
  * Command/skill directories are scanned two levels deep:
  *   - Top-level .md files → /command-name
@@ -148,6 +150,43 @@ function scanSkillsDir(skillsDir: string, pluginName: string): CommandEntry[] {
   return results;
 }
 
+/** Parse description from GSD workflow `<purpose>...</purpose>` tag */
+function parseGsdPurpose(content: string): string {
+  const m = content.match(/<purpose>\s*([\s\S]*?)\s*<\/purpose>/);
+  if (!m) return '';
+  return m[1].split('\n')[0].trim();
+}
+
+/**
+ * Scan a GSD workflows directory for .md files (flat, not subdirectories with SKILL.md).
+ * Each .md file is a workflow skill named /gsd:{filename}.
+ */
+function scanGsdWorkflowsDir(dir: string): CommandEntry[] {
+  const results: CommandEntry[] = [];
+  let filenames: string[];
+  try {
+    filenames = fs.readdirSync(dir);
+  } catch {
+    return results;
+  }
+  for (const filename of filenames) {
+    if (!filename.endsWith('.md')) continue;
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(dir, filename), 'utf-8');
+    } catch {
+      continue;
+    }
+    const skillName = filename.replace(/\.md$/, '');
+    results.push({
+      cmd: toSlashCmd(`gsd:${skillName}`),
+      desc: parseGsdPurpose(content),
+      source: 'plugin',
+    });
+  }
+  return results;
+}
+
 /**
  * Read installed_plugins.json and return plugin entries that apply to the given cwd.
  * Deduplicates by installPath so the same plugin installed at multiple scopes
@@ -220,6 +259,12 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
     commands.push(...scanCommandDir(path.join(installPath, 'commands'), 'plugin'));
     commands.push(...scanSkillsDir(path.join(installPath, 'skills'), pluginName));
   }
+
+  // 4. Manually installed skills (~/.claude/skills/)
+  commands.push(...scanSkillsDir(path.join(userClaudeDir, 'skills'), 'local'));
+
+  // 5. GSD workflow skills (~/.claude/get-shit-done/workflows/)
+  commands.push(...scanGsdWorkflowsDir(path.join(userClaudeDir, 'get-shit-done', 'workflows')));
 
   // Filter out disabled skills
   const disabled = disabledSkillsForProject(cwd, userHomeOverride);
