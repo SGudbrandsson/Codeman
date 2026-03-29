@@ -143,8 +143,14 @@ function scanSkillsDir(skillsDir: string, pluginName: string): CommandEntry[] {
     }
     const { name, description } = parseFrontmatter(content);
     const skillName = name ?? entry.name;
-    // Prefix with pluginName if not already namespaced
-    const rawCmd = skillName.includes(':') ? skillName : `${pluginName}:${skillName}`;
+    // For manually installed skills (pluginName === 'local'), use the skill name
+    // directly without a namespace prefix. For plugin skills, prefix with pluginName.
+    let rawCmd: string;
+    if (pluginName === 'local') {
+      rawCmd = skillName;
+    } else {
+      rawCmd = skillName.includes(':') ? skillName : `${pluginName}:${skillName}`;
+    }
     results.push({ cmd: toSlashCmd(rawCmd), desc: description ?? '', source: 'plugin' });
   }
   return results;
@@ -258,6 +264,8 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
   for (const { installPath, pluginName } of applicablePluginPaths(cwd, userHomeOverride)) {
     commands.push(...scanCommandDir(path.join(installPath, 'commands'), 'plugin'));
     commands.push(...scanSkillsDir(path.join(installPath, 'skills'), pluginName));
+    // Some plugins (e.g. impeccable) store skills under .cursor/skills/
+    commands.push(...scanSkillsDir(path.join(installPath, '.cursor', 'skills'), pluginName));
   }
 
   // 4. Manually installed skills (~/.claude/skills/)
@@ -266,10 +274,31 @@ export function discoverCommands(cwd: string, userHomeOverride?: string): Comman
   // 5. GSD workflow skills (~/.claude/get-shit-done/workflows/)
   commands.push(...scanGsdWorkflowsDir(path.join(userClaudeDir, 'get-shit-done', 'workflows')));
 
+  // Deduplicate: drop user/project commands that are just wrappers invoking a
+  // skill that's already in the list. E.g. user command "/codeman:full-qa" is
+  // redundant when skill "/codeman-full-qa" exists.
+  const skillNames = new Set<string>();
+  for (const cmd of commands) {
+    if (cmd.source !== 'plugin') continue;
+    const bare = cmd.cmd.startsWith('/') ? cmd.cmd.slice(1) : cmd.cmd;
+    skillNames.add(bare);
+  }
+
+  const deduped = commands.filter((cmd) => {
+    if (cmd.source !== 'user' && cmd.source !== 'project') return true;
+    const bare = cmd.cmd.startsWith('/') ? cmd.cmd.slice(1) : cmd.cmd;
+    // "codeman:full-qa" → check if "codeman-full-qa" (colon→dash) is a skill
+    const dashName = bare.replace(':', '-');
+    if (skillNames.has(dashName) || skillNames.has(bare)) {
+      return false;
+    }
+    return true;
+  });
+
   // Filter out disabled skills
   const disabled = disabledSkillsForProject(cwd, userHomeOverride);
-  if (disabled.size === 0) return commands;
-  return commands.filter((cmd) => {
+  if (disabled.size === 0) return deduped;
+  return deduped.filter((cmd) => {
     if (cmd.source !== 'plugin') return true;
     const bare = cmd.cmd.startsWith('/') ? cmd.cmd.slice(1) : cmd.cmd;
     return !disabled.has(bare);
