@@ -128,6 +128,23 @@ export const MCP_LIBRARY: McpLibraryEntry[] = [
     args: ['@modelcontextprotocol/server-filesystem', '/allowed/path'],
   },
   {
+    id: 'codeman-messaging',
+    name: 'Codeman Messaging',
+    description: 'List sessions and send messages between Codeman sessions',
+    category: 'Communication',
+    transport: 'stdio',
+    command: 'node',
+    args: ['dist/mcp-server.js'],
+    envVars: [
+      {
+        key: 'CODEMAN_URL',
+        description: 'Codeman API URL (default: http://localhost:3001)',
+        required: false,
+        sensitive: false,
+      },
+    ],
+  },
+  {
     id: 'blank-stdio',
     name: 'Custom (stdio)',
     description: 'Blank template — configure your own stdio MCP server',
