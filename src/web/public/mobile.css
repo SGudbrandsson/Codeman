@@ -3081,6 +3081,7 @@ html.mobile-init .file-browser-panel {
 }
 .compose-slash-item:last-child { border-bottom: none; }
 .compose-slash-item:active { background: #2a2a4e; }
+.compose-slash-item.active { background: rgba(255, 255, 255, 0.08); }
 .compose-slash-cmd {
   font-size: 14px;
   font-weight: 600;

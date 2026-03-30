@@ -160,3 +160,145 @@ describe('mergeCommands (session + builtins)', () => {
     expect(compacts.some((c) => c.cmd === '/compact')).toBe(true);
   });
 });
+
+// ── Mirrored from app.js: InputPanel._findSlashToken ──────────────────────────
+
+function findSlashToken(value: string, cursorPos: number): { start: number; query: string } | null {
+  if (!value || cursorPos == null || cursorPos < 1) return null;
+  let i = cursorPos - 1;
+  while (
+    i >= 0 &&
+    value[i] !== '/' &&
+    value[i] !== ' ' &&
+    value[i] !== '\n' &&
+    value[i] !== '\r' &&
+    value[i] !== '\t'
+  ) {
+    i--;
+  }
+  if (i < 0 || value[i] !== '/') return null;
+  if (i > 0) {
+    const prev = value[i - 1];
+    if (prev !== ' ' && prev !== '\n' && prev !== '\r' && prev !== '\t') return null;
+  }
+  const query = value.slice(i + 1, cursorPos);
+  return { start: i, query };
+}
+
+// ── Inline slash token detection tests ───────────────────────────────────────
+
+describe('findSlashToken (inline slash detection)', () => {
+  it('"hello /com" cursor=10 -> { start: 6, query: "com" }', () => {
+    expect(findSlashToken('hello /com', 10)).toEqual({ start: 6, query: 'com' });
+  });
+
+  it('"/compact foo" cursor=8 -> { start: 0, query: "compact" }', () => {
+    expect(findSlashToken('/compact foo', 8)).toEqual({ start: 0, query: 'compact' });
+  });
+
+  it('"no slash here" cursor=13 -> null', () => {
+    expect(findSlashToken('no slash here', 13)).toBeNull();
+  });
+
+  it('"foo /bar baz" cursor=8 -> { start: 4, query: "bar" }', () => {
+    expect(findSlashToken('foo /bar baz', 8)).toEqual({ start: 4, query: 'bar' });
+  });
+
+  it('cursor in middle of token: "check /help please" cursor=11 -> { start: 6, query: "help" }', () => {
+    expect(findSlashToken('check /help please', 11)).toEqual({ start: 6, query: 'help' });
+  });
+
+  it('"http://foo" -> null (/ preceded by non-space)', () => {
+    expect(findSlashToken('http://foo', 10)).toBeNull();
+  });
+
+  it('"/" at start with cursor=1 -> { start: 0, query: "" }', () => {
+    expect(findSlashToken('/', 1)).toEqual({ start: 0, query: '' });
+  });
+
+  it('empty string -> null', () => {
+    expect(findSlashToken('', 0)).toBeNull();
+  });
+
+  it('cursor at 0 -> null', () => {
+    expect(findSlashToken('/foo', 0)).toBeNull();
+  });
+
+  it('newline before slash: "hello\\n/com" -> detects token', () => {
+    expect(findSlashToken('hello\n/com', 10)).toEqual({ start: 6, query: 'com' });
+  });
+});
+
+// ── Keyboard navigation logic tests ──────────────────────────────────────────
+
+describe('Keyboard navigation (highlight index wrapping)', () => {
+  // These test the pure wrapping logic used by the keydown handler
+  function wrapDown(idx: number, count: number): number {
+    return (idx + 1) % count;
+  }
+  function wrapUp(idx: number, count: number): number {
+    return (idx - 1 + count) % count;
+  }
+
+  it('ArrowDown wraps from last to 0', () => {
+    expect(wrapDown(4, 5)).toBe(0);
+  });
+
+  it('ArrowDown increments normally', () => {
+    expect(wrapDown(0, 5)).toBe(1);
+    expect(wrapDown(2, 5)).toBe(3);
+  });
+
+  it('ArrowUp wraps from 0 to last', () => {
+    expect(wrapUp(0, 5)).toBe(4);
+  });
+
+  it('ArrowUp decrements normally', () => {
+    expect(wrapUp(3, 5)).toBe(2);
+    expect(wrapUp(1, 5)).toBe(0);
+  });
+
+  it('single item: ArrowDown stays at 0', () => {
+    expect(wrapDown(0, 1)).toBe(0);
+  });
+
+  it('single item: ArrowUp stays at 0', () => {
+    expect(wrapUp(0, 1)).toBe(0);
+  });
+});
+
+describe('Inline slash command insertion', () => {
+  // Mirrors _insertSlashCommand logic: replaces tokenStart..tokenEnd with cmd + ' '
+  function insertSlashCommand(
+    value: string,
+    tokenStart: number,
+    tokenEnd: number,
+    cmd: string
+  ): { text: string; cursor: number } {
+    const before = value.slice(0, tokenStart);
+    const after = value.slice(tokenEnd);
+    const insertion = cmd + ' ';
+    return { text: before + insertion + after, cursor: before.length + insertion.length };
+  }
+
+  it('replaces inline token, preserving surrounding text', () => {
+    // "hello /com" -> "hello /compact " (token at 6..10)
+    const result = insertSlashCommand('hello /com', 6, 10, '/compact');
+    expect(result.text).toBe('hello /compact ');
+    expect(result.cursor).toBe(15);
+  });
+
+  it('replaces at start of input', () => {
+    const result = insertSlashCommand('/com', 0, 4, '/compact');
+    expect(result.text).toBe('/compact ');
+    expect(result.cursor).toBe(9);
+  });
+
+  it('preserves text after the token', () => {
+    // "do /hel and more" -> token is at 3..7, replaced with "/help " -> "do /help  and more"
+    // Note: the insertion always adds a trailing space, so there's a double space before "and"
+    const result = insertSlashCommand('do /hel and more', 3, 7, '/help');
+    expect(result.text).toBe('do /help  and more');
+    expect(result.cursor).toBe(9);
+  });
+});

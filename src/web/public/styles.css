@@ -9344,6 +9344,7 @@ kbd {
   }
   .compose-slash-item:last-child { border-bottom: none; }
   .compose-slash-item:hover { background: rgba(255, 255, 255, 0.05); }
+  .compose-slash-item.active { background: rgba(255, 255, 255, 0.08); }
   .compose-slash-cmd {
     font-size: 0.8rem;
     font-weight: 600;
