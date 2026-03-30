@@ -20462,7 +20462,7 @@ const InputPanel = {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         FeatureTracker.track('keyboard-shortcut-ctrl-enter');
-        this.send();
+        this.send().catch(() => {});
       }
     });
 

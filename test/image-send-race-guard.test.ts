@@ -341,7 +341,7 @@ describe('InputPanel send() upload race guard', () => {
   });
 
   describe('double-send safety during upload', () => {
-    it('second send() finds empty content and returns early (no duplicate message)', async () => {
+    it('second send() during same upload does not crash', async () => {
       const { panel, sent } = createInputPanel();
 
       const entry = panel.startUpload();
@@ -356,12 +356,9 @@ describe('InputPanel send() upload race guard', () => {
       await send1;
       await send2;
 
-      // First send processes the image + text; second finds _images cleared and
-      // text is empty string (textarea was "cleared"), so it returns early.
-      // Since our replica doesn't clear a real textarea, the second send will
-      // also find the same text. But in the real code, ta.value = '' happens
-      // in the first send, so the second sees empty text + empty images → early return.
-      // Here we verify at most 2 sends occurred (worst case) and the first is correct.
+      // Both sends resolve without throwing — the guard prevents crashes.
+      // Our replica doesn't clear a real textarea, so we can't assert exactly 1 send;
+      // we verify the calls don't crash and the first payload is correct.
       expect(sent.length).toBeGreaterThanOrEqual(1);
       expect(sent[0]).toBe('/screenshots/img.png\nhello');
     });
