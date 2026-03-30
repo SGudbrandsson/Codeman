@@ -20593,7 +20593,19 @@ const InputPanel = {
   },
 
   /** Send all queued images then the typed text */
-  send() {
+  async send() {
+    // Guard: wait for any in-flight uploads to complete before sending.
+    // This prevents the race where Ctrl+Enter (or any code path) calls send()
+    // while an image upload fetch hasn't resolved yet, causing the image to be
+    // silently dropped because its .path is still null.
+    if (this._uploadingCount > 0) {
+      if (!this._uploadsCompletePromise) {
+        // Safety: count is positive but no promise — create one now
+        this._uploadsCompletePromise = new Promise(r => { this._uploadsCompleteResolve = r; });
+      }
+      if (typeof app !== 'undefined') app.showToast('Waiting for image upload\u2026', 'info');
+      await this._uploadsCompletePromise;
+    }
     FeatureTracker.track('compose-bar-send');
     const ta = this._getTextarea();
     if (!ta) return;
@@ -20676,8 +20688,10 @@ const InputPanel = {
     }
 
     ta.value = '';
-    this._images = [];
-    this._files = [];
+    // Only remove images/files that were actually sent (have a resolved path).
+    // Any entries still mid-upload (path === null) from a concurrent paste are preserved.
+    this._images = this._images.filter(img => !img.path);
+    this._files = this._files.filter(f => !f.path);
     this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
     this._autoGrow(ta);
   },
@@ -20806,6 +20820,18 @@ const InputPanel = {
     const btn = document.getElementById('composeSendBtn');
     if (!btn) return;
     btn.disabled = this._uploadingCount > 0;
+
+    // Manage the _uploadsCompletePromise used by send() to await in-flight uploads.
+    // When count transitions from 0 to positive, create a fresh promise.
+    // When count reaches 0, resolve it so any waiting send() can proceed.
+    if (this._uploadingCount > 0 && !this._uploadsCompletePromise) {
+      this._uploadsCompletePromise = new Promise(r => { this._uploadsCompleteResolve = r; });
+    } else if (this._uploadingCount <= 0 && this._uploadsCompleteResolve) {
+      this._uploadsCompleteResolve();
+      this._uploadsCompletePromise = null;
+      this._uploadsCompleteResolve = null;
+    }
+
     // Safety valve: if _uploadingCount is stuck positive (e.g. an exception
     // bypassed the finally block), force-reset after 60 seconds so the Send
     // button doesn't stay permanently disabled.
