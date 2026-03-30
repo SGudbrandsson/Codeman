@@ -3159,6 +3159,7 @@ const TranscriptView = {
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
     this._thinkingBubbleEl = null;
+    this._permissionBlockEl = null;
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
     // NOTE: do NOT clear state.blocks here — caller (clear()) does it when needed.

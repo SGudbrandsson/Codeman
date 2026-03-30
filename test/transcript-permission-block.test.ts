@@ -659,3 +659,249 @@ describe('Thinking indicator suppression — setWorking(false) when permission p
     });
   });
 });
+
+// ─── Gap 6: load() nulls _permissionBlockEl ────────────────────────────
+
+describe('load() — nulls _permissionBlockEl and removes .tv-permission-block from DOM', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+  let sessionId2: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    sessionId2 = await createSession(page);
+    await selectSession(page, sessionId);
+
+    // Render a permission block for sessionId
+    await page.evaluate(
+      ({ sid }) => {
+        const tv = (
+          window as unknown as {
+            TranscriptView: {
+              _sessionId: string;
+              _renderPermissionBlock: (data: { tool: string; command: string; sessionId: string }) => void;
+            };
+          }
+        ).TranscriptView;
+        tv._sessionId = sid;
+        tv._renderPermissionBlock({ tool: 'Bash', command: 'echo load-test', sessionId: sid });
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await deleteSession(page, sessionId2);
+    await context?.close();
+  });
+
+  it('.tv-permission-block exists before load()', async () => {
+    const count = await page.locator('.tv-permission-block').count();
+    expect(count).toBe(1);
+  });
+
+  it('_permissionBlockEl is not null before load()', async () => {
+    const isNull = await page.evaluate(() => {
+      return (
+        (
+          window as unknown as {
+            TranscriptView: { _permissionBlockEl: unknown };
+          }
+        ).TranscriptView._permissionBlockEl === null
+      );
+    });
+    expect(isNull).toBe(false);
+  });
+
+  it('after load(newSessionId), _permissionBlockEl is null', async () => {
+    // Call load() with a different session to trigger the reset
+    await page.evaluate(
+      ({ sid2 }) => {
+        const tv = (
+          window as unknown as {
+            TranscriptView: {
+              load: (sessionId: string) => Promise<void>;
+            };
+          }
+        ).TranscriptView;
+        tv.load(sid2);
+      },
+      { sid2: sessionId2 }
+    );
+    await page.waitForTimeout(800);
+
+    const isNull = await page.evaluate(() => {
+      return (
+        (
+          window as unknown as {
+            TranscriptView: { _permissionBlockEl: unknown };
+          }
+        ).TranscriptView._permissionBlockEl === null
+      );
+    });
+    expect(isNull).toBe(true);
+  });
+
+  it('.tv-permission-block is no longer in the DOM after load()', async () => {
+    const count = await page.locator('.tv-permission-block').count();
+    expect(count).toBe(0);
+  });
+});
+
+// ─── Gap 7: _renderPermissionBlock deduplication ───────────────────────
+
+describe('_renderPermissionBlock deduplication — only one block in DOM after double call', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('calling _renderPermissionBlock twice results in exactly one .tv-permission-block', async () => {
+    await page.evaluate(
+      ({ sid }) => {
+        const tv = (
+          window as unknown as {
+            TranscriptView: {
+              _sessionId: string;
+              _renderPermissionBlock: (data: { tool: string; command: string; sessionId: string }) => void;
+            };
+          }
+        ).TranscriptView;
+        tv._sessionId = sid;
+        tv._renderPermissionBlock({ tool: 'Bash', command: 'echo first', sessionId: sid });
+        tv._renderPermissionBlock({ tool: 'Write', command: 'echo second', sessionId: sid });
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+
+    const count = await page.locator('.tv-permission-block').count();
+    expect(count).toBe(1);
+  });
+
+  it('the surviving block shows the second call data', async () => {
+    const descText = await page.evaluate(() => {
+      const desc = document.querySelector('.tv-permission-desc');
+      return desc?.textContent ?? null;
+    });
+    expect(descText).toContain('Write');
+    expect(descText).toContain('echo second');
+  });
+});
+
+// ─── Gap 8: _renderPermissionBlock with no tool info ───────────────────
+
+describe('_renderPermissionBlock with no tool — desc omitted, block and buttons still render', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+
+    await page.evaluate(
+      ({ sid }) => {
+        const tv = (
+          window as unknown as {
+            TranscriptView: {
+              _sessionId: string;
+              _renderPermissionBlock: (data: { sessionId: string }) => void;
+            };
+          }
+        ).TranscriptView;
+        tv._sessionId = sid;
+        tv._renderPermissionBlock({ sessionId: sid });
+      },
+      { sid: sessionId }
+    );
+    await page.waitForTimeout(200);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('.tv-permission-block is rendered', async () => {
+    const count = await page.locator('.tv-permission-block').count();
+    expect(count).toBe(1);
+  });
+
+  it('.tv-permission-desc is NOT rendered when tool is absent', async () => {
+    const count = await page.locator('.tv-permission-desc').count();
+    expect(count).toBe(0);
+  });
+
+  it('buttons are still present', async () => {
+    const btnCount = await page.locator('.tv-permission-btn').count();
+    expect(btnCount).toBe(3);
+  });
+
+  it('header is still present', async () => {
+    const headerText = await page.evaluate(() => {
+      const hdr = document.querySelector('.tv-permission-header');
+      return hdr?.textContent ?? null;
+    });
+    expect(headerText).toBe('Permission Required');
+  });
+});
+
+// ─── Gap 9: _onHookPermissionPrompt inactive session guard ─────────────
+
+describe('_onHookPermissionPrompt — does NOT render block for inactive session', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+    await selectSession(page, sessionId);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('firing _onHookPermissionPrompt with a non-active sessionId does not create .tv-permission-block', async () => {
+    // Fire with a fake session ID that is NOT the active session
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          app: {
+            _onHookPermissionPrompt: (data: { sessionId: string; tool: string; command: string }) => void;
+          };
+        }
+      ).app._onHookPermissionPrompt({
+        sessionId: 'non-existent-session-id-12345',
+        tool: 'Bash',
+        command: 'echo should-not-render',
+      });
+    });
+    await page.waitForTimeout(200);
+
+    const count = await page.locator('.tv-permission-block').count();
+    expect(count).toBe(0);
+  });
+});
