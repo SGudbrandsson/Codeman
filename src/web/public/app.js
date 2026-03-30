@@ -7300,6 +7300,24 @@ class CodemanApp {
 
   /** Parse numbered options from a plain-text string (hook payload). */
   _parseElicitationOptionsFromText(text) {
+    // Try multi-select format first: "N. [ ] Label" or "N. [x] Label"
+    const multiRe = /^\s*(\d+)\.\s*\[([x ])\]\s*(.+)/gim;
+    const multiOptions = [];
+    let hasTypeOption = false;
+    let mm;
+    while ((mm = multiRe.exec(text)) !== null) {
+      const label = mm[3].trim();
+      // Track "Type something" but don't include it as a selectable option
+      if (/^type something$/i.test(label)) { hasTypeOption = true; continue; }
+      multiOptions.push({ val: mm[1], label, checked: mm[2].toLowerCase() === 'x' });
+    }
+    if (multiOptions.length > 0) {
+      const firstIdx = text.search(/^\s*\d+\.\s*\[/m);
+      const before = firstIdx > 0 ? text.slice(0, firstIdx) : '';
+      const question = before.split('\n').map(l => l.trim()).filter(Boolean).pop() || '';
+      return { question, options: multiOptions, multiSelect: true, hasTypeOption };
+    }
+    // Single-select format: "N: Label"
     const optionRe = /\b(\d):\s*([A-Za-z][A-Za-z /\-]{0,40}?)(?=\s{2,}|\s*\d:|$|\n)/g;
     const options = [];
     let m;
@@ -7309,11 +7327,11 @@ class CodemanApp {
     if (options.length === 0) return null;
     const firstOptionIdx = text.indexOf(options[0].val + ':');
     const question = text.slice(0, firstOptionIdx).split('\n').map(l => l.trim()).filter(Boolean).pop() || '';
-    return { question, options };
+    return { question, options, multiSelect: false };
   }
 
   /**
-   * Reads the last 20 lines of the given session's xterm buffer and extracts
+   * Reads the last 30 lines of the given session's xterm buffer and extracts
    * numbered options of the form "N: Label" plus the question text above them.
    * Returns { question, options: [{val, label}] } or null if nothing found.
    */
@@ -7322,7 +7340,7 @@ class CodemanApp {
     if (!terminal) return null;
     const buf = terminal.buffer.active;
     const lineCount = buf.length;
-    const start = Math.max(0, lineCount - 20);
+    const start = Math.max(0, lineCount - 30);
     const lines = [];
     for (let i = start; i < lineCount; i++) {
       const line = buf.getLine(i);
@@ -7330,6 +7348,25 @@ class CodemanApp {
     }
     const text = lines.join('\n');
 
+    // Try multi-select format first: "N. [ ] Label" (with optional cursor marker)
+    const multiRe = /^\s*[>❯]?\s*(\d+)\.\s*\[([x ])\]\s*(.+)/gim;
+    const multiOptions = [];
+    let hasTypeOption = false;
+    let mm;
+    while ((mm = multiRe.exec(text)) !== null) {
+      const label = mm[3].trim();
+      if (/^type something$/i.test(label)) { hasTypeOption = true; continue; }
+      multiOptions.push({ val: mm[1], label, checked: mm[2].toLowerCase() === 'x' });
+    }
+    if (multiOptions.length > 0) {
+      const firstIdx = text.search(/^\s*[>❯]?\s*\d+\.\s*\[/m);
+      const before = firstIdx > 0 ? text.slice(0, firstIdx) : '';
+      const questionLines = before.split('\n').map(l => l.replace(/^[\u2022\s]+/, '').trim()).filter(Boolean);
+      const question = questionLines[questionLines.length - 1] || '';
+      return { question, options: multiOptions, multiSelect: true, hasTypeOption };
+    }
+
+    // Single-select format: "N: Label"
     const optionRe = /\b(\d):\s*([A-Za-z][A-Za-z /\-]{0,18}?)(?=\s{2,}|\s*\d:|$|\n)/g;
     const options = [];
     let m;
@@ -7345,7 +7382,7 @@ class CodemanApp {
       .filter(Boolean);
     const question = questionLines[questionLines.length - 1] || '';
 
-    return { question, options };
+    return { question, options, multiSelect: false };
   }
 
   /** Renders or hides the elicitation quick-reply panel based on this.pendingElicitation. */
@@ -7358,7 +7395,26 @@ class CodemanApp {
       return;
     }
     panel.style.display = '';
-    if (pe.options && pe.options.length > 0) {
+    // All option labels come from our own parser output (terminal buffer or hook payload),
+    // not from untrusted user input. The existing innerHTML pattern is used throughout this
+    // panel for single-select buttons — extending it for multi-select checkboxes.
+    if (pe.multiSelect && pe.options && pe.options.length > 0) {
+      // Multi-select: render toggleable checkboxes with a Submit button
+      const sid = pe.sessionId;
+      const checks = pe.options.map((o, i) =>
+        `<label class="elicitation-check" data-idx="${i}">` +
+        `<input type="checkbox" ${o.checked ? 'checked' : ''}>` +
+        `<span>${o.label}</span></label>`
+      ).join('');
+      panel.innerHTML =
+        (pe.question ? `<div class="elicitation-question">${pe.question}</div>` : '') +
+        `<div class="elicitation-multiselect">${checks}</div>` +
+        `<div class="elicitation-multi-actions">` +
+        `<button class="elicitation-send-btn" ` +
+        `onclick="app.sendMultiSelectElicitationResponse('${sid}')" ` +
+        `ontouchend="event.preventDefault();app.sendMultiSelectElicitationResponse('${sid}')">Submit</button>` +
+        `</div>`;
+    } else if (pe.options && pe.options.length > 0) {
       const btns = pe.options.map(o =>
         `<button class="elicitation-btn" ` +
         `onclick="app.sendElicitationResponse('${pe.sessionId}','${o.val}')" ` +
@@ -7390,6 +7446,48 @@ class CodemanApp {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
+    }).catch(() => {});
+  }
+
+  /** Sends a multi-select elicitation response by reading checked checkboxes
+   * from the panel and sending terminal navigation keystrokes (arrow/space)
+   * to toggle the selected items in Ink's multi-select UI, then submits.
+   */
+  sendMultiSelectElicitationResponse(sessionId) {
+    const pe = this.pendingElicitation;
+    if (!pe || !pe.multiSelect) return;
+    const panel = document.getElementById('elicitationPanel');
+    if (!panel) return;
+    const checkboxes = panel.querySelectorAll('.elicitation-check input[type="checkbox"]');
+    const selected = new Set();
+    checkboxes.forEach((cb, i) => { if (cb.checked) selected.add(i); });
+
+    // Build terminal keystroke sequence for Ink's multi-select:
+    // Cursor starts at the first item (index 0).
+    // For each item: compare desired state against Ink's initial state —
+    // only send Space (toggle) when they differ. Then Arrow Down to next.
+    const DOWN = '\x1b[B';
+    const SPACE = ' ';
+    const ENTER = '\r';
+    const parts = [];
+    const totalItems = pe.options.length;
+    for (let i = 0; i < totalItems; i++) {
+      const initiallyChecked = pe.options[i].checked;
+      const wantChecked = selected.has(i);
+      if (wantChecked !== initiallyChecked) parts.push(SPACE);
+      parts.push(DOWN);
+    }
+    // Skip "Type something" item if present (detected by parser), then Enter on "Next"
+    if (pe.hasTypeOption) parts.push(DOWN);
+    parts.push(ENTER);
+
+    this.clearPendingHooks(sessionId, 'elicitation_dialog');
+    this.pendingElicitation = null;
+    this.renderElicitationPanel();
+    fetch(`/api/sessions/${sessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: parts.join(''), useMux: true }),
     }).catch(() => {});
   }
 
@@ -7585,6 +7683,8 @@ class CodemanApp {
       sessionId: data.sessionId,
       question,
       options: parsed?.options || [],
+      multiSelect: parsed?.multiSelect || false,
+      hasTypeOption: parsed?.hasTypeOption || false,
     };
     this.renderElicitationPanel();
   }
