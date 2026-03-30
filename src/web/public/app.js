@@ -7332,8 +7332,9 @@ class CodemanApp {
 
   /**
    * Reads the last 30 lines of the given session's xterm buffer and extracts
-   * numbered options of the form "N: Label" plus the question text above them.
-   * Returns { question, options: [{val, label}] } or null if nothing found.
+   * elicitation options. Supports multi-select ("N. [ ] Label") and single-select
+   * ("N: Label") formats, plus the question text above them.
+   * Returns { question, options, multiSelect, hasTypeOption } or null.
    */
   _parseElicitationOptions(sessionId) {
     const terminal = this.terminals?.get(sessionId) ?? this.terminal;
