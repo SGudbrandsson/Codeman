@@ -20309,6 +20309,10 @@ const InputPanel = {
   _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
   _files: [],      // Array<{ filename: string, path: string|null, uploading: boolean }>
   _slashVisible: false,
+  _slashHighlightIdx: -1,
+  _slashTokenStart: -1,
+  _slashTokenEnd: -1,
+  _slashItems: [],           // cached list of command strings shown in popup
   _replaceIdx: -1,
   _autoGrowPending: false,
   _drafts: new Map(),       // Map<sessionId, {text, imagePaths[]}> — per-session draft cache
@@ -20438,7 +20442,7 @@ const InputPanel = {
 
     // Auto-grow on input (RAF-debounced to avoid forced sync layout per keystroke)
     ta.addEventListener('input', () => {
-      this._handleSlashInput(ta.value); // stays synchronous (drives popup visibility)
+      this._handleSlashInput(ta.value, ta.selectionStart); // stays synchronous (drives popup visibility)
       if (!this._autoGrowPending) {
         this._autoGrowPending = true;
         requestAnimationFrame(() => {
@@ -20457,8 +20461,44 @@ const InputPanel = {
       }
     });
 
-    // Keyboard: Ctrl/Cmd+Enter sends on desktop; plain Enter creates newline
+    // Keyboard: slash popup navigation + Ctrl/Cmd+Enter sends on desktop
     ta.addEventListener('keydown', (e) => {
+      // Slash popup keyboard navigation
+      if (this._slashVisible && this._slashItems.length > 0) {
+        const count = this._slashItems.length;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          this._slashHighlightIdx = (this._slashHighlightIdx + 1) % count;
+          this._updateSlashHighlight();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          this._slashHighlightIdx = (this._slashHighlightIdx - 1 + count) % count;
+          this._updateSlashHighlight();
+          return;
+        }
+        if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          if (this._slashHighlightIdx >= 0 && this._slashHighlightIdx < count) {
+            this._insertSlashCommand(this._slashItems[this._slashHighlightIdx]);
+          }
+          return;
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          if (this._slashHighlightIdx >= 0 && this._slashHighlightIdx < count) {
+            this._insertSlashCommand(this._slashItems[this._slashHighlightIdx]);
+          }
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this._closeSlashPopup();
+          return;
+        }
+      }
+      // Ctrl/Cmd+Enter sends on desktop; plain Enter creates newline
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         FeatureTracker.track('keyboard-shortcut-ctrl-enter');
@@ -20972,9 +21012,13 @@ const InputPanel = {
 
   // ── Slash commands ──────────────────────────────────────────────────────────
 
-  _handleSlashInput(value) {
-    if (!value.startsWith('/')) { this._closeSlashPopup(); return; }
-    const query = value.slice(1).toLowerCase();
+  _handleSlashInput(value, cursorPos) {
+    // Inline slash detection: find nearest `/` before cursor that is at pos 0 or preceded by whitespace
+    const token = InputPanel._findSlashToken(value, cursorPos);
+    if (!token) { this._closeSlashPopup(); return; }
+    this._slashTokenStart = token.start;
+    this._slashTokenEnd = cursorPos;
+    const query = token.query.toLowerCase();
     const sessionId = typeof app !== 'undefined' ? app.activeSessionId : null;
     const sessionCommands = (sessionId && app._sessionCommands?.get(sessionId)) || [];
     // Merge session-specific commands (first) with built-ins, deduplicating by cmd name
@@ -20998,14 +21042,39 @@ const InputPanel = {
     this._showSlashPopup(matches);
   },
 
+  /**
+   * Find the slash token at the cursor position.
+   * Returns { start, query } or null if no valid slash token is found.
+   * Exported as a static method for testability.
+   */
+  _findSlashToken(value, cursorPos) {
+    if (!value || cursorPos == null || cursorPos < 1) return null;
+    // Scan backwards from cursor to find `/`
+    let i = cursorPos - 1;
+    // First, skip backwards over word characters (the token after `/`)
+    while (i >= 0 && value[i] !== '/' && value[i] !== ' ' && value[i] !== '\n' && value[i] !== '\r' && value[i] !== '\t') {
+      i--;
+    }
+    if (i < 0 || value[i] !== '/') return null;
+    // The `/` must be at position 0 or preceded by a space/newline
+    if (i > 0) {
+      const prev = value[i - 1];
+      if (prev !== ' ' && prev !== '\n' && prev !== '\r' && prev !== '\t') return null;
+    }
+    const query = value.slice(i + 1, cursorPos);
+    return { start: i, query };
+  },
+
   _showSlashPopup(commands) {
     const popup = document.getElementById('composeSlashPopup');
     if (!popup) return;
     popup.replaceChildren();
-    commands.forEach(cmd => {
+    this._slashItems = commands.map(c => c.cmd);
+    commands.forEach((cmd, idx) => {
       const item = document.createElement('div');
-      item.className = 'compose-slash-item';
+      item.className = 'compose-slash-item' + (idx === 0 ? ' active' : '');
       item.setAttribute('role', 'option');
+      if (idx === 0) item.setAttribute('aria-selected', 'true');
 
       const cmdSpan = document.createElement('span');
       cmdSpan.className = 'compose-slash-cmd';
@@ -21022,12 +21091,35 @@ const InputPanel = {
     });
     popup.style.display = '';
     this._slashVisible = true;
+    this._slashHighlightIdx = 0;
+  },
+
+  _updateSlashHighlight() {
+    const popup = document.getElementById('composeSlashPopup');
+    if (!popup) return;
+    const items = popup.querySelectorAll('.compose-slash-item');
+    items.forEach((el, i) => {
+      if (i === this._slashHighlightIdx) {
+        el.classList.add('active');
+        el.setAttribute('aria-selected', 'true');
+        el.scrollIntoView({ block: 'nearest' });
+      } else {
+        el.classList.remove('active');
+        el.removeAttribute('aria-selected');
+      }
+    });
   },
 
   _insertSlashCommand(cmd) {
     const ta = this._getTextarea();
     if (ta) {
-      ta.value = cmd + ' ';
+      const before = ta.value.slice(0, this._slashTokenStart);
+      const after = ta.value.slice(this._slashTokenEnd);
+      const insertion = cmd + ' ';
+      ta.value = before + insertion + after;
+      const newCursor = before.length + insertion.length;
+      ta.selectionStart = newCursor;
+      ta.selectionEnd = newCursor;
       this._autoGrow(ta);
       ta.focus();
     }
@@ -21038,6 +21130,10 @@ const InputPanel = {
     const popup = document.getElementById('composeSlashPopup');
     if (popup) popup.style.display = 'none';
     this._slashVisible = false;
+    this._slashHighlightIdx = -1;
+    this._slashItems = [];
+    this._slashTokenStart = -1;
+    this._slashTokenEnd = -1;
   },
 };
 
