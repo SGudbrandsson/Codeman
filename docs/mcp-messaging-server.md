@@ -11,21 +11,20 @@ Lightweight MCP server that lets Claude agents list sessions and send messages t
 
 ## Install
 
-### Claude Code (`~/.claude/settings.json`)
+### Claude Code (global — `~/.claude/.mcp.json`)
 
 ```json
 {
   "mcpServers": {
     "codeman": {
       "command": "node",
-      "args": ["/home/YOU/.codeman/app/dist/mcp-server.js"],
-      "env": {
-        "CODEMAN_URL": "http://localhost:3001"
-      }
+      "args": ["/home/YOU/.codeman/app/dist/mcp-server.js"]
     }
   }
 }
 ```
+
+`CODEMAN_URL` defaults to `http://localhost:3001`. Override via env if needed.
 
 ### Per-session (Codeman UI)
 
