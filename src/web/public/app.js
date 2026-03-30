@@ -7634,9 +7634,14 @@ class CodemanApp {
 
   _onHookStop(data) {
     const session = this.sessions.get(data.sessionId);
-    // Clear all pending hooks when Claude finishes responding
+    // Clear non-elicitation pending hooks when Claude finishes responding.
+    // Do NOT clear elicitation_dialog — the stop hook from turn N can arrive
+    // after the elicitation_dialog hook from turn N+1, which would wipe the
+    // newly-set elicitation state for the next question in multi-step wizards.
     if (data.sessionId) {
-      this.clearPendingHooks(data.sessionId);
+      this.clearPendingHooks(data.sessionId, 'idle_prompt');
+      this.clearPendingHooks(data.sessionId, 'permission_prompt');
+      this.clearPendingHooks(data.sessionId, 'ask_user_question');
     }
     this.notificationManager?.notify({
       urgency: 'info',
@@ -20633,20 +20638,20 @@ const InputPanel = {
       // Backend now awaits tmux completion before responding, so we know Enter
       // has been dispatched by the time this .then() fires.
       // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
-      // actually received the input. Check both server-SSE status AND optimistic
-      // displayStatus so the timer stops as soon as any busy signal arrives.
+      // actually received the input. Uses real-time status/isWorking only (NOT
+      // displayStatus which has a 4s hide-debounce that causes false positives).
       let _sendChecks = 0;
       const _sendCheckTimer = setInterval(() => {
         _sendChecks++;
         const s = app.sessions?.get(_sendSessionId);
-        const isBusy = s?.status === 'busy' || s?.isWorking || s?.displayStatus === 'busy';
+        const isBusy = s?.status === 'busy' || s?.isWorking;
         if (isBusy) { clearInterval(_sendCheckTimer); return; }
         if (_sendChecks >= 20) {
           clearInterval(_sendCheckTimer);
           // Session still idle 3 s after tmux confirmed Enter was sent —
           // Enter was likely dropped; resend it once as a fallback.
           const sNow = app.sessions?.get(_sendSessionId);
-          const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking || sNow?.displayStatus === 'busy';
+          const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
           if (!isNowBusy) app.sendInput('\r').catch(() => {});
         }
       }, 150);
