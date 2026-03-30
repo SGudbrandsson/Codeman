@@ -9970,6 +9970,19 @@ kbd {
 .tv-auq-next { padding: 7px 14px; background: #3b82f6; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; margin-left: auto; }
 .tv-auq-next:hover { background: #2563eb; }
 
+/* Permission prompt inline block */
+.tv-permission-block { max-width: 860px; margin: 8px auto; padding: 12px 16px; background: #111827; border: 1px solid rgba(245,158,11,0.35); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.tv-permission-header { font-size: 11px; font-weight: 600; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.05em; }
+.tv-permission-desc { font-size: 0.85rem; color: #e2e8f0; font-family: 'SF Mono', 'Fira Code', monospace; word-break: break-all; }
+.tv-permission-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.tv-permission-btn { padding: 7px 16px; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: background 0.1s; }
+.tv-permission-btn--yes { background: #16a34a; }
+.tv-permission-btn--yes:hover { background: #15803d; }
+.tv-permission-btn--no { background: #dc2626; }
+.tv-permission-btn--no:hover { background: #b91c1c; }
+.tv-permission-btn--always { background: #2563eb; }
+.tv-permission-btn--always:hover { background: #1d4ed8; }
+
 /* Context-continuation compaction summary — collapsed pill with expandable markdown */
 .tv-compact-block { max-width: 860px; margin: 10px auto; border: 1px solid rgba(251,191,36,0.2); border-radius: 6px; overflow: hidden; }
 .tv-compact-header {
