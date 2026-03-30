@@ -2678,6 +2678,47 @@ html.mobile-init .file-browser-panel {
     touch-action: manipulation;
   }
 
+  .elicitation-multiselect {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .elicitation-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .elicitation-check:active {
+    background: #2a2a2a;
+    border-color: rgba(255,255,255,0.3);
+  }
+
+  .elicitation-check input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #2563eb;
+    flex-shrink: 0;
+  }
+
+  .elicitation-multi-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
   /* AskUserQuestion panel CSS removed — questions are now rendered inline in tv-auq-block only */
 }
 
