@@ -3055,6 +3055,7 @@ const TranscriptView = {
   _loadFetchInProgress: false,   // true while load()'s HTTP fetch is in-flight — gates _prependBatch to avoid race
   _lastSkillLaunch: null,        // holds skill name between "Launching skill:" tool_result and the following user text block
   _thinkingBubbleEl: null,       // in-flow "thinking" bubble appended during setWorking(true)
+  _permissionBlockEl: null,      // in-flow permission prompt block
   _thinkingPhrases: ['Thinking...','Processing...','Germinating...','Reasoning...','Contemplating...','Synthesizing...','Deliberating...','Cogitating...','Extrapolating...','Formulating...','Consulting the oracle...','Parsing neural patterns...','Reticulating splines...','Traversing thought-space...','Engaging cortex...','Quantum-tunneling...'],
   _BATCH_SIZE: 50,
   _renderedStartIdx: 0,
@@ -3158,6 +3159,7 @@ const TranscriptView = {
     clearTimeout(this._workingHideTimer);
     this._workingHideTimer = null;
     this._thinkingBubbleEl = null;
+    this._permissionBlockEl = null;
     const myGen = ++this._loadGen;  // guard against SSE race during fetch
     const state = this._getState(sessionId);
     // NOTE: do NOT clear state.blocks here — caller (clear()) does it when needed.
@@ -3934,6 +3936,57 @@ const TranscriptView = {
     bubble.addEventListener('transitionend', cleanup, { once: true });
     // Safety fallback in case transitionend doesn't fire
     setTimeout(cleanup, 500);
+  },
+
+  /** Render an inline permission prompt block at the bottom of the transcript view. */
+  _renderPermissionBlock(data) {
+    this._removePermissionBlock();
+    const sessionId = this._sessionId;
+    const el = document.createElement('div');
+    el.className = 'tv-permission-block';
+    el.setAttribute('data-session-id', sessionId);
+
+    const hdr = document.createElement('div');
+    hdr.className = 'tv-permission-header';
+    hdr.textContent = 'Permission Required';
+    el.appendChild(hdr);
+
+    const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
+    if (toolInfo) {
+      const desc = document.createElement('div');
+      desc.className = 'tv-permission-desc';
+      desc.textContent = toolInfo;
+      el.appendChild(desc);
+    }
+
+    const btns = document.createElement('div');
+    btns.className = 'tv-permission-actions';
+    [
+      { label: 'Yes', key: 'y', cls: 'tv-permission-btn--yes' },
+      { label: 'No', key: 'n', cls: 'tv-permission-btn--no' },
+      { label: 'Always Allow', key: 'a', cls: 'tv-permission-btn--always' },
+    ].forEach(({ label, key, cls }) => {
+      const btn = document.createElement('button');
+      btn.className = `tv-permission-btn ${cls}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        if (typeof app !== 'undefined') app.sendPermissionResponse(sessionId, key);
+      });
+      btns.appendChild(btn);
+    });
+    el.appendChild(btns);
+
+    this._permissionBlockEl = el;
+    this._container.appendChild(el);
+    this._scrollToBottom(false);
+  },
+
+  /** Remove the inline permission block if present. */
+  _removePermissionBlock() {
+    if (this._permissionBlockEl) {
+      this._permissionBlockEl.remove();
+      this._permissionBlockEl = null;
+    }
   },
 
   /** Insert an animated "Compacting context..." pill at the bottom of the transcript.
@@ -4942,6 +4995,10 @@ class CodemanApp {
       this.renderElicitationPanel();
     }
     // AskUserQuestion is now handled by the inline tv-auq-block — no panel state to clear.
+    // Permission prompt inline block — remove when hook is cleared
+    if (!hookType || hookType === 'permission_prompt') {
+      TranscriptView._removePermissionBlock();
+    }
   }
 
   updateTabAlertFromHooks(sessionId) {
@@ -7296,6 +7353,11 @@ class CodemanApp {
       title: 'Permission Required',
       message: toolInfo || 'Claude needs tool approval to continue',
     });
+    // Show inline permission block in transcript view
+    if (data.sessionId === this.activeSessionId && TranscriptView._sessionId === data.sessionId) {
+      TranscriptView.setWorking(false);
+      TranscriptView._renderPermissionBlock(data);
+    }
   }
 
   /** Parse numbered options from a plain-text string (hook payload). */
@@ -7390,6 +7452,17 @@ class CodemanApp {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: String(value) + '\r', useMux: true }),
+    }).catch(() => {});
+  }
+
+  /** Sends a permission prompt response (y/n/a) and clears the inline block. */
+  sendPermissionResponse(sessionId, key) {
+    this.clearPendingHooks(sessionId, 'permission_prompt');
+    TranscriptView._removePermissionBlock();
+    fetch(`/api/sessions/${sessionId}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: key + '\r', useMux: true }),
     }).catch(() => {});
   }
 
