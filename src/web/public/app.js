@@ -11141,17 +11141,22 @@ class CodemanApp {
   }
 
   /**
-   * Send input to the active session.
+   * Send input to a session.
    * @param {string} input - Text to send (include \r for Enter)
+   * @param {string} [sessionId] - Target session ID (defaults to activeSessionId)
    * @returns {Promise<void>}
    */
-  async sendInput(input) {
-    if (!this.activeSessionId) return;
-    await fetch(`/api/sessions/${this.activeSessionId}/input`, {
+  async sendInput(input, sessionId) {
+    const sid = sessionId || this.activeSessionId;
+    if (!sid) return;
+    const res = await fetch(`/api/sessions/${sid}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input, useMux: true })
     });
+    if (!res.ok) {
+      throw new Error(`sendInput failed: ${res.status}`);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -20487,6 +20492,7 @@ const InputPanel = {
   _textareaEl: null,
   _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
   _files: [],      // Array<{ filename: string, path: string|null, uploading: boolean }>
+  _uploadingCount: 0,
   _slashVisible: false,
   _slashHighlightIdx: -1,
   _slashTokenStart: -1,
@@ -20515,8 +20521,10 @@ const InputPanel = {
     // switches (e.g. auto-clear creating a child session) clobbering user input.
     const ta = this._getTextarea();
     const userHasText = ta && ta.value && document.activeElement === ta;
-    if (ta && !userHasText) { ta.value = ''; }
-    if (!userHasText) this._restoreImages([]);
+    const userHasImages = this._images.length > 0;
+    const userHasContent = userHasText || userHasImages;
+    if (ta && !userHasContent) { ta.value = ''; }
+    if (!userHasContent) this._restoreImages([]);
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
@@ -20859,10 +20867,15 @@ const InputPanel = {
       }
     }
     const parts = [...images.map(img => img.path), ...(sendText ? [sendText] : [])];
+    // Capture session ID NOW, before any async work. Pass it explicitly to
+    // sendInput() so an SSE-triggered session switch can't redirect the message.
     const _sendSessionId = app.activeSessionId;
-    app.sendInput(parts.join('\n') + '\r').then(() => {
+    if (!_sendSessionId) return;
+    const inputString = parts.join('\n') + '\r';
+    try {
+      await app.sendInput(inputString, _sendSessionId);
       // Backend now awaits tmux completion before responding, so we know Enter
-      // has been dispatched by the time this .then() fires.
+      // has been dispatched by the time we reach here.
       // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
       // actually received the input. Uses real-time status/isWorking only (NOT
       // displayStatus which has a 4s hide-debounce that causes false positives).
@@ -20878,10 +20891,18 @@ const InputPanel = {
           // Enter was likely dropped; resend it once as a fallback.
           const sNow = app.sessions?.get(_sendSessionId);
           const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
-          if (!isNowBusy) app.sendInput('\r').catch(() => {});
+          if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
         }
       }, 150);
-    }).catch(() => {});
+    } catch (err) {
+      // Send failed — restore the user's input so nothing is lost.
+      console.error('[InputPanel] send failed, restoring input:', err);
+      ta.value = text;
+      this._restoreImages(images.map(img => img.path));
+      this._autoGrow(ta);
+      if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
+      return; // Don't clear draft or show optimistic UI
+    }
 
     // Show user message immediately in transcript view (optimistic UI)
     if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
