@@ -606,6 +606,38 @@ ${contextLines.join('\n')}`;
     }
   });
 
+  // ========== Restart Session (kill + restart, preserving claudeResumeId) ==========
+
+  app.post('/api/sessions/:id/restart', async (req): Promise<ApiResponse> => {
+    const { id } = req.params as { id: string };
+    const session = ctx.sessions.get(id);
+
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    if (session.mode === 'shell') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Shell sessions cannot be restarted this way');
+    }
+
+    const resumeId = session.claudeResumeId;
+    try {
+      await session.prepareForRestart();
+      await session.startInteractive();
+      getLifecycleLog().log({
+        event: 'started',
+        sessionId: id,
+        name: session.name,
+        mode: session.mode,
+        reason: 'restart',
+      });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      return { success: true, resumeId: resumeId ?? null } as ApiResponse;
+    } catch (err) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Restart failed: ' + getErrorMessage(err));
+    }
+  });
+
   // ========== Start Shell Mode ==========
 
   app.post('/api/sessions/:id/shell', async (req): Promise<ApiResponse> => {

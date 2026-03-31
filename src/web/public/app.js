@@ -8892,8 +8892,7 @@ class CodemanApp {
           ${subagentBadge}
           ${worktreeBadge}
           ${safeModeBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionContextMenu(event, '${escapeHtml(id)}')" title="Session menu" aria-label="Session menu" tabindex="0">&#x2699;</span>
         </div>`);
     }
 
@@ -11257,6 +11256,147 @@ class CodemanApp {
       tokenEl.title = this.globalStats
         ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`
         : `Token usage across active sessions${showCost ? '\nEstimated cost based on Claude Opus pricing' : ''}`;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Session Context Menu (gear icon dropdown)
+  // ═══════════════════════════════════════════════════════════════
+
+  openSessionContextMenu(event, sessionId) {
+    // Remove any existing context menu
+    this.closeSessionContextMenu();
+
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const anchorEl = event.currentTarget || event.target;
+    const rect = anchorEl.getBoundingClientRect();
+
+    const menu = document.createElement('div');
+    menu.className = 'session-context-menu';
+    menu.setAttribute('role', 'menu');
+
+    const isShell = session.mode === 'shell';
+
+    // Restart item (not for shell sessions)
+    if (!isShell) {
+      const restartItem = document.createElement('div');
+      restartItem.className = 'session-ctx-item';
+      restartItem.setAttribute('role', 'menuitem');
+      restartItem.tabIndex = 0;
+      const restartIcon = document.createElement('span');
+      restartIcon.className = 'session-ctx-icon';
+      restartIcon.textContent = '\u21BB';
+      const restartLabel = document.createElement('span');
+      restartLabel.textContent = 'Restart';
+      restartItem.appendChild(restartIcon);
+      restartItem.appendChild(restartLabel);
+      restartItem.addEventListener('click', () => {
+        this.closeSessionContextMenu();
+        this.restartSessionProcess(sessionId);
+      });
+      menu.appendChild(restartItem);
+
+      const sep = document.createElement('div');
+      sep.className = 'session-ctx-separator';
+      menu.appendChild(sep);
+    }
+
+    // Remove item
+    const removeItem = document.createElement('div');
+    removeItem.className = 'session-ctx-item session-ctx-item-danger';
+    removeItem.setAttribute('role', 'menuitem');
+    removeItem.tabIndex = 0;
+    const removeIcon = document.createElement('span');
+    removeIcon.className = 'session-ctx-icon';
+    removeIcon.textContent = '\u00D7';
+    const removeLabel = document.createElement('span');
+    removeLabel.textContent = 'Remove';
+    removeItem.appendChild(removeIcon);
+    removeItem.appendChild(removeLabel);
+    removeItem.addEventListener('click', () => {
+      this.closeSessionContextMenu();
+      this.requestCloseSession(sessionId);
+    });
+    menu.appendChild(removeItem);
+
+    // Options item
+    const optionsItem = document.createElement('div');
+    optionsItem.className = 'session-ctx-item';
+    optionsItem.setAttribute('role', 'menuitem');
+    optionsItem.tabIndex = 0;
+    const optionsIcon = document.createElement('span');
+    optionsIcon.className = 'session-ctx-icon';
+    optionsIcon.textContent = '\u2699';
+    const optionsLabel = document.createElement('span');
+    optionsLabel.textContent = 'Options';
+    optionsItem.appendChild(optionsIcon);
+    optionsItem.appendChild(optionsLabel);
+    optionsItem.addEventListener('click', () => {
+      this.closeSessionContextMenu();
+      this.openSessionOptions(sessionId);
+    });
+    menu.appendChild(optionsItem);
+
+    document.body.appendChild(menu);
+
+    // Position the menu — prefer below the gear, flip above if no space
+    const menuRect = menu.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+
+    let top, left;
+    if (spaceBelow >= menuRect.height + 4 || spaceBelow >= spaceAbove) {
+      top = rect.bottom + 4;
+    } else {
+      top = rect.top - menuRect.height - 4;
+    }
+    left = Math.min(rect.left, window.innerWidth - menuRect.width - 8);
+    left = Math.max(8, left);
+
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+
+    // Close on outside click (delayed to avoid catching the opening click)
+    this._sessionCtxMenuCleanup = () => {
+      this.closeSessionContextMenu();
+    };
+    setTimeout(() => {
+      document.addEventListener('click', this._sessionCtxMenuCleanup);
+      document.addEventListener('keydown', this._sessionCtxMenuKeyHandler = (e) => {
+        if (e.key === 'Escape') this.closeSessionContextMenu();
+      });
+    }, 0);
+  }
+
+  closeSessionContextMenu() {
+    const existing = document.querySelector('.session-context-menu');
+    if (existing) existing.remove();
+    if (this._sessionCtxMenuCleanup) {
+      document.removeEventListener('click', this._sessionCtxMenuCleanup);
+      this._sessionCtxMenuCleanup = null;
+    }
+    if (this._sessionCtxMenuKeyHandler) {
+      document.removeEventListener('keydown', this._sessionCtxMenuKeyHandler);
+      this._sessionCtxMenuKeyHandler = null;
+    }
+  }
+
+  async restartSessionProcess(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/restart`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(`Restarted session "${this.getSessionName(session)}"`, 'info');
+      } else {
+        this.showToast(`Restart failed: ${data.error || 'Unknown error'}`, 'error');
+      }
+    } catch (err) {
+      this.showToast(`Restart failed: ${err.message}`, 'error');
     }
   }
 
