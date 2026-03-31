@@ -247,6 +247,17 @@ try {
 
 log('\n── Test 6: Session switch preserves images when attached');
 try {
+  // Ensure clean state — wait for any leftover thumbnails to clear
+  await page.waitForFunction(
+    () => document.querySelectorAll('#composeThumbStrip .compose-thumb').length === 0,
+    { timeout: 5000 },
+  ).catch(() => {});
+  // Remove any stragglers
+  while (await page.locator('#composeThumbStrip .compose-thumb-remove').count() > 0) {
+    await page.locator('#composeThumbStrip .compose-thumb-remove').first().click();
+    await page.waitForTimeout(200);
+  }
+
   // Attach an image first
   await page.locator('#composeFileGallery').setInputFiles([redPath]);
   await page.waitForSelector('#composeThumbStrip .compose-thumb', { timeout: 10000 });
