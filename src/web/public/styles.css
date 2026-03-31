@@ -12602,25 +12602,109 @@ kbd {
   color: var(--text-muted, #888);
   word-break: break-all;
 }
+/* ── Image previews — thumbnail style, subordinate to text ── */
 .tv-img-preview {
   display: inline-block;
-  margin: 4px 0;
+  position: relative;
   cursor: pointer;
-  border: 1px solid var(--border-color, #333);
   border-radius: 6px;
   overflow: hidden;
-  vertical-align: middle;
-  transition: box-shadow 0.15s ease;
+  transition: opacity 0.15s ease;
+  vertical-align: top;
 }
-.tv-img-preview:hover {
-  box-shadow: 0 0 8px rgba(96,165,250,0.45);
+.tv-img-preview:active {
+  opacity: 0.8;
 }
 .tv-img-preview img {
   display: block;
-  max-height: 120px;
-  max-width: 100%;
-  object-fit: contain;
+  width: 160px;
+  height: 120px;
+  object-fit: cover;
   border-radius: 6px;
+}
+
+/* Download pill — appears on hover */
+.tv-img-download {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #e2e8f0;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  line-height: 1;
+}
+.tv-img-preview:hover .tv-img-download {
+  opacity: 1;
+}
+.tv-img-download:hover {
+  background: rgba(30, 58, 95, 0.85);
+}
+
+/* Image strip inside user bubbles — horizontal row of thumbnails */
+.tv-bubble .tv-img-strip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+/* If images are the only content (no text after), remove bottom margin */
+.tv-bubble .tv-img-strip:last-child {
+  margin-bottom: 0;
+}
+.tv-bubble .tv-img-strip .tv-img-preview img {
+  width: 120px;
+  height: 90px;
+  border-radius: 4px;
+}
+/* Single image in bubble — slightly larger */
+.tv-bubble .tv-img-strip .tv-img-preview:only-child img {
+  width: 180px;
+  height: 135px;
+}
+
+/* Assistant-side image previews — inline in markdown flow */
+.tv-content .tv-img-preview {
+  display: inline-block;
+  margin: 6px 0;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+.tv-content .tv-img-preview img {
+  width: 240px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+/* ── File attachment chip ── */
+.tv-file-ref {
+  display: inline-block;
+}
+.tv-file-ref a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  text-decoration: none;
+  font-size: 0.82em;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.tv-file-ref a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #cbd5e1;
+  text-decoration: none;
 }
 
 /* Lightbox overlay */
@@ -12628,19 +12712,24 @@ kbd {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: rgba(0,0,0,0.85);
+  background: rgba(0, 0, 0, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   display: none;
   align-items: center;
   justify-content: center;
+  animation: lb-fadein 0.15s ease;
 }
+@keyframes lb-fadein { from { opacity: 0; } }
 .tv-lightbox.open {
   display: flex;
 }
 .tv-lightbox img {
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: 92vw;
+  max-height: 92vh;
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
 }
 .tv-lightbox-close {
   position: absolute;

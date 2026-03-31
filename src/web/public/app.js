@@ -394,16 +394,33 @@ function inlineMarkdown(escaped, safeHref, esc) {
  * @param {string} html - rendered markdown HTML
  * @returns {string} HTML with image previews injected
  */
+function _escAttr(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 function replaceImagePaths(html) {
-  return html.replace(/(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match, codeBlock, imgPath) {
+  // Match [Image: /path] or [Image: source: /path] references, bare absolute image paths,
+  // and [Attached file: /path] references — but skip anything inside <code>/<pre>.
+  return html.replace(/(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|\[Image:(?:\s*source:)?\s*(\/[^\]]+\.(?:png|jpg|jpeg|gif|webp|svg))\]|\[Attached file:\s*(\/[^\]]+)\]|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi, function (match, codeBlock, bracketImg, attachedFile, bareImg) {
     if (codeBlock) return codeBlock;
-    var encoded = encodeURIComponent(imgPath);
-    var thumbSrc = '/api/files/thumbnail?path=' + encoded + '&width=240';
-    var fullSrc = '/api/files/preview?path=' + encoded;
-    return '<span class="tv-img-path">' + imgPath + '</span>' +
-      '<span class="tv-img-preview">' +
-      '<img src="' + thumbSrc + '" data-full-src="' + fullSrc + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
-      '</span>';
+    var imgPath = bracketImg || bareImg;
+    if (imgPath) {
+      var encoded = encodeURIComponent(imgPath);
+      var fullSrc = '/api/files/preview?path=' + encoded;
+      var safeName = _escAttr(imgPath.split('/').pop());
+      return '<span class="tv-img-preview">' +
+        '<img src="' + fullSrc + '" data-full-src="' + fullSrc + '" loading="lazy" alt="preview" onerror="this.parentElement.style.display=\'none\'">' +
+        '<a class="tv-img-download" href="' + fullSrc + '" download="' + safeName + '" title="Download ' + safeName + '">\u2913</a>' +
+        '</span>';
+    }
+    if (attachedFile) {
+      var encFile = encodeURIComponent(attachedFile);
+      var fileSrc = '/api/files/preview?path=' + encFile;
+      var safeFname = _escAttr(attachedFile.split('/').pop());
+      return '<span class="tv-file-ref">' +
+        '<a href="' + fileSrc + '" download="' + safeFname + '" title="Download ' + safeFname + '">\ud83d\udcce ' + safeFname + '</a>' +
+        '</span>';
+    }
+    return match;
   });
 }
 
@@ -4282,7 +4299,62 @@ const TranscriptView = {
       // Use the XML-stripped text if any command/local-command tags were removed,
       // so raw XML from system-injected metadata never appears in the chat bubble.
       const _bubbleText = block.text.replace(/<(?:command-\w+|local-command-\w+)(?:\s[^>]*)?>[\s\S]*?<\/(?:command-\w+|local-command-\w+)>/g, '').trim();
-      bubble.textContent = _bubbleText || block.text; // fallback to original if stripping empties it
+      const _displayText = _bubbleText || block.text;
+      // Detect [Image: /path] or [Image: source: /path] references and render as
+      // image previews above the text. Uses safe DOM methods (no innerHTML).
+      const _imgRefPattern = /\[Image:(?:\s*source:)?\s*(\/[^\]]+\.(?:png|jpg|jpeg|gif|webp|svg))\]/gi;
+      const _fileRefPattern = /\[Attached file:\s*(\/[^\]]+)\]/gi;
+      const _imgPaths = [];
+      const _filePaths = [];
+      let _rm;
+      while ((_rm = _imgRefPattern.exec(_displayText)) !== null) _imgPaths.push(_rm[1]);
+      while ((_rm = _fileRefPattern.exec(_displayText)) !== null) _filePaths.push(_rm[1]);
+      const _cleanText = _displayText.replace(/\[Image:(?:\s*source:)?\s*\/[^\]]+\]/gi, '').replace(/\[Attached file:\s*\/[^\]]+\]/gi, '').trim();
+      // Text first — message is primary, attachments are secondary
+      if (_cleanText) {
+        const _tn = document.createElement('div');
+        _tn.textContent = _cleanText;
+        bubble.appendChild(_tn);
+      }
+      // Image thumbnails in a horizontal strip
+      if (_imgPaths.length) {
+        const strip = document.createElement('div');
+        strip.className = 'tv-img-strip';
+        _imgPaths.forEach(function (imgP) {
+          const enc = encodeURIComponent(imgP);
+          const preview = document.createElement('span');
+          preview.className = 'tv-img-preview';
+          const img = document.createElement('img');
+          img.src = '/api/files/preview?path=' + enc;
+          img.dataset.fullSrc = '/api/files/preview?path=' + enc;
+          img.loading = 'lazy';
+          img.alt = 'Attached image';
+          img.onerror = function () { preview.style.display = 'none'; };
+          const dl = document.createElement('a');
+          dl.className = 'tv-img-download';
+          dl.href = '/api/files/preview?path=' + enc;
+          dl.download = imgP.split('/').pop();
+          dl.title = 'Download';
+          dl.textContent = '\u21E3';
+          preview.appendChild(img);
+          preview.appendChild(dl);
+          strip.appendChild(preview);
+        });
+        bubble.appendChild(strip);
+      }
+      // File attachment chips
+      _filePaths.forEach(function (fp) {
+        const enc = encodeURIComponent(fp);
+        const ref = document.createElement('span');
+        ref.className = 'tv-file-ref';
+        const a = document.createElement('a');
+        a.href = '/api/files/preview?path=' + enc;
+        a.download = fp.split('/').pop();
+        a.title = 'Download ' + a.download;
+        a.textContent = '\ud83d\udcce ' + a.download;
+        ref.appendChild(a);
+        bubble.appendChild(ref);
+      });
       div.appendChild(label);
       div.appendChild(bubble);
       const tsText = this._formatTimestamp(block.timestamp);
@@ -11141,17 +11213,22 @@ class CodemanApp {
   }
 
   /**
-   * Send input to the active session.
+   * Send input to a session.
    * @param {string} input - Text to send (include \r for Enter)
+   * @param {string} [sessionId] - Target session ID (defaults to activeSessionId)
    * @returns {Promise<void>}
    */
-  async sendInput(input) {
-    if (!this.activeSessionId) return;
-    await fetch(`/api/sessions/${this.activeSessionId}/input`, {
+  async sendInput(input, sessionId) {
+    const sid = sessionId || this.activeSessionId;
+    if (!sid) return;
+    const res = await fetch(`/api/sessions/${sid}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input, useMux: true })
     });
+    if (!res.ok) {
+      throw new Error(`sendInput failed: ${res.status}`);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -20504,6 +20581,8 @@ const InputPanel = {
   _textareaEl: null,
   _images: [],     // Array<{ objectUrl: string, file: File, path: string|null }>
   _files: [],      // Array<{ filename: string, path: string|null, uploading: boolean }>
+  _uploadingCount: 0,
+  _sending: false,
   _slashVisible: false,
   _slashHighlightIdx: -1,
   _slashTokenStart: -1,
@@ -20532,8 +20611,10 @@ const InputPanel = {
     // switches (e.g. auto-clear creating a child session) clobbering user input.
     const ta = this._getTextarea();
     const userHasText = ta && ta.value && document.activeElement === ta;
-    if (ta && !userHasText) { ta.value = ''; }
-    if (!userHasText) this._restoreImages([]);
+    const userHasImages = this._images.length > 0;
+    const userHasContent = userHasText || userHasImages;
+    if (ta && !userHasContent) { ta.value = ''; }
+    if (!userHasContent) this._restoreImages([]);
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
@@ -20830,6 +20911,13 @@ const InputPanel = {
 
   /** Send all queued images then the typed text */
   async send() {
+    // Prevent concurrent invocations (e.g. double-click, Ctrl+Enter + click race)
+    if (this._sending) return;
+    this._sending = true;
+    try { await this._sendInner(); } finally { this._sending = false; }
+  },
+
+  async _sendInner() {
     // Guard: wait for any in-flight uploads to complete before sending.
     // This prevents the race where Ctrl+Enter (or any code path) calls send()
     // while an image upload fetch hasn't resolved yet, causing the image to be
@@ -20851,16 +20939,22 @@ const InputPanel = {
     if (!text && !images.length && !attachedFiles.length) return;
     if (typeof app === 'undefined' || !app.sendInput) return;
 
-    // Combine image paths and text into one message joined by \n (Ctrl+J line breaks).
-    // This sends everything as a single Claude prompt so the Enter at the end submits
-    // it all together — avoids the race where text+Enter arrive while Claude is still
-    // processing the image path submission from a prior Enter.
+    // Build the message as a single line of text. Image and file paths are embedded
+    // inline as [Image: /path] or [Attached file: /path] references. Claude reads the
+    // files via its Read tool. This avoids multi-line tmux send-keys timing issues
+    // where Ink discards input lines sent while busy.
     let sendText = text;
 
     // Prepend non-image file references so Claude knows to read them
     if (attachedFiles.length) {
-      const fileRefs = attachedFiles.map(f => `[Attached file: ${f.path}]`).join('\n');
-      sendText = fileRefs + (sendText ? '\n' + sendText : '');
+      const fileRefs = attachedFiles.map(f => `[Attached file: ${f.path}]`).join(' ');
+      sendText = fileRefs + (sendText ? ' ' + sendText : '');
+    }
+
+    // Prepend image references inline
+    if (images.length) {
+      const imageRefs = images.map(img => `[Image: ${img.path}]`).join(' ');
+      sendText = imageRefs + (sendText ? ' ' + sendText : '');
     }
 
     if (sendText && typeof SecretDetector !== 'undefined' && SecretDetector.isEnabled()) {
@@ -20875,11 +20969,17 @@ const InputPanel = {
         );
       }
     }
-    const parts = [...images.map(img => img.path), ...(sendText ? [sendText] : [])];
+    // Capture session ID NOW, before any async work. Pass it explicitly to
+    // sendInput() so an SSE-triggered session switch can't redirect the message.
     const _sendSessionId = app.activeSessionId;
-    app.sendInput(parts.join('\n') + '\r').then(() => {
+    if (!_sendSessionId) return;
+    // Single line + \r — no multi-line tmux issues
+    const inputString = sendText + '\r';
+
+    try {
+      await app.sendInput(inputString, _sendSessionId);
       // Backend now awaits tmux completion before responding, so we know Enter
-      // has been dispatched by the time this .then() fires.
+      // has been dispatched by the time we reach here.
       // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
       // actually received the input. Uses real-time status/isWorking only (NOT
       // displayStatus which has a 4s hide-debounce that causes false positives).
@@ -20895,17 +20995,26 @@ const InputPanel = {
           // Enter was likely dropped; resend it once as a fallback.
           const sNow = app.sessions?.get(_sendSessionId);
           const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
-          if (!isNowBusy) app.sendInput('\r').catch(() => {});
+          if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
         }
       }, 150);
-    }).catch(() => {});
+    } catch (err) {
+      // Send failed — restore the user's input so nothing is lost.
+      console.error('[InputPanel] send failed, restoring input:', err);
+      ta.value = text;
+      this._restoreImages(images.map(img => img.path));
+      this._autoGrow(ta);
+      if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
+      return; // Don't clear draft or show optimistic UI
+    }
 
-    // Show user message immediately in transcript view (optimistic UI)
-    if (text && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
-      if (text.trim() === '/clear') {
+    // Show user message immediately in transcript view (optimistic UI).
+    // Pass the full sendText (with [Image:] refs) so user bubble renders previews.
+    if (sendText && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
+      if (sendText.trim() === '/clear') {
         TranscriptView.clearOnly();
       } else {
-        TranscriptView.appendOptimistic(text);
+        TranscriptView.appendOptimistic(sendText);
       }
     }
 

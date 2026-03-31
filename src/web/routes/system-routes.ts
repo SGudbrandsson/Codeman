@@ -769,8 +769,11 @@ export function registerSystemRoutes(
     if (!existsSync(SCREENSHOTS_DIR)) {
       mkdirSync(SCREENSHOTS_DIR, { recursive: true });
     }
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-    const filename = `screenshot_${timestamp}${ext}`;
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    const rand = Math.random().toString(36).slice(2, 6);
+    const filename = `screenshot_${timestamp}-${ms}_${rand}${ext}`;
     const filepath = join(SCREENSHOTS_DIR, filename);
     await fs.writeFile(filepath, filePart.data);
 
