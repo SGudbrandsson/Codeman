@@ -323,6 +323,17 @@ export function registerWorktreeSessionRoutes(
         }
         lightState = ctx.getSessionStateWithRespawn(newSession);
         ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
+
+        // Send notes as the first prompt if provided
+        if (notes && resolvedMode !== 'shell') {
+          // Wait for the session to fully initialize before sending input
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const noteInput = notes + '\r';
+          const sent = await newSession.writeViaMux(noteInput);
+          if (!sent) {
+            req.log.warn({ sessionId: newSession.id }, '[worktree] autoStart: failed to send notes as first prompt');
+          }
+        }
       } catch (err) {
         req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
       }
@@ -608,6 +619,16 @@ export function registerWorktreeSessionRoutes(
         }
         lightState = ctx.getSessionStateWithRespawn(newSession);
         ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
+
+        // Send notes as the first prompt if provided
+        if (notes && resolvedMode !== 'shell') {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const noteInput = notes + '\r';
+          const sent = await newSession.writeViaMux(noteInput);
+          if (!sent) {
+            req.log.warn({ sessionId: newSession.id }, '[worktree] autoStart: failed to send notes as first prompt');
+          }
+        }
       } catch (err) {
         req.log.error({ err, sessionId: newSession.id }, '[worktree] autoStart failed');
       }

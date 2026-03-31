@@ -648,20 +648,27 @@ ${contextLines.join('\n')}`;
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
     }
-    const { input, useMux } = result.data;
+    const { input, useMux, submit } = result.data;
     const session = ctx.sessions.get(id);
 
     if (!session) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
-    const inputStr = String(input);
+    let inputStr = String(input);
     if (inputStr.length > MAX_INPUT_LENGTH) {
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
         `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`
       );
     }
+
+    // When submit: true, append \r to trigger Enter and force mux delivery
+    const shouldSubmit = submit === true;
+    if (shouldSubmit && !inputStr.includes('\r')) {
+      inputStr += '\r';
+    }
+    const effectiveUseMux = useMux || shouldSubmit;
 
     // Intercept /clear — route to archive+child flow instead of sending to PTY
     if (inputStr.replace(/\r?\n?$/, '').trim() === '/clear') {
@@ -675,7 +682,7 @@ ${contextLines.join('\n')}`;
     // after tmux has fully dispatched the text + Enter key. This gives the client
     // a deterministic signal that Enter has been sent, so client-side retry
     // timers can start counting from a meaningful baseline.
-    if (useMux) {
+    if (effectiveUseMux) {
       let ok = false;
       try {
         ok = await session.writeViaMux(inputStr);

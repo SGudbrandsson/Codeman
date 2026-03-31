@@ -360,10 +360,26 @@ export const SettingsUpdateSchema = z
 /**
  * Schema for POST /api/sessions/:id/input with length limit
  */
-export const SessionInputWithLimitSchema = z.object({
-  input: z.string().max(100000), // 100KB max input
-  useMux: z.boolean().optional(),
-});
+export const SessionInputWithLimitSchema = z
+  .object({
+    input: z.string().max(100000).optional(),
+    text: z.string().max(100000).optional(), // alias for input
+    useMux: z.boolean().optional(),
+    submit: z.boolean().optional(), // when true, auto-appends \r and forces useMux
+  })
+  .transform((data) => {
+    const input = data.input ?? data.text;
+    if (input === undefined) {
+      throw new z.ZodError([
+        {
+          code: 'custom',
+          message: "Missing required field: 'input' (or 'text')",
+          path: ['input'],
+        },
+      ]);
+    }
+    return { input, useMux: data.useMux, submit: data.submit };
+  });
 
 // ========== Session Mutation Routes ==========
 
