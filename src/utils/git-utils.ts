@@ -51,21 +51,33 @@ export async function getCurrentBranch(repoDir: string): Promise<string> {
   return git(['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
 }
 
-const WORKTREE_ARTIFACTS = ['node_modules', 'dist', 'src/web/public/vendor'] as const;
+const WORKTREE_DIR_ARTIFACTS = ['node_modules', 'dist', 'src/web/public/vendor'] as const;
+const WORKTREE_FILE_ARTIFACTS = ['.mcp.json'] as const;
 
 /**
- * Symlinks gitignored runtime artifacts (node_modules, dist, src/web/public/vendor) from the git root
- * into a newly-created worktree directory. Each artifact is symlinked independently —
- * a failure on one does not block the others or abort worktree creation.
+ * Symlinks gitignored runtime artifacts from the git root into a newly-created worktree directory.
+ * Handles both directory artifacts (node_modules, dist, vendor) and file artifacts (.mcp.json).
+ * Each artifact is symlinked independently — a failure on one does not block the others.
  */
 export async function setupWorktreeArtifacts(gitRoot: string, worktreePath: string): Promise<void> {
-  for (const artifact of WORKTREE_ARTIFACTS) {
+  for (const artifact of WORKTREE_DIR_ARTIFACTS) {
     const src = join(gitRoot, artifact);
     const dest = join(worktreePath, artifact);
     try {
       if (!existsSync(src)) continue;
       if (existsSync(dest)) continue;
       await fs.symlink(src, dest, 'dir');
+    } catch (err) {
+      console.warn(`[setupWorktreeArtifacts] Failed to symlink ${artifact}: ${String(err)}`);
+    }
+  }
+  for (const artifact of WORKTREE_FILE_ARTIFACTS) {
+    const src = join(gitRoot, artifact);
+    const dest = join(worktreePath, artifact);
+    try {
+      if (!existsSync(src)) continue;
+      if (existsSync(dest)) continue;
+      await fs.symlink(src, dest, 'file');
     } catch (err) {
       console.warn(`[setupWorktreeArtifacts] Failed to symlink ${artifact}: ${String(err)}`);
     }

@@ -43,6 +43,8 @@ Examples:
 
 ## Step 4 — Create Worktree via API
 
+Pass `taskMd` and `claudeMd` inline so the server writes them atomically before returning. This eliminates the race condition where Claude starts before TASK.md exists.
+
 ```bash
 curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   -H "Content-Type: application/json" \
@@ -50,11 +52,13 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
     "branch": "feat/<slug>",
     "isNew": true,
     "notes": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
-    "autoStart": false
+    "autoStart": false,
+    "taskMd": "<TASK.md content as a JSON string — see Step 4a>",
+    "claudeMd": "You are working autonomously in a Codeman worktree.\nBefore doing ANYTHING else, re-read `TASK.md` in this directory\nand resume from the phase in `status`.\nDo not rely on conversation history.\nThen invoke the codeman-task-runner skill.\n"
   }'
 ```
 
-The `notes` field is just this short trigger sentence — the full task description lives in `TASK.md`. **Do NOT set `autoStart: true`** — that races against the TASK.md write. Write the files first, then start the session in Step 5b.
+The server writes `TASK.md` and `CLAUDE.md` to the worktree directory before returning. **Do NOT write these files separately** — use the `taskMd`/`claudeMd` fields to avoid race conditions.
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/absolute/path/to/worktree" }`
 
@@ -110,11 +114,9 @@ curl -s -X PATCH http://localhost:3001/api/work-items/WORK_ITEM_ID \
 
 If this PATCH fails, log a warning and continue.
 
-## Step 5 — Write TASK.md and CLAUDE.md
+## Step 4a — TASK.md content template
 
-Write both files to `worktreePath` from the response.
-
-**Write `<worktreePath>/TASK.md`:**
+Use this template for the `taskMd` field in Step 4 (JSON-escape newlines as `\n`):
 
 ```markdown
 # Task
@@ -154,25 +156,15 @@ test_fix_cycles: 0
 <!-- append-only log of key decisions made during the workflow -->
 ```
 
-**Write `<worktreePath>/CLAUDE.md`:**
+## Step 5 — Start the Session
 
-```markdown
-You are working autonomously in a Codeman worktree.
-Before doing ANYTHING else, re-read `TASK.md` in this directory
-and resume from the phase in `status`.
-Do not rely on conversation history.
-Then invoke the codeman-task-runner skill.
-```
-
-## Step 5b — Start the Session
-
-After writing both files, start the Claude process:
+The server already wrote TASK.md and CLAUDE.md in Step 4. Now start Claude:
 
 ```bash
 curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/interactive
 ```
 
-This fires Claude only after TASK.md is safely on disk, eliminating the race condition.
+Use the session ID from Step 4 response (`session.id`).
 
 ## Step 6 — Report
 
@@ -190,10 +182,11 @@ Summarize what was created:
 
 | Mistake | Fix |
 |---------|-----|
-| Putting full description in `notes` | `notes` is just the short trigger sentence; full description goes in TASK.md |
-| Using `autoStart: true` | **Never use autoStart: true** — it races against the TASK.md write. Use `autoStart: false`, write files, then call `/interactive` |
+| Writing TASK.md/CLAUDE.md separately with Write tool | **Always use `taskMd`/`claudeMd` fields** in the worktree creation request — the server writes them atomically before returning, eliminating race conditions |
+| Putting full description in `notes` | `notes` is just the short trigger sentence; full description goes in `taskMd` |
+| Using `autoStart: true` | Use `autoStart: false`, then call `/interactive` after worktree creation returns |
 | Using a worktree session as parent | Filter for `worktreeBranch: null` sessions only |
 | Wrong port | Codeman runs on **3001**, not 3000 |
 | Branch name with spaces | Use hyphens only, max 37 chars |
-| Forgetting to call `/interactive` after writing files | After `autoStart: false` creation + file writes, always POST to `/api/sessions/:id/interactive` to start Claude |
+| Forgetting to call `/interactive` | Always POST to `/api/sessions/:id/interactive` after worktree creation to start Claude |
 | Sending input without `useMux: true` | `POST /api/sessions/:id/input` without `useMux: true` writes text but never sends Enter — Claude never receives the message. Always include `"useMux": true` |

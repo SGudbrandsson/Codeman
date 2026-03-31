@@ -665,6 +665,8 @@ export const CreateWorktreeSchema = z.object({
   mode: z.enum(['claude', 'opencode', 'shell']).optional(),
   notes: z.string().max(2000).optional(),
   autoStart: z.boolean().optional(),
+  taskMd: z.string().max(20000).optional(),
+  claudeMd: z.string().max(5000).optional(),
 });
 
 export const RemoveWorktreeSchema = z.object({

@@ -228,7 +228,7 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew, mode, notes, autoStart } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
@@ -264,6 +264,22 @@ export function registerWorktreeSessionRoutes(
       await setupWorktreeArtifacts(gitRoot, worktreePath);
     } catch (err) {
       req.log.warn({ err, worktreePath }, '[worktree] setupWorktreeArtifacts failed — continuing');
+    }
+
+    // Write task files atomically before session starts (avoids race with autoStart/interactive)
+    if (taskMd) {
+      try {
+        await fs.writeFile(join(worktreePath, 'TASK.md'), taskMd, 'utf-8');
+      } catch (err) {
+        req.log.warn({ err, worktreePath }, '[worktree] failed to write TASK.md');
+      }
+    }
+    if (claudeMd) {
+      try {
+        await fs.writeFile(join(worktreePath, 'CLAUDE.md'), claudeMd, 'utf-8');
+      } catch (err) {
+        req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+      }
     }
 
     const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
@@ -537,7 +553,7 @@ export function registerWorktreeSessionRoutes(
     if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-    const { branch, isNew, mode, notes, autoStart } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     const resolvedMode = mode ?? 'claude';
     const gitRoot = findGitRoot(casePath);
@@ -567,6 +583,22 @@ export function registerWorktreeSessionRoutes(
       await setupWorktreeArtifacts(gitRoot, worktreePath);
     } catch (err) {
       req.log.warn({ err, worktreePath }, '[worktree] setupWorktreeArtifacts failed — continuing');
+    }
+
+    // Write task files atomically before session starts (avoids race with autoStart/interactive)
+    if (taskMd) {
+      try {
+        await fs.writeFile(join(worktreePath, 'TASK.md'), taskMd, 'utf-8');
+      } catch (err) {
+        req.log.warn({ err, worktreePath }, '[worktree] failed to write TASK.md');
+      }
+    }
+    if (claudeMd) {
+      try {
+        await fs.writeFile(join(worktreePath, 'CLAUDE.md'), claudeMd, 'utf-8');
+      } catch (err) {
+        req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+      }
     }
     const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([
       Promise.all([ctx.getGlobalNiceConfig(), ctx.getModelConfig(), ctx.getClaudeModeConfig()]),
