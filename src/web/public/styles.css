@@ -1741,28 +1741,73 @@ body {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
-/* Session tab gear icon */
+/* Session tab gear icon — always visible for mobile support */
 .session-tab .tab-gear {
-  opacity: 0;
-  width: 0;
-  padding: 0;
-  font-size: 1rem;
+  opacity: 0.4;
+  font-size: 0.85rem;
   line-height: 1;
   color: var(--text-muted);
   cursor: pointer;
-  overflow: hidden;
-  transition: opacity 0.15s, width 0.15s, padding 0.15s, transform 0.2s;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  transition: opacity 0.15s, color 0.15s, transform 0.2s;
 }
 
 .session-tab:hover .tab-gear {
-  opacity: 1;
-  width: auto;
-  padding: 0 0.3rem;
+  opacity: 0.8;
 }
 
 .session-tab .tab-gear:hover {
+  opacity: 1;
   color: var(--accent-hover);
   transform: rotate(45deg);
+}
+
+/* Session context menu (dropdown from gear icon) */
+.session-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.session-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.85rem;
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.session-ctx-item:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.session-ctx-item-danger:hover {
+  background: rgba(255, 80, 80, 0.12);
+  color: var(--red);
+}
+
+.session-ctx-icon {
+  font-size: 1rem;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.session-ctx-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
 }
 
 /* Mode indicator on session tab */

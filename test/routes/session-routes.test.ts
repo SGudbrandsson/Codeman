@@ -755,6 +755,69 @@ describe('session-routes', () => {
     });
   });
 
+  // ========== POST /api/sessions/:id/restart ==========
+
+  describe('POST /api/sessions/:id/restart', () => {
+    it('restarts session successfully', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(harness.ctx._session.prepareForRestart).toHaveBeenCalled();
+      expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
+    });
+
+    it('rejects shell sessions', async () => {
+      harness.ctx._session.mode = 'shell';
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toBeDefined();
+    });
+
+    it('returns error for unknown session', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions/nonexistent/restart',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('returns error when prepareForRestart throws', async () => {
+      harness.ctx._session.prepareForRestart.mockRejectedValueOnce(new Error('PTY kill failed'));
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('PTY kill failed');
+    });
+
+    it('returns error when startInteractive throws', async () => {
+      harness.ctx._session.startInteractive.mockRejectedValueOnce(new Error('spawn failed'));
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toContain('spawn failed');
+    });
+  });
+
   // ========== POST /api/sessions/:id/input with /clear command ==========
 
   describe('POST /api/sessions/:id/input with /clear command', () => {

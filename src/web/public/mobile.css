@@ -888,35 +888,45 @@ html.mobile-init .file-browser-panel {
     text-overflow: ellipsis;
   }
 
-  /* Hide close/gear buttons on non-active tabs on mobile */
-  .session-tab .tab-close,
+  /* Gear icon visible on all tabs on mobile for context menu access */
   .session-tab .tab-gear {
-    display: none;
-  }
-
-  /* Gear icon on active tab - tiny, subtle */
-  .session-tab.active .tab-gear {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.5rem;
+    font-size: 0.85rem;
     line-height: 1;
-    width: 12px;
-    height: 12px;
+    min-width: 32px;
+    min-height: 32px;
     margin-left: auto;
     opacity: 0.6;
   }
 
-  /* Close button on active tab - large for easy tapping */
-  .session-tab.active .tab-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1rem;
-    line-height: 1;
-    width: 20px;
-    height: 18px;
-    margin-left: -2px;
+  .session-tab.active .tab-gear {
+    opacity: 0.8;
+  }
+
+  /* Mobile context menu — bottom sheet style */
+  .session-context-menu {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    top: auto !important;
+    right: 0;
+    width: 100%;
+    min-width: unset;
+    border-radius: 16px 16px 0 0;
+    padding: 8px 0 calc(8px + var(--safe-area-bottom, 0px));
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .session-ctx-item {
+    padding: 14px 20px;
+    font-size: 1rem;
+  }
+
+  .session-ctx-icon {
+    font-size: 1.2rem;
+    width: 24px;
   }
 
   /* Clean dark toolbar - positioned near bottom */
@@ -2559,9 +2569,8 @@ html.mobile-init .file-browser-panel {
    ============================================================================ */
 @media (hover: none) and (pointer: coarse) {
   /* Remove hover-dependent UI patterns */
-  .session-tab .tab-close,
   .session-tab .tab-gear {
-    opacity: 1;
+    opacity: 0.6;
     width: auto;
     padding: 0.15rem 0.25rem;
     align-items: center;

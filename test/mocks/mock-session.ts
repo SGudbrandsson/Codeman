@@ -233,6 +233,12 @@ export class MockSession extends EventEmitter {
   /** Stub for runPrompt */
   runPrompt = vi.fn(async () => {});
 
+  /** Claude resume ID (preserved across restarts) */
+  claudeResumeId: string | null = null;
+
+  /** Stub for prepareForRestart */
+  prepareForRestart = vi.fn(async () => {});
+
   /** Stub for startInteractive */
   startInteractive = vi.fn(async () => {});
 
