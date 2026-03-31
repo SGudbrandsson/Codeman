@@ -516,3 +516,189 @@ describe('onSessionChange() image preservation (Gap 4)', () => {
     expect(panel._images).toHaveLength(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Single-line input construction (new flow)
+// ---------------------------------------------------------------------------
+
+describe('send() builds single-line input with [Image:] refs', () => {
+  function buildInputString(images: { path: string | null }[], files: { path: string | null }[], text: string): string {
+    const resolvedImages = images.filter((img) => img.path);
+    const resolvedFiles = files.filter((f) => f.path);
+    let sendText = text;
+    if (resolvedFiles.length) {
+      const fileRefs = resolvedFiles.map((f) => `[Attached file: ${f.path}]`).join(' ');
+      sendText = fileRefs + (sendText ? ' ' + sendText : '');
+    }
+    if (resolvedImages.length) {
+      const imageRefs = resolvedImages.map((img) => `[Image: ${img.path}]`).join(' ');
+      sendText = imageRefs + (sendText ? ' ' + sendText : '');
+    }
+    return sendText + '\r';
+  }
+
+  it('single image + text', () => {
+    expect(buildInputString([{ path: '/tmp/img.png' }], [], 'hello')).toBe('[Image: /tmp/img.png] hello\r');
+  });
+
+  it('multiple images + text', () => {
+    expect(buildInputString([{ path: '/tmp/a.png' }, { path: '/tmp/b.jpg' }], [], 'check')).toBe(
+      '[Image: /tmp/a.png] [Image: /tmp/b.jpg] check\r'
+    );
+  });
+
+  it('image only, no text', () => {
+    expect(buildInputString([{ path: '/tmp/shot.png' }], [], '')).toBe('[Image: /tmp/shot.png]\r');
+  });
+
+  it('text only, no images', () => {
+    expect(buildInputString([], [], 'just text')).toBe('just text\r');
+  });
+
+  it('images + files + text', () => {
+    expect(buildInputString([{ path: '/tmp/img.png' }], [{ path: '/tmp/doc.pdf' }], 'see')).toBe(
+      '[Image: /tmp/img.png] [Attached file: /tmp/doc.pdf] see\r'
+    );
+  });
+
+  it('skips images with null path', () => {
+    expect(buildInputString([{ path: '/tmp/done.png' }, { path: null }], [], 'partial')).toBe(
+      '[Image: /tmp/done.png] partial\r'
+    );
+  });
+
+  it('never contains newlines', () => {
+    const result = buildInputString(
+      [{ path: '/tmp/a.png' }, { path: '/tmp/b.png' }],
+      [{ path: '/tmp/f.pdf' }],
+      'multi'
+    );
+    expect(result).not.toContain('\n');
+    expect(result.endsWith('\r')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// replaceImagePaths() regex matching
+// ---------------------------------------------------------------------------
+
+describe('replaceImagePaths() pattern matching', () => {
+  function escAttr(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function replaceImagePaths(html: string): string {
+    return html.replace(
+      /(<(?:code|pre)[^>]*>[\s\S]*?<\/(?:code|pre)>)|\[Image:(?:\s*source:)?\s*(\/[^\]]+\.(?:png|jpg|jpeg|gif|webp|svg))\]|\[Attached file:\s*(\/[^\]]+)\]|(\/(?:tmp|home|Users)\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp|svg))/gi,
+      function (_match, codeBlock, bracketImg, attachedFile, bareImg) {
+        if (codeBlock) return codeBlock;
+        const imgPath = bracketImg || bareImg;
+        if (imgPath) {
+          const encoded = encodeURIComponent(imgPath);
+          const fullSrc = '/api/files/preview?path=' + encoded;
+          const safeName = escAttr(imgPath.split('/').pop()!);
+          return '<span class="tv-img-preview"><img src="' + fullSrc + '" download="' + safeName + '"></span>';
+        }
+        if (attachedFile) {
+          const safeFname = escAttr(attachedFile.split('/').pop()!);
+          return '<span class="tv-file-ref">' + safeFname + '</span>';
+        }
+        return _match;
+      }
+    );
+  }
+
+  it('matches [Image: /path]', () => {
+    const r = replaceImagePaths('[Image: /home/user/img.png]');
+    expect(r).toContain('tv-img-preview');
+    expect(r).toContain(encodeURIComponent('/home/user/img.png'));
+  });
+
+  it('matches [Image: source: /path] (old format)', () => {
+    const r = replaceImagePaths('[Image: source: /home/user/old.png]');
+    expect(r).toContain('tv-img-preview');
+  });
+
+  it('matches bare absolute paths', () => {
+    const r = replaceImagePaths('see /home/user/pic.jpg here');
+    expect(r).toContain('tv-img-preview');
+    expect(r).toContain('see ');
+  });
+
+  it('matches [Attached file:]', () => {
+    const r = replaceImagePaths('[Attached file: /home/user/doc.pdf]');
+    expect(r).toContain('tv-file-ref');
+    expect(r).toContain('doc.pdf');
+  });
+
+  it('skips paths inside <code>', () => {
+    const html = '<code>/home/user/img.png</code>';
+    expect(replaceImagePaths(html)).toBe(html);
+  });
+
+  it('skips paths inside <pre>', () => {
+    const html = '<pre>/home/user/img.png</pre>';
+    expect(replaceImagePaths(html)).toBe(html);
+  });
+
+  it('escapes filenames with special chars (XSS)', () => {
+    const r = replaceImagePaths('[Image: /home/user/"><script>.png]');
+    expect(r).not.toContain('"><script>');
+    expect(r).toContain('&quot;&gt;&lt;script&gt;');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// User bubble text/image extraction
+// ---------------------------------------------------------------------------
+
+describe('user bubble attachment extraction', () => {
+  function parse(text: string) {
+    const imgRe = /\[Image:(?:\s*source:)?\s*(\/[^\]]+\.(?:png|jpg|jpeg|gif|webp|svg))\]/gi;
+    const fileRe = /\[Attached file:\s*(\/[^\]]+)\]/gi;
+    const imgs: string[] = [];
+    const files: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = imgRe.exec(text)) !== null) imgs.push(m[1]);
+    while ((m = fileRe.exec(text)) !== null) files.push(m[1]);
+    const clean = text
+      .replace(/\[Image:(?:\s*source:)?\s*\/[^\]]+\]/gi, '')
+      .replace(/\[Attached file:\s*\/[^\]]+\]/gi, '')
+      .trim();
+    return { imgs, files, clean };
+  }
+
+  it('extracts image path and strips from text', () => {
+    const { imgs, clean } = parse('[Image: /tmp/shot.png] hello');
+    expect(imgs).toEqual(['/tmp/shot.png']);
+    expect(clean).toBe('hello');
+  });
+
+  it('extracts multiple images', () => {
+    const { imgs } = parse('[Image: /tmp/a.png] [Image: /tmp/b.jpg] text');
+    expect(imgs).toEqual(['/tmp/a.png', '/tmp/b.jpg']);
+  });
+
+  it('extracts old format [Image: source:]', () => {
+    const { imgs } = parse('[Image: source: /home/u/old.png]');
+    expect(imgs).toEqual(['/home/u/old.png']);
+  });
+
+  it('extracts file paths', () => {
+    const { files, clean } = parse('[Attached file: /tmp/d.pdf] see');
+    expect(files).toEqual(['/tmp/d.pdf']);
+    expect(clean).toBe('see');
+  });
+
+  it('image-only = empty clean text', () => {
+    const { imgs, clean } = parse('[Image: /tmp/x.png]');
+    expect(imgs).toHaveLength(1);
+    expect(clean).toBe('');
+  });
+
+  it('plain text = no attachments', () => {
+    const { imgs, files, clean } = parse('just text');
+    expect(imgs).toEqual([]);
+    expect(files).toEqual([]);
+    expect(clean).toBe('just text');
+  });
+});
