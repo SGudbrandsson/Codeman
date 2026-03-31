@@ -123,17 +123,15 @@ describe('case-routes', () => {
     it('includes linked cases from linked-cases.json', async () => {
       // CASES_DIR readdir returns one case
       mockedReaddir.mockResolvedValue([{ name: 'regular-case', isDirectory: () => true }] as never);
-      // linked-cases.json is read second (after CASES_DIR readdir)
-      let readCallCount = 0;
-      mockedReadFile.mockImplementation(async () => {
-        readCallCount++;
-        if (readCallCount === 1) {
+      // linked-cases.json returns linked project; other readFile calls throw ENOENT
+      mockedReadFile.mockImplementation(async (filePath: string) => {
+        if (typeof filePath === 'string' && filePath.includes('linked-cases.json')) {
           return JSON.stringify({ 'linked-project': '/home/user/projects/linked' });
         }
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       // existsSync: path exists for linked case, CLAUDE.md check
-      mockedExistsSync.mockImplementation((p: string) => {
+      mockedExistsSync.mockImplementation((p) => {
         if (typeof p === 'string' && p.includes('linked')) return true;
         return false;
       });
@@ -150,6 +148,35 @@ describe('case-routes', () => {
       const linkedCase = body.find((c: { name: string }) => c.name === 'linked-project');
       expect(linkedCase).toBeDefined();
       expect(linkedCase.linked).toBe(true);
+    });
+
+    it('linked case overrides native case with same name', async () => {
+      // CASES_DIR has a native "Codeman" case
+      mockedReaddir.mockResolvedValue([{ name: 'Codeman', isDirectory: () => true }] as never);
+      // linked-cases.json also has "Codeman" pointing to a different path
+      mockedReadFile.mockImplementation(async (filePath: string) => {
+        if (typeof filePath === 'string' && filePath.includes('linked-cases.json')) {
+          return JSON.stringify({ Codeman: '/home/user/sources/Codeman' });
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      // existsSync: linked path exists, CLAUDE.md checks
+      mockedExistsSync.mockImplementation((p) => {
+        if (typeof p === 'string' && p.includes('/home/user/sources/Codeman')) return true;
+        return false;
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/cases',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Should have exactly one "Codeman" entry (linked overrides native)
+      const codemanCases = body.filter((c: { name: string }) => c.name === 'Codeman');
+      expect(codemanCases).toHaveLength(1);
+      expect(codemanCases[0].path).toBe('/home/user/sources/Codeman');
+      expect(codemanCases[0].linked).toBe(true);
     });
   });
 

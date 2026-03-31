@@ -62,15 +62,21 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       for (const [name, entry] of Object.entries(linkedCases)) {
         const path = resolveLinkedCasePath(entry);
         const orchestrationEnabled = typeof entry === 'object' ? (entry.orchestrationEnabled ?? false) : false;
-        // Only add if not already in cases (avoid duplicates) and path exists
-        if (!cases.some((c) => c.name === name) && existsSync(path)) {
-          cases.push({
+        // Linked cases override native cases with the same name (explicit user config wins)
+        if (existsSync(path)) {
+          const existingIdx = cases.findIndex((c) => c.name === name);
+          const caseEntry: CaseInfo = {
             name,
             path,
             hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
             linked: true,
             orchestrationEnabled,
-          });
+          };
+          if (existingIdx >= 0) {
+            cases[existingIdx] = caseEntry;
+          } else {
+            cases.push(caseEntry);
+          }
         }
       }
     } catch (err) {

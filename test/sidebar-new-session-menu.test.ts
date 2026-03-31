@@ -78,7 +78,7 @@ describe('startSessionInCase API call', () => {
     expect(fnStart, 'startSessionInCase function must exist').toBeGreaterThan(-1);
 
     // Extract approximately 2000 chars after the function declaration
-    const fnSlice = src.slice(fnStart, fnStart + 2000);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
 
     // The function must NOT touch document.getElementById('quickStartCase')
     expect(
@@ -92,7 +92,7 @@ describe('startSessionInCase API call', () => {
     const fnStart = src.indexOf('async startSessionInCase(');
     expect(fnStart).toBeGreaterThan(-1);
 
-    const fnSlice = src.slice(fnStart, fnStart + 2000);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
 
     // Must contain a direct fetch call to /api/sessions
     expect(fnSlice.includes('/api/sessions'), 'startSessionInCase must call POST /api/sessions directly').toBe(true);
@@ -103,7 +103,7 @@ describe('startSessionInCase API call', () => {
     const fnStart = src.indexOf('async startSessionInCase(');
     expect(fnStart).toBeGreaterThan(-1);
 
-    const fnSlice = src.slice(fnStart, fnStart + 2000);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
 
     // The API body must include the mode parameter
     expect(fnSlice.includes('mode'), 'startSessionInCase must pass mode to the API').toBe(true);
@@ -114,12 +114,78 @@ describe('startSessionInCase API call', () => {
     const fnStart = src.indexOf('async startSessionInCase(');
     expect(fnStart).toBeGreaterThan(-1);
 
-    const fnSlice = src.slice(fnStart, fnStart + 2000);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
 
     // Must reference cases (either this.cases or app.cases or /api/cases/)
     expect(
       fnSlice.includes('cases') || fnSlice.includes('/api/cases/'),
       'startSessionInCase must look up the project workingDir from cases or the cases API'
+    ).toBe(true);
+  });
+});
+
+// ─── Bug fix: sequential naming (wN-CaseName) instead of AI auto-name ─────
+
+describe('startSessionInCase sequential naming', () => {
+  it('computes sequential name with wN- prefix for non-shell sessions', () => {
+    const src = getAppJs();
+    const fnStart = src.indexOf('async startSessionInCase(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
+
+    // Must compute a name using the wN-CaseName pattern
+    expect(
+      fnSlice.includes("'w'") || fnSlice.includes('"w"'),
+      'startSessionInCase must use "w" prefix for non-shell sessions'
+    ).toBe(true);
+  });
+
+  it('computes sequential name with sN- prefix for shell sessions', () => {
+    const src = getAppJs();
+    const fnStart = src.indexOf('async startSessionInCase(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
+
+    // Must compute a name using the sN-CaseName pattern
+    expect(
+      fnSlice.includes("'s'") || fnSlice.includes('"s"'),
+      'startSessionInCase must use "s" prefix for shell sessions'
+    ).toBe(true);
+  });
+
+  it('passes name in the POST /api/sessions body', () => {
+    const src = getAppJs();
+    const fnStart = src.indexOf('async startSessionInCase(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
+
+    // The POST /api/sessions body must include name: sessionName
+    expect(
+      fnSlice.includes('name: sessionName') || fnSlice.includes('name:sessionName'),
+      'startSessionInCase must pass name in the POST body'
+    ).toBe(true);
+  });
+
+  it('does not call auto-name endpoint', () => {
+    const src = getAppJs();
+    const fnStart = src.indexOf('async startSessionInCase(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
+
+    // Must NOT call auto-name anymore
+    expect(fnSlice.includes('/auto-name'), 'startSessionInCase must not call /auto-name endpoint').toBe(false);
+  });
+
+  it('scans existing sessions to find the next number', () => {
+    const src = getAppJs();
+    const fnStart = src.indexOf('async startSessionInCase(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnSlice = src.slice(fnStart, fnStart + 3000);
+
+    // Must iterate sessions to find max existing number
+    expect(
+      fnSlice.includes('this.sessions'),
+      'startSessionInCase must scan this.sessions for existing numbered sessions'
     ).toBe(true);
   });
 });

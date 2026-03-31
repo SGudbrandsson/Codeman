@@ -11513,6 +11513,21 @@ class CodemanApp {
       return;
     }
 
+    // Compute sequential name: wN-CaseName (or sN-CaseName for shell)
+    const _prefix = mode === 'shell' ? 's' : 'w';
+    const _pattern = new RegExp(`^${_prefix}(\\d+)-${caseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    let _maxN = 0;
+    if (this.sessions) {
+      for (const s of this.sessions.values()) {
+        const m = s.name && s.name.match(_pattern);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n > _maxN) _maxN = n;
+        }
+      }
+    }
+    const sessionName = `${_prefix}${_maxN + 1}-${caseName}`;
+
     if (mode === 'opencode') {
       // OpenCode uses its own quick-start route
       try {
@@ -11525,13 +11540,17 @@ class CodemanApp {
         const res = await fetch('/api/quick-start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ caseName, mode: 'opencode', openCodeConfig: { autoAllowTools: true } }),
+          body: JSON.stringify({ caseName, mode: 'opencode', name: sessionName, openCodeConfig: { autoAllowTools: true } }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
         if (data.sessionId) {
-          // Auto-name via AI (fire-and-forget)
-          fetch(`/api/sessions/${data.sessionId}/auto-name`, { method: 'POST' }).catch(() => {});
+          // Name was already set via sequential convention; rename if needed
+          fetch(`/api/sessions/${data.sessionId}/name`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: sessionName }),
+          }).catch(() => {});
           await this.selectSession(data.sessionId);
         }
       } catch (err) {
@@ -11545,7 +11564,7 @@ class CodemanApp {
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir, mode }),
+        body: JSON.stringify({ workingDir, mode, name: sessionName }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to create session');
@@ -11562,10 +11581,8 @@ class CodemanApp {
             body: JSON.stringify(dims),
           });
         }
-      } else {
-        // Auto-name non-shell sessions via AI (fire-and-forget)
-        fetch(`/api/sessions/${sessionId}/auto-name`, { method: 'POST' }).catch(() => {});
       }
+      // Name already set via sequential convention (wN/sN-CaseName) — no auto-name needed
 
       await this.selectSession(sessionId);
       this.terminal?.focus();
