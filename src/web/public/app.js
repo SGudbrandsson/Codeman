@@ -11514,19 +11514,19 @@ class CodemanApp {
     }
 
     // Compute sequential name: wN-CaseName (or sN-CaseName for shell)
-    const _prefix = mode === 'shell' ? 's' : 'w';
-    const _pattern = new RegExp(`^${_prefix}(\\d+)-${caseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-    let _maxN = 0;
+    const prefix = mode === 'shell' ? 's' : 'w';
+    const pattern = new RegExp(`^${prefix}(\\d+)-${caseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    let maxN = 0;
     if (this.sessions) {
       for (const s of this.sessions.values()) {
-        const m = s.name && s.name.match(_pattern);
+        const m = s.name && s.name.match(pattern);
         if (m) {
           const n = parseInt(m[1], 10);
-          if (n > _maxN) _maxN = n;
+          if (n > maxN) maxN = n;
         }
       }
     }
-    const sessionName = `${_prefix}${_maxN + 1}-${caseName}`;
+    const sessionName = `${prefix}${maxN + 1}-${caseName}`;
 
     if (mode === 'opencode') {
       // OpenCode uses its own quick-start route
@@ -11540,12 +11540,12 @@ class CodemanApp {
         const res = await fetch('/api/quick-start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ caseName, mode: 'opencode', name: sessionName, openCodeConfig: { autoAllowTools: true } }),
+          body: JSON.stringify({ caseName, mode: 'opencode', openCodeConfig: { autoAllowTools: true } }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
         if (data.sessionId) {
-          // Name was already set via sequential convention; rename if needed
+          // Quick-start doesn't support name field; set it via rename endpoint
           fetch(`/api/sessions/${data.sessionId}/name`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
