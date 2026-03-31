@@ -758,8 +758,7 @@ describe('session-routes', () => {
   // ========== POST /api/sessions/:id/restart ==========
 
   describe('POST /api/sessions/:id/restart', () => {
-    it('restarts session and returns resumeId', async () => {
-      harness.ctx._session.claudeResumeId = 'resume-abc-123';
+    it('restarts session successfully', async () => {
       const res = await harness.app.inject({
         method: 'POST',
         url: `/api/sessions/${harness.ctx._sessionId}/restart`,
@@ -767,22 +766,9 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(body.resumeId).toBe('resume-abc-123');
       expect(harness.ctx._session.prepareForRestart).toHaveBeenCalled();
       expect(harness.ctx._session.startInteractive).toHaveBeenCalled();
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
-    });
-
-    it('returns null resumeId when session has no claudeResumeId', async () => {
-      harness.ctx._session.claudeResumeId = null;
-      const res = await harness.app.inject({
-        method: 'POST',
-        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.resumeId).toBeNull();
     });
 
     it('rejects shell sessions', async () => {

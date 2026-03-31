@@ -400,6 +400,7 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `POST` | `/api/quick-start` | Create case + start session |
 | `DELETE` | `/api/sessions/:id` | Delete session |
 | `POST` | `/api/sessions/:id/input` | Send input |
+| `POST` | `/api/sessions/:id/restart` | Kill process and restart (preserves conversation history) |
 
 ### Respawn
 | Method | Endpoint | Description |

@@ -620,7 +620,6 @@ ${contextLines.join('\n')}`;
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Shell sessions cannot be restarted this way');
     }
 
-    const resumeId = session.claudeResumeId;
     try {
       await session.prepareForRestart();
       await session.startInteractive();
@@ -632,7 +631,7 @@ ${contextLines.join('\n')}`;
         reason: 'restart',
       });
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
-      return { success: true, resumeId: resumeId ?? null } as ApiResponse;
+      return { success: true } as ApiResponse;
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Restart failed: ' + getErrorMessage(err));
     }

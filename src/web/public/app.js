@@ -11384,9 +11384,11 @@ class CodemanApp {
   }
 
   async restartSessionProcess(sessionId) {
+    if (this._restartingSessionId === sessionId) return;
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    this._restartingSessionId = sessionId;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/restart`, { method: 'POST' });
       const data = await res.json();
@@ -11397,6 +11399,8 @@ class CodemanApp {
       }
     } catch (err) {
       this.showToast(`Restart failed: ${err.message}`, 'error');
+    } finally {
+      this._restartingSessionId = null;
     }
   }
 
