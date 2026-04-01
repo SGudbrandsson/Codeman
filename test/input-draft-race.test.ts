@@ -1,11 +1,17 @@
 /**
  * InputPanel._loadDraft race-condition tests
  *
- * Tests the five gaps identified in the test gap analysis for the
- * fix/input-swallowed-while-typing branch:
+ * Tests for _loadDraft behavior after the compose-image-leaks-between-sessions
+ * fix.  The old early-return guard (which preserved a non-empty textarea and
+ * saved its content to _drafts) was removed.  onSessionChange now always clears
+ * the textarea before calling _loadDraft, so _loadDraft never encounters
+ * leftover content from a previous session during a normal switch.
  *
- * 1. Race 1 guard: _loadDraft called when textarea has text → value unchanged
- * 2. Race 1 side-effect: in-progress text saved to _drafts for new session id
+ * Updated gaps:
+ * 1. _loadDraft with pre-populated textarea (no local cache) — textarea is
+ *    NOT saved to _drafts (old save-to-drafts side-effect removed)
+ * 2. onSessionChange unconditional clear — text + images with focused textarea,
+ *    session switch clears everything (regression test for original bug)
  * 3. Race 2 valueAfterLocal guard: slow fetch + type after local restore → server NOT applied
  * 4. Happy path: empty textarea + local cache present → textarea set to cached text
  * 5. Server draft applied when no local cache and textarea still empty after fetch
@@ -97,9 +103,9 @@ afterAll(async () => {
   await server?.stop();
 }, 30_000);
 
-// ─── Gap 1: Race 1 guard — textarea non-empty → value preserved ──────────────
+// ─── Gap 1: _loadDraft no longer saves leftover textarea content to _drafts ──
 
-describe('Race 1 guard — _loadDraft does not clear textarea when user is mid-type', () => {
+describe('_loadDraft does not save pre-existing textarea content to _drafts (old guard removed)', () => {
   let context: BrowserContext;
   let page: Page;
   let sessionId: string;
@@ -112,15 +118,26 @@ describe('Race 1 guard — _loadDraft does not clear textarea when user is mid-t
     // Mock the draft endpoint to return 404 so no server draft interferes
     await mockDraftEndpointNotFound(page, sessionId);
 
-    // Set textarea to simulate user mid-type, then call _loadDraft for this session
+    // Set textarea to simulate leftover content, then call _loadDraft directly.
+    // The old code would save this content to _drafts for the new session — the
+    // new code does not.
     await page.evaluate(async (sid) => {
       const ta = document.getElementById('composeTextarea') as HTMLTextAreaElement | null;
-      if (ta) ta.value = 'user is typing this';
-      const ip = (window as unknown as { InputPanel: { _loadDraft: (id: string) => Promise<void> } }).InputPanel;
+      if (ta) ta.value = 'leftover from previous session';
+      const ip = (
+        window as unknown as {
+          InputPanel: {
+            _loadDraft: (id: string) => Promise<void>;
+            _drafts: Map<string, unknown>;
+          };
+        }
+      ).InputPanel;
+      // Ensure no local cache so the only way _drafts gets populated is via the
+      // removed early-return guard.
+      ip._drafts.delete(sid);
       await ip._loadDraft(sid);
     }, sessionId);
 
-    // Allow any async tails to settle
     await page.waitForTimeout(300);
   });
 
@@ -129,51 +146,116 @@ describe('Race 1 guard — _loadDraft does not clear textarea when user is mid-t
     await context?.close();
   });
 
-  it('textarea value is unchanged after _loadDraft resolves when user was mid-type', async () => {
-    const value = await page.evaluate(() => {
-      const ta = document.getElementById('composeTextarea') as HTMLTextAreaElement | null;
-      return ta ? ta.value : null;
-    });
-    expect(value).toBe('user is typing this');
+  it('_drafts does NOT contain an entry for the session (no implicit save)', async () => {
+    const hasDraft = await page.evaluate((sid) => {
+      const ip = (
+        window as unknown as {
+          InputPanel: { _drafts: Map<string, { text: string }> };
+        }
+      ).InputPanel;
+      return ip._drafts.has(sid);
+    }, sessionId);
+    expect(hasDraft).toBe(false);
   });
 });
 
-// ─── Gap 2: Race 1 side-effect — in-progress text saved to _drafts ───────────
+// ─── Gap 2: Regression — focused textarea + images, session switch clears all ─
 
-describe('Race 1 side-effect — in-progress text is saved to _drafts for new session id', () => {
+describe('Regression — text + images with focused textarea are cleared on session switch', () => {
   let context: BrowserContext;
   let page: Page;
-  let sessionId: string;
+  let sessionA: string;
+  let sessionB: string;
 
   beforeAll(async () => {
     ({ context, page } = await freshPage());
     await navigateTo(page);
-    sessionId = await createSession(page);
+    sessionA = await createSession(page);
+    sessionB = await createSession(page);
 
-    await mockDraftEndpointNotFound(page, sessionId);
+    await mockDraftEndpointNotFound(page, sessionA);
+    await mockDraftEndpointNotFound(page, sessionB);
 
-    // Set textarea to simulate in-progress typing, then call _loadDraft
-    await page.evaluate(async (sid) => {
-      const ta = document.getElementById('composeTextarea') as HTMLTextAreaElement | null;
-      if (ta) ta.value = 'save me to drafts';
-      const ip = (window as unknown as { InputPanel: { _loadDraft: (id: string) => Promise<void> } }).InputPanel;
-      await ip._loadDraft(sid);
-    }, sessionId);
+    // Reproduce the original bug scenario: text in textarea with focus + images
+    // attached, then switch sessions.  Before the fix, the content would leak to
+    // the new session.
+    await page.evaluate(
+      async ({ a, b }) => {
+        const ip = (
+          window as unknown as {
+            InputPanel: {
+              _getTextarea: () => HTMLTextAreaElement | null;
+              onSessionChange: (oldId: string | null, newId: string) => void;
+              _images: Array<{ objectUrl: string | null; file: File | null; path: string | null }>;
+              _drafts: Map<string, unknown>;
+            };
+          }
+        ).InputPanel;
 
-    await page.waitForTimeout(300);
+        // Select session A
+        ip.onSessionChange(null, a);
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Type text and focus the textarea
+        const ta = ip._getTextarea();
+        if (ta) {
+          ta.value = 'text that should not leak';
+          ta.focus();
+        }
+
+        // Simulate attached images
+        ip._images = [{ objectUrl: null, file: null, path: '/tmp/leak-test.png' }];
+
+        // Ensure session B has no cached draft
+        ip._drafts.delete(b);
+
+        // Switch to session B — this is where the old bug would leak content
+        ip.onSessionChange(a, b);
+        await new Promise((r) => setTimeout(r, 200));
+      },
+      { a: sessionA, b: sessionB }
+    );
   });
 
   afterAll(async () => {
-    await deleteSession(page, sessionId);
+    await deleteSession(page, sessionA);
+    await deleteSession(page, sessionB);
     await context?.close();
   });
 
-  it('_drafts.get(newSessionId).text equals the in-progress text from the textarea', async () => {
-    const draftText = await page.evaluate((sid) => {
-      const ip = (window as unknown as { InputPanel: { _drafts: Map<string, { text: string }> } }).InputPanel;
-      return ip._drafts.get(sid)?.text ?? null;
-    }, sessionId);
-    expect(draftText).toBe('save me to drafts');
+  it('textarea is empty in session B after switching (no text leak)', async () => {
+    const value = await page.evaluate(() => {
+      const ta = document.getElementById('composeTextarea') as HTMLTextAreaElement | null;
+      return ta ? ta.value : null;
+    });
+    expect(value).toBe('');
+  });
+
+  it('_images is empty in session B after switching (no image leak)', async () => {
+    const currentImages = await page.evaluate(() => {
+      const ip = (
+        window as unknown as {
+          InputPanel: { _images: Array<{ path: string | null }> };
+        }
+      ).InputPanel;
+      return ip._images.map((i) => i.path);
+    });
+    expect(currentImages).toEqual([]);
+  });
+
+  it('session A draft is preserved in _drafts (content saved, not lost)', async () => {
+    const draft = await page.evaluate((sid) => {
+      const ip = (
+        window as unknown as {
+          InputPanel: { _drafts: Map<string, { text: string; imagePaths: string[] }> };
+        }
+      ).InputPanel;
+      const d = ip._drafts.get(sid);
+      return d ? { text: d.text, imagePaths: d.imagePaths } : null;
+    }, sessionA);
+    expect(draft).not.toBeNull();
+    expect(draft!.text).toBe('text that should not leak');
+    expect(draft!.imagePaths).toEqual(['/tmp/leak-test.png']);
   });
 });
 

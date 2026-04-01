@@ -2,8 +2,8 @@
 
 type: bug
 status: done
-title: Desktop image preview too large in chat
-description: The desktop image preview in chat messages is way too large. When an image is attached/referenced in a message, the inline preview renders at an oversized scale on desktop viewports. It needs to be constrained to a reasonable max size. Use /impeccable:critique in the worktree to determine the best approach for sizing the preview.
+title: Image in compose bar leaks between sessions on switch
+description: When switching sessions with an image attached in the compose bar, the message and image follow to the new session instead of staying on the original session. Compose state (text + images) must be saved per-session and restored when switching back.
 affected_area: frontend
 work_item_id: none
 fix_cycles: 0
@@ -11,107 +11,145 @@ test_fix_cycles: 0
 
 ## Reproduction
 
-1. Open Codeman desktop UI in a browser at desktop viewport width (>1024px).
-2. Open or create a session that has image attachments/references in chat messages.
-3. Observe that assistant-side inline image previews render at 240x180px — consuming ~28% of the 860px content width.
-4. The preview dominates the surrounding text, breaking the reading flow of markdown content.
+1. Open session A. Type some text in the compose bar and/or attach one or more images.
+2. Click on session B's tab (or use any method to switch sessions).
+3. Observe: the compose bar in session B still shows the text and/or images from session A.
+4. Switch back to session A. Observe: the compose bar is now empty (the draft was overwritten).
+
+The bug is most visible when the textarea has focus while switching (clicking a session tab), or when images are attached (images leak regardless of focus).
 
 ## Root Cause / Spec
 
-**Root cause:** Two issues:
-1. In `styles.css`, `.tv-content .tv-img-preview img` uses hard-coded `width: 240px; height: 180px` with no responsive constraints.
-2. **Critical:** An unclosed `@media (max-width: 768px)` block at line 12469 swallowed ALL subsequent CSS rules (including image preview rules at line 12660+), making them only apply on mobile viewports. On desktop, images had no size constraints at all.
+### Root Cause
 
-**Recommended fix (from /impeccable:critique):**
+File: `src/web/public/app.js`, `InputPanel.onSessionChange()` (line ~20745)
 
-| Context | Current | Recommended |
-|---------|---------|-------------|
-| Base `.tv-img-preview img` | 160x120 | 160x120 (keep) |
-| User bubble multi | 120x90 | 120x90 (keep) |
-| User bubble single | 180x135 | 140x105 |
-| Assistant-side `.tv-content` | 240x180 | **160x120** |
+The method has a "migration" guard that was added to protect against SSE-triggered session switches clobbering user input. The logic at lines 20756-20763:
 
-Key changes:
-1. Reduce `.tv-content .tv-img-preview img` from 240x180 to 160x120.
-2. Switch from hard `width/height` to `max-width/max-height` so small images stay small.
-3. Reduce user bubble single-image from 180x135 to 140x105.
-4. Add basic responsive constraint (`max-width: 40%`) so images never dominate the content column.
+```js
+const userHasText = ta && ta.value && document.activeElement === ta;
+const userHasImages = this._images.length > 0;
+const userHasContent = userHasText || userHasImages;
+if (ta && !userHasContent) { ta.value = ''; }
+if (!userHasContent) this._restoreImages([]);
+```
+
+When `userHasContent` is true (textarea focused with text, OR images attached), the textarea and images are **not** cleared before setting `_currentSessionId = newId` and calling `_loadDraft(newId)`.
+
+Inside `_loadDraft(newId)` (line ~20788), the method checks `ta.value` (which still has old session's text) and treats it as "in-progress user input" for the new session. It then **saves the old content as the new session's draft** (line 20796) and returns early without restoring the actual draft for the new session.
+
+Two sub-bugs:
+1. **Text leaks when textarea is focused** -- `userHasText` requires `document.activeElement === ta`, but clicking a session tab often doesn't blur the textarea first, so the guard fires on normal user-initiated switches.
+2. **Images always leak** -- `userHasImages` checks `this._images.length > 0` with no focus check at all. Any attached image causes the entire compose state to migrate.
+
+### Fix Spec
+
+**In `onSessionChange(oldId, newId)`:**
+- The draft is already saved correctly for the old session at line 20747 (`_saveDraftLocal(oldId)`).
+- After saving, **always** clear the textarea and images, regardless of `userHasContent`. Remove the conditional guard entirely.
+- Then proceed to load the new session's draft as before.
+
+**In `_loadDraft(sessionId)`:**
+- Remove or rework the early-return guard at lines 20794-20798 that treats leftover textarea content as "in-progress input." After the `onSessionChange` fix, the textarea will always be empty when `_loadDraft` is called during a session switch, so this guard becomes moot for that path. However, if this guard is needed for other callers, add a parameter (e.g., `isSessionSwitch`) to distinguish the two cases.
+
+**SSE-triggered switch protection (if still needed):**
+- If the concern about SSE-triggered auto-switches clobbering user input is valid, the right approach is to pass a flag from `selectSession` indicating whether the switch was user-initiated or SSE-triggered, and only skip the clear on SSE-triggered switches. However, given that `_saveDraftLocal` already saves the content before clearing, the user's input is preserved in the draft and will be restored when they switch back. The "migration" behavior is actually harmful and should be removed entirely.
 
 ## Fix / Implementation Notes
 
-Changed `src/web/public/styles.css` — four targeted edits:
+**File changed:** `src/web/public/app.js`
 
-1. **Base `.tv-img-preview img`** (line ~12663): Changed `width: 160px; height: 120px` to `max-width: 160px; max-height: 120px`. This lets small images render at their natural size instead of being stretched up to 160x120.
+**Change 1 — `onSessionChange()` (line ~20745):**
+Removed the conditional `userHasContent` guard that skipped clearing textarea/images when the user had content. Now the method always clears both textarea and images after `_saveDraftLocal(oldId)` saves the old session's state. The draft is preserved in the local cache and will be restored when the user switches back.
 
-2. **User bubble single image** `.tv-bubble .tv-img-strip .tv-img-preview:only-child img` (line ~12712): Reduced from `180x135` to `140x105` per spec.
-
-3. **Assistant-side container** `.tv-content .tv-img-preview` (line ~12718): Added `max-width: 40%` so image previews never consume more than 40% of the content column width.
-
-4. **Assistant-side image** `.tv-content .tv-img-preview img` (line ~12725): Changed from `width: 240px; height: 180px` to `max-width: 160px; max-height: 120px`. This is the primary fix — reduces the oversized 240x180 preview to 160x120 and uses max- properties so smaller images stay at their natural size.
+**Change 2 — `_loadDraft()` (line ~20782):**
+Removed the early-return guard that treated a non-empty textarea as "in-progress input" and saved it as the new session's draft. After Change 1, the textarea is always empty when `_loadDraft` is called during a session switch, making this guard unnecessary. The method now unconditionally clears images, applies the local cache, then fetches from the server.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-**Correctness:** All four changes match the spec exactly. Sizing reductions are correct, `max-width`/`max-height` swap is applied where specified, and hard `width`/`height` is retained for user bubble strips as intended.
+**Changes reviewed:** Two edits in `src/web/public/app.js` — removal of the `userHasContent` conditional guard in `onSessionChange()` and removal of the early-return guard in `_loadDraft()`.
 
-**Specificity cascade:** Verified correct. `.tv-content .tv-img-preview img` (0,0,2,1) overrides base `.tv-img-preview img` (0,0,1,1). User bubble rules (0,0,3,1 and 0,0,4,1) override both. No conflicts.
+**Correctness:** Both changes directly address the root cause. `_saveDraftLocal(oldId)` captures the full compose state (text + image paths) before the clear, so no user data is lost. The unconditional clear ensures nothing leaks to the target session. The `_loadDraft` early-return removal is safe because `_loadDraft` is only called from `onSessionChange` (confirmed by grep), and after Change 1 the textarea is always empty on entry.
 
-**Responsive behavior:** `max-width: 40%` on `.tv-content .tv-img-preview` is a sound responsive constraint that resolves against the content column width.
+**Edge cases considered:**
+- SSE-triggered session switches: the old "migration" guard was meant to protect against these, but `_saveDraftLocal` already persists drafts before clearing, so the user's content is preserved and restored on switch-back. No data loss.
+- The redundant `_restoreImages([])` call inside `_loadDraft` (line 20786) after it was already called in `onSessionChange` (line 20755) is harmless defensive cleanup. Not a concern.
+- No other callers of `_loadDraft` exist, so the guard removal has no unintended side effects.
 
-**Minor notes (non-blocking):**
-- `object-fit: cover` on the base and assistant-side `img` rules is now effectively inert. With only `max-width`/`max-height` (no explicit `width`/`height`), the image content box matches intrinsic dimensions, so `object-fit` has nothing to do. Images will display at natural aspect ratio rather than being cropped. This is arguably *better* UX but the dead property could mislead future developers. Not a blocker.
-- Theoretical 0x0 collapse risk for images without intrinsic dimensions (broken src, loading state). In practice, all images here are user-attached files with real dimensions, so this is not a real concern in this codebase.
+**Security:** No new inputs, API calls, or data flow changes. No concerns.
 
-**Verdict:** Changes are clean, targeted, and match the spec. Approved for test gap analysis.
+**Consistency:** Code follows existing patterns in the file. Comments are clear and accurate.
 
 ## Test Gap Analysis
 
-**Verdict: NO GAPS**
+**Verdict: NO GAPS** (re-check after test updates)
 
-The only changed source file is `src/web/public/styles.css`. The changes are purely declarative CSS property adjustments (switching `width`/`height` to `max-width`/`max-height` and reducing pixel values).
+### Coverage summary
 
-**Analysis:**
-- The project has no visual regression testing infrastructure (no Playwright screenshot comparison, no CSS property assertion tests).
-- Existing image-related tests (`test/image-attach-rewrite.test.ts`) verify HTML structure and class names, not CSS computed styles.
-- The four CSS edits are value-level changes to existing rules — no new selectors, no new classes, no logic changes.
-- Writing automated tests for CSS sizing properties would require a full browser environment (Playwright) with screenshot comparison or computed-style assertions, which is outside the project's current testing patterns.
-- Manual QA (visual inspection at desktop viewport) is the appropriate verification method for this change.
+- **`test/input-draft-race.test.ts`** (8 tests, 5 gaps) — Updated Gap 1 and Gap 2 to reflect the fix. Gap 1 now verifies `_loadDraft` does NOT save pre-existing textarea content to `_drafts` (old early-return guard removed). Gap 2 is a regression test reproducing the original bug scenario end-to-end (focused textarea + images, session switch clears everything, draft preserved). Gaps 3-5 unchanged and still valid.
+- **`test/draft-per-session.test.ts`** (10 tests, 6 gaps) — All tests pass without modification. Covers save on switch, restore on switch, round-trip A->B->A, empty draft, send clears draft, and image attachment isolation.
+
+All 18 tests pass. Both source changes (removal of `userHasContent` guard in `onSessionChange`, removal of early-return guard in `_loadDraft`) are adequately covered.
 
 ## Test Writing Notes
-<!-- filled by test writing subagent -->
+
+### Modified: `test/input-draft-race.test.ts`
+
+**Gap 1 (replaced):** Old test expected `_loadDraft` to preserve a non-empty textarea via the early-return guard. New test (`_loadDraft does not save pre-existing textarea content to _drafts`) verifies that calling `_loadDraft` directly with a pre-populated textarea and no local cache does NOT create a `_drafts` entry for the session. This confirms the old save-to-drafts side-effect is gone.
+
+**Gap 2 (replaced):** Old test expected `_loadDraft` to save leftover textarea content into `_drafts` for the new session. New test (`Regression — text + images with focused textarea are cleared on session switch`) reproduces the original bug scenario end-to-end via `onSessionChange`: types text in session A with focused textarea, attaches images, switches to session B. Asserts:
+- Textarea is empty in session B (no text leak)
+- `_images` is empty in session B (no image leak)
+- Session A's draft is preserved in `_drafts` with correct text and imagePaths
+
+**Gaps 3-5:** Unchanged. These tests cover the `valueAfterLocal` race guard, local cache restore, and server draft application -- all still valid after the fix.
+
+### Unchanged: `test/draft-per-session.test.ts`
+
+All 10 existing tests pass without modification. No changes needed.
+
+### Test results
+
+- `test/input-draft-race.test.ts`: 8 tests passed
+- `test/draft-per-session.test.ts`: 10 tests passed
 
 ## Test Review History
 <!-- appended by each Opus test review subagent — never overwrite -->
 
+### Test review attempt 1 — APPROVED
+
+**Gap 1 (replaced):** The test calls `_loadDraft` directly with a pre-populated textarea and no local cache, then asserts `_drafts.has(sid)` is `false`. This correctly verifies the old save-to-drafts side-effect (removed early-return guard) no longer fires. The implementation at `_loadDraft` lines 20782-20810 confirms there is no code path that writes to `_drafts` — it only reads from it. Test is correct and targeted.
+
+**Gap 2 (replaced):** The regression test reproduces the exact original bug scenario end-to-end via `onSessionChange`: sets text + focus + images in session A, switches to session B. Three assertions cover the full fix surface:
+1. Textarea empty in session B — confirms unconditional clear works (no text leak).
+2. `_images` empty in session B — confirms image leak is fixed.
+3. Session A draft preserved with correct `text` and `imagePaths` — confirms `_saveDraftLocal(oldId)` runs before the clear, so no data is lost.
+
+Verified against the implementation: `_saveDraftLocal` reads `ta.value` and `_images` before the clear at lines 20746-20755, so the draft capture is correct. The mocked 404 for session B prevents server draft interference.
+
+**Gaps 3-5 (unchanged):** Verified these still match the implementation. Gap 3 tests the `valueAfterLocal` race guard at line 20804. Gap 4 tests local cache fast-path restore at lines 20789-20794. Gap 5 tests server draft application at lines 20804-20808. All correct.
+
+**Style/quality:** Tests follow the existing Playwright integration pattern (fresh browser context, session lifecycle management, cleanup in afterAll). Naming conventions and structure match the rest of the file. Type assertions are appropriately narrow.
+
+**Edge cases:** The key edge case (textarea focused during switch, which was the trigger for the old buggy guard) is covered by Gap 2's explicit `ta.focus()` call. Image-only leak (no text) is implicitly covered by `draft-per-session.test.ts`. No missing boundaries identified.
+
+**Verdict: All 5 gaps covered. 8 tests passing. No issues found.**
+
 ## QA Results
+<!-- filled by QA subagent -->
 
-### TypeScript typecheck (`tsc --noEmit`): PASS
-Zero errors.
+- **tsc --noEmit:** PASS (zero errors)
+- **npm run lint:** PASS (0 errors, 2 pre-existing warnings unrelated to this change)
+- **vitest (input-draft-race + draft-per-session):** PASS (18/18 tests passed)
+- **Frontend smoke test (Playwright):** PASS (page loads, session elements present, compose area present, no JS errors)
 
-### ESLint (`npm run lint`): PASS
-Zero errors (2 pre-existing warnings in unrelated files).
-
-### Unit tests (`npx vitest run test/image-attach-rewrite.test.ts`): PASS
-40/40 tests passed.
-
-### CSS diff verification: PASS
-All four changes match the spec exactly:
-1. Base `.tv-img-preview img`: `width/height` -> `max-width/max-height` (160x120)
-2. Single bubble image: 180x135 -> 140x105
-3. `.tv-content .tv-img-preview`: added `max-width: 40%`
-4. `.tv-content .tv-img-preview img`: 240x180 -> `max-width: 160px; max-height: 120px`
-
-### Playwright browser check: SKIPPED
-Dev server failed to bind port (mux-sessions.json ENOENT during session restoration — environmental, not related to CSS changes). Static CSS diff verification performed instead.
-
-### Docs Staleness: none
-Only changed file is `src/web/public/styles.css` — no API routes, skill docs, or significant UI logic changed.
+### Docs Staleness
+- Skill docs may need update (`skills/codeman-full-qa/SKILL.md`, `skills/codeman-task-runner/SKILL.md`, `skills/codeman-worktrees/SKILL.md` changed)
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
-- Followed the recommended sizes from the /impeccable:critique analysis exactly as specified in the spec table.
-- Used `max-width`/`max-height` instead of `width`/`height` for base and assistant-side rules so that images smaller than the threshold render at their natural dimensions rather than being upscaled.
-- Kept user bubble multi-image rule (`120x90`) unchanged with hard `width`/`height` since those are intentionally uniform thumbnails in a strip layout.
-- The `max-width: 40%` on the container acts as a safety net for very wide viewports.
+- Removed the "migration" guard entirely rather than adding an `isSessionSwitch` flag. Rationale: `_saveDraftLocal` already persists the compose state before clearing, so there is no data loss. The migration behavior was the root cause of the bug — it leaked content to the wrong session and overwrote the target session's draft.
+- Removed the `_loadDraft` early-return guard rather than parameterizing it. After the `onSessionChange` fix, the textarea is always empty on entry to `_loadDraft` during session switches, so the guard is dead code for that path. No other caller passes leftover content.
