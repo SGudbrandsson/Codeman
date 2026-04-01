@@ -12662,8 +12662,8 @@ kbd {
 }
 .tv-img-preview img {
   display: block;
-  width: 160px;
-  height: 120px;
+  max-width: 160px;
+  max-height: 120px;
   object-fit: cover;
   border-radius: 6px;
 }
@@ -12710,20 +12710,21 @@ kbd {
 }
 /* Single image in bubble — slightly larger */
 .tv-bubble .tv-img-strip .tv-img-preview:only-child img {
-  width: 180px;
-  height: 135px;
+  width: 140px;
+  height: 105px;
 }
 
 /* Assistant-side image previews — inline in markdown flow */
 .tv-content .tv-img-preview {
   display: inline-block;
+  max-width: 40%;
   margin: 6px 0;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
 }
 .tv-content .tv-img-preview img {
-  width: 240px;
-  height: 180px;
+  max-width: 160px;
+  max-height: 120px;
   object-fit: cover;
   border-radius: 5px;
 }
