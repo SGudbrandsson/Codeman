@@ -12476,6 +12476,7 @@ kbd {
     max-height: 100vh;
     border-radius: 0;
   }
+}
 
 /* ── Agent Dashboard ─────────────────────────────────────── */
 .agent-dashboard-card {
