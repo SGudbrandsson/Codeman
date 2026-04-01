@@ -27,7 +27,7 @@ digraph flow {
 Ask the user (in one message) for everything missing:
 - Which **project(s)** (repo name or path)
 - **Branch name(s)** for each (e.g. `feat/my-feature`)
-- **Description/notes** for each worktree — bug details, task context, etc. (pass as `notes`)
+- **Task description** for each worktree — bug details, feature spec, task context
 - New branch or existing? (default: new)
 
 If user already provided these, skip asking.
@@ -65,12 +65,21 @@ Do not create the worktree if fast-forward fails. This ensures the new branch al
 
 ## Step 4 — Create Worktree
 
+Pass `taskMd` and `claudeMd` inline so the server writes them atomically before returning. This eliminates the race condition where Claude starts before TASK.md exists.
+
 For each project × branch pair:
 
 ```bash
 curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   -H "Content-Type: application/json" \
-  -d '{"branch": "feat/my-feature", "isNew": true, "notes": "Bug: hamburger menu blocked by overlay", "autoStart": true}'
+  -d '{
+    "branch": "feat/my-feature",
+    "isNew": true,
+    "notes": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
+    "autoStart": false,
+    "taskMd": "<TASK.md content as JSON string — see Step 4a>",
+    "claudeMd": "<CLAUDE.md content as JSON string — see Step 4b>"
+  }'
 ```
 
 **Body fields:**
@@ -79,8 +88,12 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
 | `branch` | string | yes | Full branch name e.g. `feat/my-feature` |
 | `isNew` | boolean | yes | `true` = create new branch, `false` = checkout existing |
 | `mode` | string | no | `claude` / `opencode` / `shell` — inherits from parent if omitted |
-| `notes` | string | no | Bug description or task context (max 2000 chars) — stored on the session and sent as initial Claude prompt |
-| `autoStart` | boolean | no | `true` = immediately spawn Claude process after creation (default: omitted/false) |
+| `notes` | string | no | Short trigger sentence — stored on session, sent as initial prompt |
+| `autoStart` | boolean | no | **Always `false`** — use `/interactive` after creation to avoid race conditions |
+| `taskMd` | string | no | Full TASK.md content — server writes this atomically before returning |
+| `claudeMd` | string | no | Full CLAUDE.md content — server writes this atomically before returning |
+
+**Do NOT write TASK.md or CLAUDE.md separately** — always use the `taskMd`/`claudeMd` fields so files exist before Claude starts.
 
 **Success response:** `{ success: true, session: {...}, worktreePath: "/path/to/worktree" }`
 
@@ -91,14 +104,76 @@ Common errors:
 - `NOT_FOUND` → wrong session ID, re-fetch sessions
 - `INVALID_INPUT` → branch name invalid (no spaces, valid git ref)
 
-## Step 5 — Multiple Repos in Parallel
+### Step 4a — TASK.md content
+
+Build the TASK.md from the user's task description. JSON-escape newlines as `\n`:
+
+```markdown
+# Task
+
+type: <bug|feature>
+status: analysis
+title: <title from user>
+description: <full description from user>
+affected_area: unknown
+fix_cycles: 0
+test_fix_cycles: 0
+
+## Reproduction
+<!-- filled by analysis phase -->
+
+## Root Cause / Spec
+<!-- filled by analysis phase -->
+
+## Fix / Implementation Notes
+<!-- filled by fix phase -->
+
+## Review History
+<!-- appended by each review — never overwrite -->
+
+## Test Gap Analysis
+<!-- filled by test gap analysis -->
+
+## QA Results
+<!-- filled by QA phase -->
+
+## Decisions & Context
+<!-- append-only log of key decisions -->
+```
+
+If the project has its own TASK.md template (e.g. in `.skills/`), use that instead.
+
+### Step 4b — CLAUDE.md content
+
+Use a generic worktree CLAUDE.md. If the project has its own worktree CLAUDE.md convention (e.g. referencing project-specific skills like `.skills/fix-workflow.md`), use that instead.
+
+Generic default:
+```markdown
+You are working autonomously in a Codeman worktree.
+Before doing ANYTHING else, re-read `TASK.md` in this directory
+and resume from the phase in `status`.
+Do not rely on conversation history.
+Then invoke the codeman-task-runner skill.
+```
+
+## Step 5 — Start Sessions
+
+After each worktree is created, start Claude:
+
+```bash
+curl -s -X POST http://localhost:3001/api/sessions/NEW_SESSION_ID/interactive
+```
+
+Use the session ID from the Step 4 response (`session.id`). **Never use `autoStart: true`** — it races against file writes.
+
+## Step 6 — Multiple Repos in Parallel
 
 When creating worktrees across multiple repos, run all sync + curl operations sequentially per repo (sync must complete before the worktree is created for that repo).
 
-## Step 6 — Report Results
+## Step 7 — Report Results
 
 After all calls complete, summarize:
-- ✓ Created: branch name, worktree path, new session name
+- ✓ Created: branch name, worktree path, new session name, session started
 - ✗ Failed: error message + what to try next
 
 To merge or close worktrees, use the **codeman-merge-worktree** skill.
@@ -109,6 +184,9 @@ To merge or close worktrees, use the **codeman-merge-worktree** skill.
 
 | Mistake | Fix |
 |---------|-----|
+| Writing TASK.md/CLAUDE.md separately with Write tool | **Always use `taskMd`/`claudeMd` fields** in the worktree creation request — the server writes them atomically before returning, eliminating race conditions |
+| Using `autoStart: true` | **Always use `autoStart: false`**, then call `/interactive` after creation returns — `autoStart` races against file writes |
+| Sending input without `\r` | When using `/api/sessions/:id/input`, always append `\r` and include `"useMux": true"` — without `\r` text is typed but never submitted |
 | Using a worktree session as parent | Find sessions where `worktreeBranch` is null |
 | Branch name with spaces | Use hyphens/slashes only |
 | `isNew: true` on existing branch | Set `isNew: false` |
