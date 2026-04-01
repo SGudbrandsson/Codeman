@@ -296,7 +296,11 @@ Dispatch a fresh subagent with this prompt:
 >   Then wait and verify: `sleep 6 && curl -s http://localhost:$QA_PORT/api/status`
 >   **IMPORTANT: there is no `--host` flag** — the server always binds to `0.0.0.0` automatically. Never pass `--host`.
 >   Kill when done: `pkill -f "tsx src/index.ts web --port $QA_PORT"`
-> - `frontend` → start the dev server the same way (using $QA_PORT), use Playwright to load the page with `waitUntil: 'domcontentloaded'`, wait 3–4 seconds for async data, assert the UI change is visible and correct. Kill server when done.
+> - `frontend` → start the dev server the same way (using $QA_PORT). **If the server fails to start, this is a QA FAILURE — do not skip.** Read `/tmp/codeman-$QA_PORT.log`, report the error. Then use Playwright to:
+>   1. Load the page with `waitUntil: 'domcontentloaded'`, wait 3–4 seconds for async data.
+>   2. **Verify CSS rules are active:** For each CSS rule changed in the diff, use `document.querySelector` to find a matching element and `window.getComputedStyle()` to verify the changed property has the expected value (not browser defaults like `maxWidth: "none"`). If computed styles don't match the CSS source, a CSS parse error is likely swallowing rules — investigate and fix.
+>   3. Assert the UI change is visible and correct.
+>   4. Kill server when done.
 > - `logic` → run the relevant vitest test file: `npx vitest run test/<file>.test.ts`
 > - `unknown` → run only typecheck + lint (no targeted check).
 >

@@ -431,7 +431,48 @@ npx vitest run test/<relevant-files>.test.ts 2>&1
 
 **NEVER run `npx vitest run` (full suite)** — it can crash the Codeman tmux session.
 
-- All pass → proceed to Step 8
+### Step 7b — Frontend Smoke Test (mandatory for frontend changes)
+
+**Trigger:** Run this step if ANY changed file matches `src/web/public/*.css`, `src/web/public/*.js`, or `src/web/public/*.html`. Check `CHANGED_FILES` from Step 0.
+
+**Why this exists:** CSS parse errors (e.g., unclosed `@media` blocks) can silently swallow rules. TypeScript and ESLint don't validate CSS. The only way to verify CSS changes actually apply is to check computed styles in a real browser.
+
+**Procedure:**
+
+1. **Start the dev server.** Determine the QA port:
+   - Read TASK.md for `assignedPort` or a line matching `Assigned dev port for this worktree: <N>`.
+   - If not found, pick a free port: `node -e "const s=require('net').createServer();s.listen(0,'0.0.0.0',()=>{console.log(s.address().port);s.close()})"`
+   - Start: `nohup npx tsx src/index.ts web --port $QA_PORT > /tmp/codeman-$QA_PORT.log 2>&1 &`
+   - Wait and verify: `sleep 6 && curl -s http://localhost:$QA_PORT/api/status`
+   - **If the server fails to start, this is a QA FAILURE** — do not skip. Read `/tmp/codeman-$QA_PORT.log`, report the error, and attempt to fix. If unfixable, proceed with `[NEEDS REVIEW]`.
+
+2. **Verify CSS rules are active in the browser.** Use Playwright to check that changed CSS rules are actually parsed and applied:
+   ```javascript
+   // For each changed CSS file, verify the browser parsed all rules:
+   const sheet = document.styleSheets[N]; // find the right sheet by href
+   const ruleCount = sheet.cssRules.length;
+   // Compare against expected count (grep -c '}' on the source file as rough check)
+   
+   // For specific changed selectors, verify computed styles match expectations:
+   const el = document.querySelector('<selector-for-changed-rule>');
+   const styles = window.getComputedStyle(el);
+   // Assert the changed property has the expected value, NOT the browser default
+   ```
+
+3. **What to check:**
+   - For each CSS rule changed in the diff, find an element matching that selector and verify the computed style reflects the change (not browser defaults).
+   - If `computedStyle` returns a browser default (e.g., `maxWidth: "none"` when the CSS sets `max-width: 160px`), the rule is NOT being applied — investigate CSS parse errors upstream of the rule.
+   - For JS/HTML changes: load the page, wait 3-4 seconds, verify the UI change is visible.
+
+4. **Kill server when done:** `pkill -f "tsx src/index.ts web --port $QA_PORT"`
+
+**Pass/fail:**
+- All computed styles match expectations → pass
+- Any mismatch between CSS source and computed styles → **FAIL** — investigate root cause (likely a CSS syntax error in a preceding rule). Fix the syntax error and re-run.
+
+### Step 7 — Overall verdict
+
+- All checks pass (including 7b if triggered) → proceed to Step 8
 - Any fail → attempt auto-fix (one attempt), re-run. If still failing, proceed to Step 8 with warning.
 
 ---
