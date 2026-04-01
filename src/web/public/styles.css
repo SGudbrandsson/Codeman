@@ -12664,7 +12664,6 @@ kbd {
   display: block;
   max-width: 160px;
   max-height: 120px;
-  object-fit: cover;
   border-radius: 6px;
 }
 
@@ -12725,7 +12724,6 @@ kbd {
 .tv-content .tv-img-preview img {
   max-width: 160px;
   max-height: 120px;
-  object-fit: cover;
   border-radius: 5px;
 }
 
