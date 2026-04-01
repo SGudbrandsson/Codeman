@@ -275,10 +275,18 @@ export function registerWorktreeSessionRoutes(
       }
     }
     if (claudeMd) {
+      // Only write CLAUDE.md if one doesn't already exist in the worktree —
+      // the project's own CLAUDE.md is inherited from the git branch and must be preserved
+      const claudeMdPath = join(worktreePath, 'CLAUDE.md');
       try {
-        await fs.writeFile(join(worktreePath, 'CLAUDE.md'), claudeMd, 'utf-8');
-      } catch (err) {
-        req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+        await fs.access(claudeMdPath);
+        req.log.info({ worktreePath }, '[worktree] CLAUDE.md already exists in worktree, preserving project config');
+      } catch {
+        try {
+          await fs.writeFile(claudeMdPath, claudeMd, 'utf-8');
+        } catch (err) {
+          req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+        }
       }
     }
 
@@ -594,10 +602,18 @@ export function registerWorktreeSessionRoutes(
       }
     }
     if (claudeMd) {
+      // Only write CLAUDE.md if one doesn't already exist in the worktree —
+      // the project's own CLAUDE.md is inherited from the git branch and must be preserved
+      const claudeMdPath = join(worktreePath, 'CLAUDE.md');
       try {
-        await fs.writeFile(join(worktreePath, 'CLAUDE.md'), claudeMd, 'utf-8');
-      } catch (err) {
-        req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+        await fs.access(claudeMdPath);
+        req.log.info({ worktreePath }, '[worktree] CLAUDE.md already exists in worktree, preserving project config');
+      } catch {
+        try {
+          await fs.writeFile(claudeMdPath, claudeMd, 'utf-8');
+        } catch (err) {
+          req.log.warn({ err, worktreePath }, '[worktree] failed to write CLAUDE.md');
+        }
       }
     }
     const [[globalNice, modelConfig, claudeModeConfig], basePorts] = await Promise.all([

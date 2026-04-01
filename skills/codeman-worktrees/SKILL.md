@@ -145,7 +145,7 @@ If the project has its own TASK.md template (e.g. in `.skills/`), use that inste
 
 ### Step 4b — CLAUDE.md content
 
-Use a generic worktree CLAUDE.md. If the project has its own worktree CLAUDE.md convention (e.g. referencing project-specific skills like `.skills/fix-workflow.md`), use that instead.
+Always pass the generic worktree CLAUDE.md as `claudeMd`. The server will **only write it if no CLAUDE.md already exists** in the worktree — projects that have their own CLAUDE.md in the repo (inherited via git) are preserved automatically.
 
 Generic default:
 ```markdown
