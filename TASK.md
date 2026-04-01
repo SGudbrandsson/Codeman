@@ -2,165 +2,154 @@
 
 type: bug
 status: done
-title: Session created via "+" button uses wrong directory and naming convention
-description: Two bugs when clicking the "+" button next to a project name in the sidebar to create a new session. Affects any project that exists in both ~/codeman-cases/ and linked-cases.json (e.g. "Codeman"). Bug 1: Wrong directory — session is created in ~/codeman-cases/Codeman instead of /home/siggi/sources/Codeman. Root cause: In GET /api/cases (case-routes.ts line 30-83), native cases from CASES_DIR are enumerated first, and linked cases are only added if no case with the same name already exists (line 65: !cases.some(c => c.name === name)). So when "Codeman" exists in both places, the native case wins with the wrong path. The GET /api/cases/:name endpoint (line 271) does the opposite — checks linked cases first. Fix: linked cases should take priority over native cases in the list endpoint too, since they represent explicit user configuration. Bug 2: Wrong name — the session gets named "Codeman" (AI-generated) instead of wN-Codeman (the project's naming convention). The startSessionInCase function (app.js line 11496) fires auto-name which asks Claude Haiku to generate a descriptive name. It should instead use the wN-ProjectName convention: count existing sessions for the same case/project and assign the next number. This naming should happen in startSessionInCase before the session is created (pass it as name in the POST body) or right after, and skip the auto-name call.
-affected_area: frontend+backend
-work_item_id: wi-f5312d48
+title: Image in compose bar leaks between sessions on switch
+description: When switching sessions with an image attached in the compose bar, the message and image follow to the new session instead of staying on the original session. Compose state (text + images) must be saved per-session and restored when switching back.
+affected_area: frontend
+work_item_id: none
 fix_cycles: 0
 test_fix_cycles: 0
 
 ## Reproduction
 
-### Steps to reproduce (Bug 1 — wrong directory)
-1. Have a project "Codeman" that exists in both ~/codeman-cases/Codeman (native case) and ~/.codeman/linked-cases.json (linked to /home/siggi/sources/Codeman).
-2. Open the Codeman web UI sidebar.
-3. Click the "+" button next to the "Codeman" project name.
-4. Select "Claude" (or any mode).
-5. **Result**: Session is created with workingDir=/home/siggi/codeman-cases/Codeman instead of /home/siggi/sources/Codeman.
-6. **Expected**: Session should use /home/siggi/sources/Codeman (the linked path), since linked cases represent explicit user configuration and should take priority.
+1. Open session A. Type some text in the compose bar and/or attach one or more images.
+2. Click on session B's tab (or use any method to switch sessions).
+3. Observe: the compose bar in session B still shows the text and/or images from session A.
+4. Switch back to session A. Observe: the compose bar is now empty (the draft was overwritten).
 
-### Steps to reproduce (Bug 2 — wrong name)
-1. Click "+" next to any project in the sidebar and create a Claude session.
-2. **Result**: Session is auto-named by Claude Haiku with a descriptive name like "Codeman" or "Codeman Web App".
-3. **Expected**: Session should be named wN-ProjectName (e.g. w1-Codeman, w2-Codeman) where N is the next available number for that project.
-
-### Root cause analysis
-**Bug 1**: In `src/web/routes/case-routes.ts`, the `GET /api/cases` endpoint (line 30-83) iterates native cases from CASES_DIR first and adds them to the list. Then it iterates linked cases from linked-cases.json but only adds them if `!cases.some(c => c.name === name)` (line 65). This means if a case exists in both places, the native one takes priority. However, the `GET /api/cases/:name` endpoint (line 271-312) does the opposite: it checks linked cases FIRST, then falls back to CASES_DIR. These two endpoints are inconsistent, and linked cases should win in both since they represent explicit user intent.
-
-**Bug 2**: In `src/web/public/app.js`, `startSessionInCase()` (line 11496-11575) creates the session then fires `auto-name` (line 11567) which calls Claude Haiku to generate a name. Instead, it should compute the next wN- number by counting existing sessions for the same project and set the name directly, skipping auto-name. The wN- convention is already recognized by the session grouping code (line 21992-21998: `name.match(/^[ws]\d+-(.+)$/i)`).
+The bug is most visible when the textarea has focus while switching (clicking a session tab), or when images are attached (images leak regardless of focus).
 
 ## Root Cause / Spec
 
-### Bug 1: Wrong directory (linked cases lose to native cases in list endpoint)
+### Root Cause
 
-**Root cause confirmed.** In `src/web/routes/case-routes.ts`:
+File: `src/web/public/app.js`, `InputPanel.onSessionChange()` (line ~20745)
 
-- `GET /api/cases` (lines 30-83): Enumerates native cases from `CASES_DIR` first, then iterates linked cases from `linked-cases.json` but **skips** any linked case whose name already exists in the list (line 66: `!cases.some(c => c.name === name)`). So when "Codeman" exists in both `~/codeman-cases/Codeman` (native) and `linked-cases.json` (pointing to `/home/siggi/sources/Codeman`), the native case wins with the wrong path.
+The method has a "migration" guard that was added to protect against SSE-triggered session switches clobbering user input. The logic at lines 20756-20763:
 
-- `GET /api/cases/:name` (lines 271-312): Does the **opposite** -- checks linked cases FIRST (line 286: `if (linkedCases[name])`), then falls back to `CASES_DIR`. These two endpoints are inconsistent.
+```js
+const userHasText = ta && ta.value && document.activeElement === ta;
+const userHasImages = this._images.length > 0;
+const userHasContent = userHasText || userHasImages;
+if (ta && !userHasContent) { ta.value = ''; }
+if (!userHasContent) this._restoreImages([]);
+```
 
-**Impact path:** The frontend calls `GET /api/cases` at startup (app.js line 10035-10037) and stores the result in `this.cases`. When `startSessionInCase()` runs (line 11499), it looks up the case by name in `this.cases` to get the `path`. Since the list endpoint returned the native path, that wrong path is used for the new session.
+When `userHasContent` is true (textarea focused with text, OR images attached), the textarea and images are **not** cleared before setting `_currentSessionId = newId` and calling `_loadDraft(newId)`.
 
-The fallback at line 11504-11508 fetches `GET /api/cases/:name` which DOES check linked cases first, but this fallback only triggers if the case isn't already in `this.cases` -- which it always is (just with the wrong path).
+Inside `_loadDraft(newId)` (line ~20788), the method checks `ta.value` (which still has old session's text) and treats it as "in-progress user input" for the new session. It then **saves the old content as the new session's draft** (line 20796) and returns early without restoring the actual draft for the new session.
 
-**Fix:** In `GET /api/cases`, linked cases should **override** native cases with the same name, not be skipped. Change the logic so that when a linked case has the same name as a native case, the linked case replaces it (or: process linked cases first, then only add native cases if no linked case has that name).
+Two sub-bugs:
+1. **Text leaks when textarea is focused** -- `userHasText` requires `document.activeElement === ta`, but clicking a session tab often doesn't blur the textarea first, so the guard fires on normal user-initiated switches.
+2. **Images always leak** -- `userHasImages` checks `this._images.length > 0` with no focus check at all. Any attached image causes the entire compose state to migrate.
 
-### Bug 2: Wrong naming convention (AI auto-name instead of wN-ProjectName)
+### Fix Spec
 
-**Root cause confirmed.** In `src/web/public/app.js`:
+**In `onSessionChange(oldId, newId)`:**
+- The draft is already saved correctly for the old session at line 20747 (`_saveDraftLocal(oldId)`).
+- After saving, **always** clear the textarea and images, regardless of `userHasContent`. Remove the conditional guard entirely.
+- Then proceed to load the new session's draft as before.
 
-- `startSessionInCase()` (lines 11496-11575) creates the session via `POST /api/sessions` with `body: JSON.stringify({ workingDir, mode })` -- no `name` field is passed (line 11548).
-- After creation, it fires `POST /api/sessions/:id/auto-name` (line 11567) which calls Claude Haiku to generate a descriptive AI name.
-- The `POST /api/sessions` endpoint already supports a `name` field (schema at `src/web/schemas.ts` line 143, used at `session-routes.ts` line 148).
+**In `_loadDraft(sessionId)`:**
+- Remove or rework the early-return guard at lines 20794-20798 that treats leftover textarea content as "in-progress input." After the `onSessionChange` fix, the textarea will always be empty when `_loadDraft` is called during a session switch, so this guard becomes moot for that path. However, if this guard is needed for other callers, add a parameter (e.g., `isSessionSwitch`) to distinguish the two cases.
 
-The codebase already has a naming convention: `wN-CaseName` for regular sessions and `sN-CaseName` for shell sessions, as recognized by the grouping helper at line 21994: `name.match(/^[ws]\d+-(.+)$/i)`.
-
-**Fix:** In `startSessionInCase()`, before creating the session:
-1. Count existing sessions for the same case name by iterating `this.sessions` values and matching sessions whose `name` matches the `^[ws]\d+-CaseName$` pattern (or whose `workingDir` matches).
-2. Compute the next number N.
-3. Set `name` to `wN-CaseName` (or `sN-CaseName` for shell mode) and pass it in the POST body.
-4. Skip the `auto-name` call entirely when a name was computed this way.
-
-For OpenCode sessions (line 11534), the same fix applies -- compute name before creating, pass it in the quick-start body, and skip auto-name.
-
-### Affected files
-
-| File | Bug | Change needed |
-|------|-----|---------------|
-| `src/web/routes/case-routes.ts` | Bug 1 | Make linked cases override native cases in `GET /api/cases` |
-| `src/web/public/app.js` | Bug 2 | Compute `wN-CaseName` in `startSessionInCase()`, pass as `name`, skip auto-name |
+**SSE-triggered switch protection (if still needed):**
+- If the concern about SSE-triggered auto-switches clobbering user input is valid, the right approach is to pass a flag from `selectSession` indicating whether the switch was user-initiated or SSE-triggered, and only skip the clear on SSE-triggered switches. However, given that `_saveDraftLocal` already saves the content before clearing, the user's input is preserved in the draft and will be restored when they switch back. The "migration" behavior is actually harmful and should be removed entirely.
 
 ## Fix / Implementation Notes
 
-### Bug 1: Linked cases now override native cases in GET /api/cases
+**File changed:** `src/web/public/app.js`
 
-**File:** `src/web/routes/case-routes.ts` (lines 65-80)
+**Change 1 — `onSessionChange()` (line ~20745):**
+Removed the conditional `userHasContent` guard that skipped clearing textarea/images when the user had content. Now the method always clears both textarea and images after `_saveDraftLocal(oldId)` saves the old session's state. The draft is preserved in the local cache and will be restored when the user switches back.
 
-Changed the linked-cases loop: instead of skipping linked cases when a native case with the same name exists (`!cases.some(c => c.name === name)`), it now uses `findIndex` to locate any existing native case with the same name and **replaces** it with the linked case entry. If no duplicate exists, the linked case is appended as before. This makes the list endpoint consistent with the detail endpoint (`GET /api/cases/:name`), which already checks linked cases first.
-
-### Bug 2: Sequential naming (wN/sN-CaseName) instead of AI auto-name
-
-**File:** `src/web/public/app.js` (lines 11516-11529, plus changes in session creation paths)
-
-Added name computation at the top of `startSessionInCase()`, before any session creation:
-1. Determines prefix (`w` for claude/opencode, `s` for shell).
-2. Scans `this.sessions` for existing sessions matching `^{prefix}\d+-{caseName}$` (case-insensitive, regex-escaped).
-3. Finds the max N and sets `sessionName = "{prefix}{N+1}-{caseName}"`.
-
-For the **claude/shell** path: passes `name: sessionName` in the POST `/api/sessions` body (already supported by the schema at `session-routes.ts` line 148). Removed the `auto-name` fire-and-forget call.
-
-For the **opencode** path: the quick-start endpoint doesn't accept a `name` field, so after session creation, a PUT `/api/sessions/:id/name` call sets the name (fire-and-forget). Removed the `auto-name` call.
+**Change 2 — `_loadDraft()` (line ~20782):**
+Removed the early-return guard that treated a non-empty textarea as "in-progress input" and saved it as the new session's draft. After Change 1, the textarea is always empty when `_loadDraft` is called during a session switch, making this guard unnecessary. The method now unconditionally clears images, applies the local cache, then fetches from the server.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
+
 ### Review attempt 1 — APPROVED
-**Correctness**: Both changes directly address the two bugs described in the spec.
-- Bug 1: `findIndex` + replace logic correctly makes linked cases override native cases in `GET /api/cases`, consistent with how `GET /api/cases/:name` already works.
-- Bug 2: Sequential name computation (`wN-CaseName` / `sN-CaseName`) correctly scans existing sessions, finds max N, and passes the computed name in the POST body. Auto-name calls removed from all paths.
-**Edge cases checked**:
-- First session for a case: `_maxN=0` yields `w1-CaseName`. Correct.
-- `this.sessions` null/undefined: guarded by `if (this.sessions)`. Correct.
-- Case names with regex special chars: escaped via `caseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')`. Correct.
-- OpenCode path: QuickStartSchema strips the `name` field (harmless), PUT rename sets it afterward. Correct.
-- Shell sessions: `sN-CaseName` name passed in POST body before shell start. Correct.
-- Variable shadowing: `caseEntry` avoids shadowing the outer `entry` loop variable. Good.
-**TypeScript**: `CaseInfo` type annotation is explicit. No implicit any. tsc passes.
-**Security**: No new external inputs, no user-controlled paths beyond existing patterns.
-**No issues found.**
+
+**Changes reviewed:** Two edits in `src/web/public/app.js` — removal of the `userHasContent` conditional guard in `onSessionChange()` and removal of the early-return guard in `_loadDraft()`.
+
+**Correctness:** Both changes directly address the root cause. `_saveDraftLocal(oldId)` captures the full compose state (text + image paths) before the clear, so no user data is lost. The unconditional clear ensures nothing leaks to the target session. The `_loadDraft` early-return removal is safe because `_loadDraft` is only called from `onSessionChange` (confirmed by grep), and after Change 1 the textarea is always empty on entry.
+
+**Edge cases considered:**
+- SSE-triggered session switches: the old "migration" guard was meant to protect against these, but `_saveDraftLocal` already persists drafts before clearing, so the user's content is preserved and restored on switch-back. No data loss.
+- The redundant `_restoreImages([])` call inside `_loadDraft` (line 20786) after it was already called in `onSessionChange` (line 20755) is harmless defensive cleanup. Not a concern.
+- No other callers of `_loadDraft` exist, so the guard removal has no unintended side effects.
+
+**Security:** No new inputs, API calls, or data flow changes. No concerns.
+
+**Consistency:** Code follows existing patterns in the file. Comments are clear and accurate.
 
 ## Test Gap Analysis
-**Verdict: GAPS FOUND**
 
-### Gap 1: Linked case overrides native case with same name (case-routes.ts)
-- `test/routes/case-routes.test.ts` tests linked cases being included, but only when names are different.
-- **Missing:** Test where a native case and linked case share the same name — linked should win (return linked path, `linked: true`).
+**Verdict: NO GAPS** (re-check after test updates)
 
-### Gap 2: Sequential naming in startSessionInCase (app.js)
-- `test/sidebar-new-session-menu.test.ts` uses source-text matching to verify `startSessionInCase` calls `/api/sessions` with `mode`.
-- **Missing:** Test verifying `name` field is passed in the POST body with `wN-CaseName` format.
-- **Missing:** Test verifying `auto-name` is NOT called.
-- **Missing:** Test verifying sequential numbering (e.g., if `w1-Foo` exists, next is `w2-Foo`; shell mode uses `sN-`).
+### Coverage summary
+
+- **`test/input-draft-race.test.ts`** (8 tests, 5 gaps) — Updated Gap 1 and Gap 2 to reflect the fix. Gap 1 now verifies `_loadDraft` does NOT save pre-existing textarea content to `_drafts` (old early-return guard removed). Gap 2 is a regression test reproducing the original bug scenario end-to-end (focused textarea + images, session switch clears everything, draft preserved). Gaps 3-5 unchanged and still valid.
+- **`test/draft-per-session.test.ts`** (10 tests, 6 gaps) — All tests pass without modification. Covers save on switch, restore on switch, round-trip A->B->A, empty draft, send clears draft, and image attachment isolation.
+
+All 18 tests pass. Both source changes (removal of `userHasContent` guard in `onSessionChange`, removal of early-return guard in `_loadDraft`) are adequately covered.
 
 ## Test Writing Notes
 
-### test/routes/case-routes.test.ts
-- Added 1 new test: "linked case overrides native case with same name" — creates a native and linked case with the same name "Codeman", verifies only one entry is returned and it has the linked path and `linked: true`.
-- Fixed existing test "includes linked cases from linked-cases.json" — changed counter-based `readFile` mock to path-based dispatch (`filePath.includes('linked-cases.json')`) to be compatible with the new case-config.json read that occurs in the native cases loop.
+### Modified: `test/input-draft-race.test.ts`
 
-### test/sidebar-new-session-menu.test.ts
-- Added 5 new tests in "startSessionInCase sequential naming" describe block:
-  1. Uses "w" prefix for non-shell sessions
-  2. Uses "s" prefix for shell sessions
-  3. Passes `name: sessionName` in POST body
-  4. Does NOT call `/auto-name` endpoint
-  5. Scans `this.sessions` for existing numbered sessions
-- Fixed existing tests: increased fnSlice from 2000 to 3000 chars to accommodate the added name computation code.
+**Gap 1 (replaced):** Old test expected `_loadDraft` to preserve a non-empty textarea via the early-return guard. New test (`_loadDraft does not save pre-existing textarea content to _drafts`) verifies that calling `_loadDraft` directly with a pre-populated textarea and no local cache does NOT create a `_drafts` entry for the session. This confirms the old save-to-drafts side-effect is gone.
 
-All 57 tests pass (45 case-routes + 12 sidebar).
+**Gap 2 (replaced):** Old test expected `_loadDraft` to save leftover textarea content into `_drafts` for the new session. New test (`Regression — text + images with focused textarea are cleared on session switch`) reproduces the original bug scenario end-to-end via `onSessionChange`: types text in session A with focused textarea, attaches images, switches to session B. Asserts:
+- Textarea is empty in session B (no text leak)
+- `_images` is empty in session B (no image leak)
+- Session A's draft is preserved in `_drafts` with correct text and imagePaths
+
+**Gaps 3-5:** Unchanged. These tests cover the `valueAfterLocal` race guard, local cache restore, and server draft application -- all still valid after the fix.
+
+### Unchanged: `test/draft-per-session.test.ts`
+
+All 10 existing tests pass without modification. No changes needed.
+
+### Test results
+
+- `test/input-draft-race.test.ts`: 8 tests passed
+- `test/draft-per-session.test.ts`: 10 tests passed
 
 ## Test Review History
 <!-- appended by each Opus test review subagent — never overwrite -->
+
 ### Test review attempt 1 — APPROVED
-- **Coverage**: All 3 gaps covered — linked case override (1 test), sequential naming (5 tests).
-- **Correctness**: case-routes test verifies exactly one entry with linked path and `linked: true`. Sidebar tests verify prefix selection, name in body, no auto-name, session scanning.
-- **Realism**: case-routes test uses realistic scenario (same name in both locations). Sidebar tests match project's source-text analysis pattern.
-- **Style**: Matches existing test patterns. Removed unused `readCallCount` variable. Fixed existing fragile counter-based mock.
-- **No issues found.**
+
+**Gap 1 (replaced):** The test calls `_loadDraft` directly with a pre-populated textarea and no local cache, then asserts `_drafts.has(sid)` is `false`. This correctly verifies the old save-to-drafts side-effect (removed early-return guard) no longer fires. The implementation at `_loadDraft` lines 20782-20810 confirms there is no code path that writes to `_drafts` — it only reads from it. Test is correct and targeted.
+
+**Gap 2 (replaced):** The regression test reproduces the exact original bug scenario end-to-end via `onSessionChange`: sets text + focus + images in session A, switches to session B. Three assertions cover the full fix surface:
+1. Textarea empty in session B — confirms unconditional clear works (no text leak).
+2. `_images` empty in session B — confirms image leak is fixed.
+3. Session A draft preserved with correct `text` and `imagePaths` — confirms `_saveDraftLocal(oldId)` runs before the clear, so no data is lost.
+
+Verified against the implementation: `_saveDraftLocal` reads `ta.value` and `_images` before the clear at lines 20746-20755, so the draft capture is correct. The mocked 404 for session B prevents server draft interference.
+
+**Gaps 3-5 (unchanged):** Verified these still match the implementation. Gap 3 tests the `valueAfterLocal` race guard at line 20804. Gap 4 tests local cache fast-path restore at lines 20789-20794. Gap 5 tests server draft application at lines 20804-20808. All correct.
+
+**Style/quality:** Tests follow the existing Playwright integration pattern (fresh browser context, session lifecycle management, cleanup in afterAll). Naming conventions and structure match the rest of the file. Type assertions are appropriately narrow.
+
+**Edge cases:** The key edge case (textarea focused during switch, which was the trigger for the old buggy guard) is covered by Gap 2's explicit `ta.focus()` call. Image-only leak (no text) is implicitly covered by `draft-per-session.test.ts`. No missing boundaries identified.
+
+**Verdict: All 5 gaps covered. 8 tests passing. No issues found.**
 
 ## QA Results
-- **tsc --noEmit**: PASS (zero errors)
-- **npm run lint**: PASS (0 errors, 2 pre-existing warnings in unrelated files)
-- **vitest run test/routes/case-routes.test.ts test/sidebar-new-session-menu.test.ts**: PASS (57/57 tests)
-- **Backend targeted check**: Started dev server on port 3099, verified `GET /api/cases` returns Codeman with `path: "/home/siggi/sources/Codeman"` and `linked: true` (was previously returning `/home/siggi/codeman-cases/Codeman` without `linked`). PASS.
+<!-- filled by QA subagent -->
+
+- **tsc --noEmit:** PASS (zero errors)
+- **npm run lint:** PASS (0 errors, 2 pre-existing warnings unrelated to this change)
+- **vitest (input-draft-race + draft-per-session):** PASS (18/18 tests passed)
+- **Frontend smoke test (Playwright):** PASS (page loads, session elements present, compose area present, no JS errors)
 
 ### Docs Staleness
-- API docs may need update (src/web/routes/case-routes.ts changed) -- advisory only, minor behavior fix.
-- UI docs may need update (frontend app.js changed) -- advisory only, minor naming behavior change.
+- Skill docs may need update (`skills/codeman-full-qa/SKILL.md`, `skills/codeman-task-runner/SKILL.md`, `skills/codeman-worktrees/SKILL.md` changed)
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
-
-- **Linked case override strategy:** Used `findIndex` + replace rather than reordering the processing (linked-first). This preserves the native case enumeration order while ensuring linked cases win on name conflicts.
-- **OpenCode name via PUT rename:** The quick-start endpoint schema doesn't accept `name`, so we use a fire-and-forget PUT `/api/sessions/:id/name` call after creation. This is consistent with how auto-name was previously done (fire-and-forget POST).
-- **Variable naming with underscore prefix:** Used `_prefix`, `_pattern`, `_maxN` to avoid any potential conflicts with surrounding scope in the large app.js file.
-- **Regex escaping case name:** Applied full regex escaping to `caseName` in the pattern to handle cases with special characters (e.g., "C++Project").
+- Removed the "migration" guard entirely rather than adding an `isSessionSwitch` flag. Rationale: `_saveDraftLocal` already persists the compose state before clearing, so there is no data loss. The migration behavior was the root cause of the bug — it leaked content to the wrong session and overwrote the target session's draft.
+- Removed the `_loadDraft` early-return guard rather than parameterizing it. After the `onSessionChange` fix, the textarea is always empty on entry to `_loadDraft` during session switches, so the guard is dead code for that path. No other caller passes leftover content.
