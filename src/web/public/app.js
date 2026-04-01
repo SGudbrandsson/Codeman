@@ -20747,18 +20747,12 @@ const InputPanel = {
       this._saveDraftLocal(oldId);
       if (typeof SecretDetector !== 'undefined') SecretDetector.clearSession(oldId);
     }
-    // Clear textarea and images between save and load so _loadDraft doesn't
-    // mistake the previous session's leftover text as in-progress user input.
-    // However, if the user is actively composing text (document has focus and
-    // textarea has content), migrate that text to the new session's draft
-    // instead of discarding it. This protects against SSE-triggered session
-    // switches (e.g. auto-clear creating a child session) clobbering user input.
+    // Always clear textarea and images after saving so that _loadDraft sees a
+    // clean slate.  The old session's content is safely persisted by
+    // _saveDraftLocal above and will be restored when the user switches back.
     const ta = this._getTextarea();
-    const userHasText = ta && ta.value && document.activeElement === ta;
-    const userHasImages = this._images.length > 0;
-    const userHasContent = userHasText || userHasImages;
-    if (ta && !userHasContent) { ta.value = ''; }
-    if (!userHasContent) this._restoreImages([]);
+    if (ta) { ta.value = ''; }
+    this._restoreImages([]);
     this._currentSessionId = newId;
     if (newId) this._loadDraft(newId);
   },
@@ -20788,16 +20782,7 @@ const InputPanel = {
   async _loadDraft(sessionId) {
     const ta = this._getTextarea();
     if (!ta) return;
-    // If the user is mid-type, treat their in-progress text as authoritative for this
-    // session and skip any draft restoration. This prevents background session switches
-    // (e.g. auto-clear / SSE reconnect) from clobbering what the user is composing.
-    const inProgress = ta.value;
-    if (inProgress) {
-      this._drafts.set(sessionId, { text: inProgress, imagePaths: this._images.map(i => i.path).filter(Boolean) });
-      return;
-    }
-    // Textarea is empty — safe to restore the stored draft.
-    // Clear images from any previous session first.
+    // Clear any leftover state and auto-grow before restoring.
     this._restoreImages([]);
     this._autoGrow(ta);
     // Apply local cache immediately (fast path)
