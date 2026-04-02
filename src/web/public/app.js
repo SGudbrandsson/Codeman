@@ -21829,7 +21829,7 @@ const SessionDrawer = {
     gearBtn.addEventListener('click', e => {
       e.stopPropagation();
       SessionDrawer.close();
-      app.openSessionOptions(s.id);
+      app.openSessionContextMenu(e, s.id);
     });
 
     const closeBtn = document.createElement('button');
