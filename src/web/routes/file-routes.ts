@@ -1,17 +1,33 @@
 /**
  * @fileoverview File browser and streaming routes.
- * Provides directory listing, file content preview, raw file serving, and tail streaming.
+ * Provides directory listing, file content preview, raw file serving, thumbnail generation, and tail streaming.
  */
 
 import { FastifyInstance } from 'fastify';
 import { join, resolve, relative, isAbsolute, extname } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { realpathSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import type { SessionPort } from '../ports/index.js';
+
+/** Thumbnail cache directory */
+const THUMB_CACHE_DIR = join(homedir(), '.codeman', 'cache', 'thumbnails');
+
+/** Ensure thumbnail cache directory exists */
+if (!existsSync(THUMB_CACHE_DIR)) {
+  mkdirSync(THUMB_CACHE_DIR, { recursive: true });
+}
+
+/** Generate a cache key for a thumbnail based on path, mtime, and width */
+function thumbCacheKey(resolvedPath: string, mtimeMs: number, width: number): string {
+  const hash = createHash('sha256').update(`${resolvedPath}:${mtimeMs}:${width}`).digest('hex').slice(0, 16);
+  return `${hash}.webp`;
+}
 
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void {
   // File tree listing
@@ -462,6 +478,193 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       reply
         .code(500)
         .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+    }
+  });
+
+  // Serve resized thumbnail (sharp-based, cached to disk)
+  // Supported formats: png, jpg, jpeg, gif, webp. SVGs pass through as-is.
+  const thumbImageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
+
+  app.get('/api/files/thumbnail', async (req, reply) => {
+    const { path: rawPath, width: rawWidth } = req.query as { path?: string; width?: string };
+
+    if (!rawPath || !isAbsolute(rawPath)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
+      return;
+    }
+
+    const ext = extname(rawPath).slice(1).toLowerCase();
+    if (!thumbImageExts.has(ext)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
+      return;
+    }
+
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(rawPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+
+    // Security allowlist: /tmp or user home directory
+    const inTmp = resolvedPath.startsWith('/tmp/') || resolvedPath === '/tmp';
+    const inHome = resolvedPath.startsWith(homeDir + '/') || resolvedPath === homeDir;
+    if (!inTmp && !inHome) {
+      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
+      return;
+    }
+
+    // SVGs are already tiny — serve as-is
+    if (ext === 'svg') {
+      try {
+        const content = await fs.readFile(resolvedPath);
+        reply.header('Content-Type', 'image/svg+xml');
+        reply.header('Cache-Control', 'private, max-age=300');
+        reply.send(content);
+      } catch (err) {
+        reply
+          .code(500)
+          .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+      }
+      return;
+    }
+
+    const width = Math.min(Math.max(parseInt(rawWidth || '240', 10) || 240, 32), 800);
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (!stat.isFile()) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
+        return;
+      }
+
+      const MAX_THUMB_SOURCE = 50 * 1024 * 1024; // 50MB
+      if (stat.size > MAX_THUMB_SOURCE) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
+        return;
+      }
+
+      // Check cache
+      const cacheFile = join(THUMB_CACHE_DIR, thumbCacheKey(resolvedPath, stat.mtimeMs, width));
+      try {
+        const cached = await fs.readFile(cacheFile);
+        reply.header('Content-Type', 'image/webp');
+        reply.header('Cache-Control', 'private, max-age=300');
+        reply.send(cached);
+        return;
+      } catch {
+        // Cache miss — generate thumbnail
+      }
+
+      const thumbnail = await sharp(resolvedPath)
+        .resize(width, undefined, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      // Write cache file (fire-and-forget)
+      fs.writeFile(cacheFile, thumbnail).catch(() => {});
+
+      reply.header('Content-Type', 'image/webp');
+      reply.header('Cache-Control', 'private, max-age=300');
+      reply.send(thumbnail);
+    } catch (err) {
+      reply
+        .code(500)
+        .send(
+          createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to generate thumbnail: ${getErrorMessage(err)}`)
+        );
+    }
+  });
+
+  // Session-scoped thumbnail (for file browser images)
+  app.get('/api/sessions/:id/file-thumbnail', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { path: filePath, width: rawWidth } = req.query as { path?: string; width?: string };
+    const session = findSessionOrFail(ctx, id);
+
+    if (!filePath) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    const fullPath = resolve(session.workingDir, filePath);
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(fullPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+    const relativePath = relative(session.workingDir, resolvedPath);
+    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
+      return;
+    }
+
+    const ext = extname(resolvedPath).slice(1).toLowerCase();
+    if (!thumbImageExts.has(ext)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
+      return;
+    }
+
+    // SVGs pass through
+    if (ext === 'svg') {
+      try {
+        const content = await fs.readFile(resolvedPath);
+        reply.header('Content-Type', 'image/svg+xml');
+        reply.header('Cache-Control', 'private, max-age=300');
+        reply.send(content);
+      } catch (err) {
+        reply
+          .code(500)
+          .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+      }
+      return;
+    }
+
+    const width = Math.min(Math.max(parseInt(rawWidth || '400', 10) || 400, 32), 800);
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (!stat.isFile()) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
+        return;
+      }
+
+      const MAX_THUMB_SOURCE = 50 * 1024 * 1024;
+      if (stat.size > MAX_THUMB_SOURCE) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
+        return;
+      }
+
+      const cacheFile = join(THUMB_CACHE_DIR, thumbCacheKey(resolvedPath, stat.mtimeMs, width));
+      try {
+        const cached = await fs.readFile(cacheFile);
+        reply.header('Content-Type', 'image/webp');
+        reply.header('Cache-Control', 'private, max-age=300');
+        reply.send(cached);
+        return;
+      } catch {
+        // Cache miss
+      }
+
+      const thumbnail = await sharp(resolvedPath)
+        .resize(width, undefined, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      fs.writeFile(cacheFile, thumbnail).catch(() => {});
+
+      reply.header('Content-Type', 'image/webp');
+      reply.header('Cache-Control', 'private, max-age=300');
+      reply.send(thumbnail);
+    } catch (err) {
+      reply
+        .code(500)
+        .send(
+          createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to generate thumbnail: ${getErrorMessage(err)}`)
+        );
     }
   });
 }
