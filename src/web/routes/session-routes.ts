@@ -709,11 +709,16 @@ ${contextLines.join('\n')}`;
       return { success: true };
     }
 
-    // Write input to PTY. Await writeViaMux so the HTTP response only returns
-    // after tmux has fully dispatched the text + Enter key. This gives the client
-    // a deterministic signal that Enter has been sent, so client-side retry
-    // timers can start counting from a meaningful baseline.
-    if (effectiveUseMux) {
+    // Shell sessions bypass tmux send-keys entirely — write directly to the PTY.
+    // The tmux send-keys path uses trimEnd() (which drops spaces) and Ink-specific
+    // delays (50ms+100ms) that shell sessions don't need.
+    if (session.mode === 'shell') {
+      session.write(inputStr);
+    } else if (effectiveUseMux) {
+      // Write input to PTY. Await writeViaMux so the HTTP response only returns
+      // after tmux has fully dispatched the text + Enter key. This gives the client
+      // a deterministic signal that Enter has been sent, so client-side retry
+      // timers can start counting from a meaningful baseline.
       let ok = false;
       try {
         ok = await session.writeViaMux(inputStr);

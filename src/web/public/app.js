@@ -21107,26 +21107,31 @@ const InputPanel = {
 
     try {
       await app.sendInput(inputString, _sendSessionId);
-      // Backend now awaits tmux completion before responding, so we know Enter
-      // has been dispatched by the time we reach here.
-      // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
-      // actually received the input. Uses real-time status/isWorking only (NOT
-      // displayStatus which has a 4s hide-debounce that causes false positives).
-      let _sendChecks = 0;
-      const _sendCheckTimer = setInterval(() => {
-        _sendChecks++;
-        const s = app.sessions?.get(_sendSessionId);
-        const isBusy = s?.status === 'busy' || s?.isWorking;
-        if (isBusy) { clearInterval(_sendCheckTimer); return; }
-        if (_sendChecks >= 20) {
-          clearInterval(_sendCheckTimer);
-          // Session still idle 3 s after tmux confirmed Enter was sent —
-          // Enter was likely dropped; resend it once as a fallback.
-          const sNow = app.sessions?.get(_sendSessionId);
-          const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
-          if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
-        }
-      }, 150);
+      // Shell sessions write directly to PTY — no Ink, no busy detection,
+      // no need to retry Enter. Skip the polling entirely.
+      const _sendSession = app.sessions?.get(_sendSessionId);
+      if (_sendSession?.mode !== 'shell') {
+        // Backend now awaits tmux completion before responding, so we know Enter
+        // has been dispatched by the time we reach here.
+        // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
+        // actually received the input. Uses real-time status/isWorking only (NOT
+        // displayStatus which has a 4s hide-debounce that causes false positives).
+        let _sendChecks = 0;
+        const _sendCheckTimer = setInterval(() => {
+          _sendChecks++;
+          const s = app.sessions?.get(_sendSessionId);
+          const isBusy = s?.status === 'busy' || s?.isWorking;
+          if (isBusy) { clearInterval(_sendCheckTimer); return; }
+          if (_sendChecks >= 20) {
+            clearInterval(_sendCheckTimer);
+            // Session still idle 3 s after tmux confirmed Enter was sent —
+            // Enter was likely dropped; resend it once as a fallback.
+            const sNow = app.sessions?.get(_sendSessionId);
+            const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
+            if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
+          }
+        }, 150);
+      }
     } catch (err) {
       // Send failed — restore the user's input so nothing is lost.
       console.error('[InputPanel] send failed, restoring input:', err);
