@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Codeman Universal Installer
-# https://github.com/Ark0N/Codeman
+# https://github.com/SGudbrandsson/Codeman
 #
-# Usage: curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash
 #
 # Environment variables:
 #   CODEMAN_NONINTERACTIVE=1  - Skip all prompts (for CI/automation)
@@ -17,7 +17,7 @@ set -euo pipefail
 # ============================================================================
 
 INSTALL_DIR="${CODEMAN_INSTALL_DIR:-$HOME/.codeman/app}"
-REPO_URL="https://github.com/Ark0N/Codeman.git"
+REPO_URL="https://github.com/SGudbrandsson/Codeman.git"
 MIN_NODE_VERSION=18
 TARGET_NODE_VERSION="${CODEMAN_NODE_VERSION:-22}"
 NONINTERACTIVE="${CODEMAN_NONINTERACTIVE:-0}"
@@ -1244,7 +1244,7 @@ main() {
     echo ""
 
     echo -e "  ${BOLD}Documentation:${NC}"
-    echo -e "    https://github.com/Ark0N/Codeman"
+    echo -e "    https://github.com/SGudbrandsson/Codeman"
     echo ""
 
     if ! check_claude && ! check_opencode; then

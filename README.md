@@ -25,7 +25,7 @@
 ## Quick Start - Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash
 ```
 
 This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai) (or both). After install:
@@ -37,7 +37,7 @@ codeman web
 
 **Update to latest version:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash -s update
+curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash -s update
 ```
 
 <details>
@@ -58,7 +58,7 @@ mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?
 <summary><strong>Windows (WSL)</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash"
 ```
 
 Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai)). After installing, `http://localhost:3000` is accessible from your Windows browser.
