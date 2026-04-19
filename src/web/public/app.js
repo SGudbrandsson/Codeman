@@ -21878,6 +21878,64 @@ const SessionDrawer = {
     return String(str ?? '');
   },
 
+  _startInlineRename(row, nameEl, session) {
+    if (row.querySelector('.drawer-rename-input')) return;
+    const currentDisplay = app.getSessionName(session);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = session.name || '';
+    input.placeholder = currentDisplay;
+    input.className = 'drawer-rename-input';
+    input.style.cssText = 'flex:1;min-width:0;font:inherit;padding:2px 4px;background:var(--bg-input);border:1px solid var(--accent);border-radius:3px;color:var(--text);outline:none';
+
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      const restore = () => {
+        if (input.parentNode) input.replaceWith(nameEl);
+      };
+      if (!commit || !next || next === (session.name || '')) {
+        restore();
+        return;
+      }
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/name`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: next }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+          app.showToast?.(`Rename failed: ${data.error || res.statusText}`, 'error');
+          restore();
+          return;
+        }
+        session.name = next;
+        nameEl.textContent = app.getSessionName(session);
+        restore();
+        if (typeof app.renderSessionTabs === 'function') app.renderSessionTabs();
+        if (typeof app.renderMuxSessions === 'function') app.renderMuxSessions();
+      } catch (err) {
+        app.showToast?.(`Rename failed: ${err.message}`, 'error');
+        restore();
+      }
+    };
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('dblclick', (e) => e.stopPropagation());
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+  },
+
   _renderSessionRow(s) {
     const isActive = s.id === app.activeSessionId;
     const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
@@ -21898,11 +21956,6 @@ const SessionDrawer = {
     name.dataset.sessionId = s.id;
     name.title = 'Double-click to rename';
     name.textContent = app.getSessionName(s);
-    name.addEventListener('click', e => e.stopPropagation());
-    name.addEventListener('dblclick', e => {
-      e.stopPropagation();
-      app.startInlineRename(s.id);
-    });
 
     const badge = document.createElement('span');
     badge.className = 'session-mode-badge';
@@ -21942,6 +21995,15 @@ const SessionDrawer = {
       if (!document.body.classList.contains('sidebar-pinned')) {
         SessionDrawer.close();
       }
+    });
+
+    row.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof window.getSelection === 'function') {
+        try { window.getSelection().removeAllRanges(); } catch(_) {}
+      }
+      SessionDrawer._startInlineRename(row, name, s);
     });
 
     return row;
