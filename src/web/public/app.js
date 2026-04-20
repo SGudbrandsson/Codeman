@@ -8956,7 +8956,7 @@ class CodemanApp {
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${escapeHtml(name)}</span>
+              <span class="tab-name" data-session-id="${id}" draggable="false" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation(); app.startInlineRename('${escapeHtml(id)}')" title="Double-click to rename">${escapeHtml(name)}</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
           </span>
@@ -11380,6 +11380,24 @@ class CodemanApp {
       menu.appendChild(sep);
     }
 
+    // Rename item
+    const renameItem = document.createElement('div');
+    renameItem.className = 'session-ctx-item';
+    renameItem.setAttribute('role', 'menuitem');
+    renameItem.tabIndex = 0;
+    const renameIcon = document.createElement('span');
+    renameIcon.className = 'session-ctx-icon';
+    renameIcon.textContent = '\u270E';
+    const renameLabel = document.createElement('span');
+    renameLabel.textContent = 'Rename';
+    renameItem.appendChild(renameIcon);
+    renameItem.appendChild(renameLabel);
+    renameItem.addEventListener('click', () => {
+      this.closeSessionContextMenu();
+      this.startInlineRename(sessionId);
+    });
+    menu.appendChild(renameItem);
+
     // Remove item
     const removeItem = document.createElement('div');
     removeItem.className = 'session-ctx-item session-ctx-item-danger';
@@ -13205,7 +13223,7 @@ class CodemanApp {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`);
+    const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"], .drawer-session-name[data-session-id="${sessionId}"]`);
     if (!tabName) return;
 
     const currentName = this.getSessionName(session);
@@ -20349,11 +20367,13 @@ class CodemanApp {
         modelHtml = `<span class="monitor-model-badge ${modelShort}">${modelShort}</span>`;
       }
 
+      const displayName = escapeHtml(muxSession.name || muxSession.muxName);
+      const sidAttr = escapeHtml(muxSession.sessionId);
       html += `
         <div class="process-item">
           <span class="monitor-status-badge ${statusClass}">${statusLabel}</span>
           <div class="process-info">
-            <div class="process-name">${modelHtml} ${escapeHtml(muxSession.name || muxSession.muxName)}</div>
+            <div class="process-name">${modelHtml} <span class="mux-session-name" data-session-id="${sidAttr}" ondblclick="app.startMuxSessionRename('${sidAttr}')" title="Double-click to rename">${displayName}</span></div>
             <div class="process-meta">
               ${tokenHtml}
               ${costHtml}
@@ -20363,13 +20383,68 @@ class CodemanApp {
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${escapeHtml(muxSession.sessionId)}')" title="Kill session">Kill</button>
+            <button class="btn-icon-sm" onclick="app.startMuxSessionRename('${sidAttr}')" title="Rename session" aria-label="Rename session">&#x270E;</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${sidAttr}')" title="Kill session">Kill</button>
           </div>
         </div>
       `;
     }
 
     body.innerHTML = html;
+  }
+
+  startMuxSessionRename(sessionId) {
+    const muxSession = this.muxSessions.find(s => s.sessionId === sessionId);
+    if (!muxSession) return;
+    const nameSpan = document.querySelector(`.mux-session-name[data-session-id="${sessionId}"]`);
+    if (!nameSpan) return;
+    const current = muxSession.name || muxSession.muxName || '';
+    const originalText = nameSpan.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = muxSession.name || '';
+    input.placeholder = current;
+    input.className = 'mux-rename-input';
+    input.style.cssText = 'font: inherit; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;';
+    nameSpan.textContent = '';
+    nameSpan.appendChild(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      if (!commit || !next || next === current) {
+        nameSpan.textContent = originalText;
+        return;
+      }
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/name`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: next })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const finalName = (data && data.name) || next;
+        muxSession.name = finalName;
+        const sess = this.sessions.get(sessionId);
+        if (sess) sess.name = finalName;
+        this.renderMuxSessions();
+        if (typeof this.renderSessionTabs === 'function') this.renderSessionTabs();
+      } catch (err) {
+        nameSpan.textContent = originalText;
+        this.showToast(`Rename failed: ${err.message}`, 'error');
+      }
+    };
+
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') { finish(false); }
+    });
   }
 
   renderMonitorSubagents() {
@@ -21803,6 +21878,64 @@ const SessionDrawer = {
     return String(str ?? '');
   },
 
+  _startInlineRename(row, nameEl, session) {
+    if (row.querySelector('.drawer-rename-input')) return;
+    const currentDisplay = app.getSessionName(session);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = session.name || '';
+    input.placeholder = currentDisplay;
+    input.className = 'drawer-rename-input';
+    input.style.cssText = 'flex:1;min-width:0;font:inherit;padding:2px 4px;background:var(--bg-input);border:1px solid var(--accent);border-radius:3px;color:var(--text);outline:none';
+
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      const restore = () => {
+        if (input.parentNode) input.replaceWith(nameEl);
+      };
+      if (!commit || !next || next === (session.name || '')) {
+        restore();
+        return;
+      }
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/name`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: next }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+          app.showToast?.(`Rename failed: ${data.error || res.statusText}`, 'error');
+          restore();
+          return;
+        }
+        session.name = next;
+        nameEl.textContent = app.getSessionName(session);
+        restore();
+        if (typeof app.renderSessionTabs === 'function') app.renderSessionTabs();
+        if (typeof app.renderMuxSessions === 'function') app.renderMuxSessions();
+      } catch (err) {
+        app.showToast?.(`Rename failed: ${err.message}`, 'error');
+        restore();
+      }
+    };
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('dblclick', (e) => e.stopPropagation());
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+  },
+
   _renderSessionRow(s) {
     const isActive = s.id === app.activeSessionId;
     const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
@@ -21820,6 +21953,8 @@ const SessionDrawer = {
 
     const name = document.createElement('span');
     name.className = 'drawer-session-name';
+    name.dataset.sessionId = s.id;
+    name.title = 'Double-click to rename';
     name.textContent = app.getSessionName(s);
 
     const badge = document.createElement('span');
@@ -21860,6 +21995,15 @@ const SessionDrawer = {
       if (!document.body.classList.contains('sidebar-pinned')) {
         SessionDrawer.close();
       }
+    });
+
+    row.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof window.getSelection === 'function') {
+        try { window.getSelection().removeAllRanges(); } catch(_) {}
+      }
+      SessionDrawer._startInlineRename(row, name, s);
     });
 
     return row;
