@@ -23,8 +23,8 @@
   left: 0;
   right: 0;
   height: 44px;
-  background: #1a1a1a;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--bg-input);
+  border-top: 1px solid var(--alpha-border-sm);
   padding: 6px 8px;
   padding-left: calc(8px + var(--safe-area-left));
   padding-right: calc(8px + var(--safe-area-right));
@@ -48,8 +48,8 @@
   right: 0;
   bottom: calc(var(--safe-area-bottom, 0px) + 52px); /* Sits directly above accessory bar */
   z-index: 52;
-  background: #0d0d0d;
-  border-top: 1px solid #1a1a2e;
+  background: var(--bg-darker);
+  border-top: 1px solid var(--border);
   padding: 8px;
   padding-left: calc(8px + var(--safe-area-left));
   padding-right: calc(8px + var(--safe-area-right));
@@ -153,8 +153,8 @@ html.mobile-init .file-browser-panel {
     padding: 0.35rem 0.5rem;
     padding-left: calc(0.5rem + var(--safe-area-left));
     padding-right: calc(0.5rem + var(--safe-area-right));
-    background: #0a0a0a;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-dark);
+    border-bottom: 1px solid var(--alpha-border-subtle);
     z-index: 200;
   }
 
@@ -360,8 +360,8 @@ html.mobile-init .file-browser-panel {
     padding: 0.35rem 0.5rem;
     padding-left: calc(0.5rem + var(--safe-area-left));
     padding-right: calc(0.5rem + var(--safe-area-right));
-    background: #0a0a0a;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-dark);
+    border-bottom: 1px solid var(--alpha-border-subtle);
     z-index: 200;
   }
 
@@ -428,8 +428,8 @@ html.mobile-init .file-browser-panel {
     left: 0;
     right: 0;
     height: 52px;
-    background: #1a1a1a;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-input);
+    border-top: 1px solid var(--alpha-border-sm);
     padding: 6px 8px;
     padding-left: calc(8px + var(--safe-area-left));
     padding-right: calc(8px + var(--safe-area-right));
@@ -452,8 +452,8 @@ html.mobile-init .file-browser-panel {
     bottom: 100%;
     left: calc(-8px - var(--safe-area-left, 0px));
     right: calc(-8px - var(--safe-area-right, 0px));
-    background: #1e1e1e;
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--alpha-border-lg);
     display: flex;
     flex-direction: column;
     pointer-events: none;
@@ -474,16 +474,16 @@ html.mobile-init .file-browser-panel {
     display: block;
     width: 100%;
     padding: 11px 16px;
-    background: #111;
+    background: var(--bg-primary);
     border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    color: #e5e5e5;
+    border-bottom: 1px solid var(--alpha-border-md);
+    color: var(--text);
     font-size: 16px;
     outline: none;
     box-sizing: border-box;
   }
-  .accessory-cmd-search::placeholder { color: #555; }
-  .accessory-cmd-search:focus { background: #181818; }
+  .accessory-cmd-search::placeholder { color: var(--text-dim); }
+  .accessory-cmd-search:focus { background: var(--bg-hover); }
 
   .accessory-cmd-items {
     overflow-y: auto;
@@ -498,25 +498,25 @@ html.mobile-init .file-browser-panel {
     padding: 10px 20px;
     background: none;
     border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    border-bottom: 1px solid var(--alpha-border-weak);
     text-align: left;
     cursor: pointer;
   }
 
   .drawer-cmd-name {
-    color: #e5e5e5;
+    color: var(--text);
     font-size: 0.9rem;
     font-family: monospace;
   }
 
   .drawer-cmd-desc {
-    color: #6b7280;
+    color: var(--text-muted);
     font-size: 0.75rem;
     margin-top: 1px;
   }
 
   .accessory-drawer-item:last-child { border-bottom: none; }
-  .accessory-drawer-item:active { background: #2a2a2a; }
+  .accessory-drawer-item:active { background: var(--border); }
 
   /* Accessory bar buttons */
   .accessory-btn {
@@ -526,10 +526,10 @@ html.mobile-init .file-browser-panel {
     gap: 4px;
     padding: 8px 14px;
     min-height: 36px;
-    background: #2a2a2a;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--border);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
-    color: #e5e5e5;
+    color: var(--text);
     font-size: 0.65rem;
     font-weight: 500;
     cursor: pointer;
@@ -537,7 +537,7 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn:active {
-    background: #3a3a3a;
+    background: var(--border-light);
   }
 
   .accessory-btn svg {
@@ -546,28 +546,28 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn.confirming {
-    background: #6b4f00;
-    border-color: #b8860b;
-    color: #ffd54f;
+    background: var(--warning);
+    border-color: var(--yellow);
+    color: var(--yellow);
   }
 
   .accessory-btn-arrow {
     padding: 6px 10px;
-    background: #1e3a5f;
-    border-color: rgba(59, 130, 246, 0.3);
-    color: #93c5fd;
+    background: var(--surface);
+    border-color: var(--accent-border-md);
+    color: var(--accent-hover);
   }
 
   .accessory-btn-arrow:active {
-    background: #2563eb;
+    background: var(--accent);
   }
 
   .accessory-btn-dismiss {
     padding: 8px 14px;
-    background: #2a2a2a;
-    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    background: var(--border);
+    border: 1.5px solid var(--alpha-border-strong);
     border-radius: 6px;
-    color: #e5e5e5;
+    color: var(--text);
   }
 
   .accessory-btn-dismiss svg {
@@ -577,11 +577,11 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-dismiss:active {
-    background: #3a3a3a;
+    background: var(--border-light);
   }
 
   .accessory-btn-settings {
-    color: #94a3b8;
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
@@ -603,35 +603,35 @@ html.mobile-init .file-browser-panel {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #cbd5e1;
+    color: var(--text-secondary);
   }
-  .accessory-project-caret { font-size: 9px; color: #64748b; flex-shrink: 0; }
+  .accessory-project-caret { font-size: 9px; color: var(--text-dim); flex-shrink: 0; }
 
   .accessory-btn-commands {
-    background: #1e2a3a;
-    border-color: rgba(100, 160, 255, 0.3);
-    color: #93c5fd;
+    background: var(--surface);
+    border-color: var(--accent-border-md);
+    color: var(--accent-hover);
     font-size: 0.75rem;
     letter-spacing: 0.03em;
   }
-  .accessory-btn-commands:active { background: #2a3a5a; }
+  .accessory-btn-commands:active { background: var(--surface-hover); }
 
   .accessory-btn-new {
-    background: #1a2a1a;
-    border-color: rgba(34, 197, 94, 0.3);
-    color: #4ade80;
+    background: var(--surface);
+    border-color: var(--green-border-md);
+    color: var(--green);
     font-size: 1.1rem;
     font-weight: 400;
     padding: 4px 10px;
     line-height: 1;
   }
-  .accessory-btn-new:active { background: #223322; }
+  .accessory-btn-new:active { background: var(--surface); }
 
   /* View mode segmented toggle */
   .view-mode-toggle {
     display: inline-flex;
     align-items: stretch;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
     overflow: hidden;
     flex-shrink: 0;
@@ -642,18 +642,18 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     justify-content: center;
     padding: 0 12px;
-    background: #2a2a2a;
+    background: var(--border);
     border: none;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
-    color: #94a3b8;
+    border-right: 1px solid var(--alpha-border-sm);
+    color: var(--text-muted);
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
   .view-mode-seg:last-child { border-right: none; }
-  .view-mode-seg:active { background: #3a3a3a; }
+  .view-mode-seg:active { background: var(--border-light); }
   .view-mode-seg.active {
-    background: rgba(6, 182, 212, 0.18);
-    color: #22d3ee;
+    background: var(--cyan-bg-md);
+    color: var(--accent-hover);
   }
   .vmt-label { display: none; }
   .vmt-icon {
@@ -709,8 +709,8 @@ html.mobile-init .file-browser-panel {
     height: calc(28px + env(safe-area-inset-top, 0px));
     padding-top: env(safe-area-inset-top, 0px);
     z-index: 201;
-    background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(59,130,246,0.12));
-    border-bottom: 1px solid rgba(96,165,250,0.3);
+    background: linear-gradient(135deg, var(--accent-bg-md), var(--accent-bg-sm));
+    border-bottom: 1px solid var(--pill-chip-border);
     padding-left: calc(10px + env(safe-area-inset-left, 0px));
     padding-right: calc(10px + env(safe-area-inset-right, 0px));
     font-size: 0.8rem;
@@ -724,9 +724,9 @@ html.mobile-init .file-browser-panel {
   .sib-project {
     font-size: 0.7rem;
     max-width: 30vw;
-    color: rgba(147, 197, 253, 0.9);
-    background: rgba(96,165,250,0.15);
-    border-color: rgba(96,165,250,0.3);
+    color: var(--pill-text);
+    background: var(--pill-chip-bg);
+    border-color: var(--pill-chip-border);
   }
 
   /* Ultra-compact header for mobile - fixed below indicator bar */
@@ -742,8 +742,8 @@ html.mobile-init .file-browser-panel {
     padding-right: calc(0.3rem + env(safe-area-inset-right, 0px));
     gap: 0.15rem;
     overflow: hidden;
-    background: #0a0a0a;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-dark);
+    border-bottom: 1px solid var(--alpha-border-subtle);
     z-index: 200;
   }
 
@@ -786,10 +786,10 @@ html.mobile-init .file-browser-panel {
     justify-content: center;
     width: 26px;
     height: 26px;
-    background: #1a2a3f;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: var(--surface);
+    border: 1px solid var(--accent-border-md);
     border-radius: 4px;
-    color: #93c5fd;
+    color: var(--accent-hover);
     cursor: pointer;
     flex-shrink: 0;
     order: 5; /* Between Run Shell and settings gear */
@@ -801,13 +801,13 @@ html.mobile-init .file-browser-panel {
   }
 
   .btn-voice-mobile:active {
-    background: #2a3a5f;
+    background: var(--surface-hover);
   }
 
   .btn-voice-mobile.recording {
-    background: rgba(239, 68, 68, 0.25);
-    border-color: rgba(239, 68, 68, 0.6);
-    color: #ef4444;
+    background: var(--red-bg-lg);
+    border-color: var(--red-border-strong);
+    color: var(--red);
     animation: voice-pulse 1.2s ease-in-out infinite;
   }
 
@@ -819,9 +819,9 @@ html.mobile-init .file-browser-panel {
     width: 26px;
     height: 26px;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--alpha-border-xl);
     border-radius: 4px;
-    color: #9ca3af;
+    color: var(--text-muted);
     font-size: 0.85rem;
     cursor: pointer;
     flex-shrink: 0;
@@ -835,8 +835,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .btn-settings-mobile:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: var(--alpha-border-sm);
+    color: var(--text-bright);
   }
 
   /* App container - prevent scrolling, strict layout */
@@ -916,7 +916,7 @@ html.mobile-init .file-browser-panel {
     min-width: unset;
     border-radius: 16px 16px 0 0;
     padding: 8px 0 calc(8px + var(--safe-area-bottom, 0px));
-    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 -4px 24px var(--overlay-backdrop-dim);
   }
 
   .session-ctx-item {
@@ -945,8 +945,8 @@ html.mobile-init .file-browser-panel {
     gap: 0.3rem;
     align-items: center;
     justify-content: space-between;
-    background: #111111;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-primary);
+    border-top: 1px solid var(--alpha-border-sm);
     z-index: 50;
     /* Smooth transition for keyboard show/hide */
     transition: transform 0.15s ease-out;
@@ -1013,7 +1013,7 @@ html.mobile-init .file-browser-panel {
     justify-content: center;
     font-weight: 500;
     letter-spacing: 0.01em;
-    color: #fff;
+    color: var(--text-bright);
   }
 
   /* Run button group — split button with dropdown */
@@ -1041,7 +1041,7 @@ html.mobile-init .file-browser-panel {
     padding: 0 0.35rem !important;
     min-width: unset !important;
     border-radius: 0 4px 4px 0 !important;
-    border-left: 1px solid rgba(255,255,255,0.15) !important;
+    border-left: 1px solid var(--alpha-border-lg) !important;
   }
 
   .btn-toolbar.btn-run-gear svg {
@@ -1052,29 +1052,29 @@ html.mobile-init .file-browser-panel {
   /* Claude mode colors on mobile */
   .btn-toolbar.btn-run.mode-claude,
   .btn-toolbar.btn-run-gear.mode-claude {
-    background: #1e3a5f;
-    border-color: rgba(59, 130, 246, 0.3);
-    color: #93c5fd;
+    background: var(--surface);
+    border-color: var(--accent-border-md);
+    color: var(--accent-hover);
   }
 
   .btn-toolbar.btn-run.mode-claude:active,
   .btn-toolbar.btn-run-gear.mode-claude:active {
-    background: #2563eb;
-    border-color: rgba(59, 130, 246, 0.5);
+    background: var(--accent);
+    border-color: var(--accent-border-strong);
   }
 
   /* OpenCode mode colors on mobile */
   .btn-toolbar.btn-run.mode-opencode,
   .btn-toolbar.btn-run-gear.mode-opencode {
-    background: #0a2e2a;
-    border-color: rgba(16, 185, 129, 0.3);
-    color: #6ee7b7;
+    background: var(--surface);
+    border-color: var(--emerald-border-sm);
+    color: var(--green);
   }
 
   .btn-toolbar.btn-run.mode-opencode:active,
   .btn-toolbar.btn-run-gear.mode-opencode:active {
-    background: #0d4a40;
-    border-color: rgba(16, 185, 129, 0.5);
+    background: var(--surface-hover);
+    border-color: var(--emerald-border-md);
   }
 
   /* Run mode dropdown menu — positioned above toolbar on mobile */
@@ -1109,15 +1109,15 @@ html.mobile-init .file-browser-panel {
   .btn-toolbar.btn-shell {
     flex: 0 0 auto;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #9ca3af;
+    border: 1px solid var(--alpha-border-xl);
+    color: var(--text-muted);
     order: 4; /* Right position */
   }
 
   .btn-toolbar.btn-shell:hover,
   .btn-toolbar.btn-shell:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: var(--alpha-border-sm);
+    color: var(--text-bright);
   }
 
   /* Hide case selector on mobile - simplified toolbar */
@@ -1165,17 +1165,17 @@ html.mobile-init .file-browser-panel {
     width: 26px;
     height: 26px;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--alpha-border-xl);
     border-radius: 4px;
-    color: #9ca3af;
+    color: var(--text-muted);
     cursor: pointer;
     flex-shrink: 0;
     order: 1; /* Next to Run */
   }
 
   .btn-case-settings-mobile:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: var(--alpha-border-sm);
+    color: var(--text-bright);
   }
 
   /* Mobile case settings popover */
@@ -1184,12 +1184,12 @@ html.mobile-init .file-browser-panel {
     bottom: calc(var(--safe-area-bottom) + 46px);
     left: 8px;
     right: 8px;
-    background: #1e1e1e;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--bg-secondary);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 8px;
     padding: 0.6rem 0.75rem;
     z-index: 1000;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 16px var(--overlay-backdrop);
     display: block;
   }
 
@@ -1202,14 +1202,14 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     gap: 6px;
     font-size: 0.75rem;
-    color: #e5e7eb;
+    color: var(--text);
   }
 
   .case-settings-popover-mobile .form-hint {
     display: block;
     margin-top: 0.2rem;
     font-size: 0.6rem;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   /* Keyboard Accessory Bar - quick actions above keyboard */
@@ -1220,8 +1220,8 @@ html.mobile-init .file-browser-panel {
     left: 0;
     right: 0;
     height: 52px;
-    background: #1a1a1a;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-input);
+    border-top: 1px solid var(--alpha-border-sm);
     padding: 6px 8px;
     padding-left: calc(8px + var(--safe-area-left));
     padding-right: calc(8px + var(--safe-area-right));
@@ -1240,8 +1240,8 @@ html.mobile-init .file-browser-panel {
     bottom: 100%;
     left: calc(-8px - var(--safe-area-left, 0px));
     right: calc(-8px - var(--safe-area-right, 0px));
-    background: #1e1e1e;
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--alpha-border-lg);
     display: flex;
     flex-direction: column;
     pointer-events: none;
@@ -1263,16 +1263,16 @@ html.mobile-init .file-browser-panel {
     display: block;
     width: 100%;
     padding: 11px 16px;
-    background: #111;
+    background: var(--bg-primary);
     border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    color: #e5e5e5;
+    border-bottom: 1px solid var(--alpha-border-md);
+    color: var(--text);
     font-size: 16px; /* 16px prevents iOS auto-zoom */
     outline: none;
     box-sizing: border-box;
   }
-  .accessory-cmd-search::placeholder { color: #555; }
-  .accessory-cmd-search:focus { background: #181818; }
+  .accessory-cmd-search::placeholder { color: var(--text-dim); }
+  .accessory-cmd-search:focus { background: var(--bg-hover); }
 
   /* Scrollable items container inside the drawer */
   .accessory-cmd-items {
@@ -1288,45 +1288,45 @@ html.mobile-init .file-browser-panel {
     padding: 10px 20px;
     background: none;
     border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    border-bottom: 1px solid var(--alpha-border-weak);
     text-align: left;
     cursor: pointer;
   }
 
   .drawer-cmd-name {
-    color: #e5e5e5;
+    color: var(--text);
     font-size: 0.9rem;
     font-family: monospace;
   }
 
   .drawer-cmd-desc {
-    color: #6b7280;
+    color: var(--text-muted);
     font-size: 0.75rem;
     margin-top: 1px;
   }
 
   .accessory-drawer-item:last-child { border-bottom: none; }
-  .accessory-drawer-item:active { background: #2a2a2a; }
+  .accessory-drawer-item:active { background: var(--border); }
   .accessory-drawer-item.confirming {
-    background: #6b4f00;
-    border-color: #b8860b;
+    background: var(--warning);
+    border-color: var(--yellow);
   }
-  .accessory-drawer-item.confirming .drawer-cmd-name { color: #ffd54f; }
-  .accessory-drawer-item.confirming .drawer-cmd-desc { color: #c8a030; }
+  .accessory-drawer-item.confirming .drawer-cmd-name { color: var(--yellow); }
+  .accessory-drawer-item.confirming .drawer-cmd-desc { color: var(--yellow); }
 
   .accessory-drawer-sep {
     display: flex;
     align-items: center;
     gap: 8px;
     height: 1px;
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--alpha-border-lg);
     margin: 4px 0;
     padding: 4px 12px;
   }
 
   .accessory-drawer-sep-label {
     font-size: 10px;
-    color: #4b5563;
+    color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     white-space: nowrap;
@@ -1334,13 +1334,13 @@ html.mobile-init .file-browser-panel {
 
   /* Commands button style */
   .accessory-btn-commands {
-    background: #1e2a3a;
-    border-color: rgba(100, 160, 255, 0.3);
-    color: #93c5fd;
+    background: var(--surface);
+    border-color: var(--accent-border-md);
+    color: var(--accent-hover);
     font-size: 0.75rem;
     letter-spacing: 0.03em;
   }
-  .accessory-btn-commands:active { background: #2a3a5a; }
+  .accessory-btn-commands:active { background: var(--surface-hover); }
 
   .keyboard-accessory-bar.visible {
     display: flex;
@@ -1353,10 +1353,10 @@ html.mobile-init .file-browser-panel {
     gap: 4px;
     padding: 8px 14px;
     min-height: 40px; /* bar interior is 40px (52px bar − 6px×2 vertical padding); 44px HIG ideal not reachable without a taller bar */
-    background: #2a2a2a;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--border);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
-    color: #e5e5e5;
+    color: var(--text);
     font-size: 0.65rem;
     font-weight: 500;
     cursor: pointer;
@@ -1367,7 +1367,7 @@ html.mobile-init .file-browser-panel {
   .view-mode-toggle {
     display: inline-flex;
     align-items: stretch;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
     overflow: hidden;
     flex-shrink: 0;
@@ -1378,18 +1378,18 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     justify-content: center;
     padding: 0 12px;
-    background: #2a2a2a;
+    background: var(--border);
     border: none;
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
-    color: #94a3b8;
+    border-right: 1px solid var(--alpha-border-sm);
+    color: var(--text-muted);
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
   .view-mode-seg:last-child { border-right: none; }
-  .view-mode-seg:active { background: #3a3a3a; }
+  .view-mode-seg:active { background: var(--border-light); }
   .view-mode-seg.active {
-    background: rgba(6, 182, 212, 0.18);
-    color: #22d3ee;
+    background: var(--cyan-bg-md);
+    color: var(--accent-hover);
   }
   .vmt-label { display: none; } /* icons only on mobile */
   .vmt-icon {
@@ -1400,13 +1400,13 @@ html.mobile-init .file-browser-panel {
 
   /* Confirm state — button turns amber and shows "Tap again" */
   .accessory-btn.confirming {
-    background: #6b4f00;
-    border-color: #b8860b;
-    color: #ffd54f;
+    background: var(--warning);
+    border-color: var(--yellow);
+    color: var(--yellow);
   }
 
   .accessory-btn:active {
-    background: #3a3a3a;
+    background: var(--border-light);
   }
 
   .accessory-btn svg {
@@ -1416,21 +1416,21 @@ html.mobile-init .file-browser-panel {
 
   .accessory-btn-arrow {
     padding: 6px 10px;
-    background: #1e3a5f;
-    border-color: rgba(59, 130, 246, 0.3);
-    color: #93c5fd;
+    background: var(--surface);
+    border-color: var(--accent-border-md);
+    color: var(--accent-hover);
   }
 
   .accessory-btn-arrow:active {
-    background: #2563eb;
+    background: var(--accent);
   }
 
   .accessory-btn-dismiss {
     padding: 8px 14px;
-    background: #2a2a2a;
-    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    background: var(--border);
+    border: 1.5px solid var(--alpha-border-strong);
     border-radius: 6px;
-    color: #e5e5e5;
+    color: var(--text);
   }
 
   .accessory-btn-dismiss svg {
@@ -1440,12 +1440,12 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-dismiss:active {
-    background: #3a3a3a;
+    background: var(--border-light);
   }
 
   /* Settings gear button */
   .accessory-btn-settings {
-    color: #94a3b8;
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
@@ -1470,11 +1470,11 @@ html.mobile-init .file-browser-panel {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #cbd5e1;
+    color: var(--text-secondary);
   }
   .accessory-project-caret {
     font-size: 9px;
-    color: #64748b;
+    color: var(--text-dim);
     flex-shrink: 0;
   }
 
@@ -1504,7 +1504,7 @@ html.mobile-init .file-browser-panel {
   .paste-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--overlay-backdrop-strong);
     z-index: 10000;
     display: flex;
     align-items: flex-end;
@@ -1513,8 +1513,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .paste-dialog {
-    background: var(--bg-secondary, #1e1e2e);
-    border: 1px solid var(--border-color, #444);
+    background: var(--bg-secondary, var(--bg-secondary));
+    border: 1px solid var(--border-color, var(--border-light));
     border-radius: 12px;
     padding: 12px;
     width: calc(100% - 24px);
@@ -1526,9 +1526,9 @@ html.mobile-init .file-browser-panel {
     width: 100%;
     min-height: 60px;
     max-height: 120px;
-    background: var(--bg-primary, #0d0d14);
-    color: var(--text-primary, #e0e0e0);
-    border: 1px solid var(--border-color, #444);
+    background: var(--bg-primary, var(--bg-darker));
+    color: var(--text-primary, var(--text));
+    border: 1px solid var(--border-color, var(--border-light));
     border-radius: 8px;
     padding: 8px;
     font-family: inherit;
@@ -1539,7 +1539,7 @@ html.mobile-init .file-browser-panel {
 
   .paste-textarea:focus {
     outline: none;
-    border-color: var(--accent-color, #7aa2f7);
+    border-color: var(--accent-color, var(--accent-hover));
   }
 
   .paste-actions {
@@ -1558,19 +1558,19 @@ html.mobile-init .file-browser-panel {
   }
 
   .paste-cancel {
-    background: var(--bg-tertiary, #333);
-    color: var(--text-secondary, #aaa);
+    background: var(--bg-tertiary, var(--border-light));
+    color: var(--text-secondary, var(--text-muted));
   }
 
   .paste-new {
-    background: var(--bg-tertiary, #333);
-    color: var(--accent-color, #7aa2f7);
-    border: 1px solid var(--accent-color, #7aa2f7);
+    background: var(--bg-tertiary, var(--border-light));
+    color: var(--accent-color, var(--accent-hover));
+    border: 1px solid var(--accent-color, var(--accent-hover));
   }
 
   .paste-send {
-    background: var(--accent-color, #7aa2f7);
-    color: #fff;
+    background: var(--accent-color, var(--accent-hover));
+    color: var(--text-bright);
     font-weight: 600;
   }
 
@@ -1596,14 +1596,14 @@ html.mobile-init .file-browser-panel {
     line-height: 1;
     border-radius: 4px;
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: #9ca3af;
+    border: 1px solid var(--alpha-border-lg);
+    color: var(--text-muted);
   }
 
   .btn-case-add:hover,
   .btn-case-add:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: var(--alpha-border-sm);
+    color: var(--text-bright);
   }
 
   /* Panels on mobile - full width, positioned above toolbar, visibility controlled by JS */
@@ -1824,7 +1824,7 @@ html.mobile-init .file-browser-panel {
   /* Action log — horizontal strip below status, border on top instead of left */
   .respawn-action-log {
     border-left: none;
-    border-top: 1px solid rgba(34, 197, 94, 0.2);
+    border-top: 1px solid var(--green-border-sm);
     padding-left: 0;
     padding-top: 0.25rem;
     max-height: 2em;
@@ -2173,7 +2173,7 @@ html.mobile-init .file-browser-panel {
 
   /* Mobile Case Picker - Mobile-specific overrides */
   .mobile-case-picker .modal-backdrop {
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--overlay-backdrop);
   }
 
   .mobile-case-picker-sheet {
@@ -2252,7 +2252,7 @@ html.mobile-init .file-browser-panel {
     font-size: 0.8rem;
     margin-bottom: 0.4rem;
     font-weight: 500;
-    color: #e5e7eb;
+    color: var(--text);
   }
 
   #createCaseModal .form-row input[type="text"] {
@@ -2425,7 +2425,7 @@ html.mobile-init .file-browser-panel {
     min-width: 200px;
     border-radius: 6px;
     resize: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 2px 8px var(--overlay-backdrop-dim);
   }
 
   /* Hide resize handle on mobile */
@@ -2597,20 +2597,20 @@ html.mobile-init .file-browser-panel {
   .terminal-status-strip {
     font-family: var(--font-mono, 'Cascadia Code', monospace);
     font-size: 11px;
-    color: rgba(255,255,255,0.5);
-    background: #0a0a0a;
+    color: var(--alpha-text-muted);
+    background: var(--bg-dark);
     padding: 2px 8px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    border-top: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid var(--alpha-border-subtle);
     min-height: 18px;
     flex-shrink: 0;
   }
 
   .elicitation-panel {
-    background: #111;
-    border-top: 1px solid rgba(255,255,255,0.12);
+    background: var(--bg-primary);
+    border-top: 1px solid var(--alpha-border-md);
     padding: 6px 8px;
     flex-shrink: 0;
     display: flex;
@@ -2626,7 +2626,7 @@ html.mobile-init .file-browser-panel {
 
   .elicitation-question {
     font-size: 12px;
-    color: rgba(255,255,255,0.6);
+    color: var(--alpha-text-weak);
     padding: 0 2px 2px;
     white-space: nowrap;
     overflow: hidden;
@@ -2643,10 +2643,10 @@ html.mobile-init .file-browser-panel {
     flex: 1;
     min-width: 60px;
     padding: 8px 6px;
-    background: #1e1e1e;
-    border: 1px solid rgba(255,255,255,0.15);
+    background: var(--bg-secondary);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
-    color: #fff;
+    color: var(--text-bright);
     font-size: 13px;
     font-family: inherit;
     cursor: pointer;
@@ -2656,8 +2656,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .elicitation-btn:active {
-    background: #2a2a2a;
-    border-color: rgba(255,255,255,0.3);
+    background: var(--border);
+    border-color: var(--alpha-border-strong);
   }
 
   .elicitation-free-row {
@@ -2667,10 +2667,10 @@ html.mobile-init .file-browser-panel {
 
   .elicitation-free-input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid rgba(255,255,255,0.15);
+    background: var(--bg-secondary);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
-    color: #fff;
+    color: var(--text-bright);
     font-size: 13px;
     padding: 8px 10px;
     font-family: inherit;
@@ -2678,10 +2678,10 @@ html.mobile-init .file-browser-panel {
 
   .elicitation-send-btn {
     padding: 8px 14px;
-    background: #2563eb;
+    background: var(--accent);
     border: none;
     border-radius: 6px;
-    color: #fff;
+    color: var(--text-bright);
     font-size: 13px;
     cursor: pointer;
     touch-action: manipulation;
@@ -2700,10 +2700,10 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    background: #1e1e1e;
-    border: 1px solid rgba(255,255,255,0.15);
+    background: var(--bg-secondary);
+    border: 1px solid var(--alpha-border-lg);
     border-radius: 6px;
-    color: #fff;
+    color: var(--text-bright);
     font-size: 13px;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -2711,14 +2711,14 @@ html.mobile-init .file-browser-panel {
   }
 
   .elicitation-check:active {
-    background: #2a2a2a;
-    border-color: rgba(255,255,255,0.3);
+    background: var(--border);
+    border-color: var(--alpha-border-strong);
   }
 
   .elicitation-check input[type="checkbox"] {
     width: 18px;
     height: 18px;
-    accent-color: #2563eb;
+    accent-color: var(--accent);
     flex-shrink: 0;
   }
 
@@ -2737,7 +2737,7 @@ html.mobile-init .file-browser-panel {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.5);
+  background: var(--overlay-backdrop);
   z-index: 8999;
 }
 .session-drawer-overlay.open { display: block; }
@@ -2756,7 +2756,7 @@ html.mobile-init .file-browser-panel {
   transform: translateY(100%);
   transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
   border-left: none;
-  border-top: 1px solid rgba(255,255,255,0.1);
+  border-top: 1px solid var(--alpha-border-sm);
   z-index: 9000;
   display: flex;
   flex-direction: column;
@@ -2774,7 +2774,7 @@ html.mobile-init .file-browser-panel {
   display: block;
   width: 36px;
   height: 4px;
-  background: rgba(255,255,255,0.2);
+  background: var(--alpha-border-xl);
   border-radius: 2px;
   margin: 10px auto 6px;
   flex-shrink: 0;
@@ -2788,60 +2788,60 @@ html.mobile-init .file-browser-panel {
   display: block;
   width: 100%;
   padding: 10px 14px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.12);
+  background: var(--alpha-bg-sm);
+  border: 1px solid var(--alpha-border-md);
   border-radius: 10px;
-  color: #e2e8f0;
+  color: var(--text);
   font-size: 16px;
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
 }
-.session-drawer-search::placeholder { color: #4b5563; }
-.session-drawer-search:focus { background: rgba(255,255,255,0.09); border-color: rgba(96,165,250,0.4); }
+.session-drawer-search::placeholder { color: var(--text-dim); }
+.session-drawer-search:focus { background: var(--alpha-border-subtle); border-color: var(--accent-border-md); }
 .session-drawer-title {
-  font-size: 12px; font-weight: 600; color: #666;
+  font-size: 12px; font-weight: 600; color: var(--text-dim);
   text-transform: uppercase; letter-spacing: 0.08em;
   padding: 12px 16px 8px;
 }
 .session-drawer-item {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid #1a1a2e;
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.session-drawer-item:active { background: #1a1a2e; }
-.session-drawer-item.active { background: rgba(96,165,250,0.1); }
+.session-drawer-item:active { background: var(--border); }
+.session-drawer-item.active { background: var(--accent-bg-sm); }
 .session-drawer-item-name {
-  flex: 1; font-size: 14px; color: #e2e8f0;
+  flex: 1; font-size: 14px; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .session-drawer-item-meta { display: flex; align-items: center; gap: 6px; }
 .session-drawer-badge {
   font-size: 10px; padding: 2px 5px; border-radius: 3px;
-  background: #1a1a2e; color: #94a3b8; text-transform: uppercase;
+  background: var(--border); color: var(--text-muted); text-transform: uppercase;
 }
 .session-drawer-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: #374151;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
 }
-.session-drawer-dot.running { background: #22c55e; }
-.session-drawer-dot.ralph   { background: #f59e0b; }
+.session-drawer-dot.running { background: var(--green); }
+.session-drawer-dot.ralph   { background: var(--warning); }
 
 .session-drawer-status {
   font-size: 0.68rem;
   margin-left: 5px;
 }
-.session-drawer-status.busy    { color: #f59e0b; }
+.session-drawer-status.busy    { color: var(--warning); }
 .session-drawer-status.idle    { color: var(--text-muted); }
-.session-drawer-status.stopped { color: rgba(239,68,68,0.6); }
+.session-drawer-status.stopped { color: var(--red-border-strong); }
 
 .session-drawer-merge-btn {
   flex-shrink: 0;
   margin-left: auto;
   padding: 3px 6px;
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: var(--green-bg-sm);
+  border: 1px solid var(--green-border-md);
   color: var(--green);
   cursor: pointer;
   border-radius: 4px;
@@ -2852,7 +2852,7 @@ html.mobile-init .file-browser-panel {
   transition: all 0.15s;
 }
 .session-drawer-merge-btn:hover {
-  background: rgba(34, 197, 94, 0.22);
+  background: var(--green-bg-md);
   border-color: var(--green);
   opacity: 1;
 }
@@ -2871,14 +2871,14 @@ html.mobile-init .file-browser-panel {
   opacity: 0.6;
 }
 .session-drawer-close-btn:hover {
-  background: rgba(239,68,68,0.12);
-  color: #f87171;
+  background: var(--red-bg-sm);
+  color: var(--red);
   opacity: 1;
 }
 
 .session-drawer-footer {
   padding: 12px 16px;
-  border-top: 1px solid #1a1a2e;
+  border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 .session-drawer-new-btn {
@@ -2888,10 +2888,10 @@ html.mobile-init .file-browser-panel {
   gap: 8px;
   width: 100%;
   padding: 10px 16px;
-  background: rgba(59,130,246,0.08);
-  border: 1px solid rgba(59,130,246,0.25);
+  background: var(--accent-bg-weak);
+  border: 1px solid var(--accent-border-sm);
   border-radius: 7px;
-  color: #60a5fa;
+  color: var(--accent-hover);
   font-size: 0.85rem;
   font-family: inherit;
   cursor: pointer;
@@ -2899,8 +2899,8 @@ html.mobile-init .file-browser-panel {
 }
 .session-drawer-new-btn:hover,
 .session-drawer-new-btn:active {
-  background: rgba(59,130,246,0.15);
-  border-color: rgba(59,130,246,0.45);
+  background: var(--accent-bg-md);
+  border-color: var(--accent-border-lg);
 }
 
 /* ── Compose Panel ────────────────────────────────────────── */
@@ -2910,8 +2910,8 @@ html.mobile-init .file-browser-panel {
   right: 0;
   bottom: calc(var(--safe-area-bottom, 0px) + 52px); /* Sits directly above accessory bar */
   z-index: 52;
-  background: #0d0d0d;
-  border-top: 1px solid #1a1a2e;
+  background: var(--bg-darker);
+  border-top: 1px solid var(--border);
   padding: 8px;
   padding-left: calc(8px + var(--safe-area-left));
   padding-right: calc(8px + var(--safe-area-right));
@@ -2937,7 +2937,7 @@ html.mobile-init .file-browser-panel {
   height: 60px;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #1a1a2e;
+  border: 1px solid var(--border);
   cursor: pointer;
 }
 .compose-thumb img {
@@ -2953,8 +2953,8 @@ html.mobile-init .file-browser-panel {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: rgba(0,0,0,0.7);
-  color: #fff;
+  background: var(--overlay-backdrop-strong);
+  color: var(--text-bright);
   font-size: 11px;
   line-height: 18px;
   text-align: center;
@@ -2970,20 +2970,20 @@ html.mobile-init .file-browser-panel {
 .compose-textarea-wrap {
   position: relative;
   overflow: hidden; /* clip thumbnail strip to rounded corners */
-  border: 1px solid #1a1a2e;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #0d0d0d;
+  background: var(--bg-darker);
   transition: border-color 0.15s;
 }
 .compose-textarea-wrap:focus-within {
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 .compose-textarea {
   display: block;
   width: 100%;
   box-sizing: border-box;
   background: transparent;
-  color: #e2e8f0;
+  color: var(--text);
   border: none;
   /* no border-radius — wrap has overflow:hidden which clips corners */
   -webkit-appearance: none;
@@ -3025,43 +3025,43 @@ html.mobile-init .file-browser-panel {
 }
 .compose-plus-btn {
   left: 4px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
-.compose-plus-btn:active { color: #e2e8f0; }
+.compose-plus-btn:active { color: var(--text); }
 .compose-send-btn {
   right: 4px;
   bottom: 4px;
   width: 36px;
   height: 36px;
-  background: #3b82f6;
-  color: #fff;
+  background: var(--accent);
+  color: var(--text-bright);
   border-radius: 50%;
   padding: 0;
   /* 36px button + 4px bottom + 4px top clearance = 44px min-height wrapper, equal spacing all sides */
   top: auto;
   transform: none;
 }
-.compose-send-btn:active { background: #2563eb; }
+.compose-send-btn:active { background: var(--accent); }
 .compose-mic-btn {
   right: 44px;
   bottom: 7px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
-.compose-mic-btn:active { color: #e2e8f0; }
+.compose-mic-btn:active { color: var(--text); }
 .compose-mic-btn.recording {
-  background: rgba(239, 68, 68, 0.2);
-  color: #ef4444;
+  background: var(--red-bg-md);
+  color: var(--red);
   border-radius: 50%;
   animation: voice-pulse 1.2s ease-in-out infinite;
 }
 @keyframes voice-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
-    background: rgba(239, 68, 68, 0.2);
+    box-shadow: 0 0 0 0 var(--red-border-md);
+    background: var(--red-bg-md);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
-    background: rgba(239, 68, 68, 0.3);
+    box-shadow: 0 0 0 4px var(--red-bg-weak);
+    background: var(--red-border-sm);
   }
 }
 
@@ -3072,8 +3072,8 @@ html.mobile-init .file-browser-panel {
   right: 0;
   bottom: 100%;
   margin-bottom: 4px;
-  background: #1a1a2e;
-  border: 1px solid #2a2a4e;
+  background: var(--border);
+  border: 1px solid var(--surface-2);
   border-radius: 10px;
   max-height: 220px;
   overflow-y: auto;
@@ -3084,22 +3084,22 @@ html.mobile-init .file-browser-panel {
   display: flex;
   flex-direction: column;
   padding: 10px 14px;
-  border-bottom: 1px solid #2a2a4e;
+  border-bottom: 1px solid var(--surface-2);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .compose-slash-item:last-child { border-bottom: none; }
-.compose-slash-item:active { background: #2a2a4e; }
-.compose-slash-item.active { background: rgba(255, 255, 255, 0.08); }
+.compose-slash-item:active { background: var(--surface-2); }
+.compose-slash-item.active { background: var(--alpha-border-subtle); }
 .compose-slash-cmd {
   font-size: 14px;
   font-weight: 600;
-  color: #93c5fd;
+  color: var(--accent-hover);
   font-family: monospace;
 }
 .compose-slash-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-dim);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -3127,7 +3127,7 @@ html.mobile-init .file-browser-panel {
    All visual/positioning CSS lives in the .open rule only.
 
    z-index convention: session-drawer 9000, sheet 10003, backdrop 10002.
-   Background: #0d1117 — matches .session-drawer in styles.css.
+   Background: var(--bg-primary) — matches .session-drawer in styles.css.
    ============================================================================ */
 
 /* Plus action sheet */
@@ -3136,7 +3136,7 @@ html.mobile-init .file-browser-panel {
   position: fixed;
   inset: 0;
   z-index: 10002;
-  background: rgba(0,0,0,0.5);
+  background: var(--overlay-backdrop);
   animation: backdrop-fade 0.22s ease;
 }
 .compose-action-sheet.open {
@@ -3146,8 +3146,8 @@ html.mobile-init .file-browser-panel {
   right: 0;
   bottom: 0;
   z-index: 10003;
-  background: #0d1117;
-  border-top: 1px solid rgba(255,255,255,0.07);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--alpha-border-weak);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 8px 16px calc(16px + var(--safe-area-bottom));
@@ -3160,8 +3160,8 @@ html.mobile-init .file-browser-panel {
   to   { opacity: 1; }
 }
 .compose-action-item {
-  background: #161b22;
-  color: #e2e8f0;
+  background: var(--surface);
+  color: var(--text);
   border: none;
   border-radius: 10px;
   padding: 16px;
@@ -3170,10 +3170,10 @@ html.mobile-init .file-browser-panel {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.compose-action-item:active { background: #1a1a2e; }
+.compose-action-item:active { background: var(--border); }
 .compose-action-cancel {
   background: none;
-  color: #94a3b8;
+  color: var(--text-muted);
   border: none;
   border-radius: 10px;
   padding: 14px;
@@ -3201,18 +3201,18 @@ html.mobile-init .file-browser-panel {
    ============================================================================ */
 @media (max-width: 429px) {
   .accessory-btn-new {
-    background: #1a2a1a;
-    border-color: rgba(34, 197, 94, 0.3);
-    color: #4ade80;
+    background: var(--surface);
+    border-color: var(--green-border-md);
+    color: var(--green);
     font-size: 1.1rem;
     font-weight: 400;
     padding: 4px 10px;
     line-height: 1;
   }
-  .accessory-btn-new:active { background: #223322; }
+  .accessory-btn-new:active { background: var(--surface); }
 
   .accessory-ctx-pill {
-    --ctx-color: #22c55e;
+    --ctx-color: var(--green);
     display: none;
     align-items: center;
     font-size: 11px;
@@ -3308,7 +3308,7 @@ html.mobile-init .file-browser-panel {
 .swipe-session-skeleton {
   position: absolute;
   inset: 0;
-  background: var(--bg-dark, #0d0d0d);
+  background: var(--bg-dark, var(--bg-darker));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3322,10 +3322,10 @@ html.mobile-init .file-browser-panel {
 
 /* Session name pill shown at top of skeleton */
 .skeleton-session-pill {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--alpha-border-subtle);
+  border: 1px solid var(--alpha-border-md);
   border-radius: 20px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--alpha-text-muted);
   font-size: 13px;
   font-family: inherit;
   padding: 4px 14px;
@@ -3348,9 +3348,9 @@ html.mobile-init .file-browser-panel {
   border-radius: 5px;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.10) 50%,
-    rgba(255, 255, 255, 0.04) 100%
+    var(--alpha-bg-weak) 0%,
+    var(--alpha-border-sm) 50%,
+    var(--alpha-bg-weak) 100%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;

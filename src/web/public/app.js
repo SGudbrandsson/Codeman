@@ -1601,7 +1601,7 @@ const ContextBar = {
     const pct = data.pct || 0;
     this._arcFill.setAttribute('stroke-dasharray', pct + ' ' + (100 - pct));
     // Color: cyan < 60%, amber 60-85%, red 85%+
-    const strokeColor = pct >= 85 ? '#f87171' : pct >= 60 ? '#fbbf24' : '#22d3ee';
+    const strokeColor = pct >= 85 ? 'var(--red)' : pct >= 60 ? 'var(--yellow)' : 'var(--accent)';
     this._arcFill.setAttribute('stroke', strokeColor);
     this._arcPct.textContent = pct;
   },
@@ -1656,9 +1656,9 @@ const ContextBar = {
     const CIRC = 251.2;
     const pct = data.pct || 0;
     this._donutArc.style.strokeDashoffset = (CIRC * (1 - pct / 100)).toFixed(2);
-    if (pct >= 85) this._donutArc.style.stroke = '#f87171';
-    else if (pct >= 60) this._donutArc.style.stroke = '#fbbf24';
-    else this._donutArc.style.stroke = '#22d3ee';
+    if (pct >= 85) this._donutArc.style.stroke = 'var(--red)';
+    else if (pct >= 60) this._donutArc.style.stroke = 'var(--yellow)';
+    else this._donutArc.style.stroke = 'var(--accent)';
     this._donutPct.textContent = pct + '%';
 
     const max = data.maxTokens || 200000;
@@ -2503,7 +2503,7 @@ const CommandPanel = {
     label.appendChild(document.createTextNode('?'));
     div.appendChild(label);
     const desc = document.createElement('div');
-    desc.style.cssText = 'font-size:.72rem;color:#94a3b8;margin-top:4px;word-break:break-all';
+    desc.style.cssText = 'font-size:.72rem;color:var(--text-secondary);margin-top:4px;word-break:break-all';
     desc.textContent = conf.description;
     div.appendChild(desc);
     const row = document.createElement('div');
@@ -2523,9 +2523,18 @@ const CommandPanel = {
     this._scrollToBottom();
   },
 
+  _showRowStatus(row, text, color) {
+    if (!row) return;
+    row.textContent = '';
+    const em = document.createElement('em');
+    em.style.cssText = `color:var(${color});font-size:.72rem`;
+    em.textContent = text;
+    row.appendChild(em);
+  },
+
   async _confirm(confirmId, containerEl) {
     const row = containerEl.querySelector('.command-confirm-row');
-    if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#64748b;font-size:.72rem'; em.textContent = 'Confirming...'; row.appendChild(em); }
+    this._showRowStatus(row, 'Confirming...', '--text-muted');
     try {
       const res = await fetch('/api/command/confirm', {
         method: 'POST',
@@ -2537,14 +2546,13 @@ const CommandPanel = {
       if (data.error) this._addMessage('error', data.error);
       else this._addMessage('assistant', data.response || 'Action completed.', data.action ? [data.action] : undefined);
     } catch (err) {
-      if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#fca5a5;font-size:.72rem'; em.textContent = 'Failed: ' + (err.message || err); row.appendChild(em); }
+      this._showRowStatus(row, 'Failed: ' + (err.message || err), '--red');
     }
     this._saveHistory();
   },
 
   _cancel(containerEl) {
-    const row = containerEl.querySelector('.command-confirm-row');
-    if (row) { row.textContent = ''; const em = document.createElement('em'); em.style.cssText = 'color:#64748b;font-size:.72rem'; em.textContent = 'Cancelled'; row.appendChild(em); }
+    this._showRowStatus(containerEl.querySelector('.command-confirm-row'), 'Cancelled', '--text-muted');
     this._saveHistory();
   },
 
@@ -4797,8 +4805,9 @@ const _SSE_HANDLER_MAP = [
 /** Matches GSD context lines like "◆ Context: 47% · 3 tools · idle" */
 const STATUS_LINE_RE = /(\bContext\b|\btokens?\b).*\d+%|\d+%.*(\bContext\b|\btokens?\b)/i;
 
-// Shared terminal theme — single source of truth for main + teammate terminals
-const XTERM_THEME = {
+// Shared terminal theme — single source of truth for main + teammate terminals.
+// Two palettes; current one is picked by app._themeMode at init / theme switch.
+const XTERM_THEME_DARK = {
   background: '#0d0d0d', foreground: '#e0e0e0', cursor: '#e0e0e0',
   cursorAccent: '#0d0d0d', selection: 'rgba(255, 255, 255, 0.3)',
   black: '#0d0d0d', red: '#ff6b6b', green: '#51cf66', yellow: '#ffd43b',
@@ -4807,18 +4816,98 @@ const XTERM_THEME = {
   brightYellow: '#ffe066', brightBlue: '#5c7cfa', brightMagenta: '#da77f2',
   brightCyan: '#66d9e8', brightWhite: '#ffffff',
 };
+const XTERM_THEME_LIGHT = {
+  background: '#ffffff', foreground: '#1a1a1a', cursor: '#1a1a1a',
+  cursorAccent: '#ffffff', selection: 'rgba(0, 0, 0, 0.2)',
+  black: '#1a1a1a', red: '#c92a2a', green: '#2b8a3e', yellow: '#b7791f',
+  blue: '#1971c2', magenta: '#862e9c', cyan: '#0c8599', white: '#495057',
+  brightBlack: '#868e96', brightRed: '#e03131', brightGreen: '#2f9e44',
+  brightYellow: '#f08c00', brightBlue: '#1864ab', brightMagenta: '#9c36b5',
+  brightCyan: '#1098ad', brightWhite: '#212529',
+};
+// Read by XTERM_BASE_OPTIONS.theme getter when new terminals are constructed.
+let XTERM_THEME = XTERM_THEME_DARK;
+function pickXtermTheme(resolvedMode) {
+  XTERM_THEME = resolvedMode === 'light' ? XTERM_THEME_LIGHT : XTERM_THEME_DARK;
+  return XTERM_THEME;
+}
+try {
+  if (document.documentElement.dataset.theme === 'light') pickXtermTheme('light');
+} catch { /* no-op */ }
 const XTERM_BASE_OPTIONS = {
-  theme: XTERM_THEME,
+  get theme() { return XTERM_THEME; },
   fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
   lineHeight: 1.2, cursorBlink: false, cursorStyle: 'block',
   allowTransparency: true, allowProposedApi: true,
 };
+
+// ─────────────────────────── Theme helpers ───────────────────────────
+const THEME_STORAGE_KEY = 'codeman-theme';
+function safeGetLocalTheme() {
+  try { return localStorage.getItem(THEME_STORAGE_KEY); } catch { return null; }
+}
+function safeSetLocalTheme(v) {
+  try { localStorage.setItem(THEME_STORAGE_KEY, v); } catch { /* disabled */ }
+}
+function sanitizeThemeMode(v) {
+  return v === 'light' || v === 'system' ? v : 'dark';
+}
+function resolveTheme(mode) {
+  if (mode === 'light' || mode === 'dark') return mode;
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+}
+function applyTheme(appRef, resolved) {
+  // No-op fast path: DOM + xterm palette already match. Skips terminal churn on
+  // System→System re-entry or when boot-script seed already matches.
+  const wantXterm = resolved === 'light' ? XTERM_THEME_LIGHT : XTERM_THEME_DARK;
+  if (document.documentElement.dataset.theme === resolved && XTERM_THEME === wantXterm) return;
+  document.documentElement.dataset.theme = resolved;
+  pickXtermTheme(resolved);
+  const terms = [];
+  if (appRef) {
+    if (appRef.terminal) terms.push(appRef.terminal);
+    // teammateTerminals is Map<agentId, { terminal, fitAddon, ... }> — unwrap the record.
+    const tt = appRef.teammateTerminals;
+    if (tt && typeof tt.values === 'function') {
+      for (const entry of tt.values()) if (entry && entry.terminal) terms.push(entry.terminal);
+    }
+  }
+  for (const term of terms) {
+    try {
+      term.options.theme = wantXterm;
+      // Without refresh(), already-rendered cells keep the old palette until the next
+      // draw pass. Guard rows>0 for terminals that haven't sized yet.
+      if (term.rows > 0) term.refresh(0, term.rows - 1);
+    } catch { /* mid-dispose */ }
+  }
+}
+let _systemThemeWatch = null;
+function installSystemListener(appRef) {
+  if (_systemThemeWatch || !window.matchMedia) return;
+  const mq = window.matchMedia('(prefers-color-scheme: light)');
+  const handler = () => {
+    if (appRef._themeMode === 'system') applyTheme(appRef, resolveTheme('system'));
+  };
+  if (mq.addEventListener) mq.addEventListener('change', handler);
+  else if (mq.addListener) mq.addListener(handler); // Safari <14 fallback
+  _systemThemeWatch = { mq, handler };
+}
+function uninstallSystemListener() {
+  if (!_systemThemeWatch) return;
+  const { mq, handler } = _systemThemeWatch;
+  if (mq.removeEventListener) mq.removeEventListener('change', handler);
+  else if (mq.removeListener) mq.removeListener(handler);
+  _systemThemeWatch = null;
+}
 // ═══════════════════════════════════════════════════════════════
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
 
 class CodemanApp {
   constructor() {
+    // _themeActionVersion: bumped on every user toggle; GET-vs-toggle race guard (see design §6).
+    this._themeMode = sanitizeThemeMode(safeGetLocalTheme());
+    this._themeActionVersion = 0;
     this.sessions = new Map();
     this._sessionCommands = new Map(); // Map<sessionId, Array<{cmd:string, desc:string, source:string}>>
     this._shortIdCache = new Map(); // Cache session ID .slice(0, 8) results
@@ -5385,6 +5474,22 @@ class CodemanApp {
     this.loadTunnelStatus();
     // Share a single settings fetch between both consumers
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
+    applyTheme(this, resolveTheme(this._themeMode));
+    if (this._themeMode === 'system') installSystemListener(this);
+    const launchThemeVersion = this._themeActionVersion;
+    settingsPromise.then((s) => {
+      if (!s) return;
+      if (this._themeActionVersion !== launchThemeVersion) return; // user toggled first — respect it
+      const serverMode = sanitizeThemeMode(s.themeMode);
+      if (serverMode === this._themeMode) return;
+      this._themeMode = serverMode;
+      safeSetLocalTheme(serverMode);
+      applyTheme(this, resolveTheme(serverMode));
+      if (serverMode === 'system') installSystemListener(this);
+      else uninstallSystemListener();
+      const radios = document.querySelectorAll('input[name="appSettingsThemeMode"]');
+      radios.forEach((r) => { r.checked = (r.value === serverMode); });
+    });
     this.loadQuickStartCases(null, settingsPromise);
     this._initRunMode();
     this.setupEventListeners();
@@ -13458,6 +13563,22 @@ class CodemanApp {
     })).filter(c => c.command);
   }
 
+  _setThemeMode(newMode) {
+    const mode = sanitizeThemeMode(newMode);
+    this._themeActionVersion++;
+    this._themeMode = mode;
+    safeSetLocalTheme(mode);
+    applyTheme(this, resolveTheme(mode));
+    if (mode === 'system') installSystemListener(this);
+    else uninstallSystemListener();
+    // Persist cross-device via server. Keep optimistic value on failure — don't snap back.
+    this._apiPut('/api/settings', { themeMode: mode }).then((res) => {
+      if (!res || !res.ok) {
+        if (this.showToast) this.showToast("Couldn't save theme preference — will retry on reload", 'warn');
+      }
+    });
+  }
+
   openAppSettings() {
     FeatureTracker.track('settings-open');
     // Load current settings
@@ -13467,6 +13588,11 @@ class CodemanApp {
     // Use device-aware defaults for display settings (mobile has different defaults)
     const defaults = this.getDefaultSettings();
     document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? defaults.ralphTrackerEnabled ?? false;
+    const themeRadios = document.querySelectorAll('input[name="appSettingsThemeMode"]');
+    themeRadios.forEach((r) => { r.checked = (r.value === this._themeMode); });
+    themeRadios.forEach((r) => {
+      r.onchange = (ev) => { if (ev.target.checked) this._setThemeMode(ev.target.value); };
+    });
     // Header visibility settings
     document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? defaults.showFontControls ?? false;
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
@@ -13699,7 +13825,7 @@ class CodemanApp {
 
     const overlay = document.createElement('div');
     overlay.id = 'tunnelQrOverlay';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:5000;display:flex;align-items:center;justify-content:center;cursor:pointer';
+    overlay.style.cssText = 'position:fixed;inset:0;background:var(--overlay-backdrop-strong);z-index:5000;display:flex;align-items:center;justify-content:center;cursor:pointer';
     overlay.onclick = (e) => { if (e.target === overlay) this.closeTunnelQR(); };
 
     const card = document.createElement('div');
@@ -13708,7 +13834,7 @@ class CodemanApp {
     card.innerHTML = `
       <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:16px">Scan to connect</div>
       <div id="tunnelQrContainer" style="background:#fff;border-radius:8px;padding:16px;display:inline-block">
-        <div style="color:#666;font-size:12px">Loading...</div>
+        <div style="color:var(--text-muted);font-size:12px">Loading...</div>
       </div>
       <div id="tunnelQrUrl" style="margin-top:12px;font-family:monospace;font-size:11px;color:var(--text-muted);word-break:break-all;cursor:pointer" title="Click to copy"></div>
       <button onclick="app.closeTunnelQR()" style="margin-top:16px;padding:6px 20px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:13px">Close</button>
@@ -13750,7 +13876,7 @@ class CodemanApp {
       })
       .catch(() => {
         const container = document.getElementById('tunnelQrContainer');
-        if (container) container.innerHTML = '<div style="color:#c00;font-size:12px;padding:20px">Tunnel not active</div>';
+        if (container) container.innerHTML = '<div style="color:var(--red);font-size:12px;padding:20px">Tunnel not active</div>';
       });
 
     // Fetch URL for display
@@ -13963,7 +14089,7 @@ class CodemanApp {
       fetch('/api/tunnel/qr')
         .then(r => { if (!r.ok) throw new Error(); return r.json(); })
         .then(data => { if (data.svg) qrInner.innerHTML = data.svg; })
-        .catch(() => { qrInner.innerHTML = '<div style="color:#999;font-size:11px;padding:20px">QR unavailable</div>'; });
+        .catch(() => { qrInner.innerHTML = '<div style="color:var(--text-dim);font-size:11px;padding:20px">QR unavailable</div>'; });
     } else {
       clearTimeout(this._welcomeQrShrinkTimer);
       qrWrap.classList.remove('visible', 'expanded');
@@ -14274,24 +14400,24 @@ class CodemanApp {
       empty.style.display = 'none';
 
       const eventColors = {
-        created: '#4ade80', started: '#4ade80', recovered: '#4ade80',
-        exit: '#fbbf24', mux_died: '#f87171', deleted: '#f87171', stale_cleaned: '#f87171',
-        server_started: '#666', server_stopped: '#666',
+        created: 'var(--green)', started: 'var(--green)', recovered: 'var(--green)',
+        exit: 'var(--yellow)', mux_died: 'var(--red)', deleted: 'var(--red)', stale_cleaned: 'var(--red)',
+        server_started: 'var(--text-muted)', server_stopped: 'var(--text-muted)',
       };
 
       tbody.innerHTML = data.entries.map(e => {
         const time = new Date(e.ts).toLocaleString();
-        const color = eventColors[e.event] || '#888';
+        const color = eventColors[e.event] || 'var(--text-dim)';
         const name = e.name || (e.sessionId === '*' ? '—' : this.getShortId(e.sessionId));
         const extra = [];
         if (e.exitCode !== undefined && e.exitCode !== null) extra.push(`code=${e.exitCode}`);
         if (e.mode) extra.push(e.mode);
-        return `<tr style="border-bottom:1px solid #1a1a2e">
-          <td style="padding:3px 8px;color:#888;white-space:nowrap">${time}</td>
+        return `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:3px 8px;color:var(--text-dim);white-space:nowrap">${time}</td>
           <td style="padding:3px 8px;color:${color};font-weight:600">${e.event}</td>
-          <td style="padding:3px 8px;color:#e0e0e0" title="${e.sessionId}">${name}</td>
-          <td style="padding:3px 8px;color:#aaa">${e.reason || ''}</td>
-          <td style="padding:3px 8px;color:#666">${extra.join(', ')}</td>
+          <td style="padding:3px 8px;color:var(--text)" title="${e.sessionId}">${name}</td>
+          <td style="padding:3px 8px;color:var(--text-dim)">${e.reason || ''}</td>
+          <td style="padding:3px 8px;color:var(--text-muted)">${extra.join(', ')}</td>
         </tr>`;
       }).join('');
     } catch (err) {
@@ -16994,7 +17120,7 @@ class CodemanApp {
       <div class="ralph-status-block-header">
         <span>RALPH_STATUS</span>
         <span class="ralph-status-block-status ${statusClass}">${escapeHtml(statusBlock.status)}</span>
-        ${statusBlock.exitSignal ? '<span style="color: #4caf50;">🚪 EXIT</span>' : ''}
+        ${statusBlock.exitSignal ? '<span style="color: var(--green);">🚪 EXIT</span>' : ''}
       </div>
       <div class="ralph-status-block-stats">
         <span>${workIcon} ${escapeHtml(statusBlock.workType)}</span>
@@ -17663,6 +17789,7 @@ class CodemanApp {
             <title>Subagent ${escapeHtml(agentId)} Transcript</title>
             <style>
               body { background: #1a1a2e; color: #eee; font-family: monospace; padding: 20px; }
+              @media (prefers-color-scheme: light) { body { background: #ffffff; color: #1a1a1a; } }
               pre { white-space: pre-wrap; word-wrap: break-word; }
             </style>
           </head>
@@ -20641,7 +20768,7 @@ class CodemanApp {
     if (action) {
       const btn = document.createElement('button');
       btn.textContent = action.label;
-      btn.style.cssText = 'margin-left:12px;padding:2px 10px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:3px;color:inherit;cursor:pointer;font-size:12px';
+      btn.style.cssText = 'margin-left:12px;padding:2px 10px;background:rgba(var(--text-rgb), 0.15);border:1px solid rgba(var(--text-rgb), 0.3);border-radius:3px;color:inherit;cursor:pointer;font-size:12px';
       btn.onclick = (e) => { e.stopPropagation(); action.onClick(); toast.remove(); };
       toast.appendChild(btn);
     }
@@ -23138,15 +23265,15 @@ const BoardView = {
     { key: 'done',        label: 'Done',    statuses: ['done', 'cancelled'] },
   ],
 
-  // Status dot colors
+  // Status dot colors — use theme vars so status dots stay visible in light mode.
   STATUS_COLORS: {
-    queued:      '#60a5fa',
-    blocked:     '#ef4444',
-    assigned:    '#f59e0b',
-    in_progress: '#22c55e',
-    review:      '#a78bfa',
-    done:        '#475569',
-    cancelled:   '#374151',
+    queued:      'var(--accent)',
+    blocked:     'var(--red)',
+    assigned:    'var(--yellow)',
+    in_progress: 'var(--green)',
+    review:      'var(--purple)',
+    done:        'var(--text-muted)',
+    cancelled:   'var(--text-dim)',
   },
 
   // Mock data — used when GET /api/work-items returns 404 or fails
@@ -23324,7 +23451,7 @@ const BoardView = {
 
     const dot = document.createElement('span');
     dot.className = 'board-card-dot';
-    dot.style.background = this.STATUS_COLORS[item.status] || '#475569';
+    dot.style.background = this.STATUS_COLORS[item.status] || 'var(--text-muted)';
 
     const agent = this._agents.get(item.assignedAgentId);
     const agentEl = document.createElement('span');
@@ -23360,7 +23487,7 @@ const BoardView = {
       if (blockerTitles && blockerTitles.length > 0) {
         const blockerEl = document.createElement('div');
         blockerEl.className = 'board-card-blocker';
-        blockerEl.style.cssText = 'font-size:0.68rem;color:#ef4444;margin-top:4px;opacity:0.85;';
+        blockerEl.style.cssText = 'font-size:0.68rem;color:var(--red);margin-top:4px;opacity:0.85;';
         blockerEl.textContent = 'Blocked by: ' + blockerTitles.join(', ');
         card.appendChild(blockerEl);
       }
@@ -23370,7 +23497,7 @@ const BoardView = {
     const STATUSES = ['queued', 'blocked', 'assigned', 'in_progress', 'review', 'done', 'cancelled'];
     const statusSelect = document.createElement('select');
     statusSelect.className = 'board-card-status-select';
-    statusSelect.style.cssText = 'margin-top:6px;width:100%;background:#0f1117;border:1px solid rgba(255,255,255,0.12);border-radius:3px;color:#94a3b8;padding:2px 6px;font-size:0.72rem;cursor:pointer;';
+    statusSelect.style.cssText = 'margin-top:6px;width:100%;background:var(--bg-dark);border:1px solid var(--border-light);border-radius:3px;color:var(--text-secondary);padding:2px 6px;font-size:0.72rem;cursor:pointer;';
     for (const s of STATUSES) {
       const opt = document.createElement('option');
       opt.value = s;
@@ -23503,7 +23630,7 @@ const BoardView = {
     if (!panel) return;
     if (!deps) deps = { blockers: [], blockedBy: [] };
 
-    const statusColor = this.STATUS_COLORS[item.status] || '#475569';
+    const statusColor = this.STATUS_COLORS[item.status] || 'var(--text-muted)';
 
     let html = `<div class="wip-header">
       <div style="display:flex;align-items:flex-start;">
@@ -23513,7 +23640,7 @@ const BoardView = {
           <div class="wip-status-row">
             <span class="board-card-dot" style="background:${statusColor};display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
             <span class="wip-status-badge" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}44;">${this._esc(item.status)}</span>
-            ${item.branchName ? `<span style="font-size:0.68rem;color:#475569;">${this._esc(item.branchName)}</span>` : ''}
+            ${item.branchName ? `<span style="font-size:0.68rem;color:var(--text-muted);">${this._esc(item.branchName)}</span>` : ''}
           </div>
         </div>
         <button class="wip-close btn-icon-sm" onclick="app.boardView.closeDetailPanel()" title="Close">&times;</button>
@@ -23529,19 +23656,19 @@ const BoardView = {
     // Blockers section — show if item is blocked or has any blockers
     if (item.status === 'blocked' || (deps.blockers && deps.blockers.length > 0)) {
       html += `<div class="wip-section" id="wipBlockersSection">
-        <div class="wip-section-label" style="color:#ef4444;">Blocked By</div>`;
+        <div class="wip-section-label" style="color:var(--red);">Blocked By</div>`;
       if (deps.blockers && deps.blockers.length > 0) {
         for (const blocker of deps.blockers) {
-          const bColor = this.STATUS_COLORS[blocker.status] || '#475569';
-          html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+          const bColor = this.STATUS_COLORS[blocker.status] || 'var(--text-muted)';
+          html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(var(--text-rgb), 0.05);">
             <span style="width:7px;height:7px;border-radius:50%;background:${bColor};flex-shrink:0;display:inline-block;"></span>
-            <span style="flex:1;font-size:0.78rem;color:#e2e8f0;">${this._esc(blocker.title)}</span>
+            <span style="flex:1;font-size:0.78rem;color:var(--text);">${this._esc(blocker.title)}</span>
             <span style="font-size:0.65rem;color:${bColor};background:${bColor}22;border:1px solid ${bColor}44;border-radius:3px;padding:1px 5px;">${this._esc(blocker.status)}</span>
-            <button class="wip-remove-blocker board-btn-delete" data-blocker-id="${this._esc(blocker.id)}" style="font-size:0.7rem;padding:1px 7px;color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">Remove</button>
+            <button class="wip-remove-blocker board-btn-delete" data-blocker-id="${this._esc(blocker.id)}" style="font-size:0.7rem;padding:1px 7px;color:var(--red);border-color:rgba(var(--red-rgb), 0.3);background:rgba(var(--red-rgb), 0.08);">Remove</button>
           </div>`;
         }
       } else {
-        html += `<div style="font-size:0.75rem;color:#475569;">No dependency data found — the work item may be marked blocked manually.</div>`;
+        html += `<div style="font-size:0.75rem;color:var(--text-muted);">No dependency data found — the work item may be marked blocked manually.</div>`;
       }
       html += `</div>`;
     }
@@ -23550,8 +23677,8 @@ const BoardView = {
     html += `<div class="wip-section">
       <div class="wip-section-label">Assigned Agent</div>`;
     if (agent) {
-      html += `<div style="font-size:0.8rem;color:#94a3b8;margin-bottom:6px;">${this._esc(agent.name || agent.agentId || '')}`;
-      if (agent.role) html += ` <span style="font-size:0.65rem;color:#475569;background:rgba(255,255,255,0.05);border-radius:3px;padding:1px 4px;">${this._esc(agent.role)}</span>`;
+      html += `<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:6px;">${this._esc(agent.name || agent.agentId || '')}`;
+      if (agent.role) html += ` <span style="font-size:0.65rem;color:var(--text-muted);background:rgba(var(--text-rgb), 0.05);border-radius:3px;padding:1px 4px;">${this._esc(agent.role)}</span>`;
       html += `</div>`;
       if (agent.recentActivity && agent.recentActivity.length > 0) {
         html += `<ul class="wip-activity-list">`;
@@ -23560,10 +23687,10 @@ const BoardView = {
         }
         html += `</ul>`;
       } else {
-        html += `<div style="font-size:0.75rem;color:#475569;">No recent activity recorded.</div>`;
+        html += `<div style="font-size:0.75rem;color:var(--text-muted);">No recent activity recorded.</div>`;
       }
     } else {
-      html += `<div style="font-size:0.75rem;color:#475569;">Unassigned</div>`;
+      html += `<div style="font-size:0.75rem;color:var(--text-muted);">Unassigned</div>`;
     }
     html += `</div>`;
 
@@ -23576,7 +23703,7 @@ const BoardView = {
     // Message thread placeholder
     html += `<div class="wip-section">
       <div class="wip-section-label">Message Thread</div>
-      <div style="font-size:0.75rem;color:#475569;">Message thread coming in Phase 3.</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);">Message thread coming in Phase 3.</div>
     </div>`;
 
     // Git log if branchName present
@@ -23590,7 +23717,7 @@ const BoardView = {
     // Timestamps
     html += `<div class="wip-section">
       <div class="wip-section-label">Timestamps</div>
-      <div style="font-size:0.72rem;color:#475569;display:flex;flex-direction:column;gap:3px;">
+      <div style="font-size:0.72rem;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
         <div>Created: ${this._timeAgo(item.createdAt)}</div>
         ${item.assignedAt ? `<div>Assigned: ${this._timeAgo(item.assignedAt)}</div>` : ''}
         ${item.startedAt ? `<div>Started: ${this._timeAgo(item.startedAt)}</div>` : ''}
@@ -23610,8 +23737,8 @@ const BoardView = {
       <button class="board-btn-new" id="wipChangeStatusBtn">Change Status</button>
       <button class="board-btn-refresh" id="wipAddDepBtn">Add Dependency</button>
       <button class="board-btn-refresh" id="wipOpenSessionBtn"${openSessionDisabledAttr}>${openSessionLabel}</button>
-      ${showUnblock ? '<button class="board-btn-new" id="wipUnblockBtn" style="color:#f59e0b;border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);">Unblock All</button>' : ''}
-      <button class="board-btn-delete" id="wipDeleteBtn" style="margin-left:auto;color:#ef4444;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);">Delete</button>
+      ${showUnblock ? '<button class="board-btn-new" id="wipUnblockBtn" style="color:var(--yellow);border-color:rgba(var(--yellow-rgb), 0.3);background:rgba(var(--yellow-rgb), 0.08);">Unblock All</button>' : ''}
+      <button class="board-btn-delete" id="wipDeleteBtn" style="margin-left:auto;color:var(--red);border-color:rgba(var(--red-rgb), 0.3);background:rgba(var(--red-rgb), 0.08);">Delete</button>
     </div>`;
 
     panel.innerHTML = html;
@@ -23633,7 +23760,7 @@ const BoardView = {
       const input = document.createElement('input');
       input.type = 'text';
       input.placeholder = 'Agent ID';
-      input.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      input.style.cssText = 'flex:1;background:var(--bg-dark);border:1px solid var(--border-light);border-radius:4px;color:var(--text);padding:4px 8px;font-size:0.78rem;';
       const submitBtn = document.createElement('button');
       submitBtn.className = 'board-btn-new';
       submitBtn.textContent = 'Submit';
@@ -23677,7 +23804,7 @@ const BoardView = {
       form.id = 'wipStatusForm';
       form.style.cssText = 'margin-top:8px;display:flex;gap:6px;align-items:center;';
       const select = document.createElement('select');
-      select.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      select.style.cssText = 'flex:1;background:var(--bg-dark);border:1px solid var(--border-light);border-radius:4px;color:var(--text);padding:4px 8px;font-size:0.78rem;';
       for (const s of STATUSES) {
         const opt = document.createElement('option');
         opt.value = s;
@@ -23726,7 +23853,7 @@ const BoardView = {
       const input = document.createElement('input');
       input.type = 'text';
       input.placeholder = 'Depends-on work item ID';
-      input.style.cssText = 'flex:1;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:4px 8px;font-size:0.78rem;';
+      input.style.cssText = 'flex:1;background:var(--bg-dark);border:1px solid var(--border-light);border-radius:4px;color:var(--text);padding:4px 8px;font-size:0.78rem;';
       const submitBtn = document.createElement('button');
       submitBtn.className = 'board-btn-new';
       submitBtn.textContent = 'Add';
@@ -23923,11 +24050,11 @@ const BoardView = {
     // Overlay
     const overlay = document.createElement('div');
     overlay.id = 'newWorkItemDialog';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:var(--overlay-backdrop-strong);';
 
     // Dialog box
     const dlg = document.createElement('div');
-    dlg.style.cssText = 'background:#1e2130;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:24px;width:420px;max-width:95vw;color:#e2e8f0;font-family:inherit;';
+    dlg.style.cssText = 'background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:95vw;color:var(--text);font-family:inherit;';
 
     // Title heading
     const heading = document.createElement('div');
@@ -23939,10 +24066,10 @@ const BoardView = {
       const wrapper = document.createElement('div');
       wrapper.style.cssText = 'margin-bottom:12px;';
       const lbl = document.createElement('label');
-      lbl.style.cssText = 'display:block;font-size:0.75rem;color:#94a3b8;margin-bottom:4px;';
+      lbl.style.cssText = 'display:block;font-size:0.75rem;color:var(--text-secondary);margin-bottom:4px;';
       lbl.textContent = labelText;
       wrapper.appendChild(lbl);
-      el.style.cssText = 'width:100%;box-sizing:border-box;background:#0f1117;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#e2e8f0;padding:6px 10px;font-size:0.82rem;';
+      el.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-dark);border:1px solid var(--border-light);border-radius:4px;color:var(--text);padding:6px 10px;font-size:0.82rem;';
       wrapper.appendChild(el);
       return wrapper;
     };
@@ -23984,7 +24111,7 @@ const BoardView = {
     // Error message area
     const errMsg = document.createElement('div');
     errMsg.id = 'nwi-error';
-    errMsg.style.cssText = 'font-size:0.75rem;color:#ef4444;margin-bottom:8px;display:none;';
+    errMsg.style.cssText = 'font-size:0.75rem;color:var(--red);margin-bottom:8px;display:none;';
     dlg.appendChild(errMsg);
 
     // Buttons row
@@ -24965,9 +25092,9 @@ const ActionDashboard = {
 
   // Helper: get session color dot
   _sessionColor(sessionId) {
-    if (!sessionId || typeof app === 'undefined') return '#475569';
+    if (!sessionId || typeof app === 'undefined') return 'var(--text-muted)';
     const session = app.sessions?.get(sessionId);
-    return session?.color || '#475569';
+    return session?.color || 'var(--text-muted)';
   },
 
   // Helper: relative time string
@@ -25090,7 +25217,7 @@ const AgentPanel = {
           <div id="agentFormRoleErr" class="agent-form-error" style="display:none">Role is required</div>
         </div>
         <div class="agent-form-field">
-          <label class="agent-form-label">Role Prompt <span style="color:#475569">(optional)</span></label>
+          <label class="agent-form-label">Role Prompt <span style="color:var(--text-muted)">(optional)</span></label>
           <textarea id="agentFormPrompt" class="agent-form-textarea" placeholder="Custom instructions for this agent...">${agent && agent.rolePrompt ? escapeHtml(agent.rolePrompt) : ''}</textarea>
         </div>`;
 
@@ -25139,7 +25266,7 @@ const AgentPanel = {
       if (this._showMcpLibrary) {
         html += `<div class="agent-mcp-library" id="agentMcpLibrary">`;
         if (!this._mcpLibrary) {
-          html += `<div style="padding:10px;color:#64748b;font-size:0.82rem">Loading...</div>`;
+          html += `<div style="padding:10px;color:var(--text-muted);font-size:0.82rem">Loading...</div>`;
         } else {
           const filtered = this._mcpSearch
             ? this._mcpLibrary.filter(e => e.name.toLowerCase().includes(this._mcpSearch.toLowerCase()))
@@ -25157,7 +25284,7 @@ const AgentPanel = {
             </div>`;
           });
           if (filtered.length === 0) {
-            html += `<div style="padding:10px;color:#64748b;font-size:0.82rem">No results</div>`;
+            html += `<div style="padding:10px;color:var(--text-muted);font-size:0.82rem">No results</div>`;
           }
         }
         html += `</div>`;
@@ -25184,7 +25311,7 @@ const AgentPanel = {
           </div>
           ${agent.lastConsolidatedAt ? `<div class="agent-vault-stat">
             <span class="agent-vault-stat-label">Last consolidated:</span>
-            <span class="agent-vault-stat-val" style="font-size:0.78rem;color:#94a3b8;margin-left:4px">${new Date(agent.lastConsolidatedAt).toLocaleDateString()}</span>
+            <span class="agent-vault-stat-val" style="font-size:0.78rem;color:var(--text-secondary);margin-left:4px">${new Date(agent.lastConsolidatedAt).toLocaleDateString()}</span>
           </div>` : ''}
         </div>
         <div class="agent-vault-actions">
@@ -25447,14 +25574,14 @@ const AgentPanel = {
     const overlay = document.getElementById('agentNotesModalOverlay');
     const list = document.getElementById('agentNotesList');
     if (!overlay || !list) return;
-    list.innerHTML = '<div style="color:#64748b;font-size:0.82rem">Loading...</div>';
+    list.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem">Loading...</div>';
     overlay.classList.add('open');
     try {
       const res = await fetch(`/api/agents/${this._agentId}/vault/notes`);
       const data = await res.json();
       const notes = data.data || data.notes || [];
       if (notes.length === 0) {
-        list.innerHTML = '<div style="color:#64748b;font-size:0.82rem">No notes yet.</div>';
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem">No notes yet.</div>';
         return;
       }
       list.innerHTML = notes.map(n => `
@@ -25463,7 +25590,7 @@ const AgentPanel = {
           ${n.createdAt ? `<div class="agent-note-meta">${new Date(n.createdAt).toLocaleString()}</div>` : ''}
         </div>`).join('');
     } catch (e) {
-      list.innerHTML = `<div style="color:#f87171;font-size:0.82rem">Failed to load notes: ${escapeHtml(e.message)}</div>`;
+      list.innerHTML = `<div style="color:var(--red);font-size:0.82rem">Failed to load notes: ${escapeHtml(e.message)}</div>`;
     }
   },
 
