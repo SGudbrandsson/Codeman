@@ -94,7 +94,7 @@ window.FeatureTracker = {
     })).sort((a, b) => a.count - b.count);
 
     const fmtDate = iso => iso ? new Date(iso).toLocaleString() : '\u2014';
-    const borderColor = count => count === 0 ? '#ef4444' : count <= 3 ? '#f59e0b' : '#22c55e';
+    const borderColor = count => count === 0 ? 'var(--red)' : count <= 3 ? 'var(--yellow)' : 'var(--green)';
 
     // Build table using DOM methods to avoid innerHTML with external data
     const table = document.createElement('table');
