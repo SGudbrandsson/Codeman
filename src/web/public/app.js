@@ -23953,6 +23953,31 @@ const BoardView = {
     titleInput.id = 'nwi-title';
     dlg.appendChild(makeField('Title *', titleInput));
 
+    // Case selector — required for orchestrator dispatch
+    const caseSelect = document.createElement('select');
+    caseSelect.id = 'nwi-caseId';
+    const caseField = makeField('Case *', caseSelect);
+    dlg.appendChild(caseField);
+    // Populate async — app.cases may already be loaded, otherwise fetch
+    (async () => {
+      let cases = app.cases;
+      if (!cases || !cases.length) {
+        try {
+          const res = await fetch('/api/cases');
+          cases = await res.json();
+        } catch { cases = []; }
+      }
+      cases.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.name;
+        opt.textContent = c.name;
+        caseSelect.appendChild(opt);
+      });
+      // Pre-select current toolbar case
+      const toolbarCase = document.getElementById('quickStartCase')?.value;
+      if (toolbarCase) caseSelect.value = toolbarCase;
+    })();
+
     const descInput = document.createElement('textarea');
     descInput.placeholder = 'Description';
     descInput.id = 'nwi-description';
@@ -24014,6 +24039,7 @@ const BoardView = {
           title,
           description: descInput.value.trim() || undefined,
           source: sourceSelect.value,
+          caseId: caseSelect.value || undefined,
           externalRef: extRefInput.value.trim() || undefined,
           externalUrl: extUrlInput.value.trim() || undefined,
         };
