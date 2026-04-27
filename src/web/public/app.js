@@ -13333,6 +13333,39 @@ class CodemanApp {
     });
   }
 
+  /**
+   * Check if the last /api/sessions response came from the SW cache.
+   * Called after any fetch to /api/sessions to update the stale data indicator.
+   */
+  _checkStaleSessionData(response) {
+    const isCached = response.headers.get('X-Codeman-Cached') === 'true';
+    const indicator = document.getElementById('staleDataIndicator');
+    if (isCached) {
+      const dateHeader = response.headers.get('Date');
+      const timeStr = dateHeader ? new Date(dateHeader).toLocaleTimeString() : 'unknown';
+      if (indicator) {
+        indicator.textContent = `Offline — last updated: ${timeStr}`;
+        indicator.style.display = '';
+      } else {
+        this._createStaleIndicator(`Offline — last updated: ${timeStr}`);
+      }
+    } else if (indicator) {
+      indicator.style.display = 'none';
+    }
+  }
+
+  _createStaleIndicator(text) {
+    const el = document.createElement('div');
+    el.id = 'staleDataIndicator';
+    el.textContent = text;
+    el.style.cssText = 'padding:4px 12px;font-size:11px;color:#666;text-align:center;background:#111;border-bottom:1px solid #1a1a2e';
+    // Insert at top of session drawer list
+    const drawer = document.querySelector('.session-drawer-list');
+    if (drawer) {
+      drawer.parentNode.insertBefore(el, drawer);
+    }
+  }
+
   async subscribeToPush() {
     if (!this._swRegistration) {
       this.showToast('Service worker not available. HTTPS or localhost required.', 'error');
@@ -24246,7 +24279,7 @@ const ActionDashboard = {
   async refresh() {
     // Fetch all three data sources in parallel
     const [sessRes, wiRes, wtRes] = await Promise.allSettled([
-      fetch('/api/sessions').then(r => r.ok ? r.json() : []),
+      fetch('/api/sessions').then(r => { if (typeof app !== 'undefined') app._checkStaleSessionData(r); return r.ok ? r.json() : []; }),
       fetch('/api/work-items').then(r => r.ok ? r.json() : { data: [] }),
       fetch('/api/worktrees').then(r => r.ok ? r.json() : []),
     ]);
