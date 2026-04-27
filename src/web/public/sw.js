@@ -15,6 +15,7 @@
  *   - Listens for SKIP_WAITING message from app.js to activate immediately
  */
 
+// Increment CACHE_VERSION when PRECACHE_URLS changes to trigger cache purge
 const CACHE_VERSION = 1;
 const SHELL_CACHE = `codeman-shell-v${CACHE_VERSION}`;
 const API_CACHE = `codeman-api-v${CACHE_VERSION}`;
@@ -85,9 +86,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Cache-first for precached app shell assets
+  // ignoreSearch: true — build injects ?v=<hash> query strings for browser cache busting,
+  // but the SW cache keys are stored without query strings (from cache.addAll)
   if (isPrecached(url.pathname)) {
     event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request))
+      caches.match(request, { ignoreSearch: true }).then((cached) => cached || fetch(request))
     );
     return;
   }
@@ -109,7 +112,7 @@ async function networkFirstSessions(request) {
     // Cache successful responses
     if (response.ok) {
       const cache = await caches.open(API_CACHE);
-      cache.put(request, response.clone());
+      await cache.put(request, response.clone());
     }
     return response;
   } catch {
