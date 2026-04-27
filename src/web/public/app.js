@@ -13278,6 +13278,7 @@ class CodemanApp {
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       this._swRegistration = reg;
+
       // Listen for messages from service worker (notification clicks)
       navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'notification-click') {
@@ -13288,6 +13289,26 @@ class CodemanApp {
           window.focus();
         }
       });
+
+      // SW update detection — show toast when new version is waiting
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          // Only show toast for updates (not first install)
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            this._showSwUpdateToast(newWorker);
+          }
+        });
+      });
+
+      // Listen for controller change (after SKIP_WAITING) and reload
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (this._swReloading) return;
+        this._swReloading = true;
+        window.location.reload();
+      });
+
       // Check if already subscribed
       reg.pushManager.getSubscription().then((sub) => {
         if (sub) {
@@ -13297,6 +13318,18 @@ class CodemanApp {
       });
     }).catch(() => {
       // Service worker registration failed (likely not HTTPS)
+    });
+  }
+
+  _showSwUpdateToast(waitingWorker) {
+    if (this._swUpdateToastShown) return;
+    this._swUpdateToastShown = true;
+    this.showToast('New version available — tap to update', 'info', {
+      duration: 86400000,
+      action: {
+        label: 'Reload',
+        onClick: () => waitingWorker.postMessage({ type: 'SKIP_WAITING' }),
+      },
     });
   }
 
