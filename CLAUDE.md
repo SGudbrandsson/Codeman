@@ -24,9 +24,16 @@ npm run format        # Prettier write
 ```
 
 ### Running a dev instance
+
+Codeman production runs on port 3000 via systemd (`codeman.service`) — it hosts every Claude Code session on this server, **including this one**. Never restart production to test dev changes.
+
+The dev instance runs on port 3001 from the `codeman-dev` checkout:
 ```bash
-node dist/index.js web --port 3001   # Run on non-default port
+node dist/index.js web --port 3001   # Dev instance — safe to restart
 ```
+
+**Deploy to dev:** `npm run build && rsync -a --delete dist/ ~/.codeman/app/dist/` then restart the dev process (not systemd).
+**Deploy to prod:** Only after testing on dev. `sudo systemctl restart codeman` picks up the new dist.
 
 ## Architecture
 
@@ -85,9 +92,21 @@ src/
 - PRs go from fork branches → upstream `master`
 - Use `gh` CLI for GitHub operations (authenticated via `gh auth`)
 
+### After pushing a PR
+1. Merge the fix branch into local `master`: `git merge fix/<branch> --no-edit`
+2. Rebuild: `npm run build`
+3. Test on dev (port 3001) first — never deploy untested changes to prod
+4. Update production: `rsync -a --delete dist/ ~/.codeman/app/dist/`
+5. CSS/JS changes take effect on browser hard-refresh
+6. Backend changes (orchestrator, server, etc.) need: `sudo systemctl restart codeman`
+   - **Never** `kill` + `nohup` the production process — it's managed by systemd
+   - **Never** restart prod to test — use the dev instance on port 3001
+
 ## Gotchas
 - The upstream default branch is `master`, not `main`
 - Build output goes to `dist/` — always rebuild after source changes
 - CSS changes require `npm run build` then browser hard-refresh
 - For quick CSS hotfixes to production: copy `dist/web/public/<file>.css` directly
-- The `CLAUDE.md` in this repo is also used by Codeman's worktree task runner — don't remove the worktree instructions if they exist
+- Orchestrator dispatch worktrees go to `~/.codeman/dispatch-worktrees/`, not `~/codeman-cases/`
+- `sendInput()` on a Session calls `runPrompt()` which spawns a NEW process — for interactive sessions use `writeViaMux()` instead
+- Local `master` may be ahead of `origin/master` with unmerged PR fixes — this is intentional
