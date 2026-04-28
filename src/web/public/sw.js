@@ -52,7 +52,20 @@ const PRECACHE_URLS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(PRECACHE_URLS))
+    caches.open(SHELL_CACHE).then((cache) =>
+      // Use individual fetch+put instead of addAll — addAll rejects if ANY request
+      // fails (e.g., 401 from auth middleware), which would block SW installation entirely.
+      Promise.all(
+        PRECACHE_URLS.map((url) =>
+          fetch(url, { credentials: 'same-origin' })
+            .then((res) => {
+              if (res.ok) return cache.put(url, res);
+              // Skip non-ok responses (auth failures, etc.) — they'll be fetched from network later
+            })
+            .catch(() => {}) // Network error — skip, don't block install
+        )
+      )
+    )
   );
 });
 
