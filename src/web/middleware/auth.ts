@@ -88,6 +88,13 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
       return;
     }
 
+    // PWA assets must be publicly accessible — browsers fetch manifest and icons
+    // without credentials during installability checks and "Add to Home Screen"
+    if (req.url === '/manifest.json' || req.url?.startsWith('/icons/')) {
+      done();
+      return;
+    }
+
     const clientIp = req.ip;
 
     // Rate limit: reject if too many failed attempts from this IP
