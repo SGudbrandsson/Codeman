@@ -4921,6 +4921,10 @@ class CodemanApp {
     // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
     this.pendingElicitation = null;
 
+    // Deferred permission block data — stored when a permission hook fires for a non-active
+    // session so the block can be rendered when the user later switches to that session.
+    this._pendingPermissionData = null;
+
     // AskUserQuestion is now handled entirely by the inline tv-auq-block in TranscriptView.
     // No panel state needed — the block element manages its own lifecycle.
 
@@ -7425,6 +7429,8 @@ class CodemanApp {
       title: 'Permission Required',
       message: toolInfo || 'Claude needs tool approval to continue',
     });
+    // Store for deferred rendering when user switches to this session later (PWA background etc.)
+    this._pendingPermissionData = { sessionId: data.sessionId, data };
     // Show inline permission block in transcript view
     if (data.sessionId === this.activeSessionId && TranscriptView._sessionId === data.sessionId) {
       TranscriptView.setWorking(false);
@@ -7586,6 +7592,7 @@ class CodemanApp {
 
   /** Sends a permission prompt response (y/n/a) and clears the inline block. */
   sendPermissionResponse(sessionId, key) {
+    this._pendingPermissionData = null;
     this.clearPendingHooks(sessionId, 'permission_prompt');
     TranscriptView._removePermissionBlock();
     fetch(`/api/sessions/${sessionId}/input`, {
@@ -8512,6 +8519,7 @@ class CodemanApp {
     this._loadBufferQueue = null;
     // Clear pending hooks
     this.pendingHooks.clear();
+    this._pendingPermissionData = null;
     // Clear parent name cache (prevents stale session name entries accumulating)
     if (this._parentNameCache) this._parentNameCache.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -9488,6 +9496,12 @@ class CodemanApp {
     }
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
+    // Deferred permission block: if a permission hook fired while this session wasn't active,
+    // render the inline block now that the user has switched to it.
+    if (this._pendingPermissionData?.sessionId === sessionId && TranscriptView._sessionId === sessionId) {
+      TranscriptView.setWorking(false);
+      TranscriptView._renderPermissionBlock(this._pendingPermissionData.data);
+    }
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
@@ -9769,6 +9783,7 @@ class CodemanApp {
     this.ralphClosedSessions.delete(sessionId);
     this.projectInsights.delete(sessionId);
     this.pendingHooks.delete(sessionId);
+    if (this._pendingPermissionData?.sessionId === sessionId) this._pendingPermissionData = null;
     this.tabAlerts.delete(sessionId);
     this.removeAttentionItemsForSession(sessionId);
     this.clearCountdownTimers(sessionId);
@@ -13282,8 +13297,21 @@ class CodemanApp {
       // Listen for messages from service worker (notification clicks)
       navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'notification-click') {
-          const { sessionId } = event.data;
+          const { sessionId, action } = event.data;
           if (sessionId && this.sessions.has(sessionId)) {
+            // Map push notification actions to permission responses
+            if (action === 'approve') {
+              this.sendPermissionResponse(sessionId, 'y');
+            } else if (action === 'deny') {
+              this.sendPermissionResponse(sessionId, 'n');
+            } else if (!action && this._pendingPermissionData?.sessionId === sessionId) {
+              // Notification body clicked (no action button) — show the permission block.
+              // selectSession early-returns if session is already active, so render here.
+              if (TranscriptView._sessionId === sessionId) {
+                TranscriptView.setWorking(false);
+                TranscriptView._renderPermissionBlock(this._pendingPermissionData.data);
+              }
+            }
             this.selectSession(sessionId);
           }
           window.focus();
