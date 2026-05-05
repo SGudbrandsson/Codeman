@@ -6473,6 +6473,9 @@ class CodemanApp {
       return;
     }
 
+    // Don't reconnect if auth has expired
+    if (this.authExpired) return;
+
     // Clear any pending reconnect timeout to prevent duplicate connections
     if (this.sseReconnectTimeout) {
       clearTimeout(this.sseReconnectTimeout);
@@ -6543,6 +6546,8 @@ class CodemanApp {
       if (this.sseReconnectTimeout) {
         clearTimeout(this.sseReconnectTimeout);
       }
+      // Don't schedule reconnect if auth has expired — circuit breaker handles it
+      if (this.authExpired) return;
       // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
       // Fast first retry (200ms) for server-restart case (COM deploy),
       // then ramp up for real network issues.
@@ -6615,10 +6620,11 @@ class CodemanApp {
         <div class="auth-expired-icon">&#x1f512;</div>
         <h2>Session Expired</h2>
         <p>Your authentication session has timed out.</p>
-        <button class="auth-expired-btn" onclick="location.reload()">Re-authenticate</button>
+        <button class="auth-expired-btn">Re-authenticate</button>
       </div>
     `;
     document.body.appendChild(overlay);
+    overlay.querySelector('.auth-expired-btn').addEventListener('click', () => location.reload());
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -8448,6 +8454,7 @@ class CodemanApp {
 
   setupOnlineDetection() {
     window.addEventListener('online', () => {
+      if (this.authExpired) return;
       this.isOnline = true;
       this.reconnectAttempts = 0;
       this.connectSSE();
@@ -8469,6 +8476,7 @@ class CodemanApp {
    * Fixes the "frozen tab" bug where terminal stops updating after switching away.
    */
   _onTabVisible() {
+    if (this.authExpired) return;
     if (!this.isOnline) return;
     const es = this.eventSource;
     if (!es || es.readyState === EventSource.CLOSED) {
@@ -20830,6 +20838,7 @@ class CodemanApp {
   }
 
   async fetchSystemStats() {
+    if (this.authExpired) return;
     // Skip polling when system stats display is hidden
     const statsEl = document.getElementById('headerSystemStats');
     if (!statsEl || statsEl.style.display === 'none') return;
@@ -24351,6 +24360,7 @@ const ActionDashboard = {
   },
 
   async refresh() {
+    if (window.app?.authExpired) return;
     // Fetch all three data sources in parallel
     const [sessRes, wiRes, wtRes] = await Promise.allSettled([
       fetch('/api/sessions').then(r => { if (typeof app !== 'undefined') app._checkStaleSessionData(r); return r.ok ? r.json() : []; }),
