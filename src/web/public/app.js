@@ -3102,6 +3102,7 @@ const TranscriptView = {
   // Periodic sync: catches missed SSE blocks by comparing against the backend transcript.
   // Runs every 30s. Only active when transcript view is visible and not mid-load.
   _periodicSync() {
+    if (window.app?.authExpired) return;
     if (!this._sessionId || !this._container) return;
     const sessionId = this._sessionId;
     const state = this._getState(sessionId);
@@ -6573,6 +6574,51 @@ class CodemanApp {
     for (const [event] of _SSE_HANDLER_MAP) {
       addListener(event, this._sseHandlerWrappers.get(event));
     }
+  }
+
+  /**
+   * Called when a 401 response is detected — session cookie has expired.
+   * Stops all pollers to prevent request storms and shows a re-auth overlay.
+   */
+  _onAuthExpired() {
+    // Stop SSE connection and prevent reconnect
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    if (this.sseReconnectTimeout) {
+      clearTimeout(this.sseReconnectTimeout);
+      this.sseReconnectTimeout = null;
+    }
+
+    // Stop system stats polling (2s interval)
+    this.stopSystemStatsPolling();
+
+    // Stop ActionDashboard polling (30s interval)
+    if (typeof ActionDashboard !== 'undefined') ActionDashboard.stopPolling();
+
+    this.setConnectionStatus('disconnected');
+
+    // Show session-expired overlay
+    this._showAuthExpiredOverlay();
+  }
+
+  _showAuthExpiredOverlay() {
+    // Prevent duplicate overlays
+    if (document.getElementById('authExpiredOverlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'authExpiredOverlay';
+    overlay.className = 'auth-expired-overlay';
+    overlay.innerHTML = `
+      <div class="auth-expired-content">
+        <div class="auth-expired-icon">&#x1f512;</div>
+        <h2>Session Expired</h2>
+        <p>Your authentication session has timed out.</p>
+        <button class="auth-expired-btn" onclick="location.reload()">Re-authenticate</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
   }
 
   // ═══════════════════════════════════════════════════════════════

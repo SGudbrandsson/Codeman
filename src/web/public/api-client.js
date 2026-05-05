@@ -22,6 +22,9 @@ Object.assign(CodemanApp.prototype, {
    */
   async _api(path, opts = {}) {
     const { method = 'GET', body, signal } = opts;
+    // Short-circuit all API calls while auth is expired — no point
+    // hitting the server when we know the session is gone.
+    if (this.authExpired) return null;
     const fetchOpts = { method, signal };
     if (body !== undefined) {
       fetchOpts.headers = { 'Content-Type': 'application/json' };
@@ -29,6 +32,10 @@ Object.assign(CodemanApp.prototype, {
     }
     try {
       const res = await fetch(path, fetchOpts);
+      if (res.status === 401 && !this.authExpired) {
+        this.authExpired = true;
+        this._onAuthExpired();
+      }
       return res;
     } catch {
       return null;
