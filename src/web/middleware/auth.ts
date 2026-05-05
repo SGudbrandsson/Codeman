@@ -150,7 +150,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
     // Auth failed — only count toward rate limit when credentials were actually
     // provided (brute-force attempt). Expired-session requests (no Authorization
     // header) should not trigger rate limiting.
-    if (auth) {
+    if (auth !== undefined) {
       authFailures.set(clientIp, failures + 1);
     }
 

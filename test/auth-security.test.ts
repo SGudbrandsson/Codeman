@@ -351,6 +351,9 @@ describe('Rate Limiting — credential-less requests', () => {
   });
 
   it('should still count requests WITH wrong credentials toward rate limit', async () => {
+    // The previous test ends with a successful auth that resets the failure
+    // counter for this IP (authFailures.delete). This test starts from 0.
+
     // Send 10 requests with wrong credentials
     for (let i = 0; i < 10; i++) {
       await fetch(`${rlBaseUrl}/api/status`, {
