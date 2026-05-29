@@ -4936,6 +4936,7 @@ class CodemanApp {
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
     this.flickerFilterTimeout = null;
+    this._flickerCycleStart = 0; // performance.now() when current buffering cycle began (bounds max hold)
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
@@ -5452,11 +5453,12 @@ class CodemanApp {
     // Load scrollback setting from localStorage (default 500)
     const scrollback = parseInt(localStorage.getItem('codeman-scrollback')) || DEFAULT_SCROLLBACK;
 
-    // Cap scrollback on mobile: each line adds to xterm-viewport scroll height.
-    // 500 lines × 10px font = 5000px tall scroll layer on a 900px screen.
-    // Cap at 200 lines to keep the native scroll layer manageable.
+    // Cap scrollback on mobile: each line adds to xterm-viewport scroll height,
+    // and on mobile we rely on the browser's native scroll layer (not xterm's own
+    // wheel handling), so a very tall buffer costs memory/jank. 1000 lines keeps
+    // it usable for scrolling back through a Claude session while staying bounded.
     const isMobile = MobileDetection.getDeviceType() !== 'desktop';
-    const MOBILE_SCROLLBACK_CAP = 200;
+    const MOBILE_SCROLLBACK_CAP = 1000;
     const effectiveScrollback = isMobile ? Math.min(scrollback, MOBILE_SCROLLBACK_CAP) : scrollback;
 
     this.terminal = new Terminal({
@@ -6002,6 +6004,10 @@ class CodemanApp {
     const isShellMode = session?.mode === 'shell';
     const hasCursorUpRedraw = !isShellMode && /\x1b\[\d{1,2}A/.test(data);
     if (hasCursorUpRedraw || (this.flickerFilterActive && !flickerFilterEnabled)) {
+      // Mark the start of a fresh buffering cycle so we can bound the total hold time.
+      if (!this.flickerFilterActive) {
+        this._flickerCycleStart = performance.now();
+      }
       this.flickerFilterActive = true;
       this.flickerFilterBuffer += data;
 
@@ -6011,6 +6017,21 @@ class CodemanApp {
       // session emitting terminal data faster than SYNC_WAIT_TIMEOUT_MS never flushes,
       // accumulating MBs in flickerFilterBuffer that freeze Chrome all at once.
       if (hasCursorUpRedraw) {
+        // Bound the total hold: a busy session emits cursor-up redraws faster than
+        // SYNC_WAIT_TIMEOUT_MS, so resetting the timer on every redraw starves the
+        // flush entirely — the buffer grows until the 256KB safety valve dumps it all
+        // at once, which reads as the terminal freezing then catching up in a janky
+        // burst (and stalls keystroke echo, since the echoed input line is itself a
+        // cursor-up redraw). Once we've withheld output for MAX_FLICKER_HOLD_MS, flush
+        // now instead of extending the deadline yet again.
+        if (performance.now() - this._flickerCycleStart >= MAX_FLICKER_HOLD_MS) {
+          if (this.flickerFilterTimeout) {
+            clearTimeout(this.flickerFilterTimeout);
+            this.flickerFilterTimeout = null;
+          }
+          this.flushFlickerBuffer();
+          return;
+        }
         if (this.flickerFilterTimeout) {
           clearTimeout(this.flickerFilterTimeout);
         }
