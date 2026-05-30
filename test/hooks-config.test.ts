@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateHooksConfig, writeHooksConfig } from '../src/hooks-config.js';
+import { generateHooksConfig, writeHooksConfig, installGlobalAskUserQuestionHook } from '../src/hooks-config.js';
 
 describe('generateHooksConfig', () => {
   it('should return an object with hooks key', () => {
@@ -752,5 +752,84 @@ describe('Hook Config Generation - Extended', () => {
     expect(stopHooks).toHaveLength(1);
     expect(stopHooks[0].matcher).toBeUndefined();
     expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+});
+
+describe('installGlobalAskUserQuestionHook', () => {
+  let tmpHome: string;
+  let savedHome: string | undefined;
+  const settingsPath = () => join(tmpHome, '.claude', 'settings.json');
+
+  beforeEach(() => {
+    tmpHome = join(tmpdir(), 'codeman-globalhook-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    mkdirSync(tmpHome, { recursive: true });
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpHome; // os.homedir() respects $HOME on POSIX
+    delete process.env.CODEMAN_NO_GLOBAL_HOOK;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('creates ~/.claude/settings.json with the AskUserQuestion PreToolUse hook when none exists', async () => {
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion');
+    expect(parsed.hooks.PreToolUse[0].hooks[0].command).toContain('ask_user_question');
+  });
+
+  it('is idempotent — a second call does not duplicate the hook', async () => {
+    await installGlobalAskUserQuestionHook();
+    const r2 = await installGlobalAskUserQuestionHook();
+    expect(r2.installed).toBe(false);
+    expect(r2.reason).toBe('already present');
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it('preserves existing settings and other hooks (never clobbers)', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        model: 'opus',
+        permissions: { allow: ['Read'] },
+        hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo hi' }] }] },
+      })
+    );
+
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.model).toBe('opus');
+    expect(parsed.permissions).toEqual({ allow: ['Read'] });
+    // existing Bash hook kept, AskUserQuestion added
+    const matchers = parsed.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher);
+    expect(matchers).toContain('Bash');
+    expect(matchers).toContain('AskUserQuestion');
+  });
+
+  it('aborts without overwriting when the existing file is unparseable', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(settingsPath(), 'not valid json {{{');
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(false);
+    expect(r.reason).toContain('unparseable');
+    // file left exactly as-is
+    expect(readFileSync(settingsPath(), 'utf-8')).toBe('not valid json {{{');
+  });
+
+  it('respects the CODEMAN_NO_GLOBAL_HOOK opt-out', async () => {
+    process.env.CODEMAN_NO_GLOBAL_HOOK = '1';
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(false);
+    expect(existsSync(settingsPath())).toBe(false);
   });
 });

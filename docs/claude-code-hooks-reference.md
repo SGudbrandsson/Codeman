@@ -583,6 +583,43 @@ Use `/hooks` command to view registered hooks and make changes.
 
 ---
 
+## Codeman: the AskUserQuestion live-question hook
+
+Codeman installs one extra `PreToolUse` hook, matching the built-in
+`AskUserQuestion` tool, so that when Claude poses an interactive question the full
+question text **and option descriptions** appear live in the web **transcript**
+view — readable and answerable even on mobile, where the terminal is hard to
+scroll. (Without it, that supporting info only exists in the raw terminal TUI and
+in the transcript JSONL, which isn't written until the question is answered.)
+
+**Where it's installed (two layers, both idempotent):**
+
+- **Globally**, in `~/.claude/settings.json` — written once when the Codeman web
+  server first starts (and re-checked on every start). This covers *all* Codeman
+  sessions, including worktrees created before the feature existed, with no
+  per-worktree setup or session restart.
+- **Per worktree**, in `.claude/settings.local.json` — written at session creation
+  by `writeHooksConfig()`, alongside the notification/stop hooks.
+
+Both layers emit the *identical* command, so Claude Code's automatic
+deduplication (see "Identical commands deduplicated automatically" above) runs it
+only once; the web client additionally de-duplicates by `tool_use_id`.
+
+**Safe by design:**
+
+- The hook posts to `$CODEMAN_API_URL/api/hook-event` using the per-session
+  `$CODEMAN_API_URL` / `$CODEMAN_SESSION_ID` env vars that Codeman sets. In any
+  **non-Codeman** Claude session those vars are unset, so the `curl` no-ops
+  (`… || true`) — installing it globally is harmless to your other Claude usage.
+- The global installer never clobbers: it merges into existing settings,
+  preserves all other keys and any existing `PreToolUse` hooks, is idempotent, and
+  **aborts without writing** if `~/.claude/settings.json` exists but is unparseable.
+
+**Opt out:** set `CODEMAN_NO_GLOBAL_HOOK=1` before starting the server to skip the
+global install (the per-worktree hook still applies to new sessions).
+
+---
+
 ## Security Best Practices
 
 1. **Validate and sanitize inputs** - Never trust input data blindly
