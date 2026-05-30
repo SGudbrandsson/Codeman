@@ -347,8 +347,15 @@ const KeyboardHandler = {
             app.fitAddon.fit();
           } catch {}
         app.terminal.scrollToBottom();
-        // Send resize to server so PTY dimensions match xterm
-        this._sendTerminalResize();
+        // NOTE: we deliberately do NOT send a resize (SIGWINCH) to the server on
+        // keyboard show/hide. The viewport is the same size before and after the
+        // keyboard, and on mobile the user types in the compose bar (not Claude's
+        // terminal input line), so Claude doesn't need to know about the transient
+        // keyboard. Each SIGWINCH makes Claude's classic renderer REPRINT its frame,
+        // which appends a duplicate copy into the scrollback (open + close = the
+        // screen rendered twice). Local fit() only changes rows, not cols, so there
+        // is no reflow. Genuine size changes (orientation, window) still go through
+        // the throttled resize handler in app.js.
       }
     }, 150);
 
@@ -388,8 +395,10 @@ const KeyboardHandler = {
             app.terminal.scrollToLine(newBase + Math.max(0, offsetFromBase));
           }
         }
-        // Send resize to server to restore full terminal size
-        this._sendTerminalResize();
+        // NOTE: intentionally NO server resize here — see onKeyboardShow(). Sending
+        // SIGWINCH on keyboard hide made Claude's classic renderer reprint a duplicate
+        // frame into the scrollback. The terminal returns to its pre-keyboard size, so
+        // no resize is needed; genuine resizes are handled by app.js throttledResize.
       }
     }, 100);
 
