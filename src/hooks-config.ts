@@ -12,10 +12,10 @@
  * - `updateCaseEnvVars(casePath, envVars)` — merges env vars into settings
  *
  * Hook events generated: `idle_prompt`, `permission_prompt`, `elicitation_dialog`,
- * `stop`, `teammate_idle`, `task_completed`
+ * `ask_user_question`, `stop`, `teammate_idle`, `task_completed`
  *
- * Hook categories: `Notification` (3 matchers), `Stop` (1), `TeammateIdle` (1),
- * `TaskCompleted` (1)
+ * Hook categories: `Notification` (3 matchers), `PreToolUse` (1: AskUserQuestion),
+ * `Stop` (1), `TeammateIdle` (1), `TaskCompleted` (1)
  *
  * @dependencies types (HookEventType), config/auth-config (HOOK_TIMEOUT_MS)
  * @consumedby web/server (session creation), session-cli-builder (env setup)
@@ -63,6 +63,20 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
         {
           matcher: 'elicitation_dialog',
           hooks: [{ type: 'command', command: curlCmd('elicitation_dialog'), timeout: HOOK_TIMEOUT_MS }],
+        },
+      ],
+      // PreToolUse for AskUserQuestion fires the moment Claude poses an interactive
+      // question — BEFORE the user answers — and delivers the full structured
+      // tool_input.questions (question text + option labels AND descriptions) on
+      // stdin. This is the only live channel carrying the supporting info; the
+      // transcript JSONL doesn't get the tool_use block until the turn flushes
+      // (i.e. not while the question is pending), and the elicitation_dialog
+      // Notification is MCP-only. The web client renders this into the transcript
+      // view so the question is readable/answerable live, including on mobile.
+      PreToolUse: [
+        {
+          matcher: 'AskUserQuestion',
+          hooks: [{ type: 'command', command: curlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
         },
       ],
       Stop: [

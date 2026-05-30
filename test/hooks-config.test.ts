@@ -32,22 +32,43 @@ describe('generateHooksConfig', () => {
   it('should configure idle_prompt matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const idleHook = notifHooks.find(h => h.matcher === 'idle_prompt');
+    const idleHook = notifHooks.find((h) => h.matcher === 'idle_prompt');
     expect(idleHook).toBeDefined();
   });
 
   it('should configure permission_prompt matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const permHook = notifHooks.find(h => h.matcher === 'permission_prompt');
+    const permHook = notifHooks.find((h) => h.matcher === 'permission_prompt');
     expect(permHook).toBeDefined();
   });
 
   it('should configure elicitation_dialog matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const elicitHook = notifHooks.find(h => h.matcher === 'elicitation_dialog');
+    const elicitHook = notifHooks.find((h) => h.matcher === 'elicitation_dialog');
     expect(elicitHook).toBeDefined();
+  });
+
+  it('should configure a PreToolUse hook matching AskUserQuestion', () => {
+    const config = generateHooksConfig();
+    const pre = config.hooks.PreToolUse as Array<{ matcher?: string }>;
+    expect(pre).toBeInstanceOf(Array);
+    expect(pre).toHaveLength(1);
+    expect(pre[0].matcher).toBe('AskUserQuestion');
+  });
+
+  it('PreToolUse AskUserQuestion hook posts the ask_user_question event and forwards stdin', () => {
+    const config = generateHooksConfig();
+    const pre = config.hooks.PreToolUse as Array<{ hooks: Array<{ command: string; type: string; timeout: number }> }>;
+    const cmd = pre[0].hooks[0].command;
+    expect(cmd).toContain('"event":"ask_user_question"');
+    expect(cmd).toContain('HOOK_DATA=$(cat'); // forwards full stdin (incl. tool_input.questions, tool_use_id)
+    expect(cmd).toContain('--data @-');
+    expect(cmd).toContain('$CODEMAN_API_URL');
+    expect(cmd).toContain('|| true');
+    expect(pre[0].hooks[0].type).toBe('command');
+    expect(pre[0].hooks[0].timeout).toBe(10000);
   });
 
   it('should use env vars in curl commands (not hardcoded URLs)', () => {
@@ -141,12 +162,19 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks.Stop).toHaveLength(1);
   });
 
+  it('should write the PreToolUse AskUserQuestion hook to disk', async () => {
+    await writeHooksConfig(testDir);
+    const parsed = JSON.parse(readFileSync(join(testDir, '.claude', 'settings.local.json'), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion');
+  });
+
   it('should merge with existing settings.local.json', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
       join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ existingKey: 'existingValue', permissions: { allow: ['Read'] } }, null, 2),
+      JSON.stringify({ existingKey: 'existingValue', permissions: { allow: ['Read'] } }, null, 2)
     );
 
     await writeHooksConfig(testDir);
@@ -160,10 +188,7 @@ describe('writeHooksConfig', () => {
   it('should overwrite existing hooks key', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(
-      join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ hooks: { oldHook: [] } }, null, 2),
-    );
+    writeFileSync(join(claudeDir, 'settings.local.json'), JSON.stringify({ hooks: { oldHook: [] } }, null, 2));
 
     await writeHooksConfig(testDir);
 
@@ -641,7 +666,7 @@ describe('Hook Config Generation - Extended', () => {
   it('should include all event types', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const matchers = notifHooks.map(n => n.matcher);
+    const matchers = notifHooks.map((n) => n.matcher);
     expect(matchers).toContain('idle_prompt');
     expect(matchers).toContain('permission_prompt');
     expect(matchers).toContain('elicitation_dialog');
@@ -694,7 +719,10 @@ describe('Hook Config Generation - Extended', () => {
 
   it('should have consistent structure across all notification hooks', () => {
     const config = generateHooksConfig();
-    const notifHooks = config.hooks.Notification as Array<{ matcher: string; hooks: Array<{ type: string; command: string; timeout: number }> }>;
+    const notifHooks = config.hooks.Notification as Array<{
+      matcher: string;
+      hooks: Array<{ type: string; command: string; timeout: number }>;
+    }>;
 
     for (const hook of notifHooks) {
       expect(hook.matcher).toBeDefined();
