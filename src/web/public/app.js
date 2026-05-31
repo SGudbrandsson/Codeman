@@ -3361,6 +3361,16 @@ const TranscriptView = {
     }
   },
 
+  /** Removes the most recent optimistic user bubble (rollback when a send fails).
+   *  Only touches DOM marked data-optimistic; leaves real (SSE-reconciled) blocks alone. */
+  removeLastOptimistic() {
+    if (!this._container) return;
+    const bubbles = this._container.querySelectorAll('[data-optimistic="true"]');
+    const last = bubbles[bubbles.length - 1];
+    if (last) last.remove();
+    this._pendingOptimisticText = null;
+  },
+
   /** Renders an AskUserQuestion tool block as an inline interactive question.
    *
    * Supports:
@@ -21317,50 +21327,23 @@ const InputPanel = {
     // Single line + \r — no multi-line tmux issues
     const inputString = sendText + '\r';
 
-    try {
-      await app.sendInput(inputString, _sendSessionId);
-      // Shell sessions write directly to PTY — no Ink, no busy detection,
-      // no need to retry Enter. Skip the polling entirely.
-      const _sendSession = app.sessions?.get(_sendSessionId);
-      if (_sendSession?.mode !== 'shell') {
-        // Backend now awaits tmux completion before responding, so we know Enter
-        // has been dispatched by the time we reach here.
-        // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
-        // actually received the input. Uses real-time status/isWorking only (NOT
-        // displayStatus which has a 4s hide-debounce that causes false positives).
-        let _sendChecks = 0;
-        const _sendCheckTimer = setInterval(() => {
-          _sendChecks++;
-          const s = app.sessions?.get(_sendSessionId);
-          const isBusy = s?.status === 'busy' || s?.isWorking;
-          if (isBusy) { clearInterval(_sendCheckTimer); return; }
-          if (_sendChecks >= 20) {
-            clearInterval(_sendCheckTimer);
-            // Session still idle 3 s after tmux confirmed Enter was sent —
-            // Enter was likely dropped; resend it once as a fallback.
-            const sNow = app.sessions?.get(_sendSessionId);
-            const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
-            if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
-          }
-        }, 150);
-      }
-    } catch (err) {
-      // Send failed — restore the user's input so nothing is lost.
-      console.error('[InputPanel] send failed, restoring input:', err);
-      ta.value = text;
-      this._restoreImages(images.map(img => img.path));
-      this._autoGrow(ta);
-      if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
-      return; // Don't clear draft or show optimistic UI
-    }
+    // ---- Optimistic UI (Lever 1) ----
+    // Everything below runs IMMEDIATELY, before/without awaiting the POST, so the
+    // compose bar feels instant regardless of tmux send-keys timing. The actual
+    // network send is fired-and-forgotten afterward; its .catch() rolls the UI back
+    // if the POST fails. We capture the snapshot needed for rollback first.
+    const _sentImagePaths = images.map(img => img.path);
+    let _optimisticAppended = false;
 
     // Show user message immediately in transcript view (optimistic UI).
     // Pass the full sendText (with [Image:] refs) so user bubble renders previews.
+    // Cross-session guard: only render for the session currently in view.
     if (sendText && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
       if (sendText.trim() === '/clear') {
         TranscriptView.clearOnly();
       } else {
         TranscriptView.appendOptimistic(sendText);
+        _optimisticAppended = true;
       }
     }
 
@@ -21385,6 +21368,57 @@ const InputPanel = {
     this._files = this._files.filter(f => !f.path);
     this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
     this._autoGrow(ta);
+
+    // Fire the POST without awaiting — perceived latency is now decoupled from the
+    // tmux send-keys sequence. The fallback-Enter poller runs only on success
+    // (chained via .then), and rollback runs on failure (chained via .catch).
+    app.sendInput(inputString, _sendSessionId)
+      .then(() => {
+        // Shell sessions write directly to PTY — no Ink, no busy detection,
+        // no need to retry Enter. Skip the polling entirely.
+        const _sendSession = app.sessions?.get(_sendSessionId);
+        if (_sendSession?.mode !== 'shell') {
+          // Backend awaits tmux completion before responding, so we know Enter
+          // has been dispatched by the time this resolves.
+          // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
+          // actually received the input. Uses real-time status/isWorking only (NOT
+          // displayStatus which has a 4s hide-debounce that causes false positives).
+          let _sendChecks = 0;
+          const _sendCheckTimer = setInterval(() => {
+            _sendChecks++;
+            const s = app.sessions?.get(_sendSessionId);
+            const isBusy = s?.status === 'busy' || s?.isWorking;
+            if (isBusy) { clearInterval(_sendCheckTimer); return; }
+            if (_sendChecks >= 20) {
+              clearInterval(_sendCheckTimer);
+              // Session still idle 3 s after tmux confirmed Enter was sent —
+              // Enter was likely dropped; resend it once as a fallback.
+              const sNow = app.sessions?.get(_sendSessionId);
+              const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
+              if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
+            }
+          }, 150);
+        }
+      })
+      .catch((err) => {
+        // Send failed — roll the optimistic UI back and restore the user's input
+        // so nothing is lost. Only restore the textarea if the user hasn't already
+        // started typing a new message into it.
+        console.error('[InputPanel] send failed, restoring input:', err);
+        const taNow = this._getTextarea();
+        if (taNow && !taNow.value.trim()) {
+          taNow.value = text;
+          this._autoGrow(taNow);
+        }
+        this._restoreImages(_sentImagePaths);
+        // Remove the optimistic bubble we appended, if the same session is still in view.
+        if (_optimisticAppended && typeof TranscriptView !== 'undefined'
+            && TranscriptView._sessionId === _sendSessionId
+            && typeof TranscriptView.removeLastOptimistic === 'function') {
+          TranscriptView.removeLastOptimistic();
+        }
+        if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
+      });
   },
 
   clear() {
