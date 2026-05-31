@@ -1133,6 +1133,11 @@ main() {
     echo -e "${GREEN}${BOLD}  Codeman installed successfully!${NC}"
     echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
+    echo -e "  ${DIM}On first start, Codeman installs an AskUserQuestion hook into${NC}"
+    echo -e "  ${DIM}~/.claude/settings.json so interactive questions appear live in${NC}"
+    echo -e "  ${DIM}the web transcript (readable/answerable on mobile). It only acts${NC}"
+    echo -e "  ${DIM}inside Codeman sessions; opt out with CODEMAN_NO_GLOBAL_HOOK=1.${NC}"
+    echo ""
 
     local launch_choice=""
     local has_systemd=false

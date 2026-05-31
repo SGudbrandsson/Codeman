@@ -68,6 +68,7 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
     'hook_event_name',
     'tool_name',
     'tool_input',
+    'tool_use_id', // AskUserQuestion: lets the web client dedup the live hook render against the later transcript tool_use block
     'session_id',
     'cwd',
     'permission_mode',

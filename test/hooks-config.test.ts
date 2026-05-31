@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateHooksConfig, writeHooksConfig } from '../src/hooks-config.js';
+import { generateHooksConfig, writeHooksConfig, installGlobalAskUserQuestionHook } from '../src/hooks-config.js';
 
 describe('generateHooksConfig', () => {
   it('should return an object with hooks key', () => {
@@ -32,22 +32,43 @@ describe('generateHooksConfig', () => {
   it('should configure idle_prompt matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const idleHook = notifHooks.find(h => h.matcher === 'idle_prompt');
+    const idleHook = notifHooks.find((h) => h.matcher === 'idle_prompt');
     expect(idleHook).toBeDefined();
   });
 
   it('should configure permission_prompt matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const permHook = notifHooks.find(h => h.matcher === 'permission_prompt');
+    const permHook = notifHooks.find((h) => h.matcher === 'permission_prompt');
     expect(permHook).toBeDefined();
   });
 
   it('should configure elicitation_dialog matcher', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const elicitHook = notifHooks.find(h => h.matcher === 'elicitation_dialog');
+    const elicitHook = notifHooks.find((h) => h.matcher === 'elicitation_dialog');
     expect(elicitHook).toBeDefined();
+  });
+
+  it('should configure a PreToolUse hook matching AskUserQuestion', () => {
+    const config = generateHooksConfig();
+    const pre = config.hooks.PreToolUse as Array<{ matcher?: string }>;
+    expect(pre).toBeInstanceOf(Array);
+    expect(pre).toHaveLength(1);
+    expect(pre[0].matcher).toBe('AskUserQuestion');
+  });
+
+  it('PreToolUse AskUserQuestion hook posts the ask_user_question event and forwards stdin', () => {
+    const config = generateHooksConfig();
+    const pre = config.hooks.PreToolUse as Array<{ hooks: Array<{ command: string; type: string; timeout: number }> }>;
+    const cmd = pre[0].hooks[0].command;
+    expect(cmd).toContain('"event":"ask_user_question"');
+    expect(cmd).toContain('HOOK_DATA=$(cat'); // forwards full stdin (incl. tool_input.questions, tool_use_id)
+    expect(cmd).toContain('--data @-');
+    expect(cmd).toContain('$CODEMAN_API_URL');
+    expect(cmd).toContain('|| true');
+    expect(pre[0].hooks[0].type).toBe('command');
+    expect(pre[0].hooks[0].timeout).toBe(10000);
   });
 
   it('should use env vars in curl commands (not hardcoded URLs)', () => {
@@ -141,12 +162,19 @@ describe('writeHooksConfig', () => {
     expect(parsed.hooks.Stop).toHaveLength(1);
   });
 
+  it('should write the PreToolUse AskUserQuestion hook to disk', async () => {
+    await writeHooksConfig(testDir);
+    const parsed = JSON.parse(readFileSync(join(testDir, '.claude', 'settings.local.json'), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion');
+  });
+
   it('should merge with existing settings.local.json', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
     writeFileSync(
       join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ existingKey: 'existingValue', permissions: { allow: ['Read'] } }, null, 2),
+      JSON.stringify({ existingKey: 'existingValue', permissions: { allow: ['Read'] } }, null, 2)
     );
 
     await writeHooksConfig(testDir);
@@ -160,10 +188,7 @@ describe('writeHooksConfig', () => {
   it('should overwrite existing hooks key', async () => {
     const claudeDir = join(testDir, '.claude');
     mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(
-      join(claudeDir, 'settings.local.json'),
-      JSON.stringify({ hooks: { oldHook: [] } }, null, 2),
-    );
+    writeFileSync(join(claudeDir, 'settings.local.json'), JSON.stringify({ hooks: { oldHook: [] } }, null, 2));
 
     await writeHooksConfig(testDir);
 
@@ -641,7 +666,7 @@ describe('Hook Config Generation - Extended', () => {
   it('should include all event types', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ matcher?: string }>;
-    const matchers = notifHooks.map(n => n.matcher);
+    const matchers = notifHooks.map((n) => n.matcher);
     expect(matchers).toContain('idle_prompt');
     expect(matchers).toContain('permission_prompt');
     expect(matchers).toContain('elicitation_dialog');
@@ -694,7 +719,10 @@ describe('Hook Config Generation - Extended', () => {
 
   it('should have consistent structure across all notification hooks', () => {
     const config = generateHooksConfig();
-    const notifHooks = config.hooks.Notification as Array<{ matcher: string; hooks: Array<{ type: string; command: string; timeout: number }> }>;
+    const notifHooks = config.hooks.Notification as Array<{
+      matcher: string;
+      hooks: Array<{ type: string; command: string; timeout: number }>;
+    }>;
 
     for (const hook of notifHooks) {
       expect(hook.matcher).toBeDefined();
@@ -724,5 +752,84 @@ describe('Hook Config Generation - Extended', () => {
     expect(stopHooks).toHaveLength(1);
     expect(stopHooks[0].matcher).toBeUndefined();
     expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+});
+
+describe('installGlobalAskUserQuestionHook', () => {
+  let tmpHome: string;
+  let savedHome: string | undefined;
+  const settingsPath = () => join(tmpHome, '.claude', 'settings.json');
+
+  beforeEach(() => {
+    tmpHome = join(tmpdir(), 'codeman-globalhook-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    mkdirSync(tmpHome, { recursive: true });
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpHome; // os.homedir() respects $HOME on POSIX
+    delete process.env.CODEMAN_NO_GLOBAL_HOOK;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('creates ~/.claude/settings.json with the AskUserQuestion PreToolUse hook when none exists', async () => {
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion');
+    expect(parsed.hooks.PreToolUse[0].hooks[0].command).toContain('ask_user_question');
+  });
+
+  it('is idempotent — a second call does not duplicate the hook', async () => {
+    await installGlobalAskUserQuestionHook();
+    const r2 = await installGlobalAskUserQuestionHook();
+    expect(r2.installed).toBe(false);
+    expect(r2.reason).toBe('already present');
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it('preserves existing settings and other hooks (never clobbers)', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        model: 'opus',
+        permissions: { allow: ['Read'] },
+        hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo hi' }] }] },
+      })
+    );
+
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    expect(parsed.model).toBe('opus');
+    expect(parsed.permissions).toEqual({ allow: ['Read'] });
+    // existing Bash hook kept, AskUserQuestion added
+    const matchers = parsed.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher);
+    expect(matchers).toContain('Bash');
+    expect(matchers).toContain('AskUserQuestion');
+  });
+
+  it('aborts without overwriting when the existing file is unparseable', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(settingsPath(), 'not valid json {{{');
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(false);
+    expect(r.reason).toContain('unparseable');
+    // file left exactly as-is
+    expect(readFileSync(settingsPath(), 'utf-8')).toBe('not valid json {{{');
+  });
+
+  it('respects the CODEMAN_NO_GLOBAL_HOOK opt-out', async () => {
+    process.env.CODEMAN_NO_GLOBAL_HOOK = '1';
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(false);
+    expect(existsSync(settingsPath())).toBe(false);
   });
 });

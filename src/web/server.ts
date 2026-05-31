@@ -47,6 +47,7 @@ import {
   type ActiveBashTool,
 } from '../session.js';
 import type { ClaudeMode } from '../types.js';
+import { installGlobalAskUserQuestionHook } from '../hooks-config.js';
 import type { SessionState } from '../types/session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
@@ -2946,6 +2947,25 @@ export class WebServer extends EventEmitter {
 
     // Set API URL for child processes (MCP server, spawned sessions)
     process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;
+
+    // Ensure the AskUserQuestion PreToolUse hook is installed in the user's global
+    // ~/.claude/settings.json so every Codeman session (incl. pre-existing worktrees)
+    // surfaces interactive questions live in the transcript. Idempotent + safe;
+    // opt out with CODEMAN_NO_GLOBAL_HOOK=1. Skipped in test mode.
+    if (!this.testMode) {
+      installGlobalAskUserQuestionHook()
+        .then((r) => {
+          if (r.installed) {
+            console.log('✓ Installed global AskUserQuestion hook in ~/.claude/settings.json');
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            '[hooks] global AskUserQuestion hook not installed:',
+            err instanceof Error ? err.message : String(err)
+          );
+        });
+    }
 
     // Start scheduled runs cleanup timer
     this.cleanup.setInterval(

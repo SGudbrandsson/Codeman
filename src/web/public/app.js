@@ -3061,6 +3061,10 @@ const TranscriptView = {
   _container: null,
   _sessionId: null,
   _pendingToolUses: {},
+  // tool_use ids of AskUserQuestion prompts already surfaced live from a PreToolUse
+  // hook. Used to dedup the later JSONL tool_use block and suppress its orphan
+  // tool_result (the live widget is removed on answer). Cleared on load().
+  _auqHandledIds: new Set(),
   _loadGen: 0,       // incremented each load(); SSE blocks check this to avoid races
   _compactingEl: null,   // DOM ref to the animated compacting spinner pill
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
@@ -3170,6 +3174,7 @@ const TranscriptView = {
   async load(sessionId, opts = {}) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
+    this._auqHandledIds = new Set();
     this._lastSkillLaunch = null;
     clearTimeout(this._workingDebounce);
     this._workingDebounce = null;
@@ -3239,6 +3244,7 @@ const TranscriptView = {
         this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
+        this._auqHandledIds = new Set();
         this._lastSkillLaunch = null;
         // If a /clear is in progress (_clearPending), the backend may still be serving
         // the old conversation's blocks — the new conversation UUID hasn't been registered
@@ -3509,6 +3515,45 @@ const TranscriptView = {
 
     renderQuestion(0);
     return el;
+  },
+
+  /** True if an AskUserQuestion widget with this tool_use id is currently in the DOM. */
+  _auqElExists(id) {
+    if (!this._container || !id) return false;
+    const blocks = this._container.querySelectorAll('.tv-auq-block');
+    for (const b of blocks) {
+      if (b.dataset.toolId === id) return true;
+    }
+    return false;
+  },
+
+  /**
+   * Render an AskUserQuestion live from a PreToolUse hook, BEFORE its tool_use
+   * block lands in the transcript JSONL (which doesn't happen while the question
+   * is pending). This is what makes the question + supporting info readable and
+   * answerable in the transcript view — including on mobile, where the terminal
+   * is hard to scroll. Deduped against the later JSONL block via _auqHandledIds.
+   * Returns true if rendered (or already shown), false if the transcript view
+   * isn't currently showing this session.
+   */
+  appendAskUserQuestionFromHook(sessionId, questions, toolId) {
+    if (!this._container || this._sessionId !== sessionId) return false;
+    if (!Array.isArray(questions) || questions.length === 0) return false;
+    const transcriptEl = document.getElementById('transcriptView');
+    if (transcriptEl && transcriptEl.style.display === 'none') return false;
+
+    const id = toolId || ('auq-live-' + String(questions[0]?.header || questions[0]?.question || '').slice(0, 48));
+    this._auqHandledIds.add(id);
+    if (this._auqElExists(id)) return true; // hook fired twice — already shown
+
+    const block = { type: 'tool_use', name: 'AskUserQuestion', id, input: { questions } };
+    const placeholder = this._container.querySelector('.tv-placeholder');
+    if (placeholder) placeholder.remove();
+    const el = this._renderAskUserQuestionBlock(block);
+    el.dataset.toolId = id;
+    this._container.appendChild(el);
+    this._scrollToBottom(false);
+    return true;
   },
 
   append(block) {
@@ -4050,6 +4095,9 @@ const TranscriptView = {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
       if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
+        // Already surfaced live from a PreToolUse hook (and possibly already
+        // answered/removed) — don't render a duplicate when the JSONL catches up.
+        if (block.id && this._auqHandledIds.has(block.id)) return;
         el = this._renderAskUserQuestionBlock(block);
         el.dataset.toolId = block.id;
         this._container.appendChild(el);
@@ -4063,6 +4111,13 @@ const TranscriptView = {
       const pendingEl = block.toolUseId
         ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
         : null;
+      // AskUserQuestion surfaced live from a hook: remove the inline widget if it's
+      // still showing, and never fall through to render an orphan tool_result row.
+      if (block.toolUseId && this._auqHandledIds.has(block.toolUseId)) {
+        if (pendingEl) pendingEl.remove();
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
       // Detect skill launches — render a pill instead of a tool wrapper row.
       const skillMatch = typeof block.content === 'string' && block.content.match(/^Launching skill: (.+)/);
       if (skillMatch) {
@@ -7952,7 +8007,12 @@ class CodemanApp {
       title: q.header || 'Question',
       message: q.question || 'Claude is asking a question',
     });
-    // The inline tv-auq-block in TranscriptView handles all rendering — no panel needed.
+    // Surface the question live in the transcript view — full text + option
+    // descriptions, scrollable on mobile, answerable inline. The transcript JSONL
+    // won't carry the tool_use block while the question is still pending, so this
+    // live PreToolUse hook is the only way to show it now (deduped against the
+    // eventual JSONL block via TranscriptView._auqHandledIds).
+    TranscriptView.appendAskUserQuestionFromHook(data.sessionId, questions, data.tool_use_id);
   }
 
   _onHookStop(data) {
