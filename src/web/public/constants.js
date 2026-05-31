@@ -42,7 +42,7 @@ function urlBase64ToUint8Array(base64String) {
 // ═══════════════════════════════════════════════════════════════
 
 // Default terminal scrollback (can be changed via settings)
-const DEFAULT_SCROLLBACK = 500;
+const DEFAULT_SCROLLBACK = 5000;
 
 // Timing constants
 const STUCK_THRESHOLD_DEFAULT_MS = 600000;  // 10 minutes - default for stuck detection
@@ -53,8 +53,9 @@ const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notificati
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
-const TERMINAL_TAIL_SIZE = 128 * 1024;      // 128KB tail for initial load
+const TERMINAL_TAIL_SIZE = 512 * 1024;      // 512KB tail for initial load (~5k lines, matches scrollback capacity; server keeps 2MB/session)
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
+const MAX_FLICKER_HOLD_MS = 150;            // Max time the flicker filter may withhold output before forcing a flush (prevents timer-reset starvation under sustained Ink redraws)
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 
 // Z-index base values for layered floating windows

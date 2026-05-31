@@ -42,6 +42,7 @@ import {
 } from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
+import { planSendKeys } from './utils/tmux-send-keys-plan.js';
 import type {
   TerminalMultiplexer,
   MuxSession,
@@ -1306,39 +1307,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     try {
-      const hasCarriageReturn = input.includes('\r');
-      // Split on \n to handle multi-line text. Each \n becomes a C-j (Ctrl+J) in
-      // Claude's input buffer, which inserts a line break without submitting the prompt.
-      // Ink (Claude CLI's terminal framework) interprets C-j as newline-in-input.
-      const lines = input.replace(/\r/g, '').split('\n');
+      // Build the ordered send-keys sequence. The planner preserves spaces (a lone
+      // " " is a real keystroke, e.g. toggling a Claude Code selection menu item) —
+      // do NOT reintroduce trimming here. See src/utils/tmux-send-keys-plan.ts.
+      const steps = planSendKeys(input);
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trimEnd();
-        const isLastLine = i === lines.length - 1;
-
-        if (line) {
-          // Send text first, then a short delay so Ink can process it before Enter/C-j.
-          await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(line)}`, {
+      for (const step of steps) {
+        if (step.type === 'literal') {
+          await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(step.text)}`, {
             timeout: EXEC_TIMEOUT_MS,
           });
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-
-        if (!isLastLine) {
-          // Line break — send C-j (Ctrl+J = LF) to insert newline in Claude's input buffer
-          await execAsync(`tmux send-keys -t "${session.muxName}" C-j`, {
+        } else if (step.type === 'key') {
+          await execAsync(`tmux send-keys -t "${session.muxName}" ${step.key}`, {
             timeout: EXEC_TIMEOUT_MS,
           });
-          await new Promise((resolve) => setTimeout(resolve, 50));
+        } else {
+          // Settle delay so Ink can process the previous piece before the next.
+          await new Promise((resolve) => setTimeout(resolve, step.ms));
         }
-      }
-
-      if (hasCarriageReturn) {
-        // Small delay before Enter so Ink has time to process the final line of text
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
       }
 
       return true;
