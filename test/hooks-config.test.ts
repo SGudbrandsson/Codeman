@@ -832,4 +832,71 @@ describe('installGlobalAskUserQuestionHook', () => {
     expect(r.installed).toBe(false);
     expect(existsSync(settingsPath())).toBe(false);
   });
+
+  it('adds a global Notification idle_prompt hook pointing at /api/hook-event', async () => {
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+    expect(idle.hooks[0].command).toContain('/api/hook-event');
+    expect(idle.hooks[0].command).toContain('"idle_prompt"');
+  });
+
+  it('is idempotent on the Notification idle_prompt hook — a second call does not duplicate it', async () => {
+    await installGlobalAskUserQuestionHook();
+    await installGlobalAskUserQuestionHook();
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    const idleEntries = parsed.hooks.Notification.filter((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idleEntries).toHaveLength(1);
+  });
+
+  it('preserves an unrelated pre-existing Notification entry (e.g. workmux) unchanged', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    const workmuxEntry = {
+      matcher: 'permission_prompt|elicitation_dialog',
+      hooks: [{ type: 'command', command: 'workmux set-window-status waiting' }],
+    };
+    writeFileSync(settingsPath(), JSON.stringify({ hooks: { Notification: [workmuxEntry] } }));
+
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    // workmux entry untouched + a separate idle_prompt entry appended
+    expect(parsed.hooks.Notification).toHaveLength(2);
+    const kept = parsed.hooks.Notification.find(
+      (e: { matcher?: string }) => e.matcher === 'permission_prompt|elicitation_dialog'
+    );
+    expect(kept).toEqual(workmuxEntry);
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+  });
+
+  it('completes a partial install — adds idle_prompt when only the AskUserQuestion PreToolUse hook is present', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'AskUserQuestion',
+              hooks: [{ type: 'command', command: 'curl ... ask_user_question' }],
+            },
+          ],
+        },
+      })
+    );
+
+    const r = await installGlobalAskUserQuestionHook();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    // PreToolUse not duplicated
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    // idle_prompt added
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+  });
 });

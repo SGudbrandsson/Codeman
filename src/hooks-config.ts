@@ -167,10 +167,15 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
 }
 
 /**
- * Idempotently install the AskUserQuestion PreToolUse hook into the user's GLOBAL
- * `~/.claude/settings.json`, so EVERY Codeman-managed session — including
- * pre-existing worktrees that never had the hook written — surfaces interactive
- * questions live in the web transcript, with no per-worktree write or restart.
+ * Idempotently install Codeman's GLOBAL `~/.claude/settings.json` hooks, so EVERY
+ * Codeman-managed session — including main-repo sessions and pre-existing worktrees
+ * that never had per-worktree hooks written — gets them with no per-worktree write
+ * or restart. Installs:
+ *  - PreToolUse AskUserQuestion (legacy; now dead code since AskUserQuestion is
+ *    disabled for Codeman sessions, but kept harmless for backward compatibility).
+ *  - Notification `idle_prompt` so the idle attention badge/queue/push fires for
+ *    main-repo (non-worktree) sessions too (worktrees already get it via
+ *    generateHooksConfig / settings.local.json).
  *
  * The hook only does anything inside a Codeman session (it relies on the
  * $CODEMAN_API_URL / $CODEMAN_SESSION_ID env vars Codeman exports per session); in
@@ -215,7 +220,10 @@ export async function installGlobalAskUserQuestionHook(): Promise<{ installed: b
       : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as Array<Record<string, unknown>>) : [];
 
-  const alreadyInstalled = preToolUse.some(
+  // NOTE: This PreToolUse AskUserQuestion hook is now effectively dead code — Codeman
+  // sessions launch with `--disallowedTools AskUserQuestion`, so Claude never invokes
+  // the tool and this hook never fires. Kept (harmless) for backward compatibility.
+  const askAlreadyInstalled = preToolUse.some(
     (entry) =>
       entry &&
       entry.matcher === 'AskUserQuestion' &&
@@ -224,15 +232,45 @@ export async function installGlobalAskUserQuestionHook(): Promise<{ installed: b
         (h) => typeof h?.command === 'string' && h.command.includes('ask_user_question')
       )
   );
-  if (alreadyInstalled) {
+
+  // Global idle_prompt Notification hook: per-worktree settings.local.json already gets
+  // this via generateHooksConfig(), but main-repo (non-worktree) Codeman sessions rely on
+  // the global ~/.claude/settings.json, which has no Codeman idle_prompt matcher. Without
+  // it the idle attention badge/queue/push never fires for those sessions. We add a
+  // SEPARATE Notification matcher entry (do NOT merge into any unrelated existing entry,
+  // e.g. workmux's permission_prompt|elicitation_dialog matcher running a different command).
+  const notification = Array.isArray(hooks.Notification) ? (hooks.Notification as Array<Record<string, unknown>>) : [];
+  const idlePromptCmd = buildHookCurlCmd('idle_prompt');
+  const idleAlreadyInstalled = notification.some(
+    (entry) =>
+      entry &&
+      Array.isArray((entry as { hooks?: unknown }).hooks) &&
+      (entry as { hooks: Array<{ command?: string }> }).hooks.some(
+        (h) =>
+          typeof h?.command === 'string' && h.command.includes('/api/hook-event') && h.command.includes('"idle_prompt"')
+      )
+  );
+
+  if (askAlreadyInstalled && idleAlreadyInstalled) {
     return { installed: false, reason: 'already present' };
   }
 
-  preToolUse.push({
-    matcher: 'AskUserQuestion',
-    hooks: [{ type: 'command', command: buildHookCurlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
-  });
-  hooks.PreToolUse = preToolUse;
+  if (!askAlreadyInstalled) {
+    preToolUse.push({
+      matcher: 'AskUserQuestion',
+      hooks: [{ type: 'command', command: buildHookCurlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
+    });
+    hooks.PreToolUse = preToolUse;
+  }
+
+  if (!idleAlreadyInstalled) {
+    notification.push({
+      matcher: 'idle_prompt',
+      hooks: [{ type: 'command', command: idlePromptCmd, timeout: HOOK_TIMEOUT_MS }],
+    });
+    hooks.Notification = notification;
+  }
+
   existing.hooks = hooks;
 
   if (!existsSync(claudeDir)) {

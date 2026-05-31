@@ -213,7 +213,11 @@ function buildSpawnCommand(options: {
     // without --fork-session (which creates a branch — not what we want for a plain resume).
     const isResuming = (options.extraArgs ?? []).includes('--resume');
     const sessionIdFlag = isResuming ? '' : ` --session-id "${options.sessionId}"`;
-    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)}${sessionIdFlag}${modelFlag}${extraStr}`;
+    // Disable AskUserQuestion for all Codeman claude sessions (fresh + resume): its
+    // interactive UI never renders in the web transcript, so we remove it from context
+    // and Claude asks as plain text instead. Bare identifier — no shell metachars.
+    const disallowFlag = ' --disallowedTools AskUserQuestion';
+    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)}${sessionIdFlag}${modelFlag}${disallowFlag}${extraStr}`;
   }
   if (options.mode === 'opencode') {
     return buildOpenCodeCommand(options.openCodeConfig);

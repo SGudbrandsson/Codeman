@@ -53,14 +53,19 @@ export function buildInteractiveArgs(
   resumeId?: string,
   safeMode?: boolean
 ): string[] {
+  // AskUserQuestion is disabled for all Codeman sessions: its interactive UI never
+  // surfaces in the web transcript (Claude Code does not fire PreToolUse for it), so
+  // we remove the tool from context and let Claude ask as plain text instead. Safe-mode
+  // sessions are still Codeman sessions, so they get the flag too.
   if (safeMode) {
-    return ['--dangerously-skip-permissions'];
+    return ['--dangerously-skip-permissions', '--disallowedTools', 'AskUserQuestion'];
   }
   const args = [...buildPermissionArgs(claudeMode, allowedTools)];
   // --session-id is only valid for fresh sessions; combining it with --resume requires
   // --fork-session (which creates a branch) — not what we want for a plain resume.
   if (!resumeId) args.push('--session-id', sessionId);
   if (model) args.push('--model', model);
+  args.push('--disallowedTools', 'AskUserQuestion');
   return args;
 }
 
