@@ -10230,6 +10230,20 @@ kbd {
   font-size: 0.82em;
   color: #a5f3fc;
 }
+.tv-markdown code.tv-file-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.tv-markdown code.tv-file-link:hover {
+  color: #67e8f9;
+  border-color: rgba(103,232,249,0.4);
+}
+.tv-markdown code.tv-file-link:focus-visible {
+  outline: 2px solid rgba(103,232,249,0.6);
+  outline-offset: 1px;
+}
 .tv-code-block {
   position: relative;
 }

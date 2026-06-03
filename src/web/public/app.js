@@ -424,6 +424,102 @@ function replaceImagePaths(html) {
   });
 }
 
+/**
+ * Module-level cache for file-existence checks, keyed by `${sessionId}::${path}`
+ * → Promise<boolean>. Concurrent linkify passes asking for the same path share a
+ * single in-flight request; resolved values persist for the page session.
+ */
+var _filePathExistsCache = new Map();
+
+/** Known code/doc extensions used to recognise bare filenames as paths. */
+var _FILE_PATH_EXTENSIONS =
+  'md|markdown|txt|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|xml|css|scss|html|py|rs|go|sh|sql|env|lock|cfg|ini|conf';
+var _FILE_PATH_WITH_SLASH_RE = /^[\w.@~-]+(?:\/[\w.@~+-]+)+$/;
+var _FILE_PATH_BARE_RE = new RegExp('^[\\w.@~-]+\\.(?:' + _FILE_PATH_EXTENSIONS + ')$', 'i');
+
+/**
+ * Heuristic: does this inline-code text look like a (relative or absolute) file path?
+ * Existence is verified separately server-side; this only gates which spans we check.
+ */
+function looksLikePath(text) {
+  if (!text) return false;
+  var t = text.trim();
+  if (!t || t.length > 512) return false;
+  // Reject whitespace, backticks, angle brackets (defensive — already escaped).
+  if (/[\s`<>]/.test(t)) return false;
+  // Reject protocols (http:, https:, file:, mailto:, etc.).
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return false;
+  // Path with at least one separator, OR a bare filename with a known extension.
+  return _FILE_PATH_WITH_SLASH_RE.test(t) || _FILE_PATH_BARE_RE.test(t);
+}
+
+/**
+ * Check whether `path` exists within the session's working dir, reusing the existing
+ * file-content endpoint (sandbox + existence enforced server-side). Cached per
+ * session+path. Returns a Promise<boolean>.
+ */
+function _checkFilePathExists(sessionId, path) {
+  var key = sessionId + '::' + path;
+  if (_filePathExistsCache.has(key)) return _filePathExistsCache.get(key);
+  var p = fetch('/api/sessions/' + sessionId + '/file-content?path=' + encodeURIComponent(path) + '&lines=1')
+    .then(function (res) {
+      if (!res.ok) return false;
+      return res.json().then(function (json) {
+        return json && json.success === true;
+      });
+    })
+    .catch(function () {
+      return false;
+    });
+  _filePathExistsCache.set(key, p);
+  return p;
+}
+
+/**
+ * Scan a rendered DOM subtree for inline-code spans that look like project-relative
+ * file paths, verify each unique path exists server-side, and turn the existing ones
+ * into clickable links that open the read-only file-preview modal via
+ * `app.openFilePreview(path)`. Non-paths and missing files are left untouched.
+ * Operates on the live DOM AFTER innerHTML is set so it can attach handlers safely.
+ */
+function linkifyFilePaths(rootEl) {
+  if (!rootEl || typeof app === 'undefined' || !app || !app.activeSessionId) return;
+  var sessionId = app.activeSessionId;
+  // De-dupe by path so each unique path is checked once and all spans share the result.
+  var byPath = new Map();
+  var codeEls = rootEl.querySelectorAll('code');
+  for (var i = 0; i < codeEls.length; i++) {
+    var codeEl = codeEls[i];
+    if (codeEl.closest('pre')) continue; // inline code only, skip fenced blocks
+    if (codeEl.classList.contains('tv-file-link')) continue; // already bound
+    var text = (codeEl.textContent || '').trim();
+    if (!looksLikePath(text)) continue;
+    if (!byPath.has(text)) byPath.set(text, []);
+    byPath.get(text).push(codeEl);
+  }
+  byPath.forEach(function (els, path) {
+    _checkFilePathExists(sessionId, path).then(function (exists) {
+      if (!exists) return;
+      els.forEach(function (el) {
+        if (el.classList.contains('tv-file-link')) return; // guard double-binding
+        el.classList.add('tv-file-link');
+        el.setAttribute('role', 'link');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('title', 'Open ' + path);
+        el.addEventListener('click', function () {
+          app.openFilePreview(path);
+        });
+        el.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            app.openFilePreview(path);
+          }
+        });
+      });
+    });
+  });
+}
+
 /** Global lightbox for image previews — created lazily on first use. */
 var _imgLightbox = null;
 function _getImageLightbox() {
@@ -3959,6 +4055,7 @@ const TranscriptView = {
       } else {
         // Final pass: render full markdown
         content.innerHTML = replaceImagePaths(renderMarkdown(text)); // eslint-disable-line no-unsanitized/property
+        linkifyFilePaths(content);
         this._scrollToBottom(false);
       }
     };
@@ -4342,6 +4439,7 @@ const TranscriptView = {
         const body = document.createElement('div');
         body.className = 'tv-compact-body tv-markdown';
         body.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
+        linkifyFilePaths(body);
 
         hdr.addEventListener('click', () => {
           const open = hdr.classList.toggle('open');
@@ -4440,6 +4538,7 @@ const TranscriptView = {
       // Link hrefs are protocol-validated (only http/https/relative allowed).
       // The resulting HTML is safe to assign on .tv-markdown elements.
       content.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
+      linkifyFilePaths(content);
       div.appendChild(label);
       div.appendChild(content);
       const tsText = this._formatTimestamp(block.timestamp);

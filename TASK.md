@@ -1,263 +1,600 @@
 # Task
 
-type: bug
+type: feature
 status: done
-title: Sluggish send/input latency in web compose bar
-description: When the user types text in the compose bar and hits send, the UI often "stays there" for a noticeable delay before the text is sent and the textarea clears. Root cause is twofold. (1) CLIENT: the compose send awaits the full HTTP round-trip before doing anything — no optimistic UI and no local echo. app.sendInput() (src/web/public/app.js ~line 11357) awaits the POST, and InputPanel._sendInner() (~line 21254-21385) only clears the textarea, shows the optimistic user bubble (TranscriptView.appendOptimistic), and shows the working indicator (TranscriptView.setWorking) AFTER sendInput resolves (~line 21321, 21357-21385). (2) SERVER: the POST /api/sessions/:id/input handler blocks the HTTP 200 on `await session.writeViaMux(inputStr)` (src/web/routes/session-routes.ts:724). writeViaMux -> TmuxManager.sendInput (src/tmux-manager.ts ~1286) runs `tmux send-keys` SEQUENTIALLY via execAsync per step, with hardcoded sleeps from planSendKeys (src/utils/tmux-send-keys-plan.ts): 50ms after each line of text, 50ms after each newline (C-j), and 100ms before the final Enter. Multi-line pastes stack these into 1s+ before the response even returns. On the way back, the terminal flicker filter (batchTerminalWrite, MAX_FLICKER_HOLD_MS=150) holds echoed output another 50-150ms.
+title: Clickable file paths in transcript open a read-only modal overlay
+description: |
+  In the Codeman web UI transcript/chat view, when a rendered assistant (or user)
+  message contains a Markdown inline-code span that looks like a file path
+  (e.g. `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`, `src/index.ts`,
+  `dist/index.js`), make that span clickable. Clicking opens a READ-ONLY modal
+  overlay showing the file contents.
 
-affected_area: frontend
-affected_area_detail: src/web/public/app.js (compose send / optimistic UI — PRIMARY), src/web/routes/session-routes.ts (input route), src/tmux-manager.ts + src/utils/tmux-send-keys-plan.ts (send-keys delays)
-work_item_id: wi-39d6dc38
+  Behaviour:
+  - The span is only made clickable / styled as a link if the file ACTUALLY EXISTS
+    on disk, resolved within the current project. If it does not exist, leave it as
+    a normal inline-code span (no link, no overlay, no error chrome).
+  - Clicking an existing file opens a modal overlay with the file contents,
+    read-only. Prefer monospaced/scrollable display; syntax highlighting is a nice
+    to have, not required. Provide an obvious close affordance (X / click backdrop /
+    Esc).
+  - File path resolution is scoped to the CURRENT PROJECT's working directory
+    (the session's repo root, derived from the current project/session context in
+    the UI/backend — "based on the current project URL/link", per the user). 
+
+constraints: |
+  - SANDBOXING IS A HARD REQUIREMENT: a path must resolve to a location INSIDE the
+    project working directory. Any path that resolves outside it (via `..`, absolute
+    paths escaping the root, symlinks, etc.) must be treated as non-existent — it
+    must NOT open and MUST NOT be able to read the parent directory or anywhere else
+    on the filesystem. The user explicitly said: "I cannot accidentally expand into
+    the parent directory of the project."
+  - No relative-path guessing/fuzzy lookups: resolve the path as given against the
+    project root; if it isn't there, it doesn't exist.
+  - Only open the overlay when the file exists. Do NOT show the overlay for missing
+    files.
+  - Determining existence requires a backend check (browser can't stat the FS).
+    Add/extend a backend endpoint that takes a project/session identifier + a
+    relative path, enforces the sandbox, and returns existence + (on open) contents.
+    Batch existence checks if many spans appear, to avoid request storms.
+  - Keep current rendering untouched for non-path inline code and for missing files.
+
+affected_area: frontend (src/web/public/app.js TranscriptView + styles.css) — NO backend change; existing GET /api/sessions/:id/file-content already does existence + sandbox enforcement
+work_item_id: wi-fdaf8229
 fix_cycles: 0
 test_fix_cycles: 0
 
-## Reproduction
-- Open a session in the web UI, type a message into the compose bar, press send (Ctrl+Enter or the send button). Observe the textarea does not clear and no optimistic user bubble / "working" indicator appears until the HTTP POST resolves — several hundred ms for a single line, 1s+ for a multi-line paste.
-- The latency scales with line count: each text line costs 50ms, each newline (C-j) costs 50ms, plus a fixed 100ms before the final Enter. A 5-line paste = ~5×50 + 4×50 + 100 = ~550ms of pure server-side sleeps before the 200 returns, and only THEN does the client clear/echo.
-- Confirm by instrumenting timing: log a timestamp at the top of `InputPanel._sendInner` and another right before `ta.value = ''` (currently the last step); the gap equals the full round-trip including all `planSendKeys` sleeps.
-
 ## Root Cause / Spec
+<!-- filled by analysis subagent -->
 
-### Fix Lever 1 (PRIMARY — low risk, biggest perceived win): Optimistic client UI
-Make the compose bar feel instant. On send, BEFORE/WITHOUT awaiting the network round-trip:
-- Capture the text, then immediately: clear the textarea, append the optimistic user bubble (TranscriptView.appendOptimistic), and show the working indicator (TranscriptView.setWorking(true)).
-- Fire the POST in the background. On error, roll back gracefully: surface a toast and restore the textarea content (and remove the optimistic bubble if feasible) so the user can retry.
-- Preserve existing guards: the `_sending` re-entrancy guard, in-flight image-upload wait, and secret-detection scan must still run BEFORE clearing/sending (do not send if secrets block). Sequence: run validation (uploads + secret scan) first; once cleared to send, do the optimistic clear + fire-and-forget POST.
-- Keep behavior correct for the case where the send target session != active session (the optimistic bubble/working indicator only render when TranscriptView._sessionId === app.activeSessionId — keep that condition).
+### Verified existing infrastructure (all confirmed by reading code)
 
-### Fix Lever 2 (SECONDARY — careful): Don't block HTTP 200 on the full tmux sequence
-- In POST /api/sessions/:id/input (session-routes.ts:724), avoid awaiting the entire writeViaMux/send-keys sequence before returning success. Options: enqueue the write and return 200 immediately (fire-and-forget with internal error logging), OR keep the await but trim/justify the sleeps.
-- The 50/100ms sleeps in planSendKeys exist to let Ink (the Claude CLI renderer) settle between keystrokes so multi-line paste lands intact. Do NOT blindly remove them — if you trim, verify multi-line paste still arrives correctly in the target Ink app. The HTTP RESPONSE does not need to wait for the settle delays even if the writes themselves keep them.
-- If fire-and-forget on the server: ensure ordering is preserved (a later input must not overtake an earlier one for the same session) and that write failures are still logged/surfaced (the existing fallback to session.write on writeViaMux failure must be retained in some form).
+1. **Backend `GET /api/sessions/:id/file-content`** — `src/web/routes/file-routes.ts`
+   lines 157-261. Query params: `path` (relative, required), `lines` (default 500,
+   cap 10000), `raw` ('true' to force binary metadata). Sandbox is FULLY enforced:
+   - `fullPath = resolve(session.workingDir, filePath)` (line 168)
+   - `resolvedPath = realpathSync(fullPath)` (line 171) — resolves symlinks; throws if
+     missing → returns `NOT_FOUND` "File not found".
+   - `relativePath = relative(session.workingDir, resolvedPath)`; if it
+     `startsWith('..')` or `isAbsolute()` → returns `INVALID_INPUT`
+     "Path must be within working directory" (lines 175-178).
+   - Success response shape: `{ success: true, data: { ... } }`. For text:
+     `data = { path, content, size, totalLines, truncated, extension }`.
+     For image/video/binary (by extension or `raw=true`):
+     `data = { path, size, type: 'image'|'video'|'binary', extension, url }`.
+   - Missing/escaping/error → `{ success: false, error, code }` with non-2xx? NOTE:
+     `createErrorResponse(...)` is RETURNED from the handler (not `reply.code(...)`),
+     so HTTP status is 200 with a JSON body `{ success: false, ... }`. The existence
+     check MUST therefore inspect the JSON `success` flag, NOT just `res.ok`.
+     (Confirm during impl: `openFilePreview` itself relies on `res.ok` AND
+     `result.success` — see app.js 19313-19317.)
+   - **CONCLUSION: no backend change needed.** The frontend passes the path verbatim;
+     the server resolves + sandboxes + reports existence. affected_area = frontend only.
 
-### Acceptance
-- Pressing send clears the textarea and shows feedback within ~1 frame, independent of tmux timing.
-- Multi-line paste still arrives intact in the session.
-- Error path (POST fails) restores the user's text and notifies them.
-- No regression to the `_sending` guard, secret detection, image-upload wait, or cross-session optimistic-render condition.
+2. **Frontend viewer `openFilePreview(filePath)`** — `src/web/public/app.js` line 19296
+   (method on the `app` object). Signature: single arg `filePath`, a path RELATIVE to
+   `session.workingDir`. It guards on `this.activeSessionId`, shows `#filePreviewOverlay`
+   (adds class `visible`), sets `#filePreviewTitle = filePath`, fetches
+   `/api/sessions/${activeSessionId}/file-content?path=...&lines=500`, and renders
+   text/image/video/binary into `#filePreviewBody`. Close affordance: X button only
+   (`onclick="app.closeFilePreview()"`, index.html line 452). There is currently NO
+   backdrop-click and NO Esc handler for this overlay (closeAllPanels at app.js 15365
+   does not include it). Per "reuse the existing viewer as-is" this is acceptable; adding
+   Esc/backdrop is an OPTIONAL nicety (would go in closeFilePreview wiring / the global
+   Escape handler at app.js 6481). Do NOT block on it.
+   - **Reuse `app.openFilePreview(relativePath)` directly. Build no new modal.**
 
-### Analysis Findings (confirmed)
+3. **Markdown rendering** — `renderMarkdown(text)` is a FREE function (app.js line 188),
+   not a method. Inline code spans are produced by `inlineMarkdown()` (app.js 355-389):
+   it extracts `` `...` `` into placeholders then restores them as literal
+   `<code>...</code>` (line 365). There is NO class/id on these `<code>` elements, and
+   the inner text is HTML-escaped (`&lt;` etc.). The rendered HTML is assigned via
+   `innerHTML` at THREE sites, all inside the `TranscriptView` singleton object
+   (app.js line 3060, exposed as `window.TranscriptView`):
+   - `_typewriterReveal()` final pass — app.js line **3961** (animated assistant text).
+   - `_renderTextBlock()` compact-summary block — app.js line **4344**.
+   - `_renderTextBlock()` assistant content — app.js line **4442**.
+   (User-role bubbles at ~4365-4420 use `textContent`, NOT markdown, so they have no
+   `<code>` spans — out of scope, which matches "assistant messages" in the screenshot.)
 
-**CLIENT — `src/web/public/app.js`**
-- `App.sendInput(input, sessionId)` at line **11357** awaits the POST and throws on `!res.ok`. Body is `{ input, useMux: true }`. Caller is responsible for `\r` (already appended). This function is fine to keep as-is; the fix is in the *caller's* ordering.
-- `InputPanel._sendInner()` at lines **21261-21388** is the bug site. Current ordering:
-  1. Upload wait (21266-21273), `FeatureTracker.track` (21274), validation/empty check (21275-21281).
-  2. Build `sendText` with image/file refs (21287-21299), secret scan (21301-21312) — these run BEFORE send. Good; keep before optimistic clear.
-  3. Capture `_sendSessionId = app.activeSessionId` (21315), build `inputString = sendText + '\r'` (21318).
-  4. `await app.sendInput(inputString, _sendSessionId)` at **line 21321** — BLOCKS here for the full round-trip.
-  5. Post-resolve fallback Enter poller (21324-21346): if shell-mode skip, else poll status 20×150ms and resend `'\r'` once if still idle. Depends on send having "completed".
-  6. `catch` (21347-21355): restores `ta.value = text`, `_restoreImages`, toast. This is the existing error-rollback — REUSE this logic for Lever 1's rollback.
-  7. ONLY AFTER resolve: optimistic bubble `TranscriptView.appendOptimistic(sendText)` (line **21363**), `TranscriptView.setWorking(true)` (line **21370**), `_updateTabStatusDebounced(...'busy')` (21372), draft clear (21374-21379), `ta.value = ''` (21381), image/file strip (21384-21385).
-- Cross-session guard already present at lines **21359** and **21369**: `TranscriptView._sessionId === app.activeSessionId`. Must be preserved when moving these earlier. Note: `appendOptimistic` is line 3346, `setWorking` is line 3894, `_restoreImages` is line 21025 — all exist.
-- **Fix shape for Lever 1:** keep steps 1-3 (validation, secret scan, capture id) unchanged. Then do the optimistic block (bubble + setWorking + tab status + draft clear + `ta.value=''` + image strip) IMMEDIATELY, then fire `app.sendInput(...)` without `await` (fire-and-forget). Move the existing `catch` rollback (step 6) into the promise's `.catch()` so a failed POST still restores text/images and toasts. The fallback-Enter poller (step 5) can stay chained after the POST resolves (`.then(...)`) since it only needs to run on success.
+4. **Session context inside TranscriptView** — `TranscriptView._sessionId` holds the
+   rendered session's id (set in `load()`, app.js 3175). The global `app` object is
+   referenced directly elsewhere in the file (e.g. app.js 1065 `app.sessions?.get(...)`,
+   3742 `app.activeSessionId`). So from TranscriptView we can call
+   `app.openFilePreview(path)` and read `app.activeSessionId`. Use `app.activeSessionId`
+   for the existence-check fetch and for `openFilePreview` (which itself uses
+   `this.activeSessionId`). Paths in inline code are ALREADY relative to the project root
+   (screenshot example `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`,
+   `src/index.ts`, `dist/index.js`) so they are passed VERBATIM — no client-side path
+   munging, no working-dir join, no `..` stripping (the backend owns all that).
 
-**SERVER — `src/web/routes/session-routes.ts`**
-- Input route handler ends at line **738** (`return { success: true }`). The blocking `await session.writeViaMux(inputStr)` is at line **724** inside the `effectiveUseMux` branch (717-734). On failure it falls back to `session.write(safeStr)` with `\n`→space (728-733). Shell mode (715-716) and non-mux (735-736) write directly.
-- The comment at 718-721 explicitly states the await exists "so client-side retry timers can start counting from a meaningful baseline" — i.e. the client's fallback-Enter poller assumes the 200 means Enter was dispatched. If Lever 2 makes the server fire-and-forget, that client assumption breaks; Lever 1 (client optimistic) is independent of this and is the primary win. If Lever 2 is pursued, preserve ordering per-session and retain the writeViaMux-failure fallback to `session.write`.
+5. **Path-detection reference** — `registerFilePathLinkProvider()` (app.js 5926) detects
+   ABSOLUTE paths in terminal buffer text (`/home`, `/tmp`, with extensions). Our case is
+   different: inline-code spans hold RELATIVE project paths. We mirror only the spirit
+   (extension allow-list + segment shape), not the absolute-path regex.
 
-**SERVER — `src/tmux-manager.ts` / `src/utils/tmux-send-keys-plan.ts`**
-- `TmuxManager.sendInput` at line **1286** loops over `planSendKeys(input)` steps (1313-1328), running one `execAsync` per literal/key step and `setTimeout` per delay step — all sequential `await`s, so total latency = sum of all delays + exec time.
-- `planSendKeys` (tmux-send-keys-plan.ts, lines 26-56): 50ms after each non-empty line (line 40), 50ms after each `C-j` newline (line 46), 100ms before final Enter (line 51). These exist for Ink settle timing; file header (lines 18-19) and `test/tmux-send-keys-plan.test.ts` warn NOT to trim. Note `_sendInner` already collapses multi-line into a single line (no `\n`) before sending (comment at 21283-21286, `inputString = sendText + '\r'`), so in the compose-bar path the only delay is the 100ms pre-Enter + one 50ms line delay ≈ 150ms server-side. Multi-line latency is more relevant to other callers / paste paths. **Dominant fix is therefore Lever 1 (client), confirming affected_area: frontend.**
+### Implementation plan (frontend only)
 
-**RETURN PATH**
-- `batchTerminalWrite` (app.js line 6087) with `MAX_FLICKER_HOLD_MS` (used line 6138) holds echoed terminal output up to 150ms — affects when the echoed text appears in the *terminal* view, not the optimistic bubble. Lever 1 sidesteps this entirely for perceived latency.
+**A. New post-processing function** (place near `replaceImagePaths`, ~app.js 402, as a
+free function — call it `linkifyFilePaths(rootEl)`). It operates on a DOM element AFTER
+`innerHTML` is set (not on the HTML string), so it can attach event listeners and avoid
+re-escaping:
+  - `rootEl.querySelectorAll('code')` — for each `<code>` whose `textContent` matches the
+    path heuristic AND whose parent is NOT a `<pre>` (skip fenced code blocks; inline
+    code only). Use `codeEl.closest('pre')` to exclude block code.
+  - **Path heuristic** (`looksLikePath(text)`): trimmed text, single token (no spaces),
+    matches `^[\w.@~-]+(?:\/[\w.@~+-]+)+$` (i.e. at least one `/` separating path-ish
+    segments) OR a bare filename WITH a known code/doc extension
+    `^[\w.@~-]+\.(md|markdown|txt|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|xml|css|scss|html|py|rs|go|sh|sql|env|lock|cfg|ini|conf)$`.
+    Reject if it starts with a protocol (`http:`, `https:`, etc.), contains whitespace,
+    backticks, or `<`/`>` (already escaped, but guard), or is purely numeric/an option
+    flag. Length cap (e.g. < 512 chars). Absolute paths (`/...`) are allowed to be
+    detected too — backend will reject any that escape the root, so they simply won't
+    become links. Keep the heuristic permissive-ish; existence-check is the real gate.
+  - Collect candidate `{ el, path }` pairs. De-dupe identical paths (Map path→[els]).
+
+**B. Existence check (batched + cached, avoids request storms)**
+  - Module-level cache keyed by `${sessionId}::${path}` → `Promise<boolean>` (or
+    resolved boolean). Reuse the in-flight Promise so concurrent blocks asking for the
+    same path share ONE request. Cache persists for the page session (paths don't
+    un-exist meaningfully; acceptable staleness).
+  - For each UNIQUE uncached path, issue a lightweight HEAD-equivalent existence check:
+    reuse `GET /api/sessions/${app.activeSessionId}/file-content?path=<enc>&lines=1`
+    (lines=1 minimizes payload; we only care whether `success === true`). Parse JSON;
+    `exists = res.ok && json.success === true`. (No new endpoint — constraint satisfied.)
+    - Throttle: process candidates with a small concurrency limit (e.g. 6 at a time) or
+      just rely on the per-path de-dupe cache; since most transcripts have few unique
+      code spans this is sufficient. If a single rendered block produces many (>N) unique
+      candidate paths, cap or window them, but a hard cap is likely unnecessary.
+  - On `exists === true`: mutate the `<code>` element in place — add class
+    `tv-file-link` (new CSS), set `role="link"`, `tabindex="0"`,
+    `title="Open ${path}"`, and attach a click handler
+    `() => app.openFilePreview(path)` (also keydown Enter/Space for a11y). Optionally set
+    `cursor:pointer`/underline via CSS.
+  - On `exists === false`: leave the `<code>` untouched (plain inline code). No error
+    chrome, no overlay — matches the "only clickable if exists" requirement.
+
+**C. Wire the three render sites** — after each of the three `innerHTML` assignments
+(3961, 4344, 4442) add a call to `linkifyFilePaths(<the element just set>)`:
+  - 3961: `content` (the `.tv-content`) — call `linkifyFilePaths(content)`.
+  - 4344: `body` (`.tv-compact-body`) — `linkifyFilePaths(body)`.
+  - 4442: `content` (`.tv-content`) — `linkifyFilePaths(content)`.
+  Because these run inside TranscriptView methods, the function reads `app.activeSessionId`
+  internally (free function reaching the `app` global). Guard: if `!app?.activeSessionId`,
+  bail (leave spans plain). Existence checks are async; spans become links a moment after
+  render (fine — non-blocking, no layout shift since we only toggle class/handlers).
+
+**D. CSS** — add a `.tv-markdown code.tv-file-link` rule in styles.css near the existing
+`.tv-markdown code` block (~line 10224): `cursor: pointer; text-decoration: underline;
+text-decoration-style: dotted;` and a hover color shift. Keep base `<code>` styling for
+non-link spans unchanged.
+
+### Edge cases / constraints addressed
+- **Non-path spans** (e.g. `const x`, `npm run build`, `foo()`): fail `looksLikePath`
+  (whitespace / no slash / no known extension) → never checked, stay plain.
+- **Missing files**: backend returns `success:false` → not linkified.
+- **Sandbox escape** (`../../etc/passwd`, absolute `/etc/passwd`, symlink-out): backend
+  `realpathSync`+`relative().startsWith('..')` rejects → `success:false` → not linkified.
+  Frontend adds ZERO path logic; passes the literal span text. (Hard requirement met by
+  reuse, not reimplementation.)
+- **Streaming / re-render**: `_typewriterReveal` runs `linkifyFilePaths` on its final
+  full-markdown pass (3961) only, not on each typewriter frame. `load()` re-renders
+  blocks via `_appendBlock`→`_renderTextBlock`, each calling `linkifyFilePaths` on its own
+  fresh element — idempotent because we re-query a fresh subtree each time. Guard against
+  double-binding by checking `codeEl.classList.contains('tv-file-link')` before attaching.
+- **Multiple identical paths**: de-duped in the existence-check cache → one request, all
+  matching spans linkified from the shared result.
+- **Performance with many spans**: per-path Promise cache + (optional) concurrency cap
+  prevents request storms; class-toggle mutation is cheap and causes no reflow cascade.
+- **Wrong-session staleness**: existence cache is keyed by sessionId, so switching
+  sessions doesn't cross-contaminate. `openFilePreview` uses the live `app.activeSessionId`
+  at click time (consistent with the rest of the viewer).
+
+### Concrete touch-list for the Fix subagent
+- `src/web/public/app.js`:
+  - Add free fn `linkifyFilePaths(rootEl)` + helper `looksLikePath(text)` + module-level
+    existence cache Map, placed near `replaceImagePaths` (~line 402).
+  - Add `linkifyFilePaths(content)` after line **3961**.
+  - Add `linkifyFilePaths(body)` after line **4344**.
+  - Add `linkifyFilePaths(content)` after line **4442**.
+- `src/web/public/styles.css`: add `.tv-markdown code.tv-file-link { ... }` near 10224.
+- NO change to `src/web/routes/file-routes.ts`, no new endpoint, no new modal.
+- Verify with: `npm run typecheck` (app.js is JS, but build bundles it — run
+  `npm run build` to ensure no syntax break) and manual smoke in a dev server.
 
 ## Fix / Implementation Notes
 
-### Lever 1 (PRIMARY) — Optimistic client UI in `InputPanel._sendInner()` (src/web/public/app.js)
+Implemented frontend-only, exactly per spec. No backend/endpoint/modal changes.
 
-**What changed (the send-ordering reorder around old lines 21320-21388):**
+**`src/web/public/app.js`** (after `replaceImagePaths`, ~line 425+):
+- `var _filePathExistsCache = new Map()` — module-level existence-check cache,
+  keyed `${sessionId}::${path}` → `Promise<boolean>`. In-flight promises are shared
+  so concurrent linkify passes for the same path issue ONE request; resolved values
+  persist for the page session.
+- `looksLikePath(text)` — trims, length-caps at 512, rejects whitespace/backticks/
+  angle brackets and protocol prefixes (`^[a-z][a-z0-9+.-]*:`), then accepts either a
+  multi-segment path (`^[\w.@~-]+(?:\/[\w.@~+-]+)+$`) or a bare filename with a known
+  code/doc extension (md|ts|tsx|js|json|yaml|... case-insensitive). Detection is
+  permissive on purpose; the server existence check is the real gate.
+- `_checkFilePathExists(sessionId, path)` — caches + reuses a fetch to the EXISTING
+  `GET /api/sessions/:id/file-content?path=<enc>&lines=1`. Returns
+  `res.ok && json.success === true` (reads the JSON `success` flag, NOT just res.ok,
+  because the route returns HTTP 200 with `{success:false}` on missing/escaping paths).
+  Network errors resolve to false.
+- `linkifyFilePaths(rootEl)` — bails if `!app?.activeSessionId`. Queries `<code>`
+  spans, excludes any inside `<pre>` (`closest('pre')`) and any already-bound
+  (`classList.contains('tv-file-link')`), filters by `looksLikePath`, de-dupes by path
+  (Map path→[els]). For each unique existing path it adds class `tv-file-link`,
+  `role="link"`, `tabindex="0"`, `title="Open <path>"`, a click handler calling
+  `app.openFilePreview(path)`, and an Enter/Space keydown handler (a11y). Paths are
+  passed VERBATIM — zero client-side path munging; all sandboxing stays server-side.
+- Wired `linkifyFilePaths(...)` after all three TranscriptView innerHTML sites:
+  `_typewriterReveal` final pass (`content`), compact-summary block (`body`), and
+  assistant-content block (`content`).
 
-BEFORE — strictly sequential:
-1. `await app.sendInput(inputString, _sendSessionId)` blocked for the full HTTP round-trip (incl. all `planSendKeys` sleeps).
-2. On resolve: fallback-Enter poller started.
-3. `catch`: restored `ta.value`, `_restoreImages`, toast, `return`.
-4. ONLY AFTER resolve: optimistic bubble (`appendOptimistic`) + `setWorking(true)` + `_updateTabStatusDebounced('busy')` + draft clear + `ta.value = ''` + image/file strip.
+**`src/web/public/styles.css`** (after `.tv-markdown code`, ~line 10233):
+- `.tv-markdown code.tv-file-link` → `cursor: pointer` + dotted underline.
+- `:hover` color/border shift; `:focus-visible` outline for keyboard a11y.
+- Base `<code>` styling untouched.
 
-AFTER — optimistic-first, fire-and-forget:
-1. Steps 1-3 unchanged (upload wait, FeatureTracker, empty-check, sendText build with image/file refs, SecretDetector scan, `_sendSessionId` capture, `inputString` build). Nothing is cleared or sent until the secret scan and validation have passed.
-2. The optimistic block now runs IMMEDIATELY (synchronously, before any network await): appendOptimistic / clearOnly (guarded by `TranscriptView._sessionId === app.activeSessionId`), `setWorking(true)` (same guard), `_updateTabStatusDebounced('busy')`, draft clear, `ta.value = ''`, image/file strip, `_renderThumbnails()`, `_autoGrow()`. The cross-session guard is preserved verbatim at both sites.
-3. `app.sendInput(inputString, _sendSessionId)` is fired WITHOUT `await`:
-   - `.then(...)` holds the fallback-Enter poller (the 20×150ms `setInterval` resend), so it still runs — but only on a successful POST, matching the prior "Enter dispatched by now" assumption.
-   - `.catch(...)` holds the rollback: logs, restores `ta.value = text` **only if the textarea is still empty** (avoids clobbering text the user started typing in the gap), `_restoreImages(_sentImagePaths)`, error toast, and removes the optimistic bubble via the new `TranscriptView.removeLastOptimistic()` (guarded so it's a no-op if the user navigated to another session, and feature-detected with `typeof === 'function'`).
-
-**New method added** — `TranscriptView.removeLastOptimistic()` (app.js, immediately after `appendOptimistic` ~line 3363): removes the last `[data-optimistic="true"]` bubble and clears `_pendingOptimisticText`. Used only by the rollback path. Touches only DOM marked optimistic, never SSE-reconciled real blocks (real blocks already strip `data-optimistic` on arrival at line ~3566).
-
-**Rollback snapshot:** `_sentImagePaths = images.map(img => img.path)` and `_optimisticAppended` boolean are captured before firing, since `this._images` is mutated synchronously by the optimistic strip.
-
-### `_sending` re-entrancy guard decision
-The guard lives in `send()` (the wrapper, lines 21255-21259): `if (this._sending) return; this._sending = true; try { await this._sendInner(); } finally { this._sending = false; }`. With fire-and-forget, `_sendInner()` now returns as soon as the optimistic block runs and the POST is fired (it no longer awaits the round-trip), so `_sending` resets almost immediately rather than after the full network cycle. **This is correct and intentional:** the double-submit risk that `_sending` guards against is fully eliminated the moment the optimistic block clears the textarea — a second invocation hits the empty-text guard (`if (!text && !images.length && !attachedFiles.length) return;`) and bails. Keeping `_sending` reset on `_sendInner` return (not on promise settle) maximizes UI responsiveness while still preventing the synchronous double-fire. No change to the wrapper was needed.
-
-### Lever 2 (SECONDARY/SERVER) — NOT TOUCHED
-See Decisions & Context below.
+**Build:** `npm run build` completes clean (app.js minified to 550.6kb, no syntax
+errors); `tv-file-link` literals confirmed present in the bundled output.
 
 ## Review History
 <!-- appended by each review subagent — never overwrite -->
 
 ### Review attempt 1 — APPROVED
 
-Verified the fire-and-forget reorder in `InputPanel._sendInner()` (src/web/public/app.js ~21271-21422) and the new `TranscriptView.removeLastOptimistic()` (~3364-3372) against the task spec and acceptance criteria.
+Reviewed against spec and verified all claims by reading the actual code.
 
-**Reorder correctness:** Validation (upload wait, FeatureTracker, empty-check, sendText build, SecretDetector scan) and session-id capture (`_sendSessionId`) run unchanged BEFORE anything is cleared or sent. The optimistic block (appendOptimistic/clearOnly, setWorking(true), `_updateTabStatusDebounced('busy')`, draft clear, `ta.value=''`, image/file strip, `_renderThumbnails`, `_autoGrow`) now runs synchronously before the network call. The POST is fired without `await`; the fallback-Enter poller is chained on `.then()` (success only) and rollback on `.catch()` (failure). Confirmed against the live source, not just the diff.
+**Correctness — PASS**
+- `_checkFilePathExists` correctly gates on `res.ok && json.success === true`.
+  Confirmed in `file-routes.ts` 157-261 that the route RETURNS `createErrorResponse(...)`
+  (HTTP 200 + `{success:false}`) for missing (`realpathSync` throws → NOT_FOUND) and
+  sandbox-escaping (`relative().startsWith('..') || isAbsolute()` → INVALID_INPUT)
+  paths, so `res.ok` alone is insufficient — reading the JSON `success` flag is the
+  correct and required approach.
+- `openFilePreview` (app.js 19395) uses the SAME convention: `if (!res.ok) throw` then
+  `if (!result.success) throw`. The existence check and the viewer agree, so a span
+  that linkifies will also open successfully.
+- `looksLikePath` verified against the spec accept/reject lists via a standalone Node
+  run: accepts `src/index.ts`, `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`,
+  `dist/index.js`, `README.md`, `package.json`, `tsconfig.json`, `foo.tsx`; rejects
+  `npm run build`, `const x`, `https://example.com`, `foo()`, `12345`, `-rf`,
+  `mailto:...`, `file:///etc/passwd`, and multi-token strings. All correct.
 
-**Cross-session guard:** Preserved verbatim. Optimistic render guards use `TranscriptView._sessionId === app.activeSessionId`, and since `_sendSessionId = app.activeSessionId` is captured with no intervening await, they are equivalent. Rollback's bubble-removal guard correctly uses the captured `_sendSessionId` against the current `TranscriptView._sessionId`, so navigating away makes removal a no-op.
+**Sandbox — PASS (hard requirement met by reuse, not reimplementation)**
+- Frontend adds ZERO path logic: the span's trimmed `textContent` is passed verbatim
+  through `encodeURIComponent(path)` to the existing endpoint and to
+  `app.openFilePreview(path)`. No `..` stripping, no working-dir join, no normalization.
+  The sole sandbox gate is the server's `realpathSync` (symlink-resolving) +
+  `relative().startsWith('..')/isAbsolute()` check. A `../`, absolute, or symlink-out
+  path returns `success:false` → never linkified → cannot open. Requirement satisfied.
 
-**Re-entrancy / double-submit:** Verified. `_sending` resets in the wrapper's `finally` after `_sendInner` returns. `ta.value = ''` (line 21364) executes synchronously before the POST is fired and before `_sendInner` returns, so a second invocation reads an empty textarea, the sent images/files are already filtered out, and it bails on the empty-text guard (line 21290). During an in-flight upload, `_sendInner` suspends at `await this._uploadsCompletePromise` (21282) with `_sending` still true — guard correctly holds across the upload wait.
+**Edge cases — PASS**
+- Fenced code blocks excluded via `codeEl.closest('pre')`.
+- Double-binding guarded twice: skip `tv-file-link` at query time AND re-check before
+  attaching in the async callback.
+- Identical paths de-duped via `byPath` Map → one existence request, all spans share it.
+- Missing files left as plain `<code>` (no error chrome, no overlay).
+- Bails when `!app?.activeSessionId`.
 
-**Rollback correctness:** `removeLastOptimistic()` only queries `[data-optimistic="true"]`. Confirmed real SSE user blocks never carry that attribute — `append()` (3575-3578) removes the optimistic bubble and renders the real block via `_appendBlock` without setting the marker, so no real block can be wrongly removed. Textarea restore is guarded on `!taNow.value.trim()` (won't clobber new typing). `_sentImagePaths`/`_optimisticAppended` are captured before the synchronous image strip mutates `this._images` — correct. `_restoreImages` takes a path array, matching `_sentImagePaths`.
+**Event-listener accumulation — PASS**
+- Re-renders go through `_renderTextBlock`, which builds a fresh `content`/`body`
+  element each time (`document.createElement` + new `innerHTML`); those carry no prior
+  handlers. Within a single element the class guard prevents re-binding. No accumulation.
 
-**Edge cases:** `/clear` path leaves `_optimisticAppended` false, so rollback correctly skips `removeLastOptimistic` (the cleared transcript isn't restored on a failed `/clear`, but that matches prior behavior — not a regression). Shell-mode sessions still skip the Enter poller via the `mode !== 'shell'` check inside `.then()`. Unconditional `_restoreImages(_sentImagePaths)` on rollback can replace freshly-attached images, but this mirrors the original catch behavior — not a regression.
+**Session staleness — acceptable (not a bug)**
+- Cache keyed by `${sessionId}::${path}`; click resolves against live `app.activeSessionId`.
+  Spec explicitly accepts this and it matches the rest of the viewer's behavior.
 
-**Build:** `node --check src/web/public/app.js` → OK. `npx tsc --noEmit` → exit 0, no errors.
+**CSS — PASS**
+- `.tv-markdown code.tv-file-link` requires a `.tv-markdown` ancestor. Verified all three
+  call sites operate on `tv-markdown` elements: assistant content and compact body set
+  `className = 'tv-content/tv-compact-body tv-markdown'`; the typewriter site's
+  `el.querySelector('.tv-content')` resolves to the same `_renderTextBlock`-built
+  `tv-content tv-markdown` element. Cursor/dotted-underline + hover + focus-visible all
+  apply. Base `code` styling untouched.
 
-No regressions to the `_sending` guard, secret detection, image-upload wait, or cross-session optimistic-render condition. Lever 2 (server) deliberately untouched per the SECONDARY/risky designation — acceptable; Lever 1 alone satisfies the perceived-latency acceptance criteria.
+**Build/lint — PASS**
+- `node --check` clean; `npm run build` succeeds; `tv-file-link` + `linkifyFilePaths`
+  present in the bundled `dist/web/public/app.js`. app.js is eslint-ignored (consistent
+  with the rest of the file). Style matches the surrounding `var`/free-function area
+  (mirrors `replaceImagePaths` placement).
+
+**Minor note (non-blocking):** bare dotfiles like `.env` do not match (the bare-filename
+regex requires a name segment before the extension). Not in the spec's case list and it
+fails safe to plain code, so no action required.
+
+Verdict: APPROVED — ready for test gap analysis.
 
 ## Test Gap Analysis
 
-**Verdict: GAPS FOUND** (2 realistically-fillable gaps)
+### Verdict: GAPS FOUND (one feasible unit gap — `looksLikePath`)
 
-### Test infrastructure for app.js front-end behavior
-`app.js` is a single large browser bundle with no module exports, and the vitest environment is `node` (no jsdom — confirmed in `vitest.config.ts:6`). Two established patterns exist for covering it:
+**Changed source (excl. TASK.md):** `src/web/public/app.js` (new free fns
+`looksLikePath`, `_checkFilePathExists`, `linkifyFilePaths` + module-level
+`_filePathExistsCache` Map and the two path regexes), `src/web/public/styles.css`
+(`.tv-markdown code.tv-file-link` rule). All frontend, browser-bundle.
 
-1. **Pure-function replica** (node env) — the app.js logic under test is re-implemented in TypeScript and asserted directly. Used by `test/image-send-race-guard.test.ts` (replicates `InputPanel.send()` + `_updateSendBtnState()` upload-race logic), `test/compose-slash-commands.test.ts`, `test/image-paste-attach.test.ts`, `test/photo-upload-fixes.test.ts`. Each file states the replica must be kept in sync with app.js by hand.
-2. **Playwright browser drive** — boots a real `WebServer` in Chromium and calls real `TranscriptView`/`InputPanel` objects via `page.evaluate`, then asserts on the live DOM. Used by `test/transcript-clear-new-session.test.ts` (already calls `TranscriptView.appendOptimistic`, `clearOnly`, `setViewMode` directly and queries the rendered container), `test/input-draft-race.test.ts`, `test/transcript-web-view.test.ts`, `test/draft-per-session.test.ts`.
+### Harness assessment (how this repo tests app.js)
 
-There is NO jsdom harness that drives the real `InputPanel._sendInner()` method end-to-end; doing so would require stubbing `app.sendInput`, session state, the `_sending` guard, secret scan, and the fallback-Enter timers — not feasible cheaply and not matching any existing pattern. Gaps below are scoped to what each existing pattern can realistically reach.
+`app.js` is a ~550kb browser bundle of free functions + the `app`/`TranscriptView`
+globals — NOT an ES module with exports, so it cannot be `import`ed. `vitest.config.ts`
+uses `environment: 'node'` by default (jsdom is opt-in per-file via a docblock) and
+`coverage.include` is `src/**/*.ts` only, deliberately excluding `app.js`. Three
+established patterns exist for app.js, in increasing cost:
 
-### Gap 1 — `TranscriptView.removeLastOptimistic()` is untested (Playwright pattern)
-- **File / target:** `src/web/public/app.js` ~line 3366 (`removeLastOptimistic`), new method, no coverage.
-- **Realistic approach:** Add to `test/transcript-clear-new-session.test.ts` (or a sibling Playwright file) — it already drives `TranscriptView.appendOptimistic` and queries the container via `page.evaluate`. Append one or two optimistic bubbles, call `TranscriptView.removeLastOptimistic()`, assert: (a) the last `[data-optimistic="true"]` element is removed, (b) `_pendingOptimisticText` is reset to `null`, (c) a real (non-optimistic) rendered block is left untouched — i.e. the query only targets `[data-optimistic="true"]` and never strips an SSE-reconciled block. This directly mirrors the spec note that real blocks lose `data-optimistic` on arrival (app.js ~3576).
+1. **Re-implement the pure free fn inside the test and exercise it** — the repo's
+   pattern for exactly this kind of helper. `test/image-attach-rewrite.test.ts`
+   tests `replaceImagePaths` (the literal sibling free fn that `linkifyFilePaths`
+   was modeled on, ~app.js 400) by defining a copy of the function in the test file
+   and running an input/output table against it. No import, no DOM, no fetch.
+2. **Source-text assertions** — read app.js as a string and assert it contains/omits
+   specific code (`test/sidebar-new-session-menu.test.ts`, `startSessionInCase`).
+   Weak (asserts shape, not behavior); used when execution is impractical.
+3. **Playwright full-browser tests** — `page.evaluate` against a live server for real
+   DOM/fetch/UI behavior (`test/transcript-web-view.test.ts`,
+   `test/file-link-click.test.ts`). All such tests are gated behind a
+   `browserAvailable`/server-up flag and are the repo's mechanism for UI behavior.
+   There is NO pattern anywhere that imports/`new Function`-extracts and executes an
+   app.js free fn against the real source — fn-execution is either a hand-copy (#1) or
+   Playwright (#3).
 
-### Gap 2 — Optimistic-before-send ordering + rollback-on-failure are untested (pure-function replica pattern)
-- **File / target:** `src/web/public/app.js` `InputPanel._sendInner()` reorder (~lines 21327-21420): optimistic clear/append fires synchronously BEFORE the fire-and-forget `app.sendInput(...)`; `.catch()` rollback restores `ta.value = text` only if the textarea is still empty, restores `_sentImagePaths`, and removes the optimistic bubble.
-- **Realistic approach:** Extend the replica in `test/image-send-race-guard.test.ts` (which already models `InputPanel.send()` with a stubbed `sent[]`/`toasts[]` and resolvable upload promises) — or a new sibling file following the same pattern — to cover the reordered send path. Assert: (a) on send, the textarea value is cleared and the optimistic bubble is appended SYNCHRONOUSLY, i.e. before the `sendInput` promise settles (model `sendInput` as a pending/never-resolved promise and check state immediately); (b) on a REJECTED `sendInput`, the rollback restores the original text only when the replica textarea is still empty, restores the captured image paths, removes the optimistic bubble, and surfaces a toast; (c) the rollback does NOT clobber text the user typed into the textarea during the in-flight gap (the `!taNow.value.trim()` guard).
-- **Note / limitation:** This is a replica, not a drive of the real method, consistent with how `send()` is already tested. It cannot catch a divergence between the replica and the real `_sendInner` source; the existing files accept this tradeoff explicitly. The fallback-Enter poller (`.then()` 20×150ms `setInterval`) and the `_sending` guard are already (or adjacently) covered and are lower-value to re-replicate; focus the new test on the ordering + rollback, which is the actual behavioral change.
+### Gaps
 
-### Not flagged
-- Server levers (session-routes.ts / tmux-send-keys-plan.ts) were deliberately NOT changed (Lever 2 untouched), so `test/tmux-send-keys-plan.test.ts` and `test/tmux-send-input-newlines.test.ts` remain valid and need no update.
-- The `_sending` re-entrancy guard, secret detection, and upload-wait paths are unchanged in behavior (only reordered relative to the network call); existing `image-send-race-guard.test.ts` coverage still holds.
-<!-- filled by test gap analysis subagent -->
+- **`looksLikePath(text)` — pure logic, NOT covered, FEASIBLE (actionable).**
+  No-arg pure function (trim, length cap, whitespace/backtick/angle-bracket reject,
+  protocol reject, then `_FILE_PATH_WITH_SLASH_RE` OR `_FILE_PATH_BARE_RE`). It is the
+  highest-value, most-testable unit and has a clear accept/reject table from the spec
+  and Review attempt 1. It maps 1:1 onto repo pattern #1 (the `replaceImagePaths`
+  precedent in `image-attach-rewrite.test.ts`). Recommended: a new vitest test
+  reproducing `looksLikePath` + its two regexes (copy them verbatim from app.js
+  444-454) and asserting:
+    - ACCEPT: `src/index.ts`, `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`,
+      `dist/index.js`, `README.md`, `package.json`, `tsconfig.json`, `foo.tsx`.
+    - REJECT: `npm run build`, `const x` (whitespace), `https://example.com`,
+      `mailto:x@y.z`, `file:///etc/passwd` (protocol), `foo()`, `12345`, `-rf`,
+      a 600-char string (length cap), and any multi-token string.
+    - Edge note (from Review): bare dotfiles like `.env` do NOT match — fail-safe,
+      assert it stays `false` so the behavior is pinned.
+  This is genuinely valuable: the regexes are the brittle part of the feature and a
+  table test guards them against future edits.
 
-### Re-check (post-test-review)
+- **`linkifyFilePaths(rootEl)` — DOM mutation, NOT unit-covered, NOT cheaply feasible
+  (leave to QA/Playwright).** Requires jsdom + a stubbed `app` global
+  (`activeSessionId`, `openFilePreview`) + mocked `fetch`, plus async-resolution
+  timing, to verify class/`role`/`tabindex`/handler attachment, `<pre>` exclusion,
+  double-bind guard, and per-path de-dupe. The repo does not unit-test app.js DOM
+  mutators this way; equivalent UI behavior is covered by Playwright
+  (`transcript-web-view.test.ts`, `file-link-click.test.ts`) and by manual QA. No
+  committed Playwright test exists for THIS feature, but writing one is beyond the
+  unit-test gate's scope and would duplicate the QA phase. Defer to Phase QA.
 
-**Verdict: NO GAPS** — all changed code is now adequately covered.
+- **`_checkFilePathExists(sessionId, path)` — fetch + cache, NOT unit-covered, NOT
+  cheaply feasible (leave to QA).** Behavior (gate on JSON `success===true` not just
+  `res.ok`; per-`sessionId::path` Promise cache that de-dupes in-flight + persisted
+  results; catch→false) needs `fetch` mocking and the Map's lifecycle. No repo
+  precedent for unit-testing app.js fetch helpers; the underlying endpoint's
+  existence/sandbox semantics are already covered server-side
+  (`file-routes.ts`, and `file-link-click.test.ts` exercises the click→viewer path).
+  Defer to QA.
 
-Re-confirmed the diff vs `master`: the ONLY source change is `src/web/public/app.js`, with exactly two behavioral additions — `TranscriptView.removeLastOptimistic()` (~3364) and the `InputPanel._sendInner()` optimistic-first / fire-and-forget reorder (~21327-21420). Both original gaps are now filled with APPROVED, passing tests:
-- Gap 1 → `test/transcript-remove-last-optimistic.test.ts` (Playwright drive of the REAL method): 4/4 PASS.
-- Gap 2 → `test/optimistic-send-rollback.test.ts` (replica of the reorder): 6/6 PASS. Verified the replica covers every materially-changed branch — synchronous optimistic block, `/clear` no-bubble path, `setWorking(true)`, image strip with in-flight preservation, fire-and-forget ordering, reject rollback (text+images+bubble+toast), and the `!taNow.value.trim()` no-clobber guard.
+**Action:** write a focused unit test for `looksLikePath` only (pattern #1, mirroring
+`image-attach-rewrite.test.ts`). The two DOM/fetch fns are intentionally left to the
+QA/Playwright phase per the repo's testing conventions. `status` → `writing-tests`.
 
-Considered but NOT flagged (not material / not introduced by this change):
-- **`.then()` fallback-Enter poller** (the 20×150ms `setInterval` resend + shell-mode skip): pre-existing logic that was merely moved from inside the old `try` into `.then()`; its internals are byte-for-byte unchanged. It was never tested before this change and is not realistically fillable cheaply (timer-driven, depends on live session-status polling). The gap analysis already deprioritized it; the reorder introduced no new behavior here. Not a new gap.
-- Server levers (Lever 2) remain untouched — existing `tmux-send-keys-plan.test.ts` / `tmux-send-input-newlines.test.ts` still valid, no update needed.
+### Re-check pass (2026-06-03) — Verdict: NO GAPS → `status` → `qa`
 
-No new harness is warranted. Proceeding to QA.
+Re-ran after the Opus test review APPROVED `test/file-path-detection.test.ts`
+(24 cases for `looksLikePath`). Re-verified the harness situation is UNCHANGED:
+`vitest.config.ts` is still `environment: 'node'` with `coverage.include`
+`src/**/*.ts` only (app.js deliberately excluded), and `app.js` is still a
+browser bundle with no real exports (cannot be `import`ed). No new harness exists
+or should be invented.
+
+- The single feasible unit gap — `looksLikePath` (pure heuristic) — is now
+  covered. `npx vitest run test/file-path-detection.test.ts` → 24 passed
+  (re-run confirmed this pass).
+- `linkifyFilePaths` (DOM mutation) and `_checkFilePathExists` (fetch + cache)
+  are NOT newly feasible. There is still no repo precedent for unit-testing
+  app.js DOM mutators or fetch helpers; they require jsdom + stubbed `app`
+  global + mocked `fetch` + async timing. They remain QA/Playwright territory
+  exactly as in the original analysis, and pinning them in the unit gate would
+  duplicate the QA phase. The server-side existence/sandbox logic these depend on
+  is already covered (`file-routes.ts`, `file-link-click.test.ts`).
+- No genuinely feasible, valuable, previously-missed unit gap was found.
+
+**Decision:** the one feasible gap is covered; all remaining frontend behavior is
+QA/Playwright territory. `status` → `qa`.
+
+
 
 ## Test Writing Notes
-
-Two new test files were added — one per gap. No existing tests were refactored.
-
-### Gap 1 — `TranscriptView.removeLastOptimistic()` (Playwright browser drive)
-- **File created:** `test/transcript-remove-last-optimistic.test.ts`
-- **Pattern:** mirrors `test/transcript-clear-new-session.test.ts` exactly — boots a real `WebServer` (port **3262**, previously unused) in headless Chromium, calls the REAL `TranscriptView.appendOptimistic` / `removeLastOptimistic` and the real `app._onTranscriptBlock` handler via `page.evaluate`, then asserts on the live DOM.
-- **Covers (4 tests):**
-  1. `removeLastOptimistic()` removes the `[data-optimistic="true"]` bubble AND resets `_pendingOptimisticText` to `null`.
-  2. A real (non-optimistic) assistant block (rendered via the real `_onTranscriptBlock` → `append` → `_appendBlock`, which never sets `data-optimistic`) is left untouched — asserted by counting `.tv-block--assistant` elements without the optimistic marker before/after. This is the load-bearing spec point (real SSE blocks are not stripped).
-  3. With two optimistic bubbles, only the LAST is removed.
-  4. No-op / no throw when there is no optimistic bubble.
-- **Run:** `npx vitest run test/transcript-remove-last-optimistic.test.ts`
-- **Result:** 4/4 PASS (~10s incl. server+browser boot).
-
-### Gap 2 — Optimistic-before-send ordering + rollback-on-failure (pure-function replica)
-- **File created:** `test/optimistic-send-rollback.test.ts`
-- **Pattern:** mirrors `test/image-send-race-guard.test.ts` — re-implements the reordered `InputPanel._sendInner()` body (post-validation) in TypeScript with a controllable `app.sendInput` stub (resolve / reject / never-settle) and a `TranscriptView` replica (appendOptimistic/removeLastOptimistic/setWorking). Faithfully mirrors current app.js (~lines 21330-21421): rollback snapshot captured before the synchronous image strip, optimistic block runs synchronously, `app.sendInput(...)` fired WITHOUT `await`, `.catch()` rollback with the `!taNow.value.trim()` no-clobber guard, `_restoreImages(_sentImagePaths)`, guarded `removeLastOptimistic()`, and the exact error toast string.
-- **Covers (6 tests):**
-  - Synchronous optimistic UI: textarea cleared + bubble appended + `setWorking(true)` + `\r`-terminated POST fired, all BEFORE the (never-settled, pending) `sendInput` promise resolves; sent images stripped synchronously while in-flight images are preserved; `/clear` uses the no-bubble path.
-  - Rollback on a REJECTED POST: restores text (when textarea still empty), restores image paths from the snapshot, removes the optimistic bubble, fires the error toast.
-  - No-clobber guard: text the user typed into the textarea during the in-flight gap is NOT overwritten on failure (bubble still rolled back, toast still fires).
-  - Success path: no rollback (textarea stays empty, bubble stays, images stay cleared, no toast).
-- **Run:** `npx vitest run test/optimistic-send-rollback.test.ts`
-- **Result:** 6/6 PASS (~0.2s).
-- **Limitation (per Gap Analysis):** this is a replica, not a drive of the real `_sendInner` (app.js is an export-less browser bundle, vitest env is `node`/no-jsdom). It cannot detect replica/source divergence — same accepted tradeoff as the existing `image-send-race-guard.test.ts` and sibling replica tests.
-
-### Verification
-- Both new files typecheck clean (`npx tsc --noEmit` — no errors in either file).
-- No implementation bugs found; all tests pass against the current fix. (One initial Playwright assertion used full `innerText` matching which was brittle against the empty-CTA placeholder + markdown wrapping of long reply text — switched to DOM `.tv-block--assistant` counting; this was a test-bug fix, not an implementation issue.)
 <!-- filled by test writing subagent -->
+
+### test/file-path-detection.test.ts (2026-06-03)
+- Added a focused unit test for the pure heuristic `looksLikePath(text)` only.
+  The two DOM/fetch functions (`linkifyFilePaths`, `_checkFilePathExists`) are
+  intentionally left to the QA/Playwright phase per the gap analysis.
+- **Pattern:** hand-copied `_FILE_PATH_EXTENSIONS`, `_FILE_PATH_WITH_SLASH_RE`,
+  `_FILE_PATH_BARE_RE`, and `looksLikePath` VERBATIM from
+  `src/web/public/app.js` (~lines 435-454) into the test file and exercised the
+  copy with an accept/reject table. This mirrors the established repo precedent
+  in `test/image-attach-rewrite.test.ts` (which copies the sibling free fn
+  `replaceImagePaths`). app.js is a browser bundle with no exports, so it cannot
+  be imported.
+- **Known limitation:** because the source is hand-copied, the test will NOT
+  catch the source drifting out of sync — if `looksLikePath` or its regexes
+  change in app.js, this copy must be updated by hand. This is the accepted
+  limitation of the repo's app.js unit-test pattern, documented in the file's
+  docblock.
+- **Coverage groups (24 cases, all passing):**
+  - Accepts: slash-separated paths (`src/index.ts`,
+    `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`, `dist/index.js`,
+    `src/web/public/app.js`) and bare filenames with known extensions
+    (`package.json`, `README.md`, `styles.css`, `tsconfig.json`).
+  - Rejects: command/code fragments with whitespace (`npm run build`,
+    `const x = 5`), parens (`foo()`), URLs/protocols (`https://...`,
+    `http://localhost:3001/api`, `mailto:`, `file://`), empty string, backticks,
+    angle brackets, bare word without slash/extension (`something`), >512-char
+    string.
+  - Extension-list significance (documents bare-vs-slash behavior): bare
+    `image.png` is REJECTED (png not in `_FILE_PATH_EXTENSIONS`) but
+    `foo/image.png` is ACCEPTED via the slash regex (it does not consult the
+    extension list).
+  - Edge cases (pinned): leading/trailing whitespace is trimmed before eval;
+    leading-dot dotfile `.env` is REJECTED (the bare regex requires a char
+    before the extension dot) — fail-safe behavior intentionally pinned.
+- **Verification:** every expected value was checked against the actual regex
+  (via a node harness) BEFORE asserting. No aspirational assertions; all 24
+  reflect real function behavior. `npx vitest run test/file-path-detection.test.ts`
+  → 24 passed.
 
 ## Test Review History
 <!-- appended by each Opus test review subagent — never overwrite -->
 
 ### Test review attempt 1 — APPROVED
 
-Both new test files reviewed against the two gaps, verified line-by-line against the real app.js source, and run to confirm they pass.
+Reviewed `test/file-path-detection.test.ts` (24 cases) against source
+`src/web/public/app.js` lines 434-455 and the repo precedent
+`test/image-attach-rewrite.test.ts`.
 
-**Gap 1 — `test/transcript-remove-last-optimistic.test.ts` (Playwright drive):**
-- Coverage: drives the REAL `TranscriptView.appendOptimistic` / `removeLastOptimistic` and the real `app._onTranscriptBlock` handler in headless Chromium, asserting on live DOM. Directly exercises the new method (app.js ~3366), not a replica.
-- Correctness: assertions check real behaviour — `[data-optimistic="true"]` element removed, `_pendingOptimisticText` reset to `null`, real assistant block left untouched. Verified against source: `_appendBlock` (app.js 3574-3577) only strips the optimistic marker when a *user* SSE block arrives; the test uses a `role: 'assistant'` block so that path doesn't fire, and assistant blocks never carry `data-optimistic`. The `assistantBlockCount` filter (excludes `data-optimistic`) makes test 2 genuinely load-bearing.
-- Edge cases: multiple bubbles (only last removed), no-op/no-throw with nothing to remove (matches real `removeLastOptimistic` which unconditionally nulls `_pendingOptimisticText`).
-- Style: mirrors `transcript-clear-new-session.test.ts` exactly (same `new WebServer(PORT, false, true)` testMode, beforeAll/afterAll, page-per-test). Port 3262 confirmed unique across the test suite.
-- Result: 4/4 PASS (~8s incl. browser+server boot).
+**Verbatim-copy check: PASS.** The hand-copied `_FILE_PATH_EXTENSIONS`,
+`_FILE_PATH_WITH_SLASH_RE` (`/^[\w.@~-]+(?:\/[\w.@~+-]+)+$/`), `_FILE_PATH_BARE_RE`
+(`new RegExp('^[\\w.@~-]+\\.(?:' + EXT + ')$', 'i')`), and the `looksLikePath` body
+(trim → length-cap → `/[\s\`<>]/` reject → `/^[a-z][a-z0-9+.-]*:/i` protocol reject →
+slash-OR-bare) match the source exactly. The only difference is `var`→`const`, which is
+semantically identical. No stale logic.
 
-**Gap 2 — `test/optimistic-send-rollback.test.ts` (pure-function replica):**
-- Replica fidelity (the critical check): verified against real `_sendInner` (app.js 21330-21421). Confirmed the replica faithfully mirrors current behaviour:
-  - Rollback snapshot (`_sentImagePaths` from path-filtered `images`, `_optimisticAppended`) captured BEFORE the synchronous image strip — matches 21335-21336.
-  - Optimistic block runs synchronously (appendOptimistic / `/clear` no-bubble path / setWorking(true)) under the `TranscriptView._sessionId === app.activeSessionId` guard — matches 21341-21354.
-  - `ta.value = ''` and `this._images = filter(!img.path)` (in-flight preserved) run before the POST — matches 21364-21368.
-  - `app.sendInput(inputString, _sendSessionId)` fired WITHOUT await; `.then()` = success (poller, not modeled — acceptable per gap analysis), `.catch()` = rollback — matches 21375-21421.
-  - `.catch()` restores `ta.value = text` only under the `!taNow.value.trim()` no-clobber guard, calls `_restoreImages(_sentImagePaths)` unconditionally, removes the bubble only when `_optimisticAppended && _sessionId === _sendSessionId && typeof removeLastOptimistic === 'function'`, and toasts the EXACT string `'Message failed to send — your input has been restored.'` ('error') — all match 21408-21420 verbatim.
-- Edge cases covered: synchronous optimistic UI before a never-settling POST; sent-image strip + in-flight preservation; `/clear` no-bubble; rollback on reject (text+images+bubble+toast); no-clobber guard (user typed during in-flight gap → draft preserved, bubble still rolled back, toast still fires); success path (no rollback, bubble/cleared-images stay, no toast).
-- Style: mirrors `image-send-race-guard.test.ts` (TS replica, stubbed `sent[]`/`toasts[]`, controllable promise behaviour). Same accepted replica/source-divergence tradeoff, documented in the file header and gap analysis.
-- Result: 6/6 PASS (~10ms).
+**Correctness: PASS.** I re-implemented the regexes in a standalone Node harness and
+independently evaluated all 24 inputs — every asserted expected value matches the real
+function output (24/24, zero mismatches). Spot-verified the tricky ones the task called
+out: `foo/image.png`→true (slash regex, png chars are word chars, extension list not
+consulted), bare `image.png`→false (png absent from extension list), `.env`→false (bare
+regex requires ≥1 char before the dot; leading-dot dotfiles don't match — note `env` IS
+in the extension list, so the rejection is purely the leading-dot, correctly pinned),
+`mailto:x@y.z`→false (protocol guard fires before regexes). No aspirational assertions.
 
-No issues found. Both gaps are genuinely covered, assertions verify real behaviour, the replica matches the actual app.js logic (not an idealized version), and inputs/mocks are realistic. No source or test files were modified during review.
+**Coverage: PASS.** Covers the brittle heuristic — the one feasible unit gap. Accept set
+includes the real screenshot path
+(`apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`) and spec examples
+(`src/index.ts`, `dist/index.js`) plus bare known-extension files. Reject set covers
+realistic inline-code spans: command fragments (whitespace), code with parens, the full
+protocol family, empty string, backticks, angle brackets, bare word, and the 512-char
+cap. Boundary behaviors (whitespace trim, length cap, protocol guard, unknown-extension
+bare-vs-slash divergence, leading-dot dotfile) are all pinned.
+
+**Realism / Style: PASS.** Inputs are plausible transcript inline-code spans. Uses
+`it.each` with `%j` table groups and nested `describe` blocks, matching the
+`image-attach-rewrite.test.ts` precedent. Docblock honestly documents the hand-copy
+pattern and the known drift limitation.
+
+**Execution:** `npx vitest run test/file-path-detection.test.ts` → 24 passed (1 file).
+
+Correctly scoped: `linkifyFilePaths` (DOM) and `_checkFilePathExists` (fetch/cache) are
+deferred to QA/Playwright per the gap analysis and repo conventions — no unit-test
+precedent exists for those, and pinning them here would duplicate the QA phase. No
+issues found.
 
 ## QA Results
 <!-- filled by QA subagent -->
 
-### QA attempt 1 — PASS (2026-05-31)
+### Automated checks (2026-06-03) — ALL PASS
+- **TypeScript typecheck** (`npm run typecheck`): PASS — 0 errors. app.js is plain JS (not typechecked); TS build unaffected.
+- **Lint** (`npm run lint`, runs `eslint 'src/**/*.ts'`): PASS — 0 errors, 2 pre-existing unused-eslint-disable warnings in `src/vault/search.ts` and `src/web/routes/session-routes.ts` (unrelated to this change; app.js is not in the eslint glob).
+- **Unit test** (`npx vitest run test/file-path-detection.test.ts`): PASS — 24/24 tests.
+- **Build** (`npm run build`): PASS — completes, app.js bundles to 550.6kb. Built `dist/web/public/app.js` contains `linkifyFilePaths` (2 refs) and `tv-file-link`; built `dist/web/public/styles.css` contains `tv-file-link`.
 
-**1. `npx tsc --noEmit`** — PASS (exit 0, zero errors).
-
-**2. `npm run lint`** — PASS (exit 0, 0 errors). 2 pre-existing warnings, both unrelated to the changed file `src/web/public/app.js`:
-- `src/vault/search.ts:11` — unused eslint-disable directive.
-- `src/web/routes/session-routes.ts:246` — unused eslint-disable directive.
-No new lint errors introduced by the change.
-
-**3. New test files** — PASS.
-`npx vitest run test/optimistic-send-rollback.test.ts test/transcript-remove-last-optimistic.test.ts`
-→ 2 files, 10/10 tests passed (~10s; Playwright file 4/4, replica file 6/6).
-
-**4. Frontend dev-server check (port 3115)** — PASS.
-- Server started clean (version 0.6.6), `GET /api/status` 200, no startup errors in `/tmp/codeman-3115.log`.
-- Loaded `http://localhost:3115` (domcontentloaded + 4s settle) in headless Chromium.
-- Method/wiring assertions via `page.evaluate`:
-  - `typeof TranscriptView.removeLastOptimistic` === `'function'` ✓
-  - `typeof InputPanel._sendInner` === `'function'` ✓
-  - `appendOptimistic`, `setWorking`, `app.sendInput` all `'function'` ✓
-- Opened a session; compose textarea rendered (`COMPOSE_TEXTAREA=true`).
-- Console: 0 errors total, 0 errors matching `removeLastOptimistic|_sendInner|appendOptimistic|sendInput`.
-- Server killed after the check; port 3115 confirmed down.
-
-**Verdict: all gates PASS. status → done.**
+### Frontend Playwright check (port 43219) — PASS
+- Server start note: the worktree's `node_modules` symlinks to the main repo, where `better-sqlite3` is compiled for NODE_MODULE_VERSION 141. The default `/usr/bin/node` (v22, ABI 127) fails to load it. Started successfully via `/home/linuxbrew/.linuxbrew/bin/node` (v25.6.1, ABI 141 — same binary the systemd service uses). `/api/status` returned version 0.6.6 with live sessions. (Environment/ABI quirk only — not a code defect.)
+- **`window.app` present**: true.
+- **CSS rule `tv-file-link` active**: injected `<code class="tv-file-link">` inside `.tv-markdown`; computed style = `cursor: pointer`, `text-decoration-line: underline`, `text-decoration-style: dotted`, `color: rgb(165,243,252)`. Both assertions (cursor=pointer, dotted/underline) PASS — CSS parses and applies.
+- **Bundle loaded clean for the feature**: fetched `/app.js` confirmed `linkifyFilePaths` and `tv-file-link` present. No JS errors originate from the transcript/file-path code.
+- **Pre-existing console errors (NOT caused by this change)**: 13 errors, all from `/vendor/xterm*.{js,css}` 404s → `ReferenceError: Terminal is not defined` (app.js:5628). Root cause: `src/web/public/vendor` is normally a symlink that is absent in this worktree (untracked per cleanup commit 7dde8b22); the tsx dev server serves from source where vendor is missing. `git diff master` shows NO vendor changes. This only breaks the xterm terminal view, not transcript markdown rendering. Not a feature regression.
+- **End-to-end (best-effort)**: SKIPPED — the xterm/vendor breakage in the dev-source environment prevents reliably driving into a session transcript; the unit test + CSS-active + clean-feature-load checks are sufficient per QA guidance.
 
 ### Docs Staleness
-- `src/web/public/app.js` changed → flag "UI docs may need update (frontend changed significantly)". (Informational only — not updated per QA scope. Change is internal send-ordering / rollback logic with no user-facing UI surface or copy change, so doc impact is likely minimal.)
-- No `src/web/routes/*.ts` changes → no API docs flag.
-- No `skills/*/SKILL.md` changes → no skill docs flag.
-- Note: changes are in the working tree (uncommitted), so `git diff master..HEAD` is empty; staleness assessed against the working-tree diff (`git status`).
+- UI docs may need update (frontend changed): `src/web/public/app.js`, `src/web/public/styles.css` were modified.
+- No `src/web/routes/*.ts` changes → API docs unaffected.
+- No `skills/*/SKILL.md` changes → skill docs unaffected.
+- (Informational only — docs not modified by QA.)
 
 ## Decisions & Context
 <!-- append-only log of key decisions made during the workflow -->
+- User confirmed: modal overlay, ONLY if file exists; no overlay when missing.
+- User confirmed: sandboxed to project root, must not escape into parent dir.
+- Source filename example from screenshot: inline-code span
+  `apps/skyvern/booking-sync/SKYVERN-FORK-FIX-BRIEF.md`.
+- REUSE EXISTING INFRASTRUCTURE — do NOT build a new viewer or backend. The
+  read-only file viewer the user referred to ("when I open the file explorer and
+  open a file") already exists. Wire the transcript click to the existing
+  open-file path directly:
+  - Frontend viewer: `openFilePreview(filePath)` in
+    `src/web/public/app.js` (~line 19296). Arg is a path RELATIVE to the session
+    working dir (e.g. "src/app.js"). It fetches contents and opens the read-only
+    overlay modal (`filePreviewOverlay`). This is the modal to open on click.
+  - Backend (already does existence + sandboxing, reuse as-is):
+    `GET /api/sessions/:id/file-content?path=<relative>` in
+    `src/web/routes/file-routes.ts` (~lines 158-261). It resolves against
+    `session.workingDir`, runs `realpathSync`, and REJECTS paths where the
+    relative result starts with `..` or is absolute (INVALID_INPUT) — i.e. the
+    "cannot escape into parent dir" sandbox the user requires is ALREADY enforced
+    server-side. A missing file returns an error response. So "only clickable if
+    exists" = do a cheap existence check against this endpoint (or its raw/stat
+    sibling) and only attach the click handler on success.
+  - Session id / working dir on the frontend: `this.activeSessionId` and
+    `this.sessions.get(id)?.workingDir` (a.k.a. `this.currentSessionWorkingDir`,
+    ~line 9662). Resolve transcript paths the same way the explorer does — pass
+    the path relative to workingDir to `openFilePreview()`.
+  - Path-detection reference: `registerFilePathLinkProvider()` (~line 5926) shows
+    how terminal file links are already detected; mirror that heuristic for inline
+    code spans in the transcript renderer rather than inventing a new one.
+  - Net scope: detect path-like inline-code spans in rendered transcript markdown
+    → existence-check via file-content endpoint → if it exists, style as a link &
+    on click call openFilePreview(relativePath); if not, leave as plain inline
+    code. No new modal, no new endpoint, no new sandbox logic.
 
-### Fix subagent (2026-05-31)
+### Analysis subagent findings (2026-06-03)
+- VERIFIED affected_area = frontend ONLY. The existing
+  `GET /api/sessions/:id/file-content` (file-routes.ts 157-261) already does
+  existence + symlink-resolved sandbox enforcement; no backend change is needed.
+  Updated `affected_area` and `status` (analysis → fixing) accordingly.
+- Inline code `<code>` spans are produced by the FREE function chain
+  `renderMarkdown` → `inlineMarkdown` (app.js 188 / 355) with NO id/class, inner
+  text HTML-escaped. The rendered HTML reaches the DOM via `innerHTML` at exactly
+  three TranscriptView sites: app.js 3961 (`_typewriterReveal` final pass),
+  4344 (compact summary), 4442 (assistant content). User bubbles use `textContent`
+  (no markdown) — out of scope.
+- Chosen hook: a new free fn `linkifyFilePaths(rootEl)` invoked on the DOM element
+  AFTER each of those three innerHTML assignments (operates on live DOM so it can
+  attach click handlers + a11y attrs without re-escaping). Detection: querySelectorAll
+  '<code>' not inside <pre>, filtered by a relative-path heuristic, then gated by an
+  existence check against the file-content endpoint (lines=1), with a per
+  sessionId+path Promise cache to de-dupe/avoid request storms. Only spans the backend
+  confirms add class `tv-file-link` + click → `app.openFilePreview(path)`. Paths are
+  passed VERBATIM (already project-relative); ALL sandboxing stays server-side.
+- IMPORTANT impl note: file-content's error path RETURNS `createErrorResponse(...)`
+  (HTTP 200 + `{success:false}` body), so the existence check must read the JSON
+  `success` flag, not just `res.ok`.
+- Existing file-preview overlay has only an X close button (no Esc/backdrop). Reusing
+  as-is is acceptable; adding Esc/backdrop is optional and out of scope.
+- Full implementation spec written to `## Root Cause / Spec` above with exact line
+  anchors and a concrete touch-list.
 
-1. **Lever 1 only; Lever 2 (server) deliberately NOT changed.** Rationale:
-   - Lever 1 fully satisfies the perceived-latency acceptance criteria: the textarea now clears and the optimistic bubble + working indicator render within ~1 frame, completely decoupled from tmux send-keys timing and the HTTP round-trip.
-   - The server `await session.writeViaMux(inputStr)` at session-routes.ts:724 is intentionally coupled to the client's fallback-Enter retry baseline (per the comment at lines 718-721: the client poller assumes the 200 means Enter was dispatched). Making the server fire-and-forget would break that assumption and risk reordering / lost-write-error handling. TASK.md flagged this as RISKIER/SECONDARY.
-   - In the compose-bar path specifically, `_sendInner` already collapses input to a single line (`sendText + '\r'`), so server-side delay is only ~150ms (one 50ms line delay + 100ms pre-Enter), which is now hidden entirely behind the optimistic UI. There was no clearly safe, low-risk server trim available, so the server is left as-is per the task instruction ("Do NOT make a risky server change").
-
-2. **`_sending` reset timing:** reset on `_sendInner` return (immediately after firing the fire-and-forget POST), NOT on promise settle. Detailed rationale in Fix / Implementation Notes — double-submit is prevented by the empty-textarea guard once the optimistic clear runs, so the early reset is safe and keeps the UI responsive.
-
-3. **Rollback robustness:** on POST failure the textarea is restored only if it is still empty (user hasn't begun typing a replacement), the optimistic bubble is removed via a new `removeLastOptimistic()` helper, sent images are restored, and a toast fires. The cross-session guard (`TranscriptView._sessionId === ...`) is preserved at every optimistic render/rollback site so a background-session send never mutates the foreground transcript.
-
-4. **Verification:** `node --check src/web/public/app.js` → OK; `npx tsc --noEmit` → exit 0, no errors.
+### Fix subagent decisions (2026-06-03)
+- All spec line anchors re-verified against current code before editing and matched:
+  `replaceImagePaths` @400, the three innerHTML sites @3961/4344/4442, `openFilePreview`
+  @19296, `.tv-markdown code` CSS @10224.
+- Implemented `linkifyFilePaths` as a free function reaching the `app` global (reads
+  `app.activeSessionId`, calls `app.openFilePreview`) rather than a TranscriptView method,
+  matching `replaceImagePaths`'s free-function placement. Bails early if no active session.
+- Existence check reuses `file-content?lines=1` and gates on JSON `success === true`
+  (not `res.ok` alone) — the route returns HTTP 200 + `{success:false}` for
+  missing/sandbox-escaping paths. Paths passed verbatim; no frontend path logic added,
+  so the server-side `realpathSync` + `relative().startsWith('..')` sandbox is the sole gate.
+- Double-binding guarded two ways: skip `<code>` already carrying `tv-file-link` at query
+  time, and re-check before attaching handlers in the async callback (re-renders re-query
+  fresh subtrees; cache makes repeat checks free).
+- Added `:focus-visible` outline beyond the spec's hover rule for keyboard accessibility,
+  consistent with the `role=link`/`tabindex=0`/Enter-Space handlers.
