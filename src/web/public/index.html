@@ -4,8 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
   <meta name="description" content="Claude Code session manager with web interface">
-  <meta name="theme-color" content="#0a0a0a">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="google" content="notranslate">
+  <!-- Theme boot: resolve persisted theme synchronously before any stylesheet loads.
+       Prevents flash-of-wrong-theme. Paired with src/web/public/app.js setTheme. -->
+  <script>
+    (function(){var t='dark';try{var s=localStorage.getItem('codeman-theme');if(s==='light'||s==='dark')t=s;else if(s==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)t='light';}catch(e){}document.documentElement.dataset.theme=t;})();
+  </script>
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
@@ -32,6 +38,12 @@
     .skeleton-tab{width:80px;height:24px;background:#1a1a2e;border-radius:4px}
     .skeleton-terminal{flex:1;background:#0d0d0d}
     .skeleton-toolbar{height:32px;background:#111;border-top:1px solid #1a1a2e}
+    html[data-theme="light"] .loading-skeleton{background:#ffffff}
+    html[data-theme="light"] .skeleton-header{background:#f5f5f5;border-bottom-color:#e4e4e4}
+    html[data-theme="light"] .skeleton-brand{color:#1d4ed8}
+    html[data-theme="light"] .skeleton-tab{background:#e8e8e8}
+    html[data-theme="light"] .skeleton-terminal{background:#fafafa}
+    html[data-theme="light"] .skeleton-toolbar{background:#f5f5f5;border-top-color:#e4e4e4}
     .app-loaded .loading-skeleton{display:none}
   </style>
 </head>
@@ -1066,6 +1078,29 @@
           <!-- Display Tab -->
           <div class="modal-tab-content" id="settings-display">
             <div class="settings-grid">
+              <!-- Appearance Section -->
+              <div class="settings-section-header">Appearance</div>
+              <div class="settings-item settings-item-multiline" title="Pick a color theme. System follows your OS preference and updates live when it changes.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Theme</span>
+                  <span class="settings-item-desc">Dark, Light, or match your OS</span>
+                </div>
+                <div class="theme-radio-group" role="radiogroup" aria-label="Theme">
+                  <label class="theme-radio">
+                    <input type="radio" name="appSettingsThemeMode" value="dark">
+                    <span>Dark</span>
+                  </label>
+                  <label class="theme-radio">
+                    <input type="radio" name="appSettingsThemeMode" value="light">
+                    <span>Light</span>
+                  </label>
+                  <label class="theme-radio">
+                    <input type="radio" name="appSettingsThemeMode" value="system">
+                    <span>System</span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Input Section -->
               <div class="settings-section-header">Input</div>
               <div class="settings-item settings-item-multiline" title="Scan messages for API keys, tokens, and other secrets before sending. Detected secrets are replaced with named placeholders ([SECRET_TYPE_N]) and held in memory for this session only — never stored on disk or sent over the wire.">
@@ -2159,12 +2194,12 @@
   </div>
 
   <!-- Session Lifecycle Audit Log (floating window) -->
-  <div id="lifecycleWindow" style="display:none;position:fixed;z-index:2000;top:60px;left:50%;transform:translateX(-50%);width:900px;max-width:95vw;min-width:400px;min-height:250px;height:520px;background:#111;border:1px solid #333;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.6);resize:both;overflow:hidden">
-    <div id="lifecycleWindowHeader" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#1a1a2e;border-bottom:1px solid #333;cursor:move;user-select:none;border-radius:8px 8px 0 0">
-      <span style="color:#e0e0e0;font-size:13px;font-weight:600">Session Lifecycle Log</span>
+  <div id="lifecycleWindow" style="display:none;position:fixed;z-index:2000;top:60px;left:50%;transform:translateX(-50%);width:900px;max-width:95vw;min-width:400px;min-height:250px;height:520px;background:var(--bg-primary);border:1px solid var(--border-light);border-radius:8px;box-shadow:0 8px 32px var(--overlay-backdrop-strong);resize:both;overflow:hidden">
+    <div id="lifecycleWindowHeader" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--surface-2);border-bottom:1px solid var(--border-light);cursor:move;user-select:none;border-radius:8px 8px 0 0">
+      <span style="color:var(--text);font-size:13px;font-weight:600">Session Lifecycle Log</span>
       <div style="display:flex;gap:8px;align-items:center">
         <div style="display:flex;gap:6px;flex-wrap:nowrap">
-          <select id="lifecycleFilterEvent" style="background:#0d0d0d;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:2px 6px;font-size:11px">
+          <select id="lifecycleFilterEvent" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border-light);border-radius:4px;padding:2px 6px;font-size:11px">
             <option value="">All Events</option>
             <option value="created">Created</option>
             <option value="started">Started</option>
@@ -2176,16 +2211,16 @@
             <option value="server_started">Server Started</option>
             <option value="server_stopped">Server Stopped</option>
           </select>
-          <input id="lifecycleFilterSession" type="text" placeholder="Session ID..." style="background:#0d0d0d;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:2px 6px;font-size:11px;width:120px">
-          <button onclick="app.loadLifecycleLog()" style="background:#333;color:#ccc;border:1px solid #444;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">Refresh</button>
+          <input id="lifecycleFilterSession" type="text" placeholder="Session ID..." style="background:var(--bg-input);color:var(--text);border:1px solid var(--border-light);border-radius:4px;padding:2px 6px;font-size:11px;width:120px">
+          <button onclick="app.loadLifecycleLog()" style="background:var(--bg-hover);color:var(--text-dim);border:1px solid var(--border-light);border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">Refresh</button>
         </div>
-        <button onclick="app.closeLifecycleLog()" style="background:none;border:none;color:#888;font-size:18px;cursor:pointer;padding:0 4px;line-height:1" aria-label="Close">&times;</button>
+        <button onclick="app.closeLifecycleLog()" style="background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer;padding:0 4px;line-height:1" aria-label="Close">&times;</button>
       </div>
     </div>
     <div style="overflow:auto;height:calc(100% - 36px);padding:4px 0">
       <table id="lifecycleTable" style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace">
         <thead>
-          <tr style="color:#888;text-align:left;border-bottom:1px solid #333;position:sticky;top:0;background:#111">
+          <tr style="color:var(--text-dim);text-align:left;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:var(--bg-primary)">
             <th style="padding:4px 8px">Time</th>
             <th style="padding:4px 8px">Event</th>
             <th style="padding:4px 8px">Session</th>
@@ -2195,7 +2230,7 @@
         </thead>
         <tbody id="lifecycleTableBody"></tbody>
       </table>
-      <div id="lifecycleEmpty" style="color:#666;text-align:center;padding:20px;display:none">No lifecycle entries found</div>
+      <div id="lifecycleEmpty" style="color:var(--text-muted);text-align:center;padding:20px;display:none">No lifecycle entries found</div>
     </div>
   </div>
 
@@ -2536,8 +2571,8 @@
   <div class="mcp-panel-body">
     <div class="ctx-donut-wrap">
       <svg class="ctx-donut" viewBox="0 0 100 100" width="96" height="96" aria-hidden="true">
-        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" stroke-width="12"/>
-        <circle cx="50" cy="50" r="40" fill="none" stroke="#22d3ee" stroke-width="12"
+        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--border-light)" stroke-width="12"/>
+        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent)" stroke-width="12"
           stroke-dasharray="251.2" stroke-dashoffset="251.2"
           stroke-linecap="round" transform="rotate(-90 50 50)"
           id="ctxDonutArc"/>
