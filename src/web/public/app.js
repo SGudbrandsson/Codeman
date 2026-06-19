@@ -3202,6 +3202,7 @@ const TranscriptView = {
   // Periodic sync: catches missed SSE blocks by comparing against the backend transcript.
   // Runs every 30s. Only active when transcript view is visible and not mid-load.
   _periodicSync() {
+    if (window.app?.authExpired) return;
     if (!this._sessionId || !this._container) return;
     const sessionId = this._sessionId;
     const state = this._getState(sessionId);
@@ -5085,6 +5086,10 @@ class CodemanApp {
     // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
     this.pendingElicitation = null;
 
+    // Deferred permission block data — stored when a permission hook fires for a non-active
+    // session so the block can be rendered when the user later switches to that session.
+    this._pendingPermissionData = null;
+
     // AskUserQuestion is now handled entirely by the inline tv-auq-block in TranscriptView.
     // No panel state needed — the block element manages its own lifecycle.
 
@@ -6709,6 +6714,9 @@ class CodemanApp {
       return;
     }
 
+    // Don't reconnect if auth has expired
+    if (this.authExpired) return;
+
     // Clear any pending reconnect timeout to prevent duplicate connections
     if (this.sseReconnectTimeout) {
       clearTimeout(this.sseReconnectTimeout);
@@ -6779,6 +6787,8 @@ class CodemanApp {
       if (this.sseReconnectTimeout) {
         clearTimeout(this.sseReconnectTimeout);
       }
+      // Don't schedule reconnect if auth has expired — circuit breaker handles it
+      if (this.authExpired) return;
       // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
       // Fast first retry (200ms) for server-restart case (COM deploy),
       // then ramp up for real network issues.
@@ -6810,6 +6820,52 @@ class CodemanApp {
     for (const [event] of _SSE_HANDLER_MAP) {
       addListener(event, this._sseHandlerWrappers.get(event));
     }
+  }
+
+  /**
+   * Called when a 401 response is detected — session cookie has expired.
+   * Stops all pollers to prevent request storms and shows a re-auth overlay.
+   */
+  _onAuthExpired() {
+    // Stop SSE connection and prevent reconnect
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    if (this.sseReconnectTimeout) {
+      clearTimeout(this.sseReconnectTimeout);
+      this.sseReconnectTimeout = null;
+    }
+
+    // Stop system stats polling (2s interval)
+    this.stopSystemStatsPolling();
+
+    // Stop ActionDashboard polling (30s interval)
+    if (typeof ActionDashboard !== 'undefined') ActionDashboard.stopPolling();
+
+    this.setConnectionStatus('disconnected');
+
+    // Show session-expired overlay
+    this._showAuthExpiredOverlay();
+  }
+
+  _showAuthExpiredOverlay() {
+    // Prevent duplicate overlays
+    if (document.getElementById('authExpiredOverlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'authExpiredOverlay';
+    overlay.className = 'auth-expired-overlay';
+    overlay.innerHTML = `
+      <div class="auth-expired-content">
+        <div class="auth-expired-icon">&#x1f512;</div>
+        <h2>Session Expired</h2>
+        <p>Your authentication session has timed out.</p>
+        <button class="auth-expired-btn">Re-authenticate</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.auth-expired-btn').addEventListener('click', () => location.reload());
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -7666,6 +7722,8 @@ class CodemanApp {
       title: 'Permission Required',
       message: toolInfo || 'Claude needs tool approval to continue',
     });
+    // Store for deferred rendering when user switches to this session later (PWA background etc.)
+    this._pendingPermissionData = { sessionId: data.sessionId, data };
     // Show inline permission block in transcript view
     if (data.sessionId === this.activeSessionId && TranscriptView._sessionId === data.sessionId) {
       TranscriptView.setWorking(false);
@@ -7827,6 +7885,7 @@ class CodemanApp {
 
   /** Sends a permission prompt response (y/n/a) and clears the inline block. */
   sendPermissionResponse(sessionId, key) {
+    this._pendingPermissionData = null;
     this.clearPendingHooks(sessionId, 'permission_prompt');
     TranscriptView._removePermissionBlock();
     fetch(`/api/sessions/${sessionId}/input`, {
@@ -8641,6 +8700,7 @@ class CodemanApp {
 
   setupOnlineDetection() {
     window.addEventListener('online', () => {
+      if (this.authExpired) return;
       this.isOnline = true;
       this.reconnectAttempts = 0;
       this.connectSSE();
@@ -8662,6 +8722,7 @@ class CodemanApp {
    * Fixes the "frozen tab" bug where terminal stops updating after switching away.
    */
   _onTabVisible() {
+    if (this.authExpired) return;
     if (!this.isOnline) return;
     const es = this.eventSource;
     if (!es || es.readyState === EventSource.CLOSED) {
@@ -8758,6 +8819,7 @@ class CodemanApp {
     this._loadBufferQueue = null;
     // Clear pending hooks
     this.pendingHooks.clear();
+    this._pendingPermissionData = null;
     // Clear parent name cache (prevents stale session name entries accumulating)
     if (this._parentNameCache) this._parentNameCache.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -9734,6 +9796,12 @@ class CodemanApp {
     }
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
+    // Deferred permission block: if a permission hook fired while this session wasn't active,
+    // render the inline block now that the user has switched to it.
+    if (this._pendingPermissionData?.sessionId === sessionId && TranscriptView._sessionId === sessionId) {
+      TranscriptView.setWorking(false);
+      TranscriptView._renderPermissionBlock(this._pendingPermissionData.data);
+    }
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
@@ -10015,6 +10083,7 @@ class CodemanApp {
     this.ralphClosedSessions.delete(sessionId);
     this.projectInsights.delete(sessionId);
     this.pendingHooks.delete(sessionId);
+    if (this._pendingPermissionData?.sessionId === sessionId) this._pendingPermissionData = null;
     this.tabAlerts.delete(sessionId);
     this.removeAttentionItemsForSession(sessionId);
     this.clearCountdownTimers(sessionId);
@@ -13524,16 +13593,50 @@ class CodemanApp {
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       this._swRegistration = reg;
+
       // Listen for messages from service worker (notification clicks)
       navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'notification-click') {
-          const { sessionId } = event.data;
+          const { sessionId, action } = event.data;
           if (sessionId && this.sessions.has(sessionId)) {
+            // Map push notification actions to permission responses
+            if (action === 'approve') {
+              this.sendPermissionResponse(sessionId, 'y');
+            } else if (action === 'deny') {
+              this.sendPermissionResponse(sessionId, 'n');
+            } else if (!action && this._pendingPermissionData?.sessionId === sessionId) {
+              // Notification body clicked (no action button) — show the permission block.
+              // selectSession early-returns if session is already active, so render here.
+              if (TranscriptView._sessionId === sessionId) {
+                TranscriptView.setWorking(false);
+                TranscriptView._renderPermissionBlock(this._pendingPermissionData.data);
+              }
+            }
             this.selectSession(sessionId);
           }
           window.focus();
         }
       });
+
+      // SW update detection — show toast when new version is waiting
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          // Only show toast for updates (not first install)
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            this._showSwUpdateToast(newWorker);
+          }
+        });
+      });
+
+      // Listen for controller change (after SKIP_WAITING) and reload
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (this._swReloading) return;
+        this._swReloading = true;
+        window.location.reload();
+      });
+
       // Check if already subscribed
       reg.pushManager.getSubscription().then((sub) => {
         if (sub) {
@@ -13544,6 +13647,51 @@ class CodemanApp {
     }).catch(() => {
       // Service worker registration failed (likely not HTTPS)
     });
+  }
+
+  _showSwUpdateToast(waitingWorker) {
+    if (this._swUpdateToastShown) return;
+    this._swUpdateToastShown = true;
+    this.showToast('New version available — tap to update', 'info', {
+      duration: 86400000,
+      action: {
+        label: 'Reload',
+        onClick: () => waitingWorker.postMessage({ type: 'SKIP_WAITING' }),
+      },
+    });
+  }
+
+  /**
+   * Check if the last /api/sessions response came from the SW cache.
+   * Called after any fetch to /api/sessions to update the stale data indicator.
+   */
+  _checkStaleSessionData(response) {
+    const isCached = response.headers.get('X-Codeman-Cached') === 'true';
+    const indicator = document.getElementById('staleDataIndicator');
+    if (isCached) {
+      const dateHeader = response.headers.get('Date');
+      const timeStr = dateHeader ? new Date(dateHeader).toLocaleTimeString() : 'unknown';
+      if (indicator) {
+        indicator.textContent = `Offline — last updated: ${timeStr}`;
+        indicator.style.display = '';
+      } else {
+        this._createStaleIndicator(`Offline — last updated: ${timeStr}`);
+      }
+    } else if (indicator) {
+      indicator.style.display = 'none';
+    }
+  }
+
+  _createStaleIndicator(text) {
+    const el = document.createElement('div');
+    el.id = 'staleDataIndicator';
+    el.textContent = text;
+    el.style.cssText = 'padding:4px 12px;font-size:11px;color:#666;text-align:center;background:#111;border-bottom:1px solid #1a1a2e';
+    // Insert at top of session drawer list
+    const drawer = document.querySelector('.session-drawer-list');
+    if (drawer) {
+      drawer.parentNode.insertBefore(el, drawer);
+    }
   }
 
   async subscribeToPush() {
@@ -20936,6 +21084,7 @@ class CodemanApp {
   }
 
   async fetchSystemStats() {
+    if (this.authExpired) return;
     // Skip polling when system stats display is hidden
     const statsEl = document.getElementById('headerSystemStats');
     if (!statsEl || statsEl.style.display === 'none') return;
@@ -24232,6 +24381,31 @@ const BoardView = {
     titleInput.id = 'nwi-title';
     dlg.appendChild(makeField('Title *', titleInput));
 
+    // Case selector — required for orchestrator dispatch
+    const caseSelect = document.createElement('select');
+    caseSelect.id = 'nwi-caseId';
+    const caseField = makeField('Case *', caseSelect);
+    dlg.appendChild(caseField);
+    // Populate async — app.cases may already be loaded, otherwise fetch
+    (async () => {
+      let cases = app.cases;
+      if (!cases || !cases.length) {
+        try {
+          const res = await fetch('/api/cases');
+          cases = await res.json();
+        } catch { cases = []; }
+      }
+      cases.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.name;
+        opt.textContent = c.name;
+        caseSelect.appendChild(opt);
+      });
+      // Pre-select current toolbar case
+      const toolbarCase = document.getElementById('quickStartCase')?.value;
+      if (toolbarCase) caseSelect.value = toolbarCase;
+    })();
+
     const descInput = document.createElement('textarea');
     descInput.placeholder = 'Description';
     descInput.id = 'nwi-description';
@@ -24293,6 +24467,7 @@ const BoardView = {
           title,
           description: descInput.value.trim() || undefined,
           source: sourceSelect.value,
+          caseId: caseSelect.value || undefined,
           externalRef: extRefInput.value.trim() || undefined,
           externalUrl: extUrlInput.value.trim() || undefined,
         };
@@ -24464,9 +24639,10 @@ const ActionDashboard = {
   },
 
   async refresh() {
+    if (window.app?.authExpired) return;
     // Fetch all three data sources in parallel
     const [sessRes, wiRes, wtRes] = await Promise.allSettled([
-      fetch('/api/sessions').then(r => r.ok ? r.json() : []),
+      fetch('/api/sessions').then(r => { if (typeof app !== 'undefined') app._checkStaleSessionData(r); return r.ok ? r.json() : []; }),
       fetch('/api/work-items').then(r => r.ok ? r.json() : { data: [] }),
       fetch('/api/worktrees').then(r => r.ok ? r.json() : []),
     ]);

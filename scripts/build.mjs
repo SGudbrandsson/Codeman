@@ -34,6 +34,36 @@ run('prepare dirs', 'mkdir -p dist/web dist/templates');
 run('copy web assets', 'rm -rf dist/web/public && cp -r src/web/public dist/web/ && mkdir -p dist/web/public/vendor');
 run('copy template', 'cp src/templates/case-template.md dist/templates/');
 
+// 2b. Generate PWA icons from source SVG
+await (async () => {
+  const sharp = (await import('sharp')).default;
+  const svgPath = join(ROOT, 'src/web/public/icons/icon.svg');
+  const outDir = join(ROOT, 'dist/web/public/icons');
+  execSync(`mkdir -p "${outDir}"`, { cwd: ROOT, shell: true });
+
+  const svgBuf = readFileSync(svgPath);
+
+  // Standard icons — full bleed
+  for (const size of [192, 512]) {
+    await sharp(svgBuf).resize(size, size).png().toFile(join(outDir, `icon-${size}x${size}.png`));
+  }
+
+  // Maskable icons — 80% center on background
+  for (const size of [192, 512]) {
+    const inner = Math.round(size * 0.8);
+    const pad = Math.round((size - inner) / 2);
+    const icon = await sharp(svgBuf).resize(inner, inner).png().toBuffer();
+    await sharp({
+      create: { width: size, height: size, channels: 4, background: { r: 10, g: 10, b: 10, alpha: 1 } },
+    }).composite([{ input: icon, left: pad, top: pad }]).png().toFile(join(outDir, `icon-maskable-${size}x${size}.png`));
+  }
+
+  // Apple touch icon — 180x180, full bleed
+  await sharp(svgBuf).resize(180, 180).png().toFile(join(outDir, 'apple-touch-icon-180x180.png'));
+
+  console.log('[build] generate PWA icons — done');
+})();
+
 // 3. Vendor xterm bundles (@xterm/* v6 namespace)
 run('xterm css', 'cp node_modules/@xterm/xterm/css/xterm.css dist/web/public/vendor/');
 run('xterm js', 'npx esbuild node_modules/@xterm/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js');

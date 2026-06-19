@@ -317,3 +317,54 @@ describe('No-Auth Server Warning', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('Rate Limiting — credential-less requests', () => {
+  let rlServer: WebServer;
+  let rlBaseUrl: string;
+  const RL_PORT = 3162;
+
+  beforeAll(async () => {
+    process.env.CODEMAN_PASSWORD = TEST_PASS;
+    process.env.CODEMAN_USERNAME = TEST_USER;
+    rlServer = new WebServer(RL_PORT, false, true);
+    await rlServer.start();
+    rlBaseUrl = `http://localhost:${RL_PORT}`;
+  });
+
+  afterAll(async () => {
+    await rlServer.stop();
+  });
+
+  it('should NOT count requests without credentials toward rate limit', async () => {
+    // Send 15 requests with no credentials (expired session scenario)
+    for (let i = 0; i < 15; i++) {
+      const res = await fetch(`${rlBaseUrl}/api/status`);
+      // Should always be 401, never 429
+      expect(res.status).toBe(401);
+    }
+
+    // After 15 credential-less failures, valid credentials should still work
+    const res = await fetch(`${rlBaseUrl}/api/status`, {
+      headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('should still count requests WITH wrong credentials toward rate limit', async () => {
+    // The previous test ends with a successful auth that resets the failure
+    // counter for this IP (authFailures.delete). This test starts from 0.
+
+    // Send 10 requests with wrong credentials
+    for (let i = 0; i < 10; i++) {
+      await fetch(`${rlBaseUrl}/api/status`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, 'wrong-' + i) },
+      });
+    }
+
+    // 11th attempt should be rate-limited
+    const res = await fetch(`${rlBaseUrl}/api/status`, {
+      headers: { Authorization: basicAuthHeader(TEST_USER, 'wrong-again') },
+    });
+    expect(res.status).toBe(429);
+  });
+});

@@ -12813,3 +12813,53 @@ kbd {
   border-radius: 4px;
 }
 
+/* Auth expired overlay — shown when session cookie times out */
+.auth-expired-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-expired-content {
+  text-align: center;
+  color: var(--text-primary);
+  max-width: 320px;
+  padding: 32px;
+}
+
+.auth-expired-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.auth-expired-content h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.auth-expired-content p {
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.auth-expired-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 24px;
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.auth-expired-btn:hover {
+  filter: brightness(1.1);
+}
+

@@ -88,6 +88,13 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
       return;
     }
 
+    // PWA assets must be publicly accessible — browsers fetch manifest and icons
+    // without credentials during installability checks and "Add to Home Screen"
+    if (req.url === '/manifest.json' || req.url?.startsWith('/icons/')) {
+      done();
+      return;
+    }
+
     const clientIp = req.ip;
 
     // Rate limit: reject if too many failed attempts from this IP
@@ -140,8 +147,12 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
       return;
     }
 
-    // Auth failed — track failure count
-    authFailures.set(clientIp, failures + 1);
+    // Auth failed — only count toward rate limit when credentials were actually
+    // provided (brute-force attempt). Expired-session requests (no Authorization
+    // header) should not trigger rate limiting.
+    if (auth !== undefined) {
+      authFailures.set(clientIp, failures + 1);
+    }
 
     reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
     reply.code(401).send('Unauthorized');

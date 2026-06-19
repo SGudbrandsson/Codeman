@@ -136,9 +136,15 @@ export function registerSessionRoutes(
       }
     }
 
+    // Ensure hooks config exists for Claude sessions so permission/elicitation
+    // hooks fire even for sessions created outside the quick-start/case flow.
+    const mode = body.mode || 'claude';
+    if (mode === 'claude') {
+      await writeHooksConfig(workingDir);
+    }
+
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
-    const mode = body.mode || 'claude';
     const model =
       mode === 'opencode' ? body.openCodeConfig?.model : mode !== 'shell' ? modelConfig?.defaultModel : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
