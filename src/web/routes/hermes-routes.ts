@@ -16,10 +16,11 @@ const parentLocks = new Map<string, Promise<unknown>>();
 function withParentLock<T>(parentId: string, fn: () => Promise<T>): Promise<T> {
   const prev = parentLocks.get(parentId) ?? Promise.resolve();
   const next = prev.catch(() => {}).then(fn);
-  parentLocks.set(
-    parentId,
-    next.catch(() => {})
-  );
+  const sentinel = next.catch(() => {});
+  parentLocks.set(parentId, sentinel);
+  sentinel.then(() => {
+    if (parentLocks.get(parentId) === sentinel) parentLocks.delete(parentId);
+  });
   return next;
 }
 
@@ -35,58 +36,84 @@ export function registerHermesRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort
 ): void {
-  const startHandler = (kind: 'feature' | 'fix') => async (req: { body: unknown }) => {
-    const body = req.body as Partial<StartBody>;
-    if (!body?.project || !body?.title || !body?.description) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'project, title, and description are required');
-    }
-
-    const sessions = ctx.getLightSessionsState() as ResolverSession[];
-    const resolved = resolveParentSession(sessions, body.project, body.parentSessionId);
-    if (!resolved.ok) {
-      const code = resolved.code === 'INVALID_INPUT' ? ApiErrorCode.INVALID_INPUT : ApiErrorCode.NOT_FOUND;
-      return { ...createErrorResponse(code, resolved.message), candidates: resolved.candidates };
-    }
-    const parentId = resolved.sessionId;
-
-    const taskMd = renderTaskMd(kind, {
-      title: body.title,
-      description: body.description,
-      acceptance: body.acceptance,
-    });
-    const notes = 'Read TASK.md in this directory, then invoke the codeman-task-runner skill.';
-
-    return withParentLock(parentId, async () => {
-      const prefix = kind === 'fix' ? 'fix' : 'feat';
-      let lastErr = 'unknown error';
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        const branch =
-          attempt === 1 ? slugifyBranch(body.title!, prefix) : `${slugifyBranch(body.title!, prefix)}-${attempt}`;
-
-        const res = await app.inject({
-          method: 'POST',
-          url: `/api/sessions/${parentId}/worktree`,
-          payload: { branch, isNew: true, autoStart: true, notes, taskMd, claudeMd: WORKTREE_CLAUDE_MD },
-        });
-        const json = res.json() as
-          | { success: true; session: { id: string }; worktreePath: string }
-          | { success: false; errorCode?: string; error?: string; message?: string };
-
-        if (json.success) {
-          return {
-            success: true,
-            data: { sessionId: json.session.id, branch, worktreePath: json.worktreePath, started: true },
-          };
-        }
-        // Worktree route error shape: { success:false, errorCode: 'ALREADY_EXISTS',
-        //   error: 'BRANCH_EXISTS_UNMERGED: ...' } (see worktree-session-routes.ts handleBranchCollision)
-        lastErr = json.error ?? json.message ?? json.errorCode ?? `HTTP ${res.statusCode}`;
-        const isCollision = json.errorCode === 'ALREADY_EXISTS' || /BRANCH_EXISTS|already exist/i.test(lastErr);
-        if (!isCollision) break; // non-collision failure — stop retrying
+  const startHandler =
+    (kind: 'feature' | 'fix') =>
+    async (req: { body: unknown; headers: Record<string, string | string[] | undefined> }) => {
+      const body = req.body as Partial<StartBody>;
+      if (!body?.project || !body?.title || !body?.description) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'project, title, and description are required');
       }
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Could not create worktree: ${lastErr}`);
-    });
-  };
+
+      const sessions = ctx.getLightSessionsState() as ResolverSession[];
+      const resolved = resolveParentSession(sessions, body.project, body.parentSessionId);
+      if (!resolved.ok) {
+        const code = resolved.code === 'INVALID_INPUT' ? ApiErrorCode.INVALID_INPUT : ApiErrorCode.NOT_FOUND;
+        return { ...createErrorResponse(code, resolved.message), candidates: resolved.candidates };
+      }
+      const parentId = resolved.sessionId;
+
+      const taskMd = renderTaskMd(kind, {
+        title: body.title,
+        description: body.description,
+        acceptance: body.acceptance,
+      });
+      const notes = 'Read TASK.md in this directory, then invoke the codeman-task-runner skill.';
+
+      return withParentLock(parentId, async () => {
+        const prefix = kind === 'fix' ? 'fix' : 'feat';
+        let lastErr = 'unknown error';
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          const branch =
+            attempt === 1 ? slugifyBranch(body.title!, prefix) : `${slugifyBranch(body.title!, prefix)}-${attempt}`;
+
+          const injectHeaders: Record<string, string> = {};
+          const authHeader = req.headers.authorization;
+          if (authHeader) injectHeaders.authorization = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+          const res = await app.inject({
+            method: 'POST',
+            url: `/api/sessions/${parentId}/worktree`,
+            headers: injectHeaders,
+            payload: { branch, isNew: true, autoStart: true, notes, taskMd, claudeMd: WORKTREE_CLAUDE_MD },
+          });
+
+          if (res.statusCode >= 400) {
+            let errJson: { errorCode?: string; error?: string; message?: string } = {};
+            try {
+              errJson = res.json() as typeof errJson;
+            } catch {
+              // non-JSON body (e.g. plain-text "Unauthorized")
+            }
+            lastErr = errJson.error ?? errJson.message ?? errJson.errorCode ?? res.body ?? `HTTP ${res.statusCode}`;
+            const isCollision = errJson.errorCode === 'ALREADY_EXISTS' || /BRANCH_EXISTS/i.test(lastErr);
+            if (!isCollision) break;
+            continue;
+          }
+
+          let json:
+            | { success: true; session: { id: string }; worktreePath: string }
+            | { success: false; errorCode?: string; error?: string; message?: string };
+          try {
+            json = res.json() as typeof json;
+          } catch {
+            lastErr = res.body || `HTTP ${res.statusCode}`;
+            break;
+          }
+
+          if (json.success) {
+            return {
+              success: true,
+              data: { sessionId: json.session.id, branch, worktreePath: json.worktreePath, started: true },
+            };
+          }
+          // Worktree route error shape: { success:false, errorCode: 'ALREADY_EXISTS',
+          //   error: 'BRANCH_EXISTS_UNMERGED: ...' } (see worktree-session-routes.ts handleBranchCollision)
+          lastErr = json.error ?? json.message ?? json.errorCode ?? `HTTP ${res.statusCode}`;
+          const isCollision = json.errorCode === 'ALREADY_EXISTS' || /BRANCH_EXISTS/i.test(lastErr);
+          if (!isCollision) break; // non-collision failure — stop retrying
+        }
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Could not create worktree: ${lastErr}`);
+      });
+    };
 
   app.post('/api/feature', startHandler('feature'));
   app.post('/api/fix', startHandler('fix'));
