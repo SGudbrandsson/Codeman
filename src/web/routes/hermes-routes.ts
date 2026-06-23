@@ -1,4 +1,5 @@
 // src/web/routes/hermes-routes.ts
+import { readFile } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import type { SessionPort } from '../ports/session-port.js';
@@ -10,6 +11,7 @@ import { resolveParentSession, type ResolverSession } from '../hermes/parent-res
 import { slugifyBranch } from '../hermes/branch-slug.js';
 import { renderTaskMd, WORKTREE_CLAUDE_MD } from '../hermes/task-templates.js';
 import { buildDigest } from '../hermes/digest.js';
+import { parseTaskPhase } from '../hermes/task-phase.js';
 
 // One in-flight worktree-create per parent session id.
 const parentLocks = new Map<string, Promise<unknown>>();
@@ -127,10 +129,19 @@ export function registerHermesRoutes(
       workingDir?: string;
       worktreeBranch?: string | null;
       lastActivityAt?: number;
-      taskPhase?: string | null;
     }>;
     const s = sessions.find((x) => x.id === id);
     if (!s) return createErrorResponse(ApiErrorCode.NOT_FOUND, `No session "${id}"`);
+
+    let phase: string | null = null;
+    if (s.workingDir) {
+      try {
+        const taskMd = await readFile(`${s.workingDir}/TASK.md`, 'utf-8');
+        phase = parseTaskPhase(taskMd);
+      } catch {
+        /* no TASK.md → phase stays null */
+      }
+    }
 
     const subagents = s.workingDir ? subagentWatcher.getSubagentsForSession(s.workingDir) : [];
     const digest = buildDigest({
@@ -139,7 +150,7 @@ export function registerHermesRoutes(
       status: s.status,
       transcript: ctx.getTranscriptState(id),
       subagents,
-      phase: s.taskPhase ?? null,
+      phase,
       lastActivityAt: s.lastActivityAt ?? null,
     });
     return { success: true, data: digest };
