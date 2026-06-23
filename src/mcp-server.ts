@@ -3,8 +3,12 @@
  * Codeman MCP Server — lightweight stdio JSON-RPC server.
  *
  * Tools:
- *   list_sessions  — list active sessions (id, name, branch, status)
- *   send_message   — send a message to another session
+ *   list_sessions        — list active sessions (id, name, branch, status)
+ *   send_message         — send a message to another session
+ *   list_projects        — list main (non-worktree) sessions / repos
+ *   get_session_digest   — status digest for one session
+ *   start_feature        — spin up a new feature worktree autonomously
+ *   start_fix            — spin up a new fix worktree autonomously
  *
  * Zero dependencies beyond Node built-ins. Speaks MCP (JSON-RPC 2.0 over stdio).
  *
@@ -14,6 +18,20 @@
  */
 
 const BASE = process.env.CODEMAN_URL ?? 'http://localhost:3001';
+
+// ── Auth helper ──────────────────────────────────────────────────────────────
+
+export function buildAuthHeaders(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const password = env.CODEMAN_PASSWORD;
+  if (password) {
+    const user = env.CODEMAN_USERNAME || 'admin';
+    headers.Authorization = 'Basic ' + Buffer.from(`${user}:${password}`).toString('base64');
+  }
+  return headers;
+}
+
+const AUTH = buildAuthHeaders();
 
 // ── JSON-RPC helpers ─────────────────────────────────────────────────────────
 
@@ -60,6 +78,56 @@ const TOOLS = [
       required: ['target', 'message'],
     },
   },
+  {
+    name: 'list_projects',
+    description:
+      'List repos you can start work in. Returns each main (non-worktree) session: id, name, project (workingDir basename), status, workingDir.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_session_digest',
+    description:
+      "Digest of one session: status (working/idle/stopped), done (true only when truly finished), toolExecuting, lastAssistantMessage, active subagents, phase. Poll this to answer 'is it done?'.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'Session id.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'start_feature',
+    description:
+      'Spin up a new feature worktree in a project and start it working autonomously. Returns the new session id.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        project: { type: 'string', description: 'Project name (workingDir basename), e.g. "Codeman".' },
+        title: { type: 'string', description: 'One-line feature title.' },
+        description: { type: 'string', description: 'What it should do.' },
+        acceptance: { type: 'string', description: 'Optional acceptance criteria.' },
+        parentSessionId: {
+          type: 'string',
+          description: 'Optional: pick the exact parent session if a project has several.',
+        },
+      },
+      required: ['project', 'title', 'description'],
+    },
+  },
+  {
+    name: 'start_fix',
+    description:
+      'Spin up a new fix worktree in a project and start it working autonomously. Returns the new session id.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        project: { type: 'string', description: 'Project name (workingDir basename).' },
+        title: { type: 'string', description: 'One-line bug title.' },
+        description: { type: 'string', description: 'What is broken / how to reproduce.' },
+        parentSessionId: { type: 'string', description: 'Optional explicit parent session id.' },
+      },
+      required: ['project', 'title', 'description'],
+    },
+  },
 ];
 
 // ── Tool handlers ────────────────────────────────────────────────────────────
@@ -73,7 +141,7 @@ interface Session {
 }
 
 async function listSessions(args: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${BASE}/api/sessions`);
+  const res = await fetch(`${BASE}/api/sessions`, { headers: AUTH });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   const sessions = (await res.json()) as Session[];
   let filtered = sessions.map((s) => ({
@@ -90,7 +158,7 @@ async function listSessions(args: Record<string, unknown>): Promise<unknown> {
 }
 
 async function resolveSessionId(target: string): Promise<string> {
-  const res = await fetch(`${BASE}/api/sessions`);
+  const res = await fetch(`${BASE}/api/sessions`, { headers: AUTH });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   const sessions = (await res.json()) as Session[];
 
@@ -125,14 +193,50 @@ async function sendMessage(args: Record<string, unknown>): Promise<unknown> {
   const sessionId = await resolveSessionId(target);
   const res = await fetch(`${BASE}/api/sessions/${sessionId}/input`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: message + '\r', useMux: true }),
+    headers: AUTH,
+    body: JSON.stringify({ input: message, submit: true }),
   });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Failed to send: ${res.status} ${body}`);
   }
   return { success: true, sessionId, message };
+}
+
+async function listProjects(): Promise<unknown> {
+  const res = await fetch(`${BASE}/api/sessions`, { headers: AUTH });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  const sessions = (await res.json()) as Session[];
+  return sessions
+    .filter((s) => !s.worktreeBranch)
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      project: (s.workingDir ?? '').replace(/\/+$/, '').split('/').pop() ?? '',
+      status: s.status,
+      workingDir: s.workingDir,
+    }));
+}
+
+async function getSessionDigest(args: Record<string, unknown>): Promise<unknown> {
+  const id = args.id as string;
+  if (!id) throw new Error('id is required');
+  const res = await fetch(`${BASE}/api/sessions/${id}/digest`, { headers: AUTH });
+  if (!res.ok) throw new Error(`No digest for "${id}": ${res.status}`);
+  return await res.json();
+}
+
+async function startWork(path: 'feature' | 'fix', args: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(`${BASE}/api/${path}`, {
+    method: 'POST',
+    headers: AUTH,
+    body: JSON.stringify(args),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || (body as { success?: boolean }).success === false) {
+    throw new Error(`start_${path} failed: ${JSON.stringify(body)}`);
+  }
+  return body;
 }
 
 // ── Request dispatcher ───────────────────────────────────────────────────────
@@ -166,6 +270,18 @@ async function handleRequest(req: { id: string | number | null; method: string; 
             break;
           case 'send_message':
             result = await sendMessage(args);
+            break;
+          case 'list_projects':
+            result = await listProjects();
+            break;
+          case 'get_session_digest':
+            result = await getSessionDigest(args);
+            break;
+          case 'start_feature':
+            result = await startWork('feature', args);
+            break;
+          case 'start_fix':
+            result = await startWork('fix', args);
             break;
           default:
             return jsonrpcError(id, -32601, `Unknown tool: ${p.name}`);
