@@ -2,19 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { renderTaskMd, WORKTREE_CLAUDE_MD } from '../src/web/hermes/task-templates.js';
 
 describe('renderTaskMd', () => {
-  it('includes title, phase, description, and the runner instruction', () => {
+  it('emits canonical TASK.md format for a feature', () => {
     const md = renderTaskMd('feature', { title: 'Dark mode', description: 'Add a toggle.' });
-    expect(md).toContain('# Dark mode');
-    expect(md).toMatch(/## status\nphase: analysis/);
+    expect(md).toContain('type: feature');
+    expect(md).toContain('status: analysis');
+    expect(md).toContain('title: Dark mode');
     expect(md).toContain('Add a toggle.');
-    expect(md).toContain('codeman-task-runner');
+    expect(md).toContain('constraints: none specified');
   });
-  it('renders acceptance when provided, else a placeholder line', () => {
-    expect(renderTaskMd('feature', { title: 'T', description: 'D', acceptance: 'Must do X' })).toContain('Must do X');
-    expect(renderTaskMd('fix', { title: 'T', description: 'D' })).toContain('See description.');
-  });
-  it('labels fixes as a bug fix', () => {
-    expect(renderTaskMd('fix', { title: 'T', description: 'D' }).toLowerCase()).toContain('fix');
+
+  it('emits canonical TASK.md format for a fix with acceptance', () => {
+    const md = renderTaskMd('fix', { title: 'T', description: 'D', acceptance: 'Must do X' });
+    expect(md).toContain('type: fix');
+    expect(md).toContain('constraints: Must do X');
   });
 });
 
