@@ -21,4 +21,6 @@ export interface ConfigPort {
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
   stopTranscriptWatcher(sessionId: string): void;
   getTranscriptPath(sessionId: string): string | null;
+  /** Lite transcript state for the Hermes digest; null when no watcher is attached. */
+  getTranscriptState(sessionId: string): import('../hermes/digest.js').TranscriptStateLite | null;
 }
