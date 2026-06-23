@@ -129,6 +129,7 @@ import {
   registerFeatureUsageRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
+import { registerHermesRoutes } from './routes/hermes-routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -580,6 +581,7 @@ export class WebServer extends EventEmitter {
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
       getTranscriptPath: this.getTranscriptPath.bind(this),
+      getTranscriptState: this.getTranscriptState.bind(this),
       // InfraPort
       mux: this.mux,
       runSummaryTrackers: this.runSummaryTrackers,
@@ -773,6 +775,7 @@ export class WebServer extends EventEmitter {
     updateChecker.check().catch(() => {});
     registerUpdateRoutes(this.app, ctx, updateChecker);
     registerWorktreeSessionRoutes(this.app, ctx);
+    registerHermesRoutes(this.app, ctx);
     registerWorktreeRoutes(this.app, ctx);
     registerMcpRoutes(this.app, ctx);
     registerAgentRoutes(this.app, ctx);
@@ -908,6 +911,17 @@ export class WebServer extends EventEmitter {
       watcher.stop();
       this.transcriptWatchers.delete(sessionId);
     }
+  }
+
+  private getTranscriptState(sessionId: string): import('./hermes/digest.js').TranscriptStateLite | null {
+    const watcher = this.transcriptWatchers.get(sessionId);
+    if (!watcher) return null;
+    const s = watcher.getState();
+    return {
+      isComplete: s.isComplete,
+      toolExecuting: s.toolExecuting,
+      lastAssistantMessage: s.lastAssistantMessage,
+    };
   }
 
   /** Return the transcript file path for a session.
