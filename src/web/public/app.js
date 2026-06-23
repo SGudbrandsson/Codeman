@@ -22575,6 +22575,16 @@ const SessionDrawer = {
       if (!currentIds.has(id)) return false;
     }
 
+    // Live/dormant tier determines project-group ordering, which the incremental
+    // path cannot express. Force a full rebuild (which re-partitions) if any
+    // session crossed the live (busy|idle) boundary since the last render.
+    // Ordinary busy<->idle turns keep the flag true, so the fast-path survives.
+    for (const id of currentIds) {
+      const s = app.sessions.get(id);
+      const live = !!s && (s.status === 'busy' || s.status === 'idle');
+      if ((this._lastLiveBySession?.get(id) || false) !== live) return false;
+    }
+
     // Same session set — do targeted updates on each row
     for (const row of existingRows) {
       const sid = row.dataset.sessionId;
@@ -22646,6 +22656,15 @@ const SessionDrawer = {
     if (this._tryIncrementalUpdate(list)) return;
 
     list.replaceChildren();
+
+    // Snapshot each session's live flag (busy|idle) so _tryIncrementalUpdate can
+    // detect when a session crosses the live/dormant boundary and force a rebuild
+    // (the incremental fast-path cannot reorder project groups).
+    this._lastLiveBySession = new Map();
+    for (const id of (app.sessionOrder || [])) {
+      const s = app.sessions.get(id);
+      if (s) this._lastLiveBySession.set(id, s.status === 'busy' || s.status === 'idle');
+    }
 
     // Build groups: caseName -> { caseObj, worktrees: Map(branch -> Session[]), sessions: Session[] }
     // Seed groups from all known cases first so [+] buttons always appear.
@@ -22741,7 +22760,7 @@ const SessionDrawer = {
       }
     }
 
-    for (const [groupKey, group] of groups) {
+    for (const [groupKey, group] of this._partitionGroupsLiveFirst(groups, s => s.status)) {
       const projectName = group.caseObj?.name || groupKey;
       // When filtering, skip empty groups (no sessions and no worktrees)
       if (searchQ) {
@@ -22924,6 +22943,27 @@ const SessionDrawer = {
   },
 
   /**
+   * Reorders project-group Map entries so groups with a live session
+   * (status 'busy' or 'idle') float to the top and dormant groups sink to the
+   * bottom. Within each tier the Map's original insertion order is preserved.
+   * getStatus maps a group member to its status string — members are session
+   * objects in _render() and session ids in _getOrderedSessionIds().
+   */
+  _partitionGroupsLiveFirst(groups, getStatus) {
+    const isLiveStatus = (st) => st === 'busy' || st === 'idle';
+    const groupIsLive = (group) => {
+      if (group.sessions.some(m => isLiveStatus(getStatus(m)))) return true;
+      for (const arr of group.worktrees.values()) {
+        if (arr.some(m => isLiveStatus(getStatus(m)))) return true;
+      }
+      return false;
+    };
+    const live = [], dormant = [];
+    for (const entry of groups) (groupIsLive(entry[1]) ? live : dormant).push(entry);
+    return [...live, ...dormant];
+  },
+
+  /**
    * Returns a flat ordered list of session IDs in the same order as the drawer renders them.
    * Groups sessions by project (case) first, then within each group emits worktree sessions
    * (in branch insertion order) followed by regular sessions.  Ungrouped sessions come last.
@@ -22953,7 +22993,7 @@ const SessionDrawer = {
       }
     }
     const result = [];
-    for (const [, group] of groups) {
+    for (const [, group] of this._partitionGroupsLiveFirst(groups, id => app.sessions.get(id)?.status)) {
       for (const ids of group.worktrees.values()) {
         for (const id of ids) result.push(id);
       }
