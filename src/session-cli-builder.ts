@@ -165,6 +165,11 @@ export function buildClaudeEnv(sessionId: string): Record<string, string | undef
     TERM: 'xterm-256color',
     COLORTERM: undefined,
     CLAUDECODE: undefined,
+    // Stop Claude Code from self-updating / re-exec'ing in place — an in-place re-exec
+    // relaunches the bare binary WITHOUT our CLI flags (notably --disallowedTools
+    // AskUserQuestion), silently re-enabling the interactive question picker.
+    DISABLE_AUTOUPDATER: '1',
+    DISABLE_UPDATES: '1',
     // Inform Claude it's running within Codeman (helps prevent self-termination)
     CODEMAN_MUX: '1',
     CODEMAN_SESSION_ID: sessionId,

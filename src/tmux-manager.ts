@@ -446,7 +446,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
     ];
     // Only unset CLAUDECODE for Claude sessions
-    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
+    if (mode === 'claude') {
+      envExports.splice(2, 0, 'unset CLAUDECODE');
+      // Stop Claude Code from self-updating / re-exec'ing in place. An in-place re-exec
+      // relaunches the bare binary WITHOUT our CLI flags (notably
+      // --disallowedTools AskUserQuestion), silently re-enabling the interactive question
+      // picker. The settings.json deny rule is the durable guard; this prevents the
+      // flag-dropping re-exec from happening at all.
+      envExports.push('export DISABLE_AUTOUPDATER=1', 'export DISABLE_UPDATES=1');
+    }
     const envExportsStr = envExports.join(' && ');
 
     const baseCmd = buildSpawnCommand({
@@ -656,7 +664,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       `export CODEMAN_MUX_NAME=${muxName}`,
       `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
     ];
-    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
+    if (mode === 'claude') {
+      envExports.splice(2, 0, 'unset CLAUDECODE');
+      // See createSession: keep Claude Code from re-exec'ing in place and dropping our
+      // CLI flags (which re-enables the AskUserQuestion picker).
+      envExports.push('export DISABLE_AUTOUPDATER=1', 'export DISABLE_UPDATES=1');
+    }
     const envExportsStr = envExports.join(' && ');
 
     const baseCmd = buildSpawnCommand({
