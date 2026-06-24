@@ -171,11 +171,13 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
  * Codeman-managed session — including main-repo sessions and pre-existing worktrees
  * that never had per-worktree hooks written — gets them with no per-worktree write
  * or restart. Installs:
- *  - PreToolUse AskUserQuestion (legacy; now dead code since AskUserQuestion is
- *    disabled for Codeman sessions, but kept harmless for backward compatibility).
  *  - Notification `idle_prompt` so the idle attention badge/queue/push fires for
  *    main-repo (non-worktree) sessions too (worktrees already get it via
  *    generateHooksConfig / settings.local.json).
+ *
+ * Also removes any stale Codeman-authored PreToolUse AskUserQuestion hook: that tool is
+ * suppressed via `--disallowedTools` + the global `permissions.deny` rule, so the hook is
+ * dead code and was needlessly reappearing after each restart.
  *
  * The hook only does anything inside a Codeman session (it relies on the
  * $CODEMAN_API_URL / $CODEMAN_SESSION_ID env vars Codeman exports per session); in
@@ -183,15 +185,16 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
  *
  * Safety guarantees:
  *  - Never clobbers — merges into existing settings, preserving every other key and
- *    any pre-existing PreToolUse hooks.
- *  - Idempotent — does nothing if an AskUserQuestion PreToolUse hook is already there.
+ *    any user-authored PreToolUse hooks.
+ *  - Idempotent — does nothing once the idle_prompt hook is present and no stale
+ *    AskUserQuestion hook remains.
  *  - Aborts (leaves the file untouched) if it exists but is unparseable or not a JSON
  *    object, so a hand-edited global config is never destroyed.
  *  - Opt out with CODEMAN_NO_GLOBAL_HOOK=1.
  *
  * Returns `{ installed, reason }`; never throws on the safe-abort paths.
  */
-export async function installGlobalAskUserQuestionHook(): Promise<{ installed: boolean; reason: string }> {
+export async function installGlobalCodemanHooks(): Promise<{ installed: boolean; reason: string }> {
   if (process.env.CODEMAN_NO_GLOBAL_HOOK) {
     return { installed: false, reason: 'disabled via CODEMAN_NO_GLOBAL_HOOK' };
   }
@@ -220,18 +223,22 @@ export async function installGlobalAskUserQuestionHook(): Promise<{ installed: b
       : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as Array<Record<string, unknown>>) : [];
 
-  // NOTE: This PreToolUse AskUserQuestion hook is now effectively dead code — Codeman
-  // sessions launch with `--disallowedTools AskUserQuestion`, so Claude never invokes
-  // the tool and this hook never fires. Kept (harmless) for backward compatibility.
-  const askAlreadyInstalled = preToolUse.some(
-    (entry) =>
-      entry &&
-      entry.matcher === 'AskUserQuestion' &&
-      Array.isArray((entry as { hooks?: unknown }).hooks) &&
-      (entry as { hooks: Array<{ command?: string }> }).hooks.some(
-        (h) => typeof h?.command === 'string' && h.command.includes('ask_user_question')
-      )
-  );
+  // Codeman used to install a PreToolUse AskUserQuestion hook here. It is now dead code:
+  // sessions launch with `--disallowedTools AskUserQuestion` AND the global
+  // `permissions.deny` rule removes the tool from context, so Claude never invokes it and
+  // the hook never fires. Stop installing it, and proactively strip any copy this installer
+  // wrote in the past so it doesn't keep reappearing in ~/.claude/settings.json after a
+  // server restart. Only Codeman's own entries (matcher AskUserQuestion + the
+  // ask_user_question curl) are removed; user-authored PreToolUse hooks are left untouched.
+  const isCodemanAskHook = (entry: Record<string, unknown>): boolean =>
+    !!entry &&
+    entry.matcher === 'AskUserQuestion' &&
+    Array.isArray((entry as { hooks?: unknown }).hooks) &&
+    (entry as { hooks: Array<{ command?: string }> }).hooks.some(
+      (h) => typeof h?.command === 'string' && h.command.includes('ask_user_question')
+    );
+  const cleanedPreToolUse = preToolUse.filter((entry) => !isCodemanAskHook(entry));
+  const askHookRemoved = cleanedPreToolUse.length !== preToolUse.length;
 
   // Global idle_prompt Notification hook: per-worktree settings.local.json already gets
   // this via generateHooksConfig(), but main-repo (non-worktree) Codeman sessions rely on
@@ -251,16 +258,16 @@ export async function installGlobalAskUserQuestionHook(): Promise<{ installed: b
       )
   );
 
-  if (askAlreadyInstalled && idleAlreadyInstalled) {
+  if (!askHookRemoved && idleAlreadyInstalled) {
     return { installed: false, reason: 'already present' };
   }
 
-  if (!askAlreadyInstalled) {
-    preToolUse.push({
-      matcher: 'AskUserQuestion',
-      hooks: [{ type: 'command', command: buildHookCurlCmd('ask_user_question'), timeout: HOOK_TIMEOUT_MS }],
-    });
-    hooks.PreToolUse = preToolUse;
+  if (askHookRemoved) {
+    if (cleanedPreToolUse.length > 0) {
+      hooks.PreToolUse = cleanedPreToolUse;
+    } else {
+      delete hooks.PreToolUse;
+    }
   }
 
   if (!idleAlreadyInstalled) {
@@ -277,5 +284,10 @@ export async function installGlobalAskUserQuestionHook(): Promise<{ installed: b
     await mkdir(claudeDir, { recursive: true });
   }
   await writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
-  return { installed: true, reason: 'installed' };
+  return {
+    installed: true,
+    reason: askHookRemoved
+      ? 'removed stale AskUserQuestion hook; ensured idle_prompt hook'
+      : 'installed idle_prompt hook',
+  };
 }
