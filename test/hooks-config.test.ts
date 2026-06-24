@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateHooksConfig, writeHooksConfig, installGlobalAskUserQuestionHook } from '../src/hooks-config.js';
+import { generateHooksConfig, writeHooksConfig, installGlobalCodemanHooks } from '../src/hooks-config.js';
 
 describe('generateHooksConfig', () => {
   it('should return an object with hooks key', () => {
@@ -755,7 +755,7 @@ describe('Hook Config Generation - Extended', () => {
   });
 });
 
-describe('installGlobalAskUserQuestionHook', () => {
+describe('installGlobalCodemanHooks', () => {
   let tmpHome: string;
   let savedHome: string | undefined;
   const settingsPath = () => join(tmpHome, '.claude', 'settings.json');
@@ -774,25 +774,28 @@ describe('installGlobalAskUserQuestionHook', () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  it('creates ~/.claude/settings.json with the AskUserQuestion PreToolUse hook when none exists', async () => {
-    const r = await installGlobalAskUserQuestionHook();
+  it('creates ~/.claude/settings.json with the idle_prompt hook and no AskUserQuestion hook', async () => {
+    const r = await installGlobalCodemanHooks();
     expect(r.installed).toBe(true);
     const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    expect(parsed.hooks.PreToolUse).toHaveLength(1);
-    expect(parsed.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion');
-    expect(parsed.hooks.PreToolUse[0].hooks[0].command).toContain('ask_user_question');
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+    // The dead AskUserQuestion PreToolUse hook is no longer installed
+    expect(parsed.hooks.PreToolUse).toBeUndefined();
   });
 
-  it('is idempotent — a second call does not duplicate the hook', async () => {
-    await installGlobalAskUserQuestionHook();
-    const r2 = await installGlobalAskUserQuestionHook();
+  it('is idempotent — a second call does not re-add or duplicate anything', async () => {
+    await installGlobalCodemanHooks();
+    const r2 = await installGlobalCodemanHooks();
     expect(r2.installed).toBe(false);
     expect(r2.reason).toBe('already present');
     const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+    const idleEntries = parsed.hooks.Notification.filter((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idleEntries).toHaveLength(1);
+    expect(parsed.hooks.PreToolUse).toBeUndefined();
   });
 
-  it('preserves existing settings and other hooks (never clobbers)', async () => {
+  it('preserves existing settings and user PreToolUse hooks, and never adds AskUserQuestion', async () => {
     const dir = join(tmpHome, '.claude');
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -804,76 +807,47 @@ describe('installGlobalAskUserQuestionHook', () => {
       })
     );
 
-    const r = await installGlobalAskUserQuestionHook();
+    const r = await installGlobalCodemanHooks();
     expect(r.installed).toBe(true);
     const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
     expect(parsed.model).toBe('opus');
     expect(parsed.permissions).toEqual({ allow: ['Read'] });
-    // existing Bash hook kept, AskUserQuestion added
+    // user Bash hook kept, AskUserQuestion NOT added
     const matchers = parsed.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher);
     expect(matchers).toContain('Bash');
-    expect(matchers).toContain('AskUserQuestion');
+    expect(matchers).not.toContain('AskUserQuestion');
   });
 
-  it('aborts without overwriting when the existing file is unparseable', async () => {
+  it('removes a stale Codeman AskUserQuestion hook while keeping user PreToolUse hooks', async () => {
     const dir = join(tmpHome, '.claude');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(settingsPath(), 'not valid json {{{');
-    const r = await installGlobalAskUserQuestionHook();
-    expect(r.installed).toBe(false);
-    expect(r.reason).toContain('unparseable');
-    // file left exactly as-is
-    expect(readFileSync(settingsPath(), 'utf-8')).toBe('not valid json {{{');
-  });
-
-  it('respects the CODEMAN_NO_GLOBAL_HOOK opt-out', async () => {
-    process.env.CODEMAN_NO_GLOBAL_HOOK = '1';
-    const r = await installGlobalAskUserQuestionHook();
-    expect(r.installed).toBe(false);
-    expect(existsSync(settingsPath())).toBe(false);
-  });
-
-  it('adds a global Notification idle_prompt hook pointing at /api/hook-event', async () => {
-    const r = await installGlobalAskUserQuestionHook();
-    expect(r.installed).toBe(true);
-    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
-    expect(idle).toBeDefined();
-    expect(idle.hooks[0].command).toContain('/api/hook-event');
-    expect(idle.hooks[0].command).toContain('"idle_prompt"');
-  });
-
-  it('is idempotent on the Notification idle_prompt hook — a second call does not duplicate it', async () => {
-    await installGlobalAskUserQuestionHook();
-    await installGlobalAskUserQuestionHook();
-    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    const idleEntries = parsed.hooks.Notification.filter((e: { matcher?: string }) => e.matcher === 'idle_prompt');
-    expect(idleEntries).toHaveLength(1);
-  });
-
-  it('preserves an unrelated pre-existing Notification entry (e.g. workmux) unchanged', async () => {
-    const dir = join(tmpHome, '.claude');
-    mkdirSync(dir, { recursive: true });
-    const workmuxEntry = {
-      matcher: 'permission_prompt|elicitation_dialog',
-      hooks: [{ type: 'command', command: 'workmux set-window-status waiting' }],
-    };
-    writeFileSync(settingsPath(), JSON.stringify({ hooks: { Notification: [workmuxEntry] } }));
-
-    const r = await installGlobalAskUserQuestionHook();
-    expect(r.installed).toBe(true);
-    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    // workmux entry untouched + a separate idle_prompt entry appended
-    expect(parsed.hooks.Notification).toHaveLength(2);
-    const kept = parsed.hooks.Notification.find(
-      (e: { matcher?: string }) => e.matcher === 'permission_prompt|elicitation_dialog'
+    writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo hi' }] },
+            {
+              matcher: 'AskUserQuestion',
+              hooks: [{ type: 'command', command: 'curl ... ask_user_question' }],
+            },
+          ],
+        },
+      })
     );
-    expect(kept).toEqual(workmuxEntry);
+
+    const r = await installGlobalCodemanHooks();
+    expect(r.installed).toBe(true);
+    expect(r.reason).toContain('removed stale AskUserQuestion hook');
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    const matchers = parsed.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher);
+    expect(matchers).toEqual(['Bash']);
+    // idle_prompt added alongside the cleanup
     const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
     expect(idle).toBeDefined();
   });
 
-  it('completes a partial install — adds idle_prompt when only the AskUserQuestion PreToolUse hook is present', async () => {
+  it('drops the PreToolUse key when the stale AskUserQuestion hook was its only entry', async () => {
     const dir = join(tmpHome, '.claude');
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -890,12 +864,68 @@ describe('installGlobalAskUserQuestionHook', () => {
       })
     );
 
-    const r = await installGlobalAskUserQuestionHook();
+    const r = await installGlobalCodemanHooks();
     expect(r.installed).toBe(true);
     const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
-    // PreToolUse not duplicated
-    expect(parsed.hooks.PreToolUse).toHaveLength(1);
-    // idle_prompt added
+    expect(parsed.hooks.PreToolUse).toBeUndefined();
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+  });
+
+  it('aborts without overwriting when the existing file is unparseable', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(settingsPath(), 'not valid json {{{');
+    const r = await installGlobalCodemanHooks();
+    expect(r.installed).toBe(false);
+    expect(r.reason).toContain('unparseable');
+    // file left exactly as-is
+    expect(readFileSync(settingsPath(), 'utf-8')).toBe('not valid json {{{');
+  });
+
+  it('respects the CODEMAN_NO_GLOBAL_HOOK opt-out', async () => {
+    process.env.CODEMAN_NO_GLOBAL_HOOK = '1';
+    const r = await installGlobalCodemanHooks();
+    expect(r.installed).toBe(false);
+    expect(existsSync(settingsPath())).toBe(false);
+  });
+
+  it('adds a global Notification idle_prompt hook pointing at /api/hook-event', async () => {
+    const r = await installGlobalCodemanHooks();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idle).toBeDefined();
+    expect(idle.hooks[0].command).toContain('/api/hook-event');
+    expect(idle.hooks[0].command).toContain('"idle_prompt"');
+  });
+
+  it('is idempotent on the Notification idle_prompt hook — a second call does not duplicate it', async () => {
+    await installGlobalCodemanHooks();
+    await installGlobalCodemanHooks();
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    const idleEntries = parsed.hooks.Notification.filter((e: { matcher?: string }) => e.matcher === 'idle_prompt');
+    expect(idleEntries).toHaveLength(1);
+  });
+
+  it('preserves an unrelated pre-existing Notification entry (e.g. workmux) unchanged', async () => {
+    const dir = join(tmpHome, '.claude');
+    mkdirSync(dir, { recursive: true });
+    const workmuxEntry = {
+      matcher: 'permission_prompt|elicitation_dialog',
+      hooks: [{ type: 'command', command: 'workmux set-window-status waiting' }],
+    };
+    writeFileSync(settingsPath(), JSON.stringify({ hooks: { Notification: [workmuxEntry] } }));
+
+    const r = await installGlobalCodemanHooks();
+    expect(r.installed).toBe(true);
+    const parsed = JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+    // workmux entry untouched + a separate idle_prompt entry appended
+    expect(parsed.hooks.Notification).toHaveLength(2);
+    const kept = parsed.hooks.Notification.find(
+      (e: { matcher?: string }) => e.matcher === 'permission_prompt|elicitation_dialog'
+    );
+    expect(kept).toEqual(workmuxEntry);
     const idle = parsed.hooks.Notification.find((e: { matcher?: string }) => e.matcher === 'idle_prompt');
     expect(idle).toBeDefined();
   });

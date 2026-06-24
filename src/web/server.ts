@@ -47,7 +47,7 @@ import {
   type ActiveBashTool,
 } from '../session.js';
 import type { ClaudeMode } from '../types.js';
-import { installGlobalAskUserQuestionHook } from '../hooks-config.js';
+import { installGlobalCodemanHooks } from '../hooks-config.js';
 import type { SessionState } from '../types/session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
@@ -2996,22 +2996,20 @@ export class WebServer extends EventEmitter {
     // Set API URL for child processes (MCP server, spawned sessions)
     process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;
 
-    // Ensure the AskUserQuestion PreToolUse hook is installed in the user's global
-    // ~/.claude/settings.json so every Codeman session (incl. pre-existing worktrees)
-    // surfaces interactive questions live in the transcript. Idempotent + safe;
-    // opt out with CODEMAN_NO_GLOBAL_HOOK=1. Skipped in test mode.
+    // Ensure Codeman's global hooks are present in the user's ~/.claude/settings.json so
+    // every Codeman session (incl. pre-existing worktrees) gets the idle_prompt
+    // notification, and strip the dead AskUserQuestion PreToolUse hook if a previous
+    // version left one behind. Idempotent + safe; opt out with CODEMAN_NO_GLOBAL_HOOK=1.
+    // Skipped in test mode.
     if (!this.testMode) {
-      installGlobalAskUserQuestionHook()
+      installGlobalCodemanHooks()
         .then((r) => {
           if (r.installed) {
-            console.log('✓ Installed global AskUserQuestion hook in ~/.claude/settings.json');
+            console.log(`✓ Updated global Codeman hooks in ~/.claude/settings.json (${r.reason})`);
           }
         })
         .catch((err: unknown) => {
-          console.warn(
-            '[hooks] global AskUserQuestion hook not installed:',
-            err instanceof Error ? err.message : String(err)
-          );
+          console.warn('[hooks] global Codeman hooks not updated:', err instanceof Error ? err.message : String(err));
         });
     }
 
