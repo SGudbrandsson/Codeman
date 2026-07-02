@@ -349,6 +349,11 @@ export class Session extends EventEmitter {
   private _contextOutputLines: string[] = [];
   private _contextRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private _contextSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+  // A /compact shrinks the real context, but the banner keeps showing the last
+  // parsed /context value until we re-read it. Set when a compaction is issued;
+  // consumed on the next idle to trigger a fresh /context read.
+  private _pendingCompactRefresh = false;
+  private _compactRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private _contextWindowTokens: number | null = null;
   private _contextWindowMax: number | null = null;
   private _contextWindowSystem: number | null = null;
@@ -1133,6 +1138,7 @@ export class Session extends EventEmitter {
             this._status = 'idle';
             this._lastPromptTime = Date.now();
             this.emit('idle');
+            this._maybeRefreshContextAfterCompact();
           });
           void this._activityMonitor.start();
         }
@@ -2339,6 +2345,13 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string): Promise<boolean> {
+    // A /compact resets the real context, but the banner keeps showing the last
+    // parsed /context value. Flag it so the next idle transition re-reads /context.
+    // Covers manual /compact (via the input route), auto-compact, and compact-continue —
+    // all route through here. (/context itself and 'continue' don't match.)
+    if (/^\s*\/compact\b/.test(data)) {
+      this._pendingCompactRefresh = true;
+    }
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }
@@ -2353,6 +2366,23 @@ export class Session extends EventEmitter {
   /** Trigger an immediate /context refresh. Result arrives via 'contextUpdate' event. */
   refreshContext(): void {
     this._refreshContext();
+  }
+
+  /**
+   * After a compaction the real context has shrunk, but the banner still shows the
+   * stale pre-compaction percentage until /context is re-read. Called on idle: if a
+   * /compact was issued, re-read /context once the TUI has settled so the percentage
+   * reflects the compacted conversation. Re-checks idle at fire time to avoid injecting
+   * /context into a turn (e.g. the 'continue' that auto-compact-and-continue sends).
+   */
+  private _maybeRefreshContextAfterCompact(): void {
+    if (!this._pendingCompactRefresh) return;
+    this._pendingCompactRefresh = false;
+    if (this._compactRefreshTimer) clearTimeout(this._compactRefreshTimer);
+    this._compactRefreshTimer = setTimeout(() => {
+      this._compactRefreshTimer = null;
+      if (!this._isStopped && this.isIdle()) this._refreshContext();
+    }, 2500);
   }
 
   /** Current PTY dimensions — used to skip no-op resizes that trigger Ink redraws */
@@ -2514,6 +2544,11 @@ export class Session extends EventEmitter {
       clearTimeout(this._contextSafetyTimer);
       this._contextSafetyTimer = null;
     }
+    if (this._compactRefreshTimer) {
+      clearTimeout(this._compactRefreshTimer);
+      this._compactRefreshTimer = null;
+    }
+    this._pendingCompactRefresh = false;
     this._awaitingContext = false;
     this._contextOutputLines = [];
 
