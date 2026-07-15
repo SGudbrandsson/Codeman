@@ -17795,7 +17795,7 @@ class CodemanApp {
           ${toolDetail.hasMore ? `<div class="tool-params-expanded" id="tool-params-${a.toolUseId}" style="display:none;"><pre>${escapeHtml(JSON.stringify(a.fullInput || a.input, null, 2))}</pre></div>` : ''}
         </div>`;
       } else if (a.type === 'tool_result') {
-        const icon = a.isError ? '❌' : '\ud83d\udcc4';
+        const icon = a.isError ? '❌' : '📄';
         const statusClass = a.isError ? 'error' : '';
         const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
         const preview = a.preview.length > 80 ? a.preview.substring(0, 80) + '...' : a.preview;
@@ -18372,7 +18372,7 @@ class CodemanApp {
         <span class="tool-detail">${escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
       </div>`;
     } else if (a.type === 'tool_result') {
-      const icon = a.isError ? '❌' : '\ud83d\udcc4';
+      const icon = a.isError ? '❌' : '📄';
       const statusClass = a.isError ? ' error' : '';
       const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
       const preview = a.preview.length > 60 ? a.preview.substring(0, 60) + '...' : a.preview;
@@ -19596,7 +19596,7 @@ class CodemanApp {
     win.innerHTML = `
       <div class="log-viewer-window-header">
         <div class="log-viewer-window-title" title="${escapeHtml(filePath)}">
-          <span class="icon">\ud83d\udcc4</span>
+          <span class="icon">📄</span>
           <span class="filename">${escapeHtml(fileName)}</span>
           <span class="status streaming">streaming</span>
         </div>
@@ -21756,6 +21756,7 @@ const InputPanel = {
         formData.append('file', file);
         // 30-second timeout prevents indefinite spinner if server hangs
         const controller = new AbortController();
+        entry._controller = controller; // so a mid-upload chip removal can abort it
         const timeout = setTimeout(() => controller.abort(), 30000);
         let res;
         try {
@@ -21774,12 +21775,17 @@ const InputPanel = {
         entry.uploading = false;
         this._renderThumbnails();
       } catch (err) {
-        const msg = err.name === 'AbortError' ? 'File upload timed out' : ('File upload failed: ' + (err.message || err));
-        if (typeof app !== 'undefined') app.showToast(msg, 'error');
-        console.error('[InputPanel] file upload failed:', err);
-        const idx = this._files.indexOf(entry);
-        if (idx !== -1) this._files.splice(idx, 1);
-        this._renderThumbnails();
+        // Entry was removed by the user mid-upload — the abort is expected; stay quiet.
+        if (entry._removed) {
+          // already spliced by the remove handler; nothing to report
+        } else {
+          const msg = err.name === 'AbortError' ? 'File upload timed out' : ('File upload failed: ' + (err.message || err));
+          if (typeof app !== 'undefined') app.showToast(msg, 'error');
+          console.error('[InputPanel] file upload failed:', err);
+          const idx = this._files.indexOf(entry);
+          if (idx !== -1) this._files.splice(idx, 1);
+          this._renderThumbnails();
+        }
       } finally {
         this._uploadingCount = Math.max(0, (this._uploadingCount || 0) - 1);
         this._updateSendBtnState();
@@ -21959,6 +21965,11 @@ const InputPanel = {
       removeBtn.textContent = '\xd7';
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        // If the upload is still in flight, abort it so Send isn't left disabled.
+        if (file.uploading && file._controller) {
+          file._removed = true;
+          file._controller.abort();
+        }
         this._files.splice(idx, 1);
         this._renderThumbnails();
       });
@@ -22013,12 +22024,13 @@ const InputPanel = {
       modal.appendChild(note);
     }
 
-    const close = () => overlay.remove();
+    const esc = (ev) => { if (ev.key === 'Escape') close(); };
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', esc); // all close paths clean up the listener
+    };
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     closeBtn.addEventListener('click', close);
-    const esc = (ev) => {
-      if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
-    };
     document.addEventListener('keydown', esc);
 
     overlay.appendChild(modal);
