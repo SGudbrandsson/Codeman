@@ -21095,6 +21095,13 @@ const BUILTIN_CLAUDE_COMMANDS = [
  * Features: auto-growing textarea, inset + and send buttons, multi-image thumbnails,
  * slash command popup, plus action sheet (camera / gallery / file).
  */
+// Large-paste → document-snippet thresholds. A compose paste larger than either
+// is diverted to a .txt file attachment instead of being typed through the mux.
+const PASTE_SNIPPET_MAX_BYTES = 10 * 1024; // 10 KB (UTF-8)
+const PASTE_SNIPPET_MAX_LINES = 30;
+const PASTE_PREVIEW_LIMIT = 100 * 1024;    // preview modal shows at most this many chars
+const PASTE_SNIPPET_HARD_MAX = 9 * 1024 * 1024; // headroom below the 10 MB multipart upload cap
+
 const InputPanel = {
   _open: false,
   _panelEl: null,
@@ -21116,6 +21123,35 @@ const InputPanel = {
 
   _getPanel()    { return this._panelEl    || (this._panelEl    = document.getElementById('mobileInputPanel')); },
   _getTextarea() { return this._textareaEl || (this._textareaEl = document.getElementById('composeTextarea')); },
+
+  // ── Large-paste snippet helpers ───────────────────────────────────────────
+  /** Line count with normalized line endings (\r\n, \r, LS, PS → \n). A single
+   *  trailing terminator does not count as an extra line. */
+  _countPasteLines(text) {
+    if (!text) return 0;
+    const parts = text.replace(/\r\n|\r|\u2028|\u2029/g, '\n').split('\n');
+    if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+    return parts.length;
+  },
+  /** UTF-8 byte length of the pasted text. */
+  _pasteByteLength(text) {
+    return new TextEncoder().encode(text).length;
+  },
+  /** True iff this paste should become a document snippet. */
+  _shouldSnippetPaste(text) {
+    if (!text) return false;
+    if (this._pasteByteLength(text) > PASTE_SNIPPET_MAX_BYTES) return true;
+    if (this._countPasteLines(text) > PASTE_SNIPPET_MAX_LINES) return true;
+    return false;
+  },
+  _makePasteFilename(n) {
+    return `pasted-text-${n}.txt`;
+  },
+  _fmtPasteBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  },
 
   /** Called by selectSession when the active session changes. Saves old draft, loads new one. */
   onSessionChange(oldId, newId) {
@@ -21230,6 +21266,10 @@ const InputPanel = {
       _dedupeText = text;
       _dedupeTime = now;
     });
+
+    // Large-paste → document snippet: intercept oversized plain-text pastes and
+    // divert them to a .txt attachment instead of typing them through the mux.
+    ta.addEventListener('paste', (e) => this._onTextPaste(e));
 
     // Auto-grow on input (RAF-debounced to avoid forced sync layout per keystroke)
     ta.addEventListener('input', () => {
@@ -21654,13 +21694,57 @@ const InputPanel = {
     if (nonImageFiles.length) await this._uploadNonImageFiles(nonImageFiles);
   },
 
+  /**
+   * Compose-box paste handler for oversized plain text. File/image pastes are
+   * owned by the capture-phase global handler (app.js ~5516), which runs first
+   * and only preventDefaults for file pastes; we act only on genuine plain-text
+   * pastes above the snippet thresholds.
+   */
+  _onTextPaste(e) {
+    const cd = e.clipboardData;
+    if (!cd) return;
+    if (cd.files && cd.files.length) return;      // file paste — let global handler own it
+    const text = cd.getData('text/plain');
+    if (!text) return;                            // HTML/RTF-only or empty — native paste
+    if (!this._shouldSnippetPaste(text)) return;  // small paste — native insert
+    if (typeof app === 'undefined' || !app.activeSessionId) return; // nowhere to upload
+    e.preventDefault();
+    const bytes = this._pasteByteLength(text);
+    if (bytes > PASTE_SNIPPET_HARD_MAX) {
+      if (typeof app !== 'undefined') app.showToast('Pasted text is too large to attach (max ~9 MB). Save it to a file and attach that instead.', 'error');
+      return;
+    }
+    this._uploadPasteSnippet(text);
+  },
+
+  /** Turn pasted text into a .txt file and push it through the upload pipeline. */
+  _uploadPasteSnippet(text) {
+    const sessionId = (typeof app !== 'undefined') ? app.activeSessionId : null;
+    if (!sessionId) return;
+    this._pasteCounter = (this._pasteCounter || 0) + 1;
+    const n = this._pasteCounter;
+    const file = new File([text], this._makePasteFilename(n), { type: 'text/plain' });
+    // Metadata for the "document snippet" chip + preview. previewText is bounded
+    // so a multi-MB paste doesn't keep a second full copy in memory.
+    file._pasteMeta = {
+      isPaste: true,
+      pasteLabel: n,
+      lines: this._countPasteLines(text),
+      bytes: this._pasteByteLength(text),
+      previewText: text.slice(0, PASTE_PREVIEW_LIMIT),
+      truncated: text.length > PASTE_PREVIEW_LIMIT,
+    };
+    this._uploadNonImageFiles([file], sessionId);
+  },
+
   /** Upload non-image files to the session's working directory */
-  async _uploadNonImageFiles(files) {
+  async _uploadNonImageFiles(files, sessionId = (typeof app !== 'undefined' ? app.activeSessionId : null)) {
     FeatureTracker.track('compose-bar-file-attach');
-    if (!files.length || typeof app === 'undefined' || !app.activeSessionId) return;
+    if (!files.length || !sessionId) return;
 
     for (const file of files) {
-      const entry = { filename: file.name, path: null, uploading: true };
+      const entry = { filename: file.name, path: null, uploading: true, sessionId };
+      if (file._pasteMeta) Object.assign(entry, file._pasteMeta);
       this._files.push(entry);
       this._renderThumbnails();
 
@@ -21672,10 +21756,11 @@ const InputPanel = {
         formData.append('file', file);
         // 30-second timeout prevents indefinite spinner if server hangs
         const controller = new AbortController();
+        entry._controller = controller; // so a mid-upload chip removal can abort it
         const timeout = setTimeout(() => controller.abort(), 30000);
         let res;
         try {
-          res = await fetch(`/api/sessions/${app.activeSessionId}/upload`, { method: 'POST', body: formData, signal: controller.signal });
+          res = await fetch(`/api/sessions/${sessionId}/upload`, { method: 'POST', body: formData, signal: controller.signal });
         } finally {
           clearTimeout(timeout);
         }
@@ -21690,12 +21775,17 @@ const InputPanel = {
         entry.uploading = false;
         this._renderThumbnails();
       } catch (err) {
-        const msg = err.name === 'AbortError' ? 'File upload timed out' : ('File upload failed: ' + (err.message || err));
-        if (typeof app !== 'undefined') app.showToast(msg, 'error');
-        console.error('[InputPanel] file upload failed:', err);
-        const idx = this._files.indexOf(entry);
-        if (idx !== -1) this._files.splice(idx, 1);
-        this._renderThumbnails();
+        // Entry was removed by the user mid-upload — the abort is expected; stay quiet.
+        if (entry._removed) {
+          // already spliced by the remove handler; nothing to report
+        } else {
+          const msg = err.name === 'AbortError' ? 'File upload timed out' : ('File upload failed: ' + (err.message || err));
+          if (typeof app !== 'undefined') app.showToast(msg, 'error');
+          console.error('[InputPanel] file upload failed:', err);
+          const idx = this._files.indexOf(entry);
+          if (idx !== -1) this._files.splice(idx, 1);
+          this._renderThumbnails();
+        }
       } finally {
         this._uploadingCount = Math.max(0, (this._uploadingCount || 0) - 1);
         this._updateSendBtnState();
@@ -21838,40 +21928,113 @@ const InputPanel = {
       strip.appendChild(wrap);
     });
 
-    // Render non-image file attachments
+    // Render non-image file attachments (and paste snippets)
     this._files.forEach((file, idx) => {
       const wrap = document.createElement('div');
-      wrap.className = 'compose-thumb compose-thumb-file';
-      wrap.title = file.path || (file.uploading ? 'Uploading\u2026' : file.filename);
+      wrap.className = 'compose-thumb compose-thumb-file' + (file.isPaste ? ' compose-thumb-paste' : '');
+      wrap.title = file.isPaste
+        ? (file.uploading ? 'Uploading\u2026' : 'Pasted text \u2014 click to preview')
+        : (file.path || (file.uploading ? 'Uploading\u2026' : file.filename));
 
       const icon = document.createElement('div');
       icon.className = 'compose-file-icon';
-      // Show extension badge or generic file icon
-      const ext = file.filename.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toUpperCase() || '';
-      icon.textContent = ext || '\ud83d\udcc4';
+      if (file.isPaste) {
+        icon.textContent = '\ud83d\udcc4'; // \ud83d\udcc4
+      } else {
+        // Show extension badge or generic file icon
+        const ext = file.filename.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toUpperCase() || '';
+        icon.textContent = ext || '\ud83d\udcc4';
+      }
       icon.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:60%;font-size:11px;font-weight:700;color:var(--text-secondary,#999);letter-spacing:0.5px;';
 
       const label = document.createElement('div');
       label.className = 'compose-file-label';
-      label.textContent = file.uploading ? 'Uploading\u2026' : file.filename;
+      if (file.isPaste) {
+        label.textContent = file.uploading
+          ? 'Uploading\u2026'
+          : `Pasted text #${file.pasteLabel} \u00b7 ${(file.lines || 0).toLocaleString()} lines \u00b7 ${this._fmtPasteBytes(file.bytes || 0)}`;
+      } else {
+        label.textContent = file.uploading ? 'Uploading\u2026' : file.filename;
+      }
       label.style.cssText = 'font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;text-align:center;padding:0 2px;color:var(--text-secondary,#999);';
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'compose-thumb-remove';
       removeBtn.type = 'button';
-      removeBtn.setAttribute('aria-label', 'Remove file');
+      removeBtn.setAttribute('aria-label', file.isPaste ? 'Remove pasted text' : 'Remove file');
       removeBtn.textContent = '\xd7';
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        // If the upload is still in flight, abort it so Send isn't left disabled.
+        if (file.uploading && file._controller) {
+          file._removed = true;
+          file._controller.abort();
+        }
         this._files.splice(idx, 1);
         this._renderThumbnails();
       });
+
+      // Paste snippets are clickable to preview their captured text.
+      if (file.isPaste && !file.uploading) {
+        wrap.style.cursor = 'pointer';
+        wrap.addEventListener('click', (e) => {
+          if (e.target === removeBtn) return;
+          this._previewPasteSnippet(file);
+        });
+      }
 
       wrap.appendChild(icon);
       wrap.appendChild(label);
       wrap.appendChild(removeBtn);
       strip.appendChild(wrap);
     });
+  },
+
+  /** Lightweight modal showing a paste snippet's captured text. */
+  _previewPasteSnippet(entry) {
+    const overlay = document.createElement('div');
+    overlay.className = 'paste-preview-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);padding:24px;';
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:var(--bg-secondary,#1e1e1e);color:var(--text-primary,#eee);max-width:900px;width:100%;max-height:80vh;display:flex;flex-direction:column;border-radius:8px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.5);';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:10px 14px;font-size:12px;font-weight:600;border-bottom:1px solid var(--border,#333);display:flex;justify-content:space-between;align-items:center;';
+    const title = document.createElement('span');
+    title.textContent = `\ud83d\udcc4 Pasted text #${entry.pasteLabel} \u00b7 ${(entry.lines || 0).toLocaleString()} lines \u00b7 ${this._fmtPasteBytes(entry.bytes || 0)}`;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '\xd7';
+    closeBtn.setAttribute('aria-label', 'Close preview');
+    closeBtn.style.cssText = 'background:none;border:none;color:inherit;font-size:20px;cursor:pointer;line-height:1;';
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    const body = document.createElement('pre');
+    body.style.cssText = 'margin:0;padding:14px;overflow:auto;font-family:var(--font-mono,monospace);font-size:12px;white-space:pre-wrap;word-break:break-word;';
+    body.textContent = entry.previewText || '';
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    if (entry.truncated) {
+      const note = document.createElement('div');
+      note.style.cssText = 'padding:8px 14px;font-size:11px;color:var(--text-secondary,#999);border-top:1px solid var(--border,#333);';
+      note.textContent = `Showing the first ${this._fmtPasteBytes(PASTE_PREVIEW_LIMIT)} \u2014 the full text is sent as a file attachment.`;
+      modal.appendChild(note);
+    }
+
+    const esc = (ev) => { if (ev.key === 'Escape') close(); };
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', esc); // all close paths clean up the listener
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', esc);
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
   },
 
   _previewImage(img) {
