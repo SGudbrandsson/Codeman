@@ -553,3 +553,71 @@ git commit -m "chore: large-paste snippet — build/deploy verification" || echo
 **Placeholder scan:** No TBD/TODO; every code step shows complete code. (Task 1 Step 2 notes the TDD-honesty caveat for mirror-style tests but still gives an exact command + expectation.)
 
 **Type/name consistency:** `_countPasteLines`, `_pasteByteLength`, `_shouldSnippetPaste`, `_makePasteFilename`, `_fmtPasteBytes`, `_onTextPaste`, `_uploadPasteSnippet`, `_previewPasteSnippet`, and the `_pasteMeta`/entry fields (`isPaste`, `pasteLabel`, `lines`, `bytes`, `previewText`, `truncated`) are used consistently across Tasks 1–3. `PASTE_SNIPPET_MAX_BYTES` / `PASTE_SNIPPET_MAX_LINES` / `PASTE_PREVIEW_LIMIT` match between app.js and the mirrored test constants.
+
+---
+
+## Post-review revisions (codex plan review, 2026-07-15)
+
+Codex confirmed all cited anchors, the paste-event ordering (capture-phase global
+handler returns without `preventDefault` for text pastes), File-expando + FormData
+behavior, splice-by-idx safety, and no-lint-impact. Five findings are folded in
+below — **these override the corresponding code in Tasks 1–3.**
+
+**R1 (was blocker) — capture session at paste time.** `_uploadNonImageFiles`
+uploads to the mutable `app.activeSessionId`, so a paste + session-switch could
+write the file into the wrong session's working dir. Thread an explicit
+`sessionId` captured at paste time:
+
+- `_uploadNonImageFiles(files, sessionId = (typeof app !== 'undefined' ? app.activeSessionId : null))`:
+  guard `if (!files.length || !sessionId) return;`, set `entry.sessionId = sessionId`
+  (in the entry literal), and use `` fetch(`/api/sessions/${sessionId}/upload`, …) ``
+  instead of `app.activeSessionId`. (Backward compatible: existing callers pass no
+  second arg and get today's behavior.)
+- `_uploadPasteSnippet(text)`: `const sessionId = (typeof app !== 'undefined') ? app.activeSessionId : null; if (!sessionId) return;` … `this._uploadNonImageFiles([file], sessionId);`
+
+Residual (a paste chip remaining visible after a manual session switch) is the
+pre-existing global-`_files` behavior shared with image/file attachments — out of
+scope, unchanged.
+
+**R2 (was major) — client hard-max + honest error behavior.** The 10 MB cap is on
+the whole multipart body, so a nominal 10 MB file 413s. Add headroom and reject
+early; do **not** promise a bespoke retry chip (the reused code toasts + removes
+the entry on failure).
+
+- Add constant: `const PASTE_SNIPPET_HARD_MAX = 9 * 1024 * 1024;`
+- In `_onTextPaste`, after `e.preventDefault()`:
+  ```js
+      const bytes = this._pasteByteLength(text);
+      if (bytes > PASTE_SNIPPET_HARD_MAX) {
+        if (typeof app !== 'undefined') app.showToast('Pasted text is too large to attach (max ~9 MB). Save it to a file and attach that instead.', 'error');
+        return;
+      }
+      this._uploadPasteSnippet(text);
+  ```
+- Error handling of record: on upload failure the existing path shows a toast and
+  removes the chip (no persistent retry UI). Spec §Error handling + Task 4 QA
+  updated to match.
+
+**R3 (was major) — tests are spec/parity checks, not real-handler TDD.** `app.js`
+is an unbundled browser script that cannot be imported into jsdom (the reason the
+whole repo mirrors logic in tests). The mirror tests are labeled **specification /
+parity checks** — they lock the exact expressions and boundaries — and the real
+DOM handler is exercised by the Task 4 manual browser QA. Do not claim the mirror
+tests cover the live handler.
+
+**R4 (was minor) — trailing-newline off-by-one.** `_countPasteLines` must not
+count a single trailing terminator as an extra line:
+```js
+  _countPasteLines(text) {
+    if (!text) return 0;
+    const parts = text.replace(/\r\n|\r| | /g, '\n').split('\n');
+    if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+    return parts.length;
+  },
+```
+Add boundary tests: 30 lines joined by `\n` → 30 (native); the same with a trailing
+`\n` → 30 (native); 31 lines → 31 (divert). Update the mirrored `countPasteLines`
+identically.
+
+**R5 (was minor) — restore the `#N` label.** Chip label and modal title use
+`` `Pasted text #${file.pasteLabel} · …` `` / `` `📄 Pasted text #${entry.pasteLabel} · …` `` to match the approved design.
