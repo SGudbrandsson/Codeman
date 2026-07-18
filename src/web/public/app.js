@@ -1785,9 +1785,9 @@ const ContextBar = {
 // ===================================================================
 const ModelPicker = {
   MODELS: [
-    { id: 'claude-opus-4-6',   short: 'Opus',   slug: 'opus',   desc: 'Most capable. Best for complex tasks.', ctx: '1M' },
+    { id: 'claude-fable-5',    short: 'Fable',  slug: 'fable',  desc: 'Most capable. Surpasses Opus.',          ctx: '1M' },
+    { id: 'claude-opus-4-6',   short: 'Opus',   slug: 'opus',   desc: 'Highly capable. Best for complex tasks.', ctx: '1M' },
     { id: 'claude-sonnet-4-6', short: 'Sonnet', slug: 'sonnet', desc: 'Fast and capable. Good balance.',       ctx: '200k' },
-    { id: 'claude-fable-5',    short: 'Fable',  slug: 'fable',  desc: 'Creative and expressive writing.',       ctx: '200k' },
     { id: 'claude-haiku-4-5',  short: 'Haiku',  slug: 'haiku',  desc: 'Fastest. Quick edits and simple tasks.', ctx: '200k' },
   ],
   _currentModelId: '',
