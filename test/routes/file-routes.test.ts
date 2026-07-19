@@ -74,7 +74,10 @@ describe('file-routes', () => {
   let harness: RouteTestHarness;
 
   beforeEach(async () => {
-    harness = await createRouteTestHarness(registerFileRoutes);
+    // 8MB bodyLimit mirrors the production WebServer (server.ts) so the write
+    // routes' own 5MB MAX_WRITE_SIZE guard is what rejects oversized bodies,
+    // not Fastify's default 1MB transport limit.
+    harness = await createRouteTestHarness(registerFileRoutes, { bodyLimit: 8 * 1024 * 1024 });
     vi.clearAllMocks();
 
     // Default: realpathSync returns the path unchanged (identity — path stays in sandbox)
@@ -652,19 +655,19 @@ describe('file-routes', () => {
       expect(mockedWriteFile).not.toHaveBeenCalled();
     });
 
-    it('rejects an oversized write body (cap enforced before writeFile)', async () => {
-      // The route declares a 5MB MAX_WRITE_SIZE guard, but the app runs with
-      // Fastify's default 1MB bodyLimit and sets no override (see server.ts),
-      // so any body over 1MB is rejected with 413 before the handler runs.
-      // Either way the guarantee holds: an oversized write never reaches writeFile.
-      const tooBig = 'a'.repeat(2 * 1024 * 1024);
+    it('rejects an oversized write body via the 5MB guard (before writeFile)', async () => {
+      // Body over MAX_WRITE_SIZE (5MB) but under the 8MB transport limit reaches
+      // the handler and gets the route's clean 400 "Content too large", never
+      // touching writeFile.
+      const tooBig = 'a'.repeat(6 * 1024 * 1024);
       const res = await harness.app.inject({
         method: 'PUT',
         url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
         payload: { path: 'notes.txt', content: tooBig },
       });
-      expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect(res.statusCode).toBe(413);
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error).toContain('too large');
       expect(mockedWriteFile).not.toHaveBeenCalled();
     });
 
@@ -808,16 +811,18 @@ describe('file-routes', () => {
       expect(body.error).toContain('Missing path');
     });
 
-    it('rejects an oversized create body (cap enforced before writeFile)', async () => {
-      // As with PUT save: Fastify's default 1MB bodyLimit preempts the route's
-      // 5MB guard, so an oversized body is rejected (413) before writeFile runs.
-      const tooBig = 'a'.repeat(2 * 1024 * 1024);
+    it('rejects an oversized create body via the 5MB guard (before writeFile)', async () => {
+      // Body over MAX_WRITE_SIZE (5MB) but under the 8MB transport limit reaches
+      // the handler and gets the route's clean 400 "Content too large".
+      const tooBig = 'a'.repeat(6 * 1024 * 1024);
       const res = await harness.app.inject({
         method: 'POST',
         url: `/api/sessions/${harness.ctx._sessionId}/file-create`,
         payload: { path: 'new.txt', content: tooBig },
       });
-      expect(res.statusCode).toBe(413);
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error).toContain('too large');
       expect(mockedWriteFile).not.toHaveBeenCalled();
     });
 

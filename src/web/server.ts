@@ -348,11 +348,21 @@ export class WebServer extends EventEmitter {
 
     // maxParamLength raised to 300 so plugin registry keys up to 214 chars reach the DELETE handler
     // rather than silently matching no route and returning a 404.
+    // bodyLimit raised to 8MB (from Fastify's 1MB default) so file-save/create JSON
+    // bodies carrying up to the 5MB MAX_WRITE_SIZE content cap (plus path/envelope
+    // overhead) reach the handler and get its clean 400 "Content too large" response,
+    // rather than being rejected up-front with a raw 413.
+    const bodyLimit = 8 * 1024 * 1024;
     if (https) {
       const { key, cert } = getOrCreateSelfSignedCert();
-      this.app = Fastify({ logger: false, https: { key, cert }, routerOptions: { maxParamLength: 300 } });
+      this.app = Fastify({
+        logger: false,
+        https: { key, cert },
+        routerOptions: { maxParamLength: 300 },
+        bodyLimit,
+      });
     } else {
-      this.app = Fastify({ logger: false, routerOptions: { maxParamLength: 300 } });
+      this.app = Fastify({ logger: false, routerOptions: { maxParamLength: 300 }, bodyLimit });
     }
     this.mux = createMultiplexer();
 
