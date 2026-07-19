@@ -31,6 +31,8 @@ export enum ApiErrorCode {
   OPERATION_FAILED = 'OPERATION_FAILED',
   /** Resource already exists */
   ALREADY_EXISTS = 'ALREADY_EXISTS',
+  /** Resource state conflict (e.g. stale write / concurrent modification) */
+  CONFLICT = 'CONFLICT',
   /** Internal server error */
   INTERNAL_ERROR = 'INTERNAL_ERROR',
 }
@@ -44,6 +46,7 @@ const ErrorMessages: Record<ApiErrorCode, string> = {
   [ApiErrorCode.SESSION_BUSY]: 'Session is currently busy',
   [ApiErrorCode.OPERATION_FAILED]: 'The operation failed',
   [ApiErrorCode.ALREADY_EXISTS]: 'Resource already exists',
+  [ApiErrorCode.CONFLICT]: 'The resource was modified by another process',
   [ApiErrorCode.INTERNAL_ERROR]: 'An internal error occurred',
 };
 

@@ -4,7 +4,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, resolve, relative, isAbsolute, extname } from 'node:path';
+import { join, resolve, relative, isAbsolute, extname, dirname, basename } from 'node:path';
 import { realpathSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -253,6 +253,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
           totalLines: allLines.length,
           truncated: truncatedContent,
           extension: ext,
+          mtime: stat.mtimeMs,
         },
       };
     } catch (err) {
@@ -667,4 +668,260 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         );
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Write routes (mobile file explorer): save content, create file, mkdir, delete.
+  // SECRETS SAFETY: never log request bodies or file content; never interpolate
+  // file content into error messages/SSE; never echo saved content back.
+  // ---------------------------------------------------------------------------
+
+  /** Max size for a single write (bytes). Reads allow 10MB; writes are capped tighter. */
+  const MAX_WRITE_SIZE = 5 * 1024 * 1024; // 5MB
+
+  // Save (overwrite) an existing file's content, with best-effort staleness guard.
+  app.put('/api/sessions/:id/file-content', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+    const body = (req.body ?? {}) as { path?: string; content?: string; expectedMtime?: number };
+    const filePath = body.path;
+    const content = body.content;
+
+    if (!filePath || typeof filePath !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+    if (typeof content !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing content parameter'));
+      return;
+    }
+    const byteLength = Buffer.byteLength(content, 'utf-8');
+    if (byteLength > MAX_WRITE_SIZE) {
+      reply
+        .code(400)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            `Content too large (${Math.round(byteLength / 1024 / 1024)}MB > ${MAX_WRITE_SIZE / 1024 / 1024}MB limit)`
+          )
+        );
+      return;
+    }
+
+    // Sandbox: target must already exist (existing-target pattern, mirrors file-content).
+    const fullPath = resolve(session.workingDir, filePath);
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(fullPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+    const relativePath = relative(session.workingDir, resolvedPath);
+    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
+      return;
+    }
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (!stat.isFile()) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path is not a regular file'));
+        return;
+      }
+      // Best-effort staleness guard: if caller supplied the mtime it read, and the
+      // file changed since, reject so the UI can offer Reload / Overwrite.
+      if (typeof body.expectedMtime === 'number' && Math.abs(stat.mtimeMs - body.expectedMtime) > 0.5) {
+        reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, 'File was modified since it was loaded'));
+        return;
+      }
+
+      await fs.writeFile(resolvedPath, content, 'utf-8');
+      const newStat = await fs.stat(resolvedPath);
+      return { success: true, data: { path: relativePath, size: newStat.size, mtime: newStat.mtimeMs } };
+    } catch (err) {
+      reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to save file: ${getErrorMessage(err)}`));
+      return;
+    }
+  });
+
+  // Create a new file (optionally with initial content). Parent-dir sandbox.
+  app.post('/api/sessions/:id/file-create', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+    const body = (req.body ?? {}) as { path?: string; content?: string };
+    const relPath = body.path;
+    const content = typeof body.content === 'string' ? body.content : '';
+
+    if (!relPath || typeof relPath !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+    const byteLength = Buffer.byteLength(content, 'utf-8');
+    if (byteLength > MAX_WRITE_SIZE) {
+      reply
+        .code(400)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            `Content too large (${Math.round(byteLength / 1024 / 1024)}MB > ${MAX_WRITE_SIZE / 1024 / 1024}MB limit)`
+          )
+        );
+      return;
+    }
+
+    const target = resolveNewChild(session.workingDir, relPath, reply);
+    if (!target) return; // reply already sent
+
+    try {
+      if (existsSync(target)) {
+        reply
+          .code(409)
+          .send(createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A file or folder with that name already exists'));
+        return;
+      }
+      await fs.writeFile(target, content, { encoding: 'utf-8', flag: 'wx' });
+      const newStat = await fs.stat(target);
+      const rel = relative(session.workingDir, target);
+      return { success: true, data: { path: rel, size: newStat.size, mtime: newStat.mtimeMs } };
+    } catch (err) {
+      reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create file: ${getErrorMessage(err)}`));
+      return;
+    }
+  });
+
+  // Create a new directory. Parent-dir sandbox.
+  app.post('/api/sessions/:id/dir-create', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+    const body = (req.body ?? {}) as { path?: string };
+    const relPath = body.path;
+
+    if (!relPath || typeof relPath !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    const target = resolveNewChild(session.workingDir, relPath, reply);
+    if (!target) return; // reply already sent
+
+    try {
+      if (existsSync(target)) {
+        reply
+          .code(409)
+          .send(createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A file or folder with that name already exists'));
+        return;
+      }
+      await fs.mkdir(target);
+      const newStat = await fs.stat(target);
+      const rel = relative(session.workingDir, target);
+      return { success: true, data: { path: rel, mtime: newStat.mtimeMs } };
+    } catch (err) {
+      reply
+        .code(500)
+        .send(
+          createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create directory: ${getErrorMessage(err)}`)
+        );
+      return;
+    }
+  });
+
+  // Delete an existing file or directory. Recursive dir delete requires an explicit flag.
+  app.delete('/api/sessions/:id/file', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id);
+    // Accept params from body (DELETE with JSON) or query string.
+    const body = (req.body ?? {}) as { path?: string; recursive?: boolean; confirm?: boolean };
+    const query = req.query as { path?: string; recursive?: string; confirm?: string };
+    const filePath = body.path ?? query.path;
+    const recursive =
+      body.recursive === true || body.confirm === true || query.recursive === 'true' || query.confirm === 'true';
+
+    if (!filePath || typeof filePath !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
+      return;
+    }
+
+    const fullPath = resolve(session.workingDir, filePath);
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(fullPath);
+    } catch {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+    const relativePath = relative(session.workingDir, resolvedPath);
+    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
+      return;
+    }
+    // Never delete the working directory root itself.
+    if (relativePath === '' || resolvedPath === realpathSync(session.workingDir)) {
+      reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Refusing to delete the working directory root'));
+      return;
+    }
+
+    try {
+      const stat = await fs.stat(resolvedPath);
+      if (stat.isDirectory()) {
+        // Require explicit confirmation for recursive directory removal.
+        const entries = await fs.readdir(resolvedPath);
+        if (entries.length > 0 && !recursive) {
+          reply
+            .code(400)
+            .send(
+              createErrorResponse(
+                ApiErrorCode.INVALID_INPUT,
+                'Directory is not empty; recursive delete requires explicit confirmation'
+              )
+            );
+          return;
+        }
+        await fs.rm(resolvedPath, { recursive: true, force: false });
+      } else {
+        await fs.unlink(resolvedPath);
+      }
+      return { success: true, data: { path: relativePath } };
+    } catch (err) {
+      reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to delete: ${getErrorMessage(err)}`));
+      return;
+    }
+  });
+}
+
+/**
+ * Sandbox helper for CREATE routes (new file / mkdir): the target does not exist
+ * yet, so we resolve+validate the PARENT directory (whose realpath exists), reject
+ * unsafe basenames, and return the final absolute path. On rejection it sends the
+ * HTTP error via `reply` and returns null.
+ */
+function resolveNewChild(workingDir: string, relPath: string, reply: import('fastify').FastifyReply): string | null {
+  const fullPath = resolve(workingDir, relPath);
+  const base = basename(fullPath);
+  // Reject unsafe basenames.
+  if (!base || base === '.' || base === '..' || base.includes('/') || base.includes('\\')) {
+    reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid file or folder name'));
+    return null;
+  }
+  const parent = dirname(fullPath);
+  let realParent: string;
+  try {
+    realParent = realpathSync(parent);
+  } catch {
+    reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Parent directory not found'));
+    return null;
+  }
+  const relParent = relative(workingDir, realParent);
+  if (relParent.startsWith('..') || isAbsolute(relParent)) {
+    reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
+    return null;
+  }
+  return join(realParent, base);
 }

@@ -19514,6 +19514,367 @@ class CodemanApp {
     }
   }
 
+  // ==========================================================================
+  // Mobile Files bottom sheet: browse / view / edit / create / delete.
+  // SECRETS SAFETY: file content is never logged or echoed to chat/terminal;
+  // it only ever lives in this.filesState.current and the DOM view/editor.
+  // ==========================================================================
+
+  filesState = null;
+
+  openFilesSheet() {
+    if (!this.activeSessionId) { this.showToast('No active session', 'error'); return; }
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null };
+    const sheet = this.$('filesSheet');
+    const backdrop = this.$('filesSheetBackdrop');
+    // Inline display first (Android-Chrome black-screen compositing fix), then .open.
+    if (sheet) { sheet.style.display = 'flex'; sheet.classList.add('open'); }
+    if (backdrop) { backdrop.style.display = 'block'; backdrop.classList.add('open'); }
+    const hid = this.$('filesShowHidden');
+    if (hid) hid.checked = this.filesState.showHidden;
+    this.$('filesSheetTitle').textContent = 'Files';
+    this.$('filesSheetBackBtn').style.display = 'none';
+    this._filesShowTree();
+    this.filesLoadTree();
+  }
+
+  closeFilesSheet() {
+    if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
+      if (!confirm('Discard unsaved changes?')) return;
+    }
+    const sheet = this.$('filesSheet');
+    const backdrop = this.$('filesSheetBackdrop');
+    if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
+    if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
+    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+  }
+
+  _filesShowTree() {
+    const tb = this.$('filesSheetTreeToolbar'); if (tb) tb.style.display = '';
+    const body = this.$('filesSheetTreeBody'); if (body) body.style.display = '';
+    const view = this.$('filesSheetView'); if (view) view.style.display = 'none';
+  }
+
+  _filesShowView() {
+    const tb = this.$('filesSheetTreeToolbar'); if (tb) tb.style.display = 'none';
+    const body = this.$('filesSheetTreeBody'); if (body) body.style.display = 'none';
+    const view = this.$('filesSheetView'); if (view) view.style.display = 'flex';
+  }
+
+  filesSheetBack() {
+    if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
+      if (!confirm('Discard unsaved changes?')) return;
+    }
+    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    this.$('filesSheetTitle').textContent = 'Files';
+    this.$('filesSheetBackBtn').style.display = 'none';
+    this._filesShowTree();
+    this.filesLoadTree();
+  }
+
+  filesRefresh() { this.filesLoadTree(); }
+
+  filesToggleHidden() {
+    const hid = this.$('filesShowHidden');
+    if (this.filesState) this.filesState.showHidden = hid ? hid.checked : true;
+    this.filesLoadTree();
+  }
+
+  async filesLoadTree() {
+    const sessionId = this.activeSessionId;
+    const body = this.$('filesSheetTreeBody');
+    if (!sessionId || !body || !this.filesState) return;
+    body.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
+    try {
+      const showHidden = this.filesState.showHidden ? 'true' : 'false';
+      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`);
+      if (!res.ok) throw new Error('Failed to load files');
+      const result = await res.json();
+      if (!result.success) throw new Error(result.error || 'Failed to load files');
+      this.filesState.data = result.data;
+      this.filesRenderTree();
+    } catch (err) {
+      body.innerHTML = `<div class="files-sheet-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  filesRenderTree() {
+    const body = this.$('filesSheetTreeBody');
+    if (!body || !this.filesState || !this.filesState.data) return;
+    const { tree } = this.filesState.data;
+    if (!tree || tree.length === 0) { body.innerHTML = '<div class="files-sheet-empty">No files found</div>'; return; }
+    const html = [];
+    const renderNode = (node, depth) => {
+      const isDir = node.type === 'directory';
+      const isExpanded = this.filesState.expanded.has(node.path);
+      const icon = isDir ? (isExpanded ? '📂' : '📁') : this.getFileIcon(node.extension);
+      const chev = isDir
+        ? `<span class="files-tree-chev${isExpanded ? ' expanded' : ''}">▶</span>`
+        : `<span class="files-tree-chev" style="visibility:hidden">▶</span>`;
+      const size = (!isDir && node.size !== undefined)
+        ? `<span class="files-tree-size">${this.formatFileSize(node.size)}</span>` : '';
+      html.push(`<div class="files-tree-item${isDir ? ' is-dir' : ''}${isExpanded ? ' expanded' : ''}" data-path="${escapeHtml(node.path)}" data-type="${node.type}" style="padding-left:${8 + depth * 14}px">
+        ${chev}
+        <span class="files-tree-icon">${icon}</span>
+        <span class="files-tree-name">${escapeHtml(node.name)}</span>
+        ${size}
+        <button class="files-tree-del" data-del="1" title="Delete">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>`);
+      if (isDir && isExpanded && node.children) {
+        for (const c of node.children) renderNode(c, depth + 1);
+      }
+    };
+    for (const n of tree) renderNode(n, 0);
+    body.innerHTML = html.join('');
+    body.onclick = (e) => {
+      const item = e.target.closest('.files-tree-item');
+      if (!item) return;
+      const path = item.dataset.path;
+      const type = item.dataset.type;
+      if (e.target.closest('[data-del]')) { this.filesDelete(path, type === 'directory'); return; }
+      if (type === 'directory') {
+        if (this.filesState.expanded.has(path)) this.filesState.expanded.delete(path);
+        else this.filesState.expanded.add(path);
+        this.filesRenderTree();
+      } else {
+        this.filesOpenFile(path);
+      }
+    };
+  }
+
+  async filesOpenFile(path) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || !this.filesState) return;
+    this._filesShowView();
+    this.$('filesSheetTitle').textContent = path.split('/').pop();
+    this.$('filesSheetBackBtn').style.display = '';
+    const content = this.$('filesSheetViewContent');
+    const meta = this.$('filesSheetViewMeta');
+    const actions = this.$('filesSheetViewActions');
+    content.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
+    meta.textContent = '';
+    actions.innerHTML = '';
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(path)}&lines=10000`);
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to load file');
+      const data = result.data;
+      if (data.type === 'image' || data.type === 'video' || data.type === 'binary') {
+        content.innerHTML = `<div class="files-sheet-empty">Cannot edit ${escapeHtml(data.type)} file (${this.formatFileSize(data.size)})</div>`;
+        meta.textContent = data.extension || '';
+        return;
+      }
+      this.filesState.current = {
+        path,
+        mtime: data.mtime,
+        content: data.content,
+        dirty: false,
+        editing: false,
+        truncated: !!data.truncated,
+        totalLines: data.totalLines,
+        size: data.size,
+      };
+      this.filesState.pendingContent = null;
+      this._filesRenderView();
+    } catch (err) {
+      content.innerHTML = `<div class="files-sheet-empty">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  _filesRenderView() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    const content = this.$('filesSheetViewContent');
+    const meta = this.$('filesSheetViewMeta');
+    const actions = this.$('filesSheetViewActions');
+    const trunc = cur.truncated ? ` • showing first 10000/${cur.totalLines} lines` : '';
+    meta.textContent = `${this.formatFileSize(cur.size)}${trunc}`;
+    let noticeHtml = '';
+    if (cur.truncated) {
+      noticeHtml = `<div class="files-sheet-notice">File is truncated; editing is disabled to avoid data loss.</div>`;
+    }
+    content.innerHTML = noticeHtml + `<pre><code>${escapeHtml(cur.content)}</code></pre>`;
+    const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
+    actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
+  }
+
+  filesStartEdit() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    if (cur.truncated) { this.showToast('File too large to edit safely', 'error'); return; }
+    cur.editing = true;
+    const content = this.$('filesSheetViewContent');
+    const actions = this.$('filesSheetViewActions');
+    content.innerHTML = `<textarea class="files-sheet-editor" id="filesSheetEditor" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>`;
+    const ta = this.$('filesSheetEditor');
+    ta.value = cur.content;
+    ta.addEventListener('input', () => { cur.dirty = ta.value !== cur.content; });
+    actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCancelEdit()">Cancel</button><button class="files-sheet-tool" onclick="app.filesSave()">Save</button>`;
+    ta.focus();
+  }
+
+  filesCancelEdit() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    if (cur.dirty && !confirm('Discard unsaved changes?')) return;
+    cur.dirty = false;
+    cur.editing = false;
+    this.filesState.pendingContent = null;
+    this._filesRenderView();
+  }
+
+  filesCopyCurrent() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    navigator.clipboard.writeText(cur.content)
+      .then(() => this.showToast('Copied to clipboard', 'success'))
+      .catch(() => this.showToast('Failed to copy', 'error'));
+  }
+
+  async filesSave() {
+    const cur = this.filesState && this.filesState.current;
+    const ta = this.$('filesSheetEditor');
+    const sessionId = this.activeSessionId;
+    if (!cur || !ta || !sessionId) return;
+    const newContent = ta.value;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: cur.path, content: newContent, expectedMtime: cur.mtime }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (res.status === 409) { this._filesShowConflict(newContent); return; }
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to save');
+      cur.content = newContent;
+      cur.mtime = result.data.mtime;
+      cur.size = result.data.size;
+      cur.dirty = false;
+      this.showToast('Saved', 'success');
+    } catch (err) {
+      this.showToast('Save failed: ' + err.message, 'error');
+    }
+  }
+
+  _filesShowConflict(pendingContent) {
+    const content = this.$('filesSheetViewContent');
+    if (!content || !this.filesState) return;
+    this.filesState.pendingContent = pendingContent;
+    if (content.querySelector('.files-sheet-notice')) return;
+    const notice = document.createElement('div');
+    notice.className = 'files-sheet-notice';
+    notice.innerHTML = `This file changed on disk since you opened it.
+      <div class="files-sheet-notice-actions">
+        <button class="files-sheet-tool" onclick="app.filesReloadCurrent()">Reload</button>
+        <button class="files-sheet-tool" onclick="app.filesOverwriteCurrent()">Overwrite</button>
+      </div>`;
+    content.prepend(notice);
+  }
+
+  filesReloadCurrent() {
+    const cur = this.filesState && this.filesState.current;
+    if (cur) this.filesOpenFile(cur.path);
+  }
+
+  async filesOverwriteCurrent() {
+    const cur = this.filesState && this.filesState.current;
+    const sessionId = this.activeSessionId;
+    if (!cur || !this.filesState || this.filesState.pendingContent == null || !sessionId) return;
+    const newContent = this.filesState.pendingContent;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: cur.path, content: newContent }), // no expectedMtime = force overwrite
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to save');
+      cur.content = newContent;
+      cur.mtime = result.data.mtime;
+      cur.size = result.data.size;
+      cur.dirty = false;
+      this.filesState.pendingContent = null;
+      this.showToast('Saved (overwritten)', 'success');
+      this.filesStartEdit();
+    } catch (err) {
+      this.showToast('Save failed: ' + err.message, 'error');
+    }
+  }
+
+  async filesNewFile() {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    const name = prompt('New file name (e.g. .env.local):');
+    if (!name) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/file-create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: name.trim() }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create file');
+      this.showToast('Created ' + name.trim(), 'success');
+      await this.filesLoadTree();
+      await this.filesOpenFile(result.data.path);
+      this.filesStartEdit();
+    } catch (err) {
+      this.showToast('Create failed: ' + err.message, 'error');
+    }
+  }
+
+  async filesNewFolder() {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    const name = prompt('New folder name:');
+    if (!name) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/dir-create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: name.trim() }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create folder');
+      this.showToast('Created ' + name.trim(), 'success');
+      this.filesLoadTree();
+    } catch (err) {
+      this.showToast('Create failed: ' + err.message, 'error');
+    }
+  }
+
+  async filesDelete(path, isDir) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || !path) return;
+    const name = path.split('/').pop();
+    const msg = isDir
+      ? `Delete folder "${name}" and ALL its contents? This cannot be undone.`
+      : `Delete file "${name}"? This cannot be undone.`;
+    if (!confirm(msg)) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/file`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, recursive: !!isDir, confirm: true }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to delete');
+      this.showToast('Deleted ' + name, 'success');
+      // If the deleted file is currently open, return to the tree.
+      if (this.filesState && this.filesState.current && this.filesState.current.path === path) {
+        this.filesState.current = null;
+        this.$('filesSheetTitle').textContent = 'Files';
+        this.$('filesSheetBackBtn').style.display = 'none';
+        this._filesShowTree();
+      }
+      this.filesLoadTree();
+    } catch (err) {
+      this.showToast('Delete failed: ' + err.message, 'error');
+    }
+  }
+
   getFileIcon(ext) {
     if (!ext) return '\uD83D\uDCC4'; // Default file
 

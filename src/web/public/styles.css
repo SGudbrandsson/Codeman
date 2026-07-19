@@ -3412,6 +3412,14 @@ body {
   display: none;
 }
 
+/* Mobile files button - hidden on desktop, shown on mobile */
+.btn-toolbar.btn-files-mobile {
+  display: none;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #9ca3af;
+}
+
 /* Mobile case button - hidden on desktop, shown on mobile */
 .btn-toolbar.btn-case-mobile {
   display: none;

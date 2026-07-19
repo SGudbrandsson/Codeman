@@ -525,6 +525,9 @@
             </svg>
           </button>
           <button class="btn-settings-mobile" onclick="app.openAppSettings()" title="App Settings">&#x2699;<span class="update-badge update-badge-mobile" id="updateBadgeMobile" style="display:none;" aria-label="Update available"></span></button>
+          <button class="btn-toolbar btn-files-mobile" onclick="app.openFilesSheet()" title="Files">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </button>
           <button class="btn-toolbar btn-case-mobile" onclick="app.showMobileCasePicker()" title="Select project">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span id="mobileCaseName">Project</span>
@@ -2345,6 +2348,50 @@
     </div>
     <div class="compose-action-backdrop" id="composeActionBackdrop" style="display:none;"
          onclick="InputPanel._closeActionSheet()"></div>
+  </div>
+
+  <!-- Mobile Files bottom sheet -->
+  <div class="files-sheet-backdrop" id="filesSheetBackdrop" style="display:none;"
+       onclick="app.closeFilesSheet()"></div>
+  <div class="files-sheet" id="filesSheet" style="display:none;" role="dialog" aria-label="Files">
+    <div class="files-sheet-header">
+      <div class="files-sheet-title" id="filesSheetTitle">Files</div>
+      <div class="files-sheet-header-actions">
+        <button class="files-sheet-hbtn" id="filesSheetBackBtn" onclick="app.filesSheetBack()" title="Back" style="display:none;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <button class="files-sheet-hbtn" onclick="app.closeFilesSheet()" title="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+    <!-- Tree view -->
+    <div class="files-sheet-toolbar" id="filesSheetTreeToolbar">
+      <button class="files-sheet-tool" onclick="app.filesNewFile()" title="New file">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        <span>File</span>
+      </button>
+      <button class="files-sheet-tool" onclick="app.filesNewFolder()" title="New folder">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+        <span>Folder</span>
+      </button>
+      <label class="files-sheet-toggle" title="Show hidden files">
+        <input type="checkbox" id="filesShowHidden" checked onchange="app.filesToggleHidden()">
+        <span>Hidden</span>
+      </label>
+      <button class="files-sheet-tool" onclick="app.filesRefresh()" title="Refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+    </div>
+    <div class="files-sheet-body" id="filesSheetTreeBody"></div>
+    <!-- File view/edit -->
+    <div class="files-sheet-view" id="filesSheetView" style="display:none;">
+      <div class="files-sheet-view-toolbar">
+        <span class="files-sheet-view-meta" id="filesSheetViewMeta"></span>
+        <div class="files-sheet-view-actions" id="filesSheetViewActions"></div>
+      </div>
+      <div class="files-sheet-view-content" id="filesSheetViewContent"></div>
+    </div>
   </div>
 
   <!-- New Session/Worktree Picker -->
