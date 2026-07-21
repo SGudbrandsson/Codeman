@@ -3059,6 +3059,19 @@ html.mobile-init .file-browser-panel {
   color: #94a3b8;
 }
 .compose-mic-btn:active { color: #e2e8f0; }
+
+/* Files button in the compose bar — shown 431px..1023px (the desktop-UA "tablet"
+   zone where the bottom-toolbar Files button is hidden). Phones <=430px use the
+   toolbar Files button instead, so this stays hidden there (inline display:none). */
+@media (min-width: 431px) {
+  .compose-textarea { padding-left: 78px; }
+  .compose-files-btn {
+    display: inline-flex !important;
+    left: 38px;
+    color: #94a3b8;
+  }
+  .compose-files-btn:active { color: #e2e8f0; }
+}
 .compose-mic-btn.recording {
   background: rgba(239, 68, 68, 0.2);
   color: #ef4444;
