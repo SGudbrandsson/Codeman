@@ -3414,7 +3414,9 @@ body {
 
 /* Mobile files button - hidden on desktop, shown on mobile */
 .btn-toolbar.btn-files-mobile {
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #9ca3af;
@@ -9300,8 +9302,8 @@ kbd {
     color: #e2e8f0;
     border: none;
     border-radius: 0; /* wrapper clips corners via overflow:hidden; removing radius eliminates double-border antialiasing artifact */
-    /* left: + btn; right: expand + mic + send */
-    padding: 10px 108px 10px 44px;
+    /* left: + btn + files btn; right: expand + mic + send */
+    padding: 10px 108px 10px 78px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 0.875rem;
     line-height: 1.45;
@@ -9330,6 +9332,13 @@ kbd {
     z-index: 2;
   }
   .compose-plus-btn { left: 4px; }
+  /* Files button — shown on desktop, left of the textarea next to + */
+  .compose-files-btn {
+    display: inline-flex !important;
+    left: 38px;
+    color: #94a3b8;
+  }
+  .compose-files-btn:hover { color: #e2e8f0; }
   .compose-send-btn {
     right: 4px;
     width: 32px;
@@ -12821,3 +12830,256 @@ kbd {
   border-radius: 4px;
 }
 
+
+/* ============================================================================
+   FILES SHEET (browse / view / edit / create / delete) — UNIVERSAL
+   Lives in styles.css so it applies at ALL viewport widths (the button and
+   sheet were previously mobile-only). Hidden via inline style="display:none";
+   JS sets display then adds .open (Android-Chrome-safe: positioning/z-index
+   only on the .open state). Phone = full-height bottom sheet; ≥768px = centered
+   modal. z-index: sheet 10003, backdrop 10002. Self-contained keyframes so it
+   does not depend on the mobile-only sheet-up/backdrop-fade animations.
+   ============================================================================ */
+@keyframes files-sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes files-backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes files-modal-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.files-sheet-backdrop.open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 10002;
+  background: rgba(0,0,0,0.5);
+  animation: files-backdrop-fade 0.22s ease;
+}
+.files-sheet.open {
+  display: flex;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 10003;
+  background: #0d1117;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  flex-direction: column;
+  overflow: hidden;
+  animation: files-sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.files-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+.files-sheet-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.files-sheet-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.files-sheet-hbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #9ca3af;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.files-sheet-hbtn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.files-sheet-hbtn:active { background: rgba(255,255,255,0.08); color: #fff; }
+
+.files-sheet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.files-sheet-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #161b22;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: #c9d1d9;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.files-sheet-tool:hover { background: #1a2230; }
+.files-sheet-tool:active { background: #1a2230; }
+.files-sheet-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #c9d1d9;
+  font-size: 13px;
+  margin-left: auto;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.files-sheet-toggle input { width: 16px; height: 16px; }
+
+.files-sheet-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px 4px calc(16px + var(--safe-area-bottom, 0px));
+}
+.files-sheet-empty {
+  color: #6e7681;
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 12px;
+}
+
+/* Tree rows */
+.files-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.files-tree-item:hover { background: rgba(255,255,255,0.04); }
+.files-tree-item:active { background: rgba(255,255,255,0.06); }
+.files-tree-icon { flex-shrink: 0; font-size: 15px; width: 18px; text-align: center; }
+.files-tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #e6edf3;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.files-tree-item.is-dir .files-tree-name { color: #79c0ff; font-weight: 500; }
+.files-tree-size { flex-shrink: 0; color: #6e7681; font-size: 11px; }
+.files-tree-del {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: #6e7681;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.files-tree-del:hover { background: rgba(248,81,73,0.12); color: #f85149; }
+.files-tree-del:active { background: rgba(248,81,73,0.15); color: #f85149; }
+.files-tree-children { padding-left: 16px; }
+.files-tree-chev { flex-shrink: 0; color: #6e7681; transition: transform 0.15s; }
+.files-tree-item.expanded .files-tree-chev { transform: rotate(90deg); }
+
+/* View / edit pane */
+.files-sheet-view {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.files-sheet-view-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.files-sheet-view-meta { color: #6e7681; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.files-sheet-view-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.files-sheet-view-content {
+  flex: 1 1 auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+}
+.files-sheet-view-content pre {
+  margin: 0;
+  padding: 12px calc(12px + var(--safe-area-bottom, 0px)) calc(16px + var(--safe-area-bottom, 0px));
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #e6edf3;
+  white-space: pre;
+}
+.files-sheet-editor {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  resize: none;
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 12px;
+  -webkit-text-size-adjust: 100%;
+}
+.files-sheet-notice {
+  padding: 10px 12px;
+  margin: 8px 12px;
+  background: rgba(210,153,34,0.12);
+  border: 1px solid rgba(210,153,34,0.35);
+  border-radius: 8px;
+  color: #e3b341;
+  font-size: 13px;
+}
+.files-sheet-notice-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+/* Desktop / tablet: centered modal instead of a full-height phone sheet. */
+@media (min-width: 768px) {
+  .files-sheet.open {
+    inset: 0;
+    margin: auto;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(760px, 92vw);
+    height: min(82vh, 820px);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+    animation: files-modal-in 0.18s ease;
+  }
+}
