@@ -26,7 +26,7 @@ import { EventEmitter } from 'node:events';
 // when vi.mock() factory callbacks are hoisted to the top of the module.
 // ---------------------------------------------------------------------------
 const mocks = vi.hoisted(() => ({
-  isPaneDeadImpl: vi.fn<[string], boolean>().mockReturnValue(false),
+  isPaneDeadImpl: vi.fn<[string], boolean | Promise<boolean>>().mockReturnValue(false),
   muxSessions: [] as Array<{
     sessionId: string;
     muxName: string;
@@ -235,7 +235,7 @@ vi.mock('../src/mux-factory.js', async () => {
   class FakeMux extends EventEmitter {
     reconcileSessions = vi.fn(async () => mocks.reconcileResult);
     getSessions = vi.fn(() => mocks.muxSessions);
-    isPaneDead = vi.fn((muxName: string) => mocks.isPaneDeadImpl(muxName));
+    isPaneDead = vi.fn(async (muxName: string) => mocks.isPaneDeadImpl(muxName));
     getSession = vi.fn();
     registerSession = vi.fn();
     killSession = vi.fn().mockResolvedValue(true);
@@ -665,5 +665,51 @@ describe('WebServer.checkAndRecoverDeadPanes()', () => {
     await flushAsync();
 
     expect(mocks.isPaneDeadImpl).toHaveBeenCalledWith(`codeman-${sessionId}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Sweep in-flight guard (_deadPaneCheckInFlight)
+  // -------------------------------------------------------------------------
+  describe('sweep in-flight guard (_deadPaneCheckInFlight)', () => {
+    it('skips a sweep started while a previous sweep is still in flight', async () => {
+      injectSession(server, {
+        id: 'guard-sess',
+        busy: true,
+        worktreePath: '/some/worktree',
+      });
+
+      // Hold the first sweep open on a pending isPaneDead probe
+      let resolveProbe!: (dead: boolean) => void;
+      const pendingProbe = new Promise<boolean>((resolve) => {
+        resolveProbe = resolve;
+      });
+      mocks.isPaneDeadImpl.mockReturnValue(pendingProbe);
+
+      const firstSweep = (server as any).checkAndRecoverDeadPanes() as Promise<void>;
+      // First sweep has synchronously reached the pending probe by now
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(1);
+
+      // Second call while the first sweep is in flight must not probe
+      await (server as any).checkAndRecoverDeadPanes();
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(1);
+
+      resolveProbe(false);
+      await firstSweep;
+    });
+
+    it('resets the in-flight flag after a sweep completes so the next sweep probes again', async () => {
+      injectSession(server, {
+        id: 'guard-reset-sess',
+        busy: true,
+        worktreePath: '/some/worktree',
+      });
+      mocks.isPaneDeadImpl.mockReturnValue(false);
+
+      await (server as any).checkAndRecoverDeadPanes();
+      await (server as any).checkAndRecoverDeadPanes();
+
+      // A stuck flag would leave the second sweep skipped (count 1)
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(2);
+    });
   });
 });

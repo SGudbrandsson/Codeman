@@ -353,6 +353,69 @@ describe('TmuxManager (unit)', () => {
       manager.stopStatsCollection();
       // No error thrown
     });
+
+    // The statsTickInFlight guard runs BEFORE getSessionsWithStats is invoked,
+    // so it is testable by replacing the method on the instance with a
+    // controllable promise — no need to bypass IS_TEST_MODE.
+    describe('statsTickInFlight guard', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        manager.stopStatsCollection();
+        vi.useRealTimers();
+      });
+
+      it('skips overlapping ticks while a previous tick is still awaiting getSessionsWithStats', async () => {
+        let resolvePending!: (sessions: never[]) => void;
+        const pending = new Promise<never[]>((resolve) => {
+          resolvePending = resolve;
+        });
+        const statsSpy = vi.spyOn(manager, 'getSessionsWithStats').mockReturnValue(pending);
+
+        manager.startStatsCollection(1000);
+        await vi.advanceTimersByTimeAsync(1000); // tick 1 starts, blocked on pending
+        await vi.advanceTimersByTimeAsync(2000); // ticks 2 and 3 fire — must be skipped
+
+        expect(statsSpy).toHaveBeenCalledTimes(1);
+        resolvePending([]);
+      });
+
+      it('resumes ticking and emits statsUpdated after the pending tick resolves', async () => {
+        let resolvePending!: (sessions: never[]) => void;
+        const pending = new Promise<never[]>((resolve) => {
+          resolvePending = resolve;
+        });
+        const statsSpy = vi.spyOn(manager, 'getSessionsWithStats').mockReturnValue(pending);
+        const emitted: unknown[] = [];
+        manager.on('statsUpdated', (sessions) => emitted.push(sessions));
+
+        manager.startStatsCollection(1000);
+        await vi.advanceTimersByTimeAsync(1000); // tick 1 starts, blocked on pending
+        resolvePending([]);
+        await vi.advanceTimersByTimeAsync(0); // flush microtasks — tick 1 completes
+
+        expect(emitted).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(1000); // next tick runs again (flag was reset)
+        expect(statsSpy).toHaveBeenCalledTimes(2);
+      });
+
+      it('resets the in-flight flag when getSessionsWithStats rejects', async () => {
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const statsSpy = vi.spyOn(manager, 'getSessionsWithStats').mockRejectedValue(new Error('ps exploded'));
+
+        manager.startStatsCollection(1000);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(statsSpy).toHaveBeenCalledTimes(1);
+
+        // The finally block must reset the flag despite the rejection
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(statsSpy).toHaveBeenCalledTimes(2);
+        consoleSpy.mockRestore();
+      });
+    });
   });
 
   describe('remapSessionId', () => {

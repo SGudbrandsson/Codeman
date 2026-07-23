@@ -241,7 +241,7 @@ vi.mock('../src/mux-factory.js', async () => {
   class FakeMux extends EventEmitter {
     reconcileSessions = vi.fn(async () => mocks.reconcileResult);
     getSessions = vi.fn(() => mocks.muxSessions);
-    isPaneDead = vi.fn((muxName: string) => mocks.isPaneDeadImpl(muxName));
+    isPaneDead = vi.fn(async (muxName: string) => mocks.isPaneDeadImpl(muxName));
     getSession = vi.fn();
     remapSessionId = vi.fn((oldId: string, newId: string) => {
       // Simulate real remapSessionId: find session in mocks.muxSessions and update it

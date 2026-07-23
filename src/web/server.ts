@@ -1049,6 +1049,8 @@ export class WebServer extends EventEmitter {
 
   // Track sessions currently undergoing auto-recovery to prevent concurrent recovery races
   private _recoveringSessionIds: Set<string> = new Set();
+  /** In-flight guard: skip dead-pane sweeps while a previous sweep is still running */
+  private _deadPaneCheckInFlight = false;
 
   private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
@@ -2372,7 +2374,20 @@ export class WebServer extends EventEmitter {
    *
    * Future: a per-session `autoRecoverEnabled` flag could relax the worktree-only restriction.
    */
-  private checkAndRecoverDeadPanes(): void {
+  private async checkAndRecoverDeadPanes(): Promise<void> {
+    // Skip this sweep if the previous one is still running — prevents timer ticks
+    // from stacking when probes are slow. Per-session _recoveringSessionIds guards
+    // individual recoveries; this flag guards the whole sweep.
+    if (this._deadPaneCheckInFlight) return;
+    this._deadPaneCheckInFlight = true;
+    try {
+      await this.sweepDeadPanes();
+    } finally {
+      this._deadPaneCheckInFlight = false;
+    }
+  }
+
+  private async sweepDeadPanes(): Promise<void> {
     const recoveryTasks: Promise<void>[] = [];
 
     for (const session of this.sessions.values()) {
@@ -2393,7 +2408,7 @@ export class WebServer extends EventEmitter {
 
       recoveryTasks.push(
         (async () => {
-          const isDead = this.mux.isPaneDead(muxName);
+          const isDead = await this.mux.isPaneDead(muxName);
           if (!isDead) return;
 
           // Guard against concurrent recoveries triggered by close timer ticks
@@ -2433,9 +2448,7 @@ export class WebServer extends EventEmitter {
     }
 
     // Fire all per-session checks concurrently; failures are handled individually above
-    Promise.allSettled(recoveryTasks).catch(() => {
-      /* already handled per-task */
-    });
+    await Promise.allSettled(recoveryTasks);
   }
 
   // Clean up old completed scheduled runs
@@ -3043,7 +3056,7 @@ export class WebServer extends EventEmitter {
     // Start dead-pane auto-recovery check (worktree sessions only, every 30 seconds)
     this.cleanup.setInterval(
       () => {
-        this.checkAndRecoverDeadPanes();
+        void this.checkAndRecoverDeadPanes();
       },
       DEAD_PANE_CHECK_INTERVAL_MS,
       { description: 'dead pane auto-recovery check' }
@@ -3532,7 +3545,7 @@ export class WebServer extends EventEmitter {
 
             // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
             // failure does not abort the entire startup loop.
-            if (!this.mux.isPaneDead(muxSession.muxName)) {
+            if (!(await this.mux.isPaneDead(muxSession.muxName))) {
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
               });
