@@ -19585,16 +19585,29 @@ class CodemanApp {
     const body = this.$('filesSheetTreeBody');
     if (!sessionId || !body || !this.filesState) return;
     body.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
+    // Abort if the tree scan takes too long (e.g. very large repo or a busy
+    // server) so the sheet shows an actionable error instead of spinning forever.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
     try {
       const showHidden = this.filesState.showHidden ? 'true' : 'false';
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`);
+      const res = await fetch(
+        `/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`,
+        { signal: controller.signal }
+      );
       if (!res.ok) throw new Error('Failed to load files');
       const result = await res.json();
       if (!result.success) throw new Error(result.error || 'Failed to load files');
       this.filesState.data = result.data;
       this.filesRenderTree();
     } catch (err) {
-      body.innerHTML = `<div class="files-sheet-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
+      const msg =
+        err.name === 'AbortError'
+          ? 'Loading timed out — the server may be busy. '
+          : `Failed to load files: ${escapeHtml(err.message)} `;
+      body.innerHTML = `<div class="files-sheet-empty">${msg}<br><button class="files-sheet-tool" style="margin-top:10px" onclick="app.filesLoadTree()">Retry</button></div>`;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
