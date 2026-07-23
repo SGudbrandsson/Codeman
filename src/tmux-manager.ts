@@ -1427,7 +1427,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Sync mouse mode based on pane count: enable if split (>1 pane), disable if single.
-   * Called by TeamWatcher when teammates spawn/despawn panes.
+   * Currently unused — the periodic poll in startMouseModeSync handles this automatically;
+   * kept as a public helper for on-demand syncing.
    * Uses `tmux list-panes` for bulletproof detection — counts actual panes, not config.
    */
   async syncMouseMode(muxName: string): Promise<boolean> {

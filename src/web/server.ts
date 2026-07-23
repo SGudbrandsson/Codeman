@@ -2376,8 +2376,9 @@ export class WebServer extends EventEmitter {
    */
   private async checkAndRecoverDeadPanes(): Promise<void> {
     // Skip this sweep if the previous one is still running — prevents timer ticks
-    // from stacking when probes are slow. Per-session _recoveringSessionIds guards
-    // individual recoveries; this flag guards the whole sweep.
+    // from stacking when probes are slow. The flag guards only the probe phase;
+    // recoveries run fire-and-forget so a hung recovery can't pin the flag forever.
+    // Per-session _recoveringSessionIds guards individual recoveries.
     if (this._deadPaneCheckInFlight) return;
     this._deadPaneCheckInFlight = true;
     try {
@@ -2388,7 +2389,7 @@ export class WebServer extends EventEmitter {
   }
 
   private async sweepDeadPanes(): Promise<void> {
-    const recoveryTasks: Promise<void>[] = [];
+    const candidates: Session[] = [];
 
     for (const session of this.sessions.values()) {
       // Only recover busy sessions (idle/stopped need no recovery)
@@ -2403,18 +2404,30 @@ export class WebServer extends EventEmitter {
       if (this._recoveringSessionIds.has(session.id)) continue;
       if (this.cleaningUp.has(session.id)) continue;
 
-      // Compute the mux session name — matches TmuxManager.createSession pattern
-      const muxName = `codeman-${session.id}`;
+      candidates.push(session);
+    }
+
+    // Probe phase: check all candidate panes concurrently (guarded by _deadPaneCheckInFlight)
+    const probeResults = await Promise.allSettled(
+      candidates.map(async (session) => {
+        // Compute the mux session name — matches TmuxManager.createSession pattern
+        const isDead = await this.mux.isPaneDead(`codeman-${session.id}`);
+        return { session, isDead };
+      })
+    );
+
+    const recoveryTasks: Promise<void>[] = [];
+
+    for (const result of probeResults) {
+      if (result.status !== 'fulfilled' || !result.value.isDead) continue;
+      const { session } = result.value;
+
+      // Guard against concurrent recoveries triggered by close timer ticks
+      if (this._recoveringSessionIds.has(session.id)) continue;
+      this._recoveringSessionIds.add(session.id);
 
       recoveryTasks.push(
         (async () => {
-          const isDead = await this.mux.isPaneDead(muxName);
-          if (!isDead) return;
-
-          // Guard against concurrent recoveries triggered by close timer ticks
-          if (this._recoveringSessionIds.has(session.id)) return;
-          this._recoveringSessionIds.add(session.id);
-
           console.log(
             `[Server] Dead pane detected for session ${session.id} (${session.name}), triggering auto-recovery`
           );
@@ -2447,8 +2460,9 @@ export class WebServer extends EventEmitter {
       );
     }
 
-    // Fire all per-session checks concurrently; failures are handled individually above
-    await Promise.allSettled(recoveryTasks);
+    // Fire recoveries without awaiting them — a hung recovery must not block future sweeps.
+    // Failures are handled individually above; allSettled never rejects.
+    void Promise.allSettled(recoveryTasks);
   }
 
   // Clean up old completed scheduled runs
@@ -3056,7 +3070,9 @@ export class WebServer extends EventEmitter {
     // Start dead-pane auto-recovery check (worktree sessions only, every 30 seconds)
     this.cleanup.setInterval(
       () => {
-        void this.checkAndRecoverDeadPanes();
+        this.checkAndRecoverDeadPanes().catch((err) => {
+          console.error('[Server] Dead-pane sweep error:', err);
+        });
       },
       DEAD_PANE_CHECK_INTERVAL_MS,
       { description: 'dead pane auto-recovery check' }
