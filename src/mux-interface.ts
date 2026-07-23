@@ -206,7 +206,7 @@ export interface TerminalMultiplexer extends EventEmitter {
   muxSessionExists(muxName: string): boolean;
 
   /** Check if the pane in a session is dead (command exited but remain-on-exit keeps it alive) */
-  isPaneDead(muxName: string): boolean;
+  isPaneDead(muxName: string): Promise<boolean>;
 
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
   respawnPane(options: RespawnPaneOptions): Promise<number | null>;

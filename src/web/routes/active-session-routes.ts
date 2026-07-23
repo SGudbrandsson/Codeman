@@ -68,7 +68,7 @@ export function registerActiveSessionRoutes(app: FastifyInstance, ctx: ActiveSes
       return reply.status(404).send({ error: 'no_mux_session' });
     }
 
-    const rawScreen = captureScreen(muxSession.muxName);
+    const rawScreen = await captureScreen(muxSession.muxName);
     if (rawScreen === null) {
       return reply.status(503).send({ error: 'screen_capture_failed' });
     }

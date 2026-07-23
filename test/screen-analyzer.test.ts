@@ -1,5 +1,47 @@
 import { describe, it, expect, vi } from 'vitest';
-import { analyzeScreen, stripAnsi } from '../src/screen-analyzer.js';
+
+const cpMocks = vi.hoisted(() => {
+  /** Controllable impl for promisified execFile: return { stdout } or throw to reject. */
+  const execFileImpl = vi.fn((_file: string, _args: readonly string[]): { stdout: string } => {
+    throw new Error('tmux: no such session');
+  });
+
+  // promisify(execFile) runs at screen-analyzer module load and picks up this custom
+  // implementation, matching real node execFile's { stdout, stderr } resolution shape.
+  // (A plain callback mock would resolve to the bare stdout string instead.)
+  const execFile = Object.assign(
+    vi.fn((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (err: Error | null, stdout?: string, stderr?: string) => void;
+      try {
+        const { stdout } = execFileImpl(args[0] as string, args[1] as readonly string[]);
+        cb(null, stdout, '');
+      } catch (err) {
+        cb(err as Error);
+      }
+    }),
+    {
+      [Symbol.for('nodejs.util.promisify.custom')]: (file: string, args: readonly string[]) => {
+        try {
+          const { stdout } = execFileImpl(file, args);
+          return Promise.resolve({ stdout, stderr: '' });
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      },
+    }
+  );
+
+  return { execFileImpl, execFile };
+});
+
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(() => {
+    throw new Error('tmux: no such session');
+  }),
+  execFile: cpMocks.execFile,
+}));
+
+import { analyzeScreen, stripAnsi, captureScreen } from '../src/screen-analyzer.js';
 
 describe('stripAnsi', () => {
   it('removes ANSI escape codes', () => {
@@ -98,22 +140,27 @@ describe('analyzeScreen', () => {
 
 describe('captureScreen', () => {
   it('returns null for invalid mux name (injection guard)', async () => {
-    // Import dynamically to allow module-level mock
-    const { captureScreen } = await import('../src/screen-analyzer.js');
-    const result = captureScreen('../../etc/passwd');
+    const result = await captureScreen('../../etc/passwd');
+    expect(result).toBeNull();
+    expect(cpMocks.execFileImpl).not.toHaveBeenCalled();
+  });
+
+  it('returns null when execFile fails', async () => {
+    // Default execFileImpl throws — simulates the tmux pane not existing
+    const result = await captureScreen('codeman-abc12345');
     expect(result).toBeNull();
   });
 
-  it('returns null when execSync throws', async () => {
-    // Mock execSync to simulate tmux pane not existing
-    vi.mock('node:child_process', () => ({
-      execSync: vi.fn(() => {
-        throw new Error('tmux: no such session');
-      }),
-    }));
-    const { captureScreen } = await import('../src/screen-analyzer.js');
-    const result = captureScreen('codeman-abc12345');
-    expect(result).toBeNull();
-    vi.resetModules();
+  it('returns the captured pane text when execFile succeeds', async () => {
+    const screenText = '⏺ Bash(npm test)\n  running...';
+    cpMocks.execFileImpl.mockReturnValueOnce({ stdout: screenText });
+
+    const result = await captureScreen('codeman-abc12345');
+
+    expect(result).toBe(screenText);
+    expect(cpMocks.execFileImpl).toHaveBeenCalledWith(
+      'tmux',
+      expect.arrayContaining(['capture-pane', '-t', 'codeman-abc12345'])
+    );
   });
 });

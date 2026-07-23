@@ -26,7 +26,7 @@ import { EventEmitter } from 'node:events';
 // when vi.mock() factory callbacks are hoisted to the top of the module.
 // ---------------------------------------------------------------------------
 const mocks = vi.hoisted(() => ({
-  isPaneDeadImpl: vi.fn<[string], boolean>().mockReturnValue(false),
+  isPaneDeadImpl: vi.fn<[string], boolean | Promise<boolean>>().mockReturnValue(false),
   muxSessions: [] as Array<{
     sessionId: string;
     muxName: string;
@@ -235,7 +235,7 @@ vi.mock('../src/mux-factory.js', async () => {
   class FakeMux extends EventEmitter {
     reconcileSessions = vi.fn(async () => mocks.reconcileResult);
     getSessions = vi.fn(() => mocks.muxSessions);
-    isPaneDead = vi.fn((muxName: string) => mocks.isPaneDeadImpl(muxName));
+    isPaneDead = vi.fn(async (muxName: string) => mocks.isPaneDeadImpl(muxName));
     getSession = vi.fn();
     registerSession = vi.fn();
     killSession = vi.fn().mockResolvedValue(true);
@@ -665,5 +665,140 @@ describe('WebServer.checkAndRecoverDeadPanes()', () => {
     await flushAsync();
 
     expect(mocks.isPaneDeadImpl).toHaveBeenCalledWith(`codeman-${sessionId}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Sweep in-flight guard (_deadPaneCheckInFlight)
+  // -------------------------------------------------------------------------
+  describe('sweep in-flight guard (_deadPaneCheckInFlight)', () => {
+    it('skips a sweep started while a previous sweep is still in flight', async () => {
+      injectSession(server, {
+        id: 'guard-sess',
+        busy: true,
+        worktreePath: '/some/worktree',
+      });
+
+      // Hold the first sweep open on a pending isPaneDead probe
+      let resolveProbe!: (dead: boolean) => void;
+      const pendingProbe = new Promise<boolean>((resolve) => {
+        resolveProbe = resolve;
+      });
+      mocks.isPaneDeadImpl.mockReturnValue(pendingProbe);
+
+      const firstSweep = (server as any).checkAndRecoverDeadPanes() as Promise<void>;
+      // First sweep has synchronously reached the pending probe by now
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(1);
+
+      // Second call while the first sweep is in flight must not probe
+      await (server as any).checkAndRecoverDeadPanes();
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(1);
+
+      resolveProbe(false);
+      await firstSweep;
+    });
+
+    it('resets the in-flight flag after a sweep completes so the next sweep probes again', async () => {
+      injectSession(server, {
+        id: 'guard-reset-sess',
+        busy: true,
+        worktreePath: '/some/worktree',
+      });
+      mocks.isPaneDeadImpl.mockReturnValue(false);
+
+      await (server as any).checkAndRecoverDeadPanes();
+      await (server as any).checkAndRecoverDeadPanes();
+
+      // A stuck flag would leave the second sweep skipped (count 1)
+      expect(mocks.isPaneDeadImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not block subsequent sweeps when a recovery hangs (fire-and-forget recoveries)', async () => {
+      const hungId = 'hung-recovery-sess';
+      const healthyId = 'healthy-probe-sess';
+
+      const hungSession = injectSession(server, {
+        id: hungId,
+        busy: true,
+        worktreePath: '/worktree/hung',
+      });
+      const healthySession = injectSession(server, {
+        id: healthyId,
+        busy: true,
+        worktreePath: '/worktree/healthy',
+      });
+
+      // Hung session's pane is dead; healthy session's pane is alive
+      mocks.isPaneDeadImpl.mockImplementation((name: string) => name === `codeman-${hungId}`);
+      // Recovery hangs forever on prepareForRestart
+      hungSession.prepareForRestart.mockReturnValue(new Promise(() => {}));
+
+      // Fire the first sweep without awaiting it directly — a direct await on a
+      // regressed (recovery-awaiting) implementation would hang the test instead
+      // of failing the assertions below.
+      void (server as any).checkAndRecoverDeadPanes();
+      await flushAsync();
+
+      // The in-flight flag must clear after the probe phase even though the
+      // hung recovery is still pending
+      expect((server as any)._deadPaneCheckInFlight).toBe(false);
+
+      // Second sweep must run its probe phase despite the pending recovery
+      await (server as any).checkAndRecoverDeadPanes();
+      await flushAsync();
+
+      // Healthy session probed on both sweeps
+      const healthyProbes = mocks.isPaneDeadImpl.mock.calls.filter(([name]) => name === `codeman-${healthyId}`);
+      expect(healthyProbes.length).toBe(2);
+
+      // Hung session probed only on the first sweep — skipped on the second
+      // via _recoveringSessionIds while its recovery is still pending
+      const hungProbes = mocks.isPaneDeadImpl.mock.calls.filter(([name]) => name === `codeman-${hungId}`);
+      expect(hungProbes.length).toBe(1);
+
+      // Recovery attempted exactly once — not re-triggered by the second sweep
+      expect(hungSession.prepareForRestart).toHaveBeenCalledTimes(1);
+      expect(healthySession.prepareForRestart).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Probe failure isolation (rejected isPaneDead)
+  // -------------------------------------------------------------------------
+  describe('probe failure isolation', () => {
+    it('recovers a dead session even when the probe for another session rejects', async () => {
+      const failId = 'probe-fail-sess';
+      const deadId = 'probe-ok-dead-sess';
+
+      const failSession = injectSession(server, {
+        id: failId,
+        busy: true,
+        worktreePath: '/worktree/fail',
+      });
+      const deadSession = injectSession(server, {
+        id: deadId,
+        busy: true,
+        worktreePath: '/worktree/dead',
+      });
+
+      // fail session's probe rejects; dead session's probe reports dead
+      mocks.isPaneDeadImpl.mockImplementation((name: string) => {
+        if (name === `codeman-${failId}`) throw new Error('probe failed');
+        return true;
+      });
+
+      (server as any).checkAndRecoverDeadPanes();
+      await flushAsync();
+
+      // Rejected probe must not trigger recovery for its session
+      expect(failSession.prepareForRestart).not.toHaveBeenCalled();
+      expect(failSession.startInteractive).not.toHaveBeenCalled();
+
+      // The other session's recovery must still proceed
+      expect(deadSession.prepareForRestart).toHaveBeenCalledTimes(1);
+      expect(deadSession.startInteractive).toHaveBeenCalledTimes(1);
+
+      // No stale guard entries left behind
+      expect((server as any)._recoveringSessionIds.size).toBe(0);
+    });
   });
 });

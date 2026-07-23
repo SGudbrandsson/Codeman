@@ -1062,7 +1062,7 @@ export class Session extends EventEmitter {
         // Check if session exists but pane is dead (remain-on-exit keeps it alive)
         // Respawn the pane instead of creating a whole new session — preserves tmux scrollback
         let needsNewSession = false;
-        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
+        if (this._muxSession && (await this._mux.isPaneDead(this._muxSession.muxName))) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
           const newPid = await this._mux.respawnPane({
             sessionId: this.id,
@@ -1541,7 +1541,7 @@ export class Session extends EventEmitter {
 
         // Check if session exists but pane is dead (remain-on-exit keeps it alive)
         let needsNewSession = false;
-        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
+        if (this._muxSession && (await this._mux.isPaneDead(this._muxSession.muxName))) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
           const newPid = await this._mux.respawnPane({
             sessionId: this.id,
