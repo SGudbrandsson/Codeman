@@ -46,33 +46,33 @@ const KeyboardAccessoryBar = {
    */
   _CLI_COMMANDS: {
     claude: [
-      { cmd: '/clear',           desc: 'Clear conversation history',       confirm: true  },
-      { cmd: '/compact',         desc: 'Compact conversation (keep summary)', confirm: true },
-      { cmd: '/init',            desc: 'Initialize CLAUDE.md for project'                 },
-      { cmd: '/help',            desc: 'Show help'                                         },
-      { cmd: '/cost',            desc: 'Token usage & cost'                                },
-      { cmd: '/status',          desc: 'Account & API status'                              },
-      { cmd: '/model',           desc: 'Set or switch AI model'                            },
-      { cmd: '/memory',          desc: 'Edit CLAUDE.md memory files'                       },
-      { cmd: '/config',          desc: 'View/edit configuration'                           },
-      { cmd: '/permissions',     desc: 'View/update tool permissions'                      },
-      { cmd: '/mcp',             desc: 'Manage MCP server connections'                     },
-      { cmd: '/add-dir',         desc: 'Add an allowed working directory'                  },
-      { cmd: '/doctor',          desc: 'Check installation health'                         },
-      { cmd: '/review',          desc: 'Code review (optional PR URL)'                     },
-      { cmd: '/vim',             desc: 'Toggle vim key bindings'                           },
-      { cmd: '/bug',             desc: 'Report a bug to Anthropic'                         },
-      { cmd: '/login',           desc: 'Switch Anthropic accounts'                         },
-      { cmd: '/logout',          desc: 'Sign out from Anthropic'                           },
-      { cmd: '/terminal',        desc: 'Run a terminal command'                            },
-      { cmd: '/pr_comments',     desc: 'View PR comments'                                  },
-      { cmd: '/release-notes',   desc: 'View release notes'                                },
+      { cmd: '/clear', desc: 'Clear conversation history', confirm: true },
+      { cmd: '/compact', desc: 'Compact conversation (keep summary)', confirm: true },
+      { cmd: '/init', desc: 'Initialize CLAUDE.md for project' },
+      { cmd: '/help', desc: 'Show help' },
+      { cmd: '/cost', desc: 'Token usage & cost' },
+      { cmd: '/status', desc: 'Account & API status' },
+      { cmd: '/model', desc: 'Set or switch AI model' },
+      { cmd: '/memory', desc: 'Edit CLAUDE.md memory files' },
+      { cmd: '/config', desc: 'View/edit configuration' },
+      { cmd: '/permissions', desc: 'View/update tool permissions' },
+      { cmd: '/mcp', desc: 'Manage MCP server connections' },
+      { cmd: '/add-dir', desc: 'Add an allowed working directory' },
+      { cmd: '/doctor', desc: 'Check installation health' },
+      { cmd: '/review', desc: 'Code review (optional PR URL)' },
+      { cmd: '/vim', desc: 'Toggle vim key bindings' },
+      { cmd: '/bug', desc: 'Report a bug to Anthropic' },
+      { cmd: '/login', desc: 'Switch Anthropic accounts' },
+      { cmd: '/logout', desc: 'Sign out from Anthropic' },
+      { cmd: '/terminal', desc: 'Run a terminal command' },
+      { cmd: '/pr_comments', desc: 'View PR comments' },
+      { cmd: '/release-notes', desc: 'View release notes' },
     ],
     opencode: [
-      { cmd: '/clear',    desc: 'Clear conversation',    confirm: true },
-      { cmd: '/compact',  desc: 'Compact conversation',  confirm: true },
-      { cmd: '/model',    desc: 'Set model'                            },
-      { cmd: '/sessions', desc: 'Browse sessions'                      },
+      { cmd: '/clear', desc: 'Clear conversation', confirm: true },
+      { cmd: '/compact', desc: 'Compact conversation', confirm: true },
+      { cmd: '/model', desc: 'Set model' },
+      { cmd: '/sessions', desc: 'Browse sessions' },
     ],
     shell: [],
   },
@@ -117,17 +117,18 @@ const KeyboardAccessoryBar = {
     // Helper: create SVG element with attributes
     const mkSvg = (w, h, extras) => {
       const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      s.setAttribute('width', String(w)); s.setAttribute('height', String(h));
-      s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none');
-      s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2');
+      s.setAttribute('width', String(w));
+      s.setAttribute('height', String(h));
+      s.setAttribute('viewBox', '0 0 24 24');
+      s.setAttribute('fill', 'none');
+      s.setAttribute('stroke', 'currentColor');
+      s.setAttribute('stroke-width', '2');
       s.setAttribute('aria-hidden', 'true');
       if (extras) Object.entries(extras).forEach(([k, v]) => s.setAttribute(k, v));
       return s;
     };
     const mkEl = (tag, ns, attrs) => {
-      const el = ns
-        ? document.createElementNS('http://www.w3.org/2000/svg', tag)
-        : document.createElement(tag);
+      const el = ns ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag);
       if (attrs) Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
       return el;
     };
@@ -141,7 +142,11 @@ const KeyboardAccessoryBar = {
     {
       const gSvg = mkSvg(16, 16, { 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
       gSvg.appendChild(mkEl('circle', true, { cx: '12', cy: '12', r: '3' }));
-      gSvg.appendChild(mkEl('path', true, { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }));
+      gSvg.appendChild(
+        mkEl('path', true, {
+          d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
+        })
+      );
       settingsBtn.appendChild(gSvg);
     }
     settingsBtn.addEventListener('click', () => {
@@ -158,9 +163,26 @@ const KeyboardAccessoryBar = {
     commandsBtn.textContent = '/ \u25b2';
     this.element.appendChild(commandsBtn);
 
+    // 2b. Files button — opens the Files explorer/editor sheet (always visible)
+    const filesBtn = document.createElement('button');
+    filesBtn.className = 'accessory-btn accessory-btn-files';
+    filesBtn.title = 'Files';
+    filesBtn.setAttribute('aria-label', 'Files');
+    filesBtn.type = 'button';
+    {
+      const fSvg = mkSvg(16, 16, { 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+      fSvg.appendChild(mkEl('path', true, { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }));
+      fSvg.appendChild(mkEl('polyline', true, { points: '14 2 14 8 20 8' }));
+      filesBtn.appendChild(fSvg);
+    }
+    filesBtn.addEventListener('click', () => {
+      window.app?.openFilesSheet?.();
+    });
+    this.element.appendChild(filesBtn);
+
     // Show only configured buttons (applies to data-action buttons)
     const enabled = this._getButtonConfig();
-    this.element.querySelectorAll('.accessory-btn[data-action]').forEach(btn => {
+    this.element.querySelectorAll('.accessory-btn[data-action]').forEach((btn) => {
       btn.style.display = enabled.includes(btn.dataset.action) ? '' : 'none';
     });
 
@@ -172,31 +194,41 @@ const KeyboardAccessoryBar = {
     this.element.addEventListener('mousedown', (e) => {
       if (e.target.closest('button')) e.preventDefault();
     });
-    let _tapStartX = 0, _tapStartY = 0, _tapOnBtn = false;
-    this.element.addEventListener('touchstart', (e) => {
-      if (e.target.closest('button')) {
-        e.preventDefault();
-        _tapStartX = e.touches[0].clientX;
-        _tapStartY = e.touches[0].clientY;
-        _tapOnBtn = true;
-      } else {
-        _tapOnBtn = false;
-      }
-    }, { passive: false });
+    let _tapStartX = 0,
+      _tapStartY = 0,
+      _tapOnBtn = false;
+    this.element.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e.target.closest('button')) {
+          e.preventDefault();
+          _tapStartX = e.touches[0].clientX;
+          _tapStartY = e.touches[0].clientY;
+          _tapOnBtn = true;
+        } else {
+          _tapOnBtn = false;
+        }
+      },
+      { passive: false }
+    );
     // iOS fix: touchstart.preventDefault() suppresses the browser's synthetic click event.
     // After the terminal initialises and its hidden <textarea> gains focus the browser no
     // longer fires click on button taps in the accessory bar.  We fire it ourselves on
     // touchend so buttons work whether or not the soft keyboard is visible.
-    this.element.addEventListener('touchend', (e) => {
-      if (!_tapOnBtn) return;
-      _tapOnBtn = false;
-      const btn = e.target.closest('button');
-      if (!btn) return;
-      const t = e.changedTouches[0];
-      if (Math.abs(t.clientX - _tapStartX) > 10 || Math.abs(t.clientY - _tapStartY) > 10) return;
-      e.preventDefault(); // prevent browser generating a duplicate click
-      btn.click();
-    }, { passive: false });
+    this.element.addEventListener(
+      'touchend',
+      (e) => {
+        if (!_tapOnBtn) return;
+        _tapOnBtn = false;
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const t = e.changedTouches[0];
+        if (Math.abs(t.clientX - _tapStartX) > 10 || Math.abs(t.clientY - _tapStartY) > 10) return;
+        e.preventDefault(); // prevent browser generating a duplicate click
+        btn.click();
+      },
+      { passive: false }
+    );
 
     // Click handler for data-action buttons
     this.element.addEventListener('click', (e) => {
@@ -243,7 +275,7 @@ const KeyboardAccessoryBar = {
     hamburgerBtn.type = 'button';
     {
       const hSvg = mkSvg(16, 16);
-      [6, 12, 18].forEach(y => {
+      [6, 12, 18].forEach((y) => {
         hSvg.appendChild(mkEl('line', true, { x1: '3', y1: String(y), x2: '21', y2: String(y) }));
       });
       hamburgerBtn.appendChild(hSvg);
@@ -259,7 +291,10 @@ const KeyboardAccessoryBar = {
           localStorage.setItem('sidebarPinned', 'false');
           // Update pin button icon if present
           const pinBtn = document.querySelector('.drawer-pin-btn');
-          if (pinBtn) { pinBtn.textContent = '\u21a6'; pinBtn.title = 'Pin sidebar'; }
+          if (pinBtn) {
+            pinBtn.textContent = '\u21a6';
+            pinBtn.title = 'Pin sidebar';
+          }
           SessionDrawer.close();
         } else {
           document.body.classList.add('sidebar-pinned');
@@ -275,7 +310,7 @@ const KeyboardAccessoryBar = {
     // 9. View mode toggle — segmented pill: [ >_ Terminal | ☰ Transcript ]
     //    Desktop shows icons + text; mobile shows icons only (CSS hides .vmt-label)
     const viewModeToggle = document.createElement('div');
-    viewModeToggle.id = 'accessoryViewModeBtn';  // keep same ID for compatibility
+    viewModeToggle.id = 'accessoryViewModeBtn'; // keep same ID for compatibility
     viewModeToggle.className = 'view-mode-toggle';
     viewModeToggle.style.display = 'none';
 
@@ -356,7 +391,7 @@ const KeyboardAccessoryBar = {
     toggle.style.display = isClaude && sessionId ? '' : 'none';
     if (!isClaude || !sessionId) return;
     const viewMode = typeof TranscriptView !== 'undefined' ? TranscriptView.getViewMode(sessionId) : 'terminal';
-    toggle.querySelectorAll('.view-mode-seg').forEach(seg => {
+    toggle.querySelectorAll('.view-mode-seg').forEach((seg) => {
       seg.classList.toggle('active', seg.dataset.mode === viewMode);
     });
   },
@@ -515,9 +550,10 @@ const KeyboardAccessoryBar = {
     if (!this._itemsContainer) return;
     this._itemsContainer.replaceChildren(); // clear previous items
 
-    const mode = (typeof app !== 'undefined' && app.activeSessionId)
-      ? (app.sessions?.get(app.activeSessionId)?.mode ?? 'claude')
-      : 'claude';
+    const mode =
+      typeof app !== 'undefined' && app.activeSessionId
+        ? (app.sessions?.get(app.activeSessionId)?.mode ?? 'claude')
+        : 'claude';
 
     const cliCmds = this._CLI_COMMANDS[mode] ?? [];
 
@@ -569,9 +605,8 @@ const KeyboardAccessoryBar = {
     });
 
     // Dynamic commands from plugins/GSD fetched on session connect
-    const dynamicCmds = (typeof app !== 'undefined' && app.activeSessionId)
-      ? (app._sessionCommands?.get(app.activeSessionId) ?? [])
-      : [];
+    const dynamicCmds =
+      typeof app !== 'undefined' && app.activeSessionId ? (app._sessionCommands?.get(app.activeSessionId) ?? []) : [];
 
     if (dynamicCmds.length > 0) {
       const sep = document.createElement('div');
@@ -622,8 +657,7 @@ const KeyboardAccessoryBar = {
     // Register outside-tap close. Use 200ms delay so the opening tap (and its
     // associated touchstart/click propagation) finishes before we listen.
     const handler = (e) => {
-      if (!this.drawerElement?.contains(e.target) &&
-          !e.target.closest('[data-action="commands"]')) {
+      if (!this.drawerElement?.contains(e.target) && !e.target.closest('[data-action="commands"]')) {
         this.closeDrawer();
       }
     };
@@ -642,7 +676,11 @@ const KeyboardAccessoryBar = {
    *  Sends text and Enter separately so Ink processes them as distinct events. */
   sendCommand(command) {
     if (!app.activeSessionId) return;
-    if (command === '/clear' && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
+    if (
+      command === '/clear' &&
+      typeof TranscriptView !== 'undefined' &&
+      TranscriptView._sessionId === app.activeSessionId
+    ) {
       TranscriptView.clearOnly();
     }
     // Send command text first (without Enter)
@@ -659,7 +697,7 @@ const KeyboardAccessoryBar = {
     fetch(`/api/sessions/${app.activeSessionId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: escapeSequence })
+      body: JSON.stringify({ input: escapeSequence }),
     }).catch(() => {});
   },
 
@@ -690,7 +728,7 @@ const KeyboardAccessoryBar = {
         const result = SecretDetector.scan(app.activeSessionId, text);
         if (result.count > 0) {
           text = result.redacted;
-          const typeList = result.types.map(t => t.replace(/_/g, ' ').toLowerCase()).join(', ');
+          const typeList = result.types.map((t) => t.replace(/_/g, ' ').toLowerCase()).join(', ');
           app.showToast(
             `${result.count} secret${result.count > 1 ? 's' : ''} detected and redacted before sending (${typeList}). Originals held in memory for this session only.`,
             'warning'
@@ -701,7 +739,9 @@ const KeyboardAccessoryBar = {
     };
     overlay.querySelector('.paste-cancel').addEventListener('click', () => overlay.remove());
     overlay.querySelector('.paste-send').addEventListener('click', send);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
 
     document.body.appendChild(overlay);
     textarea.focus();
@@ -712,11 +752,14 @@ const KeyboardAccessoryBar = {
     if (typeof app === 'undefined') return;
     const selection = app.terminal?.getSelection?.();
     if (selection) {
-      navigator.clipboard.writeText(selection).then(() => {
-        app.showToast('Copied', 'success');
-      }).catch(() => {
-        app.showToast('Copy failed', 'error');
-      });
+      navigator.clipboard
+        .writeText(selection)
+        .then(() => {
+          app.showToast('Copied', 'success');
+        })
+        .catch(() => {
+          app.showToast('Copy failed', 'error');
+        });
     } else {
       app.showToast('No text selected', 'warning');
     }
@@ -739,7 +782,7 @@ const KeyboardAccessoryBar = {
   /** Sync the compose button active state */
   setComposeActive(active) {
     if (this._inputToggleBtn) this._inputToggleBtn.classList.toggle('active', active);
-  }
+  },
 };
 
 // Expose a static-style instance reference so InputPanel can call
@@ -788,11 +831,11 @@ class FocusTrap {
       'select:not([disabled]):not([tabindex="-1"])',
       'textarea:not([disabled]):not([tabindex="-1"])',
       'a[href]:not([tabindex="-1"])',
-      '[tabindex]:not([tabindex="-1"]):not([disabled])'
+      '[tabindex]:not([tabindex="-1"]):not([disabled])',
     ].join(', ');
 
     return [...this.element.querySelectorAll(selector)].filter(
-      el => el.offsetParent !== null // Exclude hidden elements
+      (el) => el.offsetParent !== null // Exclude hidden elements
     );
   }
 

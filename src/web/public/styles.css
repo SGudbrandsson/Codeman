@@ -9302,8 +9302,8 @@ kbd {
     color: #e2e8f0;
     border: none;
     border-radius: 0; /* wrapper clips corners via overflow:hidden; removing radius eliminates double-border antialiasing artifact */
-    /* left: + btn + files btn; right: expand + mic + send */
-    padding: 10px 108px 10px 78px;
+    /* left: + btn; right: expand + mic + send */
+    padding: 10px 108px 10px 44px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 0.875rem;
     line-height: 1.45;
@@ -9332,13 +9332,6 @@ kbd {
     z-index: 2;
   }
   .compose-plus-btn { left: 4px; }
-  /* Files button — shown on desktop, left of the textarea next to + */
-  .compose-files-btn {
-    display: inline-flex !important;
-    left: 38px;
-    color: #94a3b8;
-  }
-  .compose-files-btn:hover { color: #e2e8f0; }
   .compose-send-btn {
     right: 4px;
     width: 32px;
