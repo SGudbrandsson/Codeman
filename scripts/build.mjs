@@ -13,10 +13,11 @@
  */
 
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
+import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'zlib';
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 
@@ -76,12 +77,34 @@ run('minify mobile.css', 'npx esbuild dist/web/public/mobile.css --minify --outf
   console.log('\n[build] inject content hashes into index.html — done');
 }
 
-// 6. Compress with gzip + brotli
-// If brotli is unavailable, remove any stale .br files so the server falls back to .gz
-run(
-  'compress',
-  `for f in dist/web/public/*.js dist/web/public/*.css dist/web/public/*.html dist/web/public/vendor/*.js dist/web/public/vendor/*.css; do` +
-    ` [ -f "$f" ] && gzip -9 -k -f "$f" && { brotli -9 -k -f "$f" 2>/dev/null || rm -f "$f.br"; }; done`
-);
+// 6. Compress with gzip + brotli via Node's zlib — no external CLI needed.
+// The previous shell version depended on a `brotli` binary that isn't installed
+// everywhere; when it was missing, deploys could leave stale .br files in the
+// target dir shadowing fresh assets (fastify-static preCompressed serves .br first).
+console.log('\n[build] compress (gzip + brotli)');
+{
+  const dirs = [join(ROOT, 'dist/web/public'), join(ROOT, 'dist/web/public/vendor')];
+  let count = 0;
+  for (const dir of dirs) {
+    for (const name of readdirSync(dir)) {
+      if (!/\.(js|css|html)$/.test(name)) continue;
+      const file = join(dir, name);
+      if (!statSync(file).isFile()) continue;
+      const buf = readFileSync(file);
+      writeFileSync(`${file}.gz`, gzipSync(buf, { level: 9 }));
+      writeFileSync(
+        `${file}.br`,
+        brotliCompressSync(buf, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 9,
+            [zlibConstants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+          },
+        })
+      );
+      count++;
+    }
+  }
+  console.log(`[build] compressed ${count} files (.gz + .br)`);
+}
 
 console.log('\n✓ Build complete');
