@@ -5704,7 +5704,9 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  z-index: 10000;
+  /* Above every sheet/backdrop (files sheet is 10003) — toasts are the only
+     feedback for saves inside full-screen sheets and must never stack under them. */
+  z-index: 10010;
   pointer-events: none;
 }
 

@@ -19750,7 +19750,10 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     const ta = this.$('filesSheetEditor');
     const sessionId = this.activeSessionId;
-    if (!cur || !ta || !sessionId) return;
+    if (!cur || !ta || !sessionId) {
+      this.showToast('Cannot save — file state was lost. Reopen the file.', 'error');
+      return;
+    }
     const newContent = ta.value;
     try {
       const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
@@ -19775,7 +19778,9 @@ class CodemanApp {
     const content = this.$('filesSheetViewContent');
     if (!content || !this.filesState) return;
     this.filesState.pendingContent = pendingContent;
-    if (content.querySelector('.files-sheet-notice')) return;
+    this.showToast('Not saved — file changed on disk. Choose Reload or Overwrite.', 'error');
+    const existing = content.querySelector('.files-sheet-notice');
+    if (existing) { existing.scrollIntoView({ block: 'nearest' }); return; }
     const notice = document.createElement('div');
     notice.className = 'files-sheet-notice';
     notice.innerHTML = `This file changed on disk since you opened it.
@@ -19784,6 +19789,7 @@ class CodemanApp {
         <button class="files-sheet-tool" onclick="app.filesOverwriteCurrent()">Overwrite</button>
       </div>`;
     content.prepend(notice);
+    notice.scrollIntoView({ block: 'nearest' });
   }
 
   filesReloadCurrent() {
