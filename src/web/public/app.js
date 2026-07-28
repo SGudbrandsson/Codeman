@@ -19670,7 +19670,7 @@ class CodemanApp {
     meta.textContent = '';
     actions.innerHTML = '';
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(path)}&lines=10000`);
+      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(path)}&lines=10000`, { cache: 'no-store' });
       const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.success) throw new Error(result.error || 'Failed to load file');
       const data = result.data;

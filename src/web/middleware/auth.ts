@@ -157,6 +157,13 @@ export function registerSecurityHeaders(app: FastifyInstance, https: boolean): v
   app.addHook('onRequest', (req, reply, done) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'SAMEORIGIN');
+    // API responses must never be served from a browser cache: iOS Safari
+    // heuristically caches header-less GETs, which made the file editor show
+    // stale content after a successful save. Routes that want caching
+    // (thumbnails, media) set their own Cache-Control later, which wins.
+    if (req.url.startsWith('/api/')) {
+      reply.header('Cache-Control', 'no-store');
+    }
     reply.header(
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' wss://api.deepgram.com; font-src 'self' https://cdn.jsdelivr.net; frame-ancestors 'self'"
