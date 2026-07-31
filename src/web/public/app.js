@@ -19536,6 +19536,28 @@ class CodemanApp {
     this.$('filesSheetBackBtn').style.display = 'none';
     this._filesShowTree();
     this.filesLoadTree();
+    // Lazy-load the CodeMirror + markdown vendor bundle on first open only.
+    // Fire-and-forget: the editor/preview paths fall back gracefully if it
+    // never resolves, and the app boot path never touches this.
+    this._filesEnsureVendor();
+  }
+
+  // Loads dist/web/public/vendor/editor.min.js on demand, exposing
+  // window.CodemanEditor + window.CodemanMarkdown. Cached promise so it runs
+  // at most once; resolves false (not reject) on failure so callers can fall
+  // back to the plain textarea / escaped <pre> without try/catch noise.
+  _filesEnsureVendor() {
+    if (this._filesVendorPromise) return this._filesVendorPromise;
+    this._filesVendorPromise = new Promise((resolve) => {
+      if (window.CodemanEditor && window.CodemanMarkdown) { resolve(true); return; }
+      const s = document.createElement('script');
+      s.src = 'vendor/editor.min.js';
+      s.async = true;
+      s.onload = () => resolve(!!(window.CodemanEditor && window.CodemanMarkdown));
+      s.onerror = () => { this._filesVendorFailed = true; resolve(false); };
+      document.head.appendChild(s);
+    });
+    return this._filesVendorPromise;
   }
 
   closeFilesSheet() {
@@ -19546,6 +19568,7 @@ class CodemanApp {
     const backdrop = this.$('filesSheetBackdrop');
     if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
     if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
+    this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
   }
 
@@ -19565,6 +19588,7 @@ class CodemanApp {
     if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
       if (!confirm('Discard unsaved changes?')) return;
     }
+    this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
     this.$('filesSheetTitle').textContent = 'Files';
     this.$('filesSheetBackBtn').style.display = 'none';
@@ -19631,6 +19655,9 @@ class CodemanApp {
         <span class="files-tree-icon">${icon}</span>
         <span class="files-tree-name">${escapeHtml(node.name)}</span>
         ${size}
+        ${isDir ? `<button class="files-tree-new" data-newfile="1" title="New file here">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>` : ''}
         <button class="files-tree-del" data-del="1" title="Delete">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         </button>
@@ -19647,11 +19674,22 @@ class CodemanApp {
       const path = item.dataset.path;
       const type = item.dataset.type;
       if (e.target.closest('[data-del]')) { this.filesDelete(path, type === 'directory'); return; }
+      if (e.target.closest('[data-newfile]')) {
+        this.filesState.activeDir = path;
+        this._filesShowCreateDialog('file', path);
+        return;
+      }
       if (type === 'directory') {
+        // Track the last-touched directory so the toolbar New File / New Folder
+        // buttons default to creating inside it.
+        this.filesState.activeDir = path;
         if (this.filesState.expanded.has(path)) this.filesState.expanded.delete(path);
         else this.filesState.expanded.add(path);
         this.filesRenderTree();
       } else {
+        // Opening a file makes its parent the active dir for new-file defaults.
+        const slash = path.lastIndexOf('/');
+        this.filesState.activeDir = slash > 0 ? path.slice(0, slash) : '';
         this.filesOpenFile(path);
       }
     };
@@ -19660,6 +19698,7 @@ class CodemanApp {
   async filesOpenFile(path) {
     const sessionId = this.activeSessionId;
     if (!sessionId || !this.filesState) return;
+    this._filesDestroyEditor();
     this._filesShowView();
     this.$('filesSheetTitle').textContent = path.split('/').pop();
     this.$('filesSheetBackBtn').style.display = '';
@@ -19675,8 +19714,7 @@ class CodemanApp {
       if (!res.ok || !result.success) throw new Error(result.error || 'Failed to load file');
       const data = result.data;
       if (data.type === 'image' || data.type === 'video' || data.type === 'binary') {
-        content.innerHTML = `<div class="files-sheet-empty">Cannot edit ${escapeHtml(data.type)} file (${this.formatFileSize(data.size)})</div>`;
-        meta.textContent = data.extension || '';
+        this._filesRenderBinary(data);
         return;
       }
       this.filesState.current = {
@@ -19696,21 +19734,76 @@ class CodemanApp {
     }
   }
 
+  // Tears down any live CodeMirror instance before we overwrite the view DOM.
+  // The textarea fallback adapter has a no-op destroy(), so this is always safe.
+  _filesDestroyEditor() {
+    if (this.filesState && this.filesState.editor) {
+      try { this.filesState.editor.destroy(); } catch (e) { /* ignore */ }
+      this.filesState.editor = null;
+    }
+  }
+
+  // Renders a real preview for image/video/binary files instead of the old
+  // "Cannot edit …" dead end. Reuses the existing file-raw endpoint (data.url).
+  _filesRenderBinary(data) {
+    const content = this.$('filesSheetViewContent');
+    const meta = this.$('filesSheetViewMeta');
+    const actions = this.$('filesSheetViewActions');
+    if (!content) return;
+    this._filesDestroyEditor();
+    // Binaries are not editable — clear any editing state so save/edit can't fire.
+    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    const ext = data.extension || (data.path ? data.path.split('.').pop() : '');
+    const name = (data.path || '').split('/').pop();
+    const rawUrl = data.url || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(data.path)}`;
+    meta.textContent = `${this.formatFileSize(data.size)}${ext ? ' • ' + ext : ''}`;
+    const dl = `<a class="files-sheet-tool" href="${escapeHtml(rawUrl)}" download="${escapeHtml(name)}">Download</a>`;
+    actions.innerHTML = dl;
+    if (data.type === 'image') {
+      content.innerHTML = `<div class="files-img-wrap"><img class="files-img" src="${escapeHtml(rawUrl)}" alt="${escapeHtml(name)}"></div>`;
+    } else if (data.type === 'video') {
+      content.innerHTML = `<div class="files-media-wrap"><video class="files-video" controls playsinline src="${escapeHtml(rawUrl)}"></video></div>`;
+    } else {
+      content.innerHTML = `<div class="files-binary-card">
+        <div class="files-binary-icon">${this.getFileIcon(ext)}</div>
+        <div class="files-binary-name">${escapeHtml(name)}</div>
+        <div class="files-binary-meta">${this.formatFileSize(data.size)}${ext ? ' • ' + escapeHtml(ext) : ''}</div>
+        <a class="files-sheet-tool files-binary-dl" href="${escapeHtml(rawUrl)}" download="${escapeHtml(name)}">Download</a>
+      </div>`;
+    }
+  }
+
   _filesRenderView() {
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
+    this._filesDestroyEditor();
     const content = this.$('filesSheetViewContent');
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
     const trunc = cur.truncated ? ` • showing first 10000/${cur.totalLines} lines` : '';
     meta.textContent = `${this.formatFileSize(cur.size)}${trunc}`;
+    const isMd = /\.(md|markdown)$/i.test(cur.path);
     let noticeHtml = '';
     if (cur.truncated) {
       noticeHtml = `<div class="files-sheet-notice">File is truncated; editing is disabled to avoid data loss.</div>`;
     }
-    content.innerHTML = noticeHtml + `<pre><code>${escapeHtml(cur.content)}</code></pre>`;
-    const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
-    actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
+    let rendered = null;
+    if (isMd && window.CodemanMarkdown) {
+      try { rendered = window.CodemanMarkdown.render(cur.content); } catch (e) { rendered = null; }
+    }
+    if (rendered != null) {
+      // rendered is already DOMPurify-sanitized in the vendor bundle.
+      content.innerHTML = noticeHtml + `<div class="files-md-preview">${rendered}</div>`;
+    } else {
+      content.innerHTML = noticeHtml + `<pre><code>${escapeHtml(cur.content)}</code></pre>`;
+    }
+    // Markdown files get an Edit ⇄ Preview tab pair (tabs, not split-pane).
+    if (isMd && !cur.truncated) {
+      actions.innerHTML = `<button class="files-sheet-tool is-active" onclick="app._filesRenderView()">Preview</button><button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button><button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>`;
+    } else {
+      const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
+      actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
+    }
   }
 
   filesStartEdit() {
@@ -19720,12 +19813,35 @@ class CodemanApp {
     cur.editing = true;
     const content = this.$('filesSheetViewContent');
     const actions = this.$('filesSheetViewActions');
-    content.innerHTML = `<textarea class="files-sheet-editor" id="filesSheetEditor" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>`;
-    const ta = this.$('filesSheetEditor');
-    ta.value = cur.content;
-    ta.addEventListener('input', () => { cur.dirty = ta.value !== cur.content; });
+    this._filesDestroyEditor();
+    // Prefer the CodeMirror surface; fall back to a plain <textarea> if the
+    // vendor bundle never loaded. Both expose the same adapter so filesSave()
+    // has a single code path.
+    if (window.CodemanEditor) {
+      content.innerHTML = `<div class="files-cm-host" id="filesSheetEditor"></div>`;
+      const host = this.$('filesSheetEditor');
+      try {
+        this.filesState.editor = window.CodemanEditor.create(host, {
+          doc: cur.content,
+          filename: cur.path,
+          onChange: (v) => { cur.dirty = v !== cur.content; },
+        });
+      } catch (e) { this.filesState.editor = null; }
+    }
+    if (!this.filesState.editor) {
+      content.innerHTML = `<textarea class="files-sheet-editor" id="filesSheetEditor" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>`;
+      const ta = this.$('filesSheetEditor');
+      ta.value = cur.content;
+      ta.addEventListener('input', () => { cur.dirty = ta.value !== cur.content; });
+      this.filesState.editor = {
+        getValue: () => ta.value,
+        setValue: (v) => { ta.value = v; },
+        focus: () => ta.focus(),
+        destroy: () => {},
+      };
+    }
     actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCancelEdit()">Cancel</button><button class="files-sheet-tool" onclick="app.filesSave()">Save</button>`;
-    ta.focus();
+    try { this.filesState.editor.focus(); } catch (e) { /* ignore */ }
   }
 
   filesCancelEdit() {
@@ -19735,6 +19851,7 @@ class CodemanApp {
     cur.dirty = false;
     cur.editing = false;
     this.filesState.pendingContent = null;
+    this._filesDestroyEditor();
     this._filesRenderView();
   }
 
@@ -19748,13 +19865,13 @@ class CodemanApp {
 
   async filesSave() {
     const cur = this.filesState && this.filesState.current;
-    const ta = this.$('filesSheetEditor');
+    const editor = this.filesState && this.filesState.editor;
     const sessionId = this.activeSessionId;
-    if (!cur || !ta || !sessionId) {
+    if (!cur || !editor || !sessionId) {
       this.showToast('Cannot save — file state was lost. Reopen the file.', 'error');
       return;
     }
-    const newContent = ta.value;
+    const newContent = editor.getValue();
     try {
       const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
         method: 'PUT',
@@ -19822,43 +19939,81 @@ class CodemanApp {
     }
   }
 
-  async filesNewFile() {
-    const sessionId = this.activeSessionId;
-    if (!sessionId) return;
-    const name = prompt('New file name (e.g. .env.local):');
-    if (!name) return;
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/file-create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: name.trim() }),
-      });
-      const result = await res.json().catch(() => ({}));
-      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create file');
-      this.showToast('Created ' + name.trim(), 'success');
-      await this.filesLoadTree();
-      await this.filesOpenFile(result.data.path);
-      this.filesStartEdit();
-    } catch (err) {
-      this.showToast('Create failed: ' + err.message, 'error');
-    }
+  // Toolbar buttons default to the last-touched directory (activeDir) so the
+  // user types only a name, never a full root-relative path.
+  filesNewFile() { this._filesShowCreateDialog('file', this.filesState ? this.filesState.activeDir : ''); }
+  filesNewFolder() { this._filesShowCreateDialog('folder', this.filesState ? this.filesState.activeDir : ''); }
+
+  // In-sheet create dialog: shows the target directory and takes only a name.
+  // dir '' / undefined means the repo root. dotfiles + nested names both work
+  // because the server's resolveNewChild splits path into basename + parent.
+  _filesShowCreateDialog(kind, dir) {
+    const sheet = this.$('filesSheet');
+    if (!sheet) return;
+    this._filesCloseCreateDialog();
+    dir = dir || '';
+    const isFolder = kind === 'folder';
+    const overlay = document.createElement('div');
+    overlay.className = 'files-create-overlay';
+    overlay.id = 'filesCreateOverlay';
+    const target = dir ? escapeHtml(dir) + '/' : 'repo root';
+    overlay.innerHTML = `
+      <div class="files-create-dialog" role="dialog" aria-label="${isFolder ? 'New folder' : 'New file'}">
+        <div class="files-create-title">${isFolder ? 'New folder' : 'New file'}</div>
+        <div class="files-create-target">In: <span>${target}</span></div>
+        <input class="files-create-input" id="filesCreateInput" type="text" spellcheck="false"
+               autocapitalize="off" autocomplete="off" autocorrect="off"
+               placeholder="${isFolder ? 'name' : 'e.g. .env.local'}">
+        <div class="files-create-actions">
+          <button class="files-sheet-tool" id="filesCreateCancel">Cancel</button>
+          <button class="files-sheet-tool" id="filesCreateSubmit">Create</button>
+        </div>
+      </div>`;
+    // Click on the dim backdrop (but not the dialog) closes it.
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this._filesCloseCreateDialog();
+    });
+    sheet.appendChild(overlay);
+    const input = this.$('filesCreateInput');
+    const submit = () => this._filesCreateSubmit(kind, dir, input.value);
+    this.$('filesCreateSubmit').addEventListener('click', submit);
+    this.$('filesCreateCancel').addEventListener('click', () => this._filesCloseCreateDialog());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); this._filesCloseCreateDialog(); }
+    });
+    input.focus();
   }
 
-  async filesNewFolder() {
+  _filesCloseCreateDialog() {
+    const ov = this.$('filesCreateOverlay');
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+  }
+
+  async _filesCreateSubmit(kind, dir, rawName) {
     const sessionId = this.activeSessionId;
-    if (!sessionId) return;
-    const name = prompt('New folder name:');
-    if (!name) return;
+    const name = (rawName || '').trim();
+    if (!sessionId || !name) return;
+    const path = dir ? dir + '/' + name : name;
+    const isFolder = kind === 'folder';
+    const endpoint = isFolder ? 'dir-create' : 'file-create';
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/dir-create`, {
+      const res = await fetch(`/api/sessions/${sessionId}/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: name.trim() }),
+        body: JSON.stringify({ path }),
       });
       const result = await res.json().catch(() => ({}));
-      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create folder');
-      this.showToast('Created ' + name.trim(), 'success');
-      this.filesLoadTree();
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create');
+      this._filesCloseCreateDialog();
+      this.showToast('Created ' + name, 'success');
+      // Reveal the new item: expand its parent dir, reload the tree.
+      if (this.filesState && dir) this.filesState.expanded.add(dir);
+      await this.filesLoadTree();
+      if (!isFolder) {
+        await this.filesOpenFile(result.data.path);
+        this.filesStartEdit();
+      }
     } catch (err) {
       this.showToast('Create failed: ' + err.message, 'error');
     }

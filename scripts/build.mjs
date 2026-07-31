@@ -43,6 +43,11 @@ run('xterm-addon-webgl', 'cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js 
 run('xterm-addon-unicode11', 'npx esbuild node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
 run('xterm-addon-search', 'npx esbuild node_modules/@xterm/addon-search/lib/addon-search.js --minify --outfile=dist/web/public/vendor/xterm-addon-search.min.js');
 
+// File-editor vendor bundle: CodeMirror 6 + markdown-it + DOMPurify, bundled
+// from an entry file (many npm packages) into one IIFE. Lazy-loaded by app.js
+// on first files-sheet open; exposes window.CodemanEditor + window.CodemanMarkdown.
+run('file-editor bundle', 'npx esbuild scripts/vendor/editor-entry.mjs --bundle --minify --format=iife --legal-comments=none --outfile=dist/web/public/vendor/editor.min.js');
+
 // 4. Minify frontend assets
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify styles.css', 'npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite');

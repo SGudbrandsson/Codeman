@@ -908,6 +908,57 @@ describe('file-routes', () => {
         flag: 'wx',
       });
     });
+
+    it('creates a file in a nested subdirectory', async () => {
+      // Frontend POSTs { path: dir + '/' + name }. The identity realpathSync mock
+      // resolves the parent (/tmp/test-workdir/subdir) inside the sandbox, so the
+      // success path joins the resolved parent with the basename.
+      mockedStat.mockResolvedValue({
+        size: 4,
+        isFile: () => true,
+        isDirectory: () => false,
+        mtimeMs: 4000,
+      } as never);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-create`,
+        payload: { path: 'subdir/nested.txt', content: 'deep' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toBe('subdir/nested.txt');
+      expect(mockedWriteFile).toHaveBeenCalledWith('/tmp/test-workdir/subdir/nested.txt', 'deep', {
+        encoding: 'utf-8',
+        flag: 'wx',
+      });
+    });
+
+    it('creates a dotfile (leading-dot name allowed by resolveNewChild)', async () => {
+      // resolveNewChild only rejects exactly '.'/'..' — a leading-dot filename
+      // like '.env.local' is a valid basename and must be written, not blocked.
+      mockedStat.mockResolvedValue({
+        size: 3,
+        isFile: () => true,
+        isDirectory: () => false,
+        mtimeMs: 5000,
+      } as never);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-create`,
+        payload: { path: '.env.local', content: 'KEY' },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toBe('.env.local');
+      expect(mockedWriteFile).toHaveBeenCalledWith('/tmp/test-workdir/.env.local', 'KEY', {
+        encoding: 'utf-8',
+        flag: 'wx',
+      });
+    });
   });
 
   // ========== POST /api/sessions/:id/dir-create ==========
