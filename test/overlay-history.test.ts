@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 interface StackEntry {
   id: string;
-  close: () => void;
+  close: (forced?: boolean) => void;
 }
 
 /**
@@ -35,7 +35,7 @@ function makeOverlayHistory() {
       window.addEventListener('popstate', (e: PopStateEvent) => this._onPopState(e));
     },
 
-    push(id: string, closeFn: () => void) {
+    push(id: string, closeFn: (forced?: boolean) => void) {
       if (this._stack.length && this._stack[this._stack.length - 1].id === id) return;
       this._stack.push({ id, close: closeFn });
       history.pushState({ overlay: id }, '');
@@ -67,7 +67,10 @@ function makeOverlayHistory() {
     clear() {
       const entries = this._stack.slice();
       this._stack = [];
-      for (const entry of entries) entry.close();
+      // Pass forced=true so registered close fns skip interactive confirms on a
+      // batch clear (Escape/closeAllPanels/session-switch). Kept in sync with
+      // OverlayHistory.clear() in app.js.
+      for (const entry of entries) entry.close(true);
       if (entries.length > 0) {
         this._skipPopstate++;
         history.go(-entries.length);
@@ -445,6 +448,81 @@ describe('OverlayHistory', () => {
 
       expect(closeA).toHaveBeenCalledTimes(1);
       expect(closeB).toHaveBeenCalledTimes(1);
+      expect(oh._stack).toHaveLength(0);
+    });
+  });
+
+  describe('forced-close contract (files-sheet integration)', () => {
+    // The files sheet registers close fns that read a `forced` arg to decide
+    // whether to skip the "Discard unsaved changes?" confirm. clear() (batch
+    // close from Escape/closeAllPanels/session-switch) must pass forced=true;
+    // interactive back (pop / real popstate) must NOT force. This locks the
+    // contract that distinguishes silent batch-close from confirm-on-back.
+
+    it('clear() invokes every registered close fn with forced === true', () => {
+      const closeA = vi.fn();
+      const closeB = vi.fn();
+      oh.push('files-sheet', closeA);
+      oh.push('files-file', closeB);
+
+      oh.clear();
+
+      expect(closeA).toHaveBeenCalledTimes(1);
+      expect(closeA).toHaveBeenCalledWith(true);
+      expect(closeB).toHaveBeenCalledTimes(1);
+      expect(closeB).toHaveBeenCalledWith(true);
+    });
+
+    it('real popstate (back/gesture) invokes close fn without a truthy forced arg', () => {
+      const closeFn = vi.fn();
+      oh.push('files-file', closeFn);
+
+      oh._onPopState(new PopStateEvent('popstate'));
+
+      expect(closeFn).toHaveBeenCalledTimes(1);
+      // Registered fn receives no argument on the interactive back path, so
+      // the leading param is falsy — the confirm() branch runs.
+      expect(closeFn.mock.calls[0][0]).toBeFalsy();
+    });
+
+    it('pop() (UI-driven close) does NOT invoke the close fn at all', () => {
+      // pop() only splices + history.back()s; the caller already tore down the
+      // DOM, so no forced flag is ever passed on this path.
+      const closeFn = vi.fn();
+      oh.push('files-file', closeFn);
+
+      oh.pop('files-file');
+
+      expect(closeFn).not.toHaveBeenCalled();
+    });
+
+    it('dirty-cancel re-push on a real back restores the entry so the next back re-confirms', () => {
+      // Model the files-file close fn: on a non-forced back with unsaved changes
+      // the user cancels the confirm, so the fn re-pushes its own id (the browser
+      // already popped the matching history entry) instead of tearing down.
+      let dirty = true;
+      const doTeardown = vi.fn();
+      const closeFn = vi.fn((forced?: boolean) => {
+        if (!forced && dirty) {
+          oh.push('files-file', closeFn); // re-push to restore the popped entry
+          return;
+        }
+        doTeardown();
+      });
+
+      oh.push('files-file', closeFn);
+
+      // First back: confirm cancelled → entry restored, sheet stays open.
+      oh._onPopState(new PopStateEvent('popstate'));
+      expect(doTeardown).not.toHaveBeenCalled();
+      expect(oh.has('files-file')).toBe(true);
+      expect(oh._stack).toHaveLength(1);
+
+      // Second back after the user discards: teardown runs, entry gone.
+      dirty = false;
+      oh._onPopState(new PopStateEvent('popstate'));
+      expect(doTeardown).toHaveBeenCalledTimes(1);
+      expect(oh.has('files-file')).toBe(false);
       expect(oh._stack).toHaveLength(0);
     });
   });

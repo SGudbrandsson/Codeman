@@ -624,7 +624,10 @@ const OverlayHistory = {
   clear() {
     const entries = this._stack.slice();
     this._stack = [];
-    for (const entry of entries) entry.close();
+    // Pass forced=true so registered close fns skip interactive confirms on a
+    // batch clear (Escape/closeAllPanels). Other overlays' close fns are
+    // ()=>this._closeInternal() and simply ignore the arg.
+    for (const entry of entries) entry.close(true);
     if (entries.length > 0) {
       this._skipPopstate++;
       history.go(-entries.length);
@@ -9698,6 +9701,14 @@ class CodemanApp {
   async selectSession(sessionId) {
     FeatureTracker.track('session-select');
     if (this.activeSessionId === sessionId) return;
+    // Files sheet is per-session; force it closed on a switch and consume its
+    // history entries so no ghost back remains. No confirm mid-switch (matches
+    // the clear() force-close trade-off).
+    if (OverlayHistory.has('files-sheet')) {
+      this._doCloseFilesSheet();
+      if (OverlayHistory.has('files-file')) OverlayHistory.pop('files-file');
+      OverlayHistory.pop('files-sheet');
+    }
     // Hide board view / action dashboard when switching to a session
     if (this._boardVisible) this.hideBoard();
     if (this._actionDashboardVisible) this.hideActionDashboard();
@@ -19540,6 +19551,9 @@ class CodemanApp {
     // Fire-and-forget: the editor/preview paths fall back gracefully if it
     // never resolves, and the app boot path never touches this.
     this._filesEnsureVendor();
+    // Wire into browser back / swipe-back. push() dedupes against the current
+    // top, so reopening while already open is a no-op.
+    OverlayHistory.push('files-sheet', (f) => this._filesSheetCloseFromHistory(f));
   }
 
   // Loads dist/web/public/vendor/editor.min.js on demand, exposing
@@ -19560,16 +19574,60 @@ class CodemanApp {
     return this._filesVendorPromise;
   }
 
-  closeFilesSheet() {
-    if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
-      if (!confirm('Discard unsaved changes?')) return;
-    }
+  // DOM-only teardown for the whole sheet (no confirm, no history). Mirrors the
+  // _closeInternal pattern other OverlayHistory overlays use.
+  _doCloseFilesSheet() {
     const sheet = this.$('filesSheet');
     const backdrop = this.$('filesSheetBackdrop');
     if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
     if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
     this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+  }
+
+  // DOM-only return from a file view back to the tree (no confirm, no history).
+  _doFilesBackToTree() {
+    this._filesDestroyEditor();
+    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    this.$('filesSheetTitle').textContent = 'Files';
+    this.$('filesSheetBackBtn').style.display = 'none';
+    this._filesShowTree();
+    this.filesLoadTree();
+  }
+
+  // Registered with OverlayHistory for the 'files-sheet' entry. Runs on a real
+  // back/gesture (browser has ALREADY popped the entry) and on clear(forced).
+  // On a dirty-cancel we re-push the entry the browser popped so a later back
+  // still triggers the confirm.
+  _filesSheetCloseFromHistory(forced) {
+    if (!forced && this.filesState && this.filesState.current && this.filesState.current.dirty) {
+      if (!confirm('Discard unsaved changes?')) {
+        OverlayHistory.push('files-sheet', (f) => this._filesSheetCloseFromHistory(f));
+        return;
+      }
+    }
+    this._doCloseFilesSheet();
+  }
+
+  // Registered with OverlayHistory for the 'files-file' entry. Same shape as
+  // above but returns to the tree instead of closing the sheet.
+  _filesBackFromHistory(forced) {
+    if (!forced && this.filesState && this.filesState.current && this.filesState.current.dirty) {
+      if (!confirm('Discard unsaved changes?')) {
+        OverlayHistory.push('files-file', (f) => this._filesBackFromHistory(f));
+        return;
+      }
+    }
+    this._doFilesBackToTree();
+  }
+
+  closeFilesSheet() {
+    if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
+      if (!confirm('Discard unsaved changes?')) return;
+    }
+    this._doCloseFilesSheet();
+    if (OverlayHistory.has('files-file')) OverlayHistory.pop('files-file');
+    if (OverlayHistory.has('files-sheet')) OverlayHistory.pop('files-sheet');
   }
 
   _filesShowTree() {
@@ -19588,12 +19646,8 @@ class CodemanApp {
     if (this.filesState && this.filesState.current && this.filesState.current.dirty) {
       if (!confirm('Discard unsaved changes?')) return;
     }
-    this._filesDestroyEditor();
-    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
-    this.$('filesSheetTitle').textContent = 'Files';
-    this.$('filesSheetBackBtn').style.display = 'none';
-    this._filesShowTree();
-    this.filesLoadTree();
+    this._doFilesBackToTree();
+    OverlayHistory.pop('files-file');
   }
 
   filesRefresh() { this.filesLoadTree(); }
@@ -19702,6 +19756,9 @@ class CodemanApp {
     this._filesShowView();
     this.$('filesSheetTitle').textContent = path.split('/').pop();
     this.$('filesSheetBackBtn').style.display = '';
+    // Second-level back entry: back/swipe closes the file view → tree, not the
+    // whole sheet. push() top-dedup makes a same-file conflict reload a no-op.
+    OverlayHistory.push('files-file', (f) => this._filesBackFromHistory(f));
     const content = this.$('filesSheetViewContent');
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
@@ -20042,6 +20099,8 @@ class CodemanApp {
         this.$('filesSheetTitle').textContent = 'Files';
         this.$('filesSheetBackBtn').style.display = 'none';
         this._filesShowTree();
+        // Consume the now-stale file-level back entry.
+        if (OverlayHistory.has('files-file')) OverlayHistory.pop('files-file');
       }
       this.filesLoadTree();
     } catch (err) {
