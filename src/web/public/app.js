@@ -19762,6 +19762,7 @@ class CodemanApp {
     const content = this.$('filesSheetViewContent');
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
+    content.classList.remove('is-frame');
     content.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
     meta.textContent = '';
     actions.innerHTML = '';
@@ -19810,6 +19811,7 @@ class CodemanApp {
     this._filesDestroyEditor();
     // Binaries are not editable — clear any editing state so save/edit can't fire.
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    content.classList.remove('is-frame');
     const ext = data.extension || (data.path ? data.path.split('.').pop() : '');
     const name = (data.path || '').split('/').pop();
     const rawUrl = data.url || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(data.path)}`;
@@ -19838,24 +19840,56 @@ class CodemanApp {
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
     const trunc = cur.truncated ? ` • showing first 10000/${cur.totalLines} lines` : '';
-    meta.textContent = `${this.formatFileSize(cur.size)}${trunc}`;
     const isMd = /\.(md|markdown)$/i.test(cur.path);
+    const isHtml = /\.html?$/i.test(cur.path);
+    const htmlPreview = isHtml && !cur.truncated;
+    // HTML previews cannot load local/relative assets (see the comment below) —
+    // say so in the meta line so a bare-looking preview isn't mistaken for a bug.
+    meta.textContent = `${this.formatFileSize(cur.size)}${trunc}${htmlPreview ? ' • preview: local assets not loaded' : ''}`;
     let noticeHtml = '';
     if (cur.truncated) {
       noticeHtml = `<div class="files-sheet-notice">File is truncated; editing is disabled to avoid data loss.</div>`;
     }
+    content.classList.toggle('is-frame', htmlPreview);
     let rendered = null;
-    if (isMd && window.CodemanMarkdown) {
+    if (!htmlPreview && isMd && window.CodemanMarkdown) {
       try { rendered = window.CodemanMarkdown.render(cur.content); } catch (e) { rendered = null; }
     }
-    if (rendered != null) {
+    if (htmlPreview) {
+      // HTML preview: the document is arbitrary project content, so it is
+      // rendered in an isolated frame instead of being sanitized into our DOM.
+      // sandbox="" = ALL restrictions on: opaque origin (no cookies/localStorage/
+      // same-origin fetch against our API), no scripts, no forms, no top-level nav.
+      // NEVER add allow-same-origin here, and never combine it with allow-scripts.
+      // Known limitation: srcdoc resolves relative URLs against the app origin and
+      // inherits the app CSP, so <img src="./logo.png"> / <link href="style.css">
+      // and external assets do not load. Structure + inline CSS still render.
+      // Built with DOM APIs (not an HTML string) so srcdoc needs no attribute
+      // escaping and sandbox is guaranteed to be set before the document loads.
+      content.innerHTML = '';
+      if (noticeHtml) {
+        const n = document.createElement('div');
+        n.innerHTML = noticeHtml;
+        if (n.firstElementChild) content.appendChild(n.firstElementChild);
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'files-html-preview';
+      const frame = document.createElement('iframe');
+      frame.className = 'files-html-frame';
+      frame.setAttribute('sandbox', ''); // must be set BEFORE srcdoc
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.setAttribute('title', 'HTML preview');
+      frame.srcdoc = cur.content;
+      wrap.appendChild(frame);
+      content.appendChild(wrap);
+    } else if (rendered != null) {
       // rendered is already DOMPurify-sanitized in the vendor bundle.
       content.innerHTML = noticeHtml + `<div class="files-md-preview">${rendered}</div>`;
     } else {
       content.innerHTML = noticeHtml + `<pre><code>${escapeHtml(cur.content)}</code></pre>`;
     }
-    // Markdown files get an Edit ⇄ Preview tab pair (tabs, not split-pane).
-    if (isMd && !cur.truncated) {
+    // Markdown and HTML files get an Edit ⇄ Preview tab pair (tabs, not split-pane).
+    if ((isMd || isHtml) && !cur.truncated) {
       actions.innerHTML = `<button class="files-sheet-tool is-active" onclick="app._filesRenderView()">Preview</button><button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button><button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>`;
     } else {
       const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
@@ -19871,6 +19905,7 @@ class CodemanApp {
     const content = this.$('filesSheetViewContent');
     const actions = this.$('filesSheetViewActions');
     this._filesDestroyEditor();
+    content.classList.remove('is-frame');
     // Prefer the CodeMirror surface; fall back to a plain <textarea> if the
     // vendor bundle never loaded. Both expose the same adapter so filesSave()
     // has a single code path.
