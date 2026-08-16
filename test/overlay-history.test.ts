@@ -13,6 +13,23 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+// @ts-expect-error — ?raw is a Vite loader suffix, not typed by tsc.
+import appSource from '../src/web/public/app.js?raw';
+
+const APP_JS_SOURCE = appSource as string;
+
+// ─── Real-source extraction (openFileInEditor back-stack tests below) ───────
+
+function methodSource(name: string): string {
+  let start = APP_JS_SOURCE.indexOf(`\n  ${name}(`);
+  if (start === -1) start = APP_JS_SOURCE.indexOf(`\n  async ${name}(`);
+  expect(start, `${name}() not found in app.js`).toBeGreaterThan(-1);
+  const lines = APP_JS_SOURCE.slice(start + 1).split('\n');
+  if (lines[0].trimEnd().endsWith('}')) return lines[0];
+  const end = lines.findIndex((l, i) => i > 0 && l === '  }');
+  expect(end, `${name}() has no 2-space closing brace`).toBeGreaterThan(0);
+  return lines.slice(0, end + 1).join('\n');
+}
 
 // ─── OverlayHistory replica ─────────────────────────────────────────────────
 
@@ -524,6 +541,109 @@ describe('OverlayHistory', () => {
       expect(doTeardown).toHaveBeenCalledTimes(1);
       expect(oh.has('files-file')).toBe(false);
       expect(oh._stack).toHaveLength(0);
+    });
+  });
+
+  describe('openFileInEditor() back stack', () => {
+    // The REAL openFileInEditor() + _filesOpenSheetShell() bodies from app.js
+    // are compiled against this OverlayHistory replica, so the "Back walks
+    // file → tree → closed" contract is asserted on the shipped code.
+
+    let app: any;
+    let openedFiles: string[];
+    let toasts: string[];
+
+    beforeEach(() => {
+      document.body.innerHTML = `
+        <div id="filesSheet"></div>
+        <div id="filesSheetBackdrop"></div>
+        <input id="filesShowHidden" type="checkbox">
+        <div id="filesSheetTitle"></div>
+        <button id="filesSheetBackBtn"></button>`;
+      openedFiles = [];
+      toasts = [];
+
+      const body = [methodSource('_filesOpenSheetShell'), methodSource('openFileInEditor')].join(',\n');
+      const factory = new Function('FeatureTracker', 'OverlayHistory', `return ({\n${body}\n});`);
+      app = Object.assign(factory({ track: () => {} }, oh), {
+        activeSessionId: 'sess-a',
+        filesState: null,
+        $: (id: string) => document.getElementById(id),
+        showToast: (msg: string) => toasts.push(msg),
+        _filesEnsureVendor: async () => true,
+        _filesInstallScrollPersist: () => {},
+        _filesSheetCloseFromHistory: () => {},
+        _filesRestoreScroll: vi.fn(),
+        filesLoadTree: () => {},
+        // Mirrors the real filesOpenFile(), whose only history side effect is
+        // the single files-file push (pinned by test/files-html-preview.test.ts).
+        filesOpenFile: async (path: string) => {
+          openedFiles.push(path);
+          oh.push('files-file', () => {});
+        },
+      });
+    });
+
+    it('produces exactly files-sheet → files-file on a cold open', async () => {
+      await app.openFileInEditor('docs/story.md');
+
+      expect(oh._stack.map((e) => e.id)).toEqual(['files-sheet', 'files-file']);
+      expect(openedFiles).toEqual(['docs/story.md']);
+    });
+
+    it('does not stack a second pair when the sheet is already showing a file', async () => {
+      await app.openFileInEditor('docs/story.md');
+      await app.openFileInEditor('docs/other.md');
+
+      expect(oh._stack.map((e) => e.id)).toEqual(['files-sheet', 'files-file']);
+      expect(openedFiles).toEqual(['docs/story.md', 'docs/other.md']);
+    });
+
+    it('restores the persisted scroll offset when one was passed', async () => {
+      await app.openFileInEditor('docs/story.md', { scrollTop: 800 });
+      expect(app._filesRestoreScroll).toHaveBeenCalledWith(800);
+    });
+
+    it('aborts before opening when the dirty-buffer confirm is declined', async () => {
+      await app.openFileInEditor('docs/story.md');
+      app.filesState.current = { path: 'docs/story.md', dirty: true };
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await app.openFileInEditor('docs/story.md');
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(openedFiles).toEqual(['docs/story.md']);
+      expect(oh._stack.map((e) => e.id)).toEqual(['files-sheet', 'files-file']);
+      confirmSpy.mockRestore();
+    });
+
+    it('discards the dirty buffer and opens once the confirm is accepted', async () => {
+      await app.openFileInEditor('docs/story.md');
+      app.filesState.current = { path: 'docs/story.md', dirty: true };
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await app.openFileInEditor('docs/other.md');
+
+      expect(app.filesState.current.dirty).toBe(false);
+      expect(openedFiles).toEqual(['docs/story.md', 'docs/other.md']);
+      confirmSpy.mockRestore();
+    });
+
+    it('opens nothing and toasts when there is no active session', async () => {
+      app.activeSessionId = null;
+
+      await app.openFileInEditor('docs/story.md');
+
+      expect(toasts).toEqual(['No active session']);
+      expect(oh._stack).toHaveLength(0);
+      expect(openedFiles).toEqual([]);
+    });
+
+    it('ignores an empty path without touching the history stack', async () => {
+      await app.openFileInEditor('');
+
+      expect(oh._stack).toHaveLength(0);
+      expect(openedFiles).toEqual([]);
     });
   });
 });

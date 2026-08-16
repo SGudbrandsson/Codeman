@@ -120,6 +120,9 @@ function makeApp() {
       if (!cur) return;
       this._filesDestroyEditor();
       const content = this.$('filesSheetViewContent');
+      // Mirrors the real scroll-preservation guard: re-rendering the same
+      // document in Preview must not throw the reader back to the top.
+      const keepScroll = !cur.editing && this._filesRenderedPath === cur.path && content ? content.scrollTop : 0;
       const meta = this.$('filesSheetViewMeta');
       const actions = this.$('filesSheetViewActions');
       const trunc = cur.truncated ? ` • showing first 10000/${cur.totalLines} lines` : '';
@@ -170,12 +173,36 @@ function makeApp() {
           : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
         actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
       }
+      // Markdown-Preview-only extras (review notes + read-aloud). Mirrors the
+      // real _filesRenderView tail; FilesTTS is absent in jsdom so the Listen
+      // button is omitted here, matching the feature-detected production path.
+      cur.editing = false;
+      if (isMd && !htmlPreview) {
+        this._filesRenderMdTools(actions);
+      }
+      // Real app also calls FilesTTS.rebind() here when speech is playing.
+      this._filesRenderedPath = cur.path;
+      if (keepScroll) content.scrollTop = keepScroll;
+    },
+
+    _filesRenderedPath: null as string | null,
+
+    _filesNotes: [] as { id: string; excerpt: string; note: string }[],
+
+    _filesRenderMdTools(actions: HTMLElement) {
+      const count = this._filesNotes.length;
+      actions.insertAdjacentHTML(
+        'beforeend',
+        `<button class="files-sheet-tool" onclick="app.filesAddNoteFromSelection()" title="Add a review note for the selected text">Note</button>` +
+          `<button class="files-sheet-tool" id="filesNotesBtn" onclick="app.filesToggleNotesPanel()">Notes (${count})</button>`
+      );
     },
 
     filesStartEdit() {
       const cur = this.filesState && this.filesState.current;
       if (!cur) return;
       if (cur.truncated) return;
+      // Real app also calls FilesTTS.stop() + _filesTeardownNotesUi() here.
       cur.editing = true;
       const content = this.$('filesSheetViewContent');
       const actions = this.$('filesSheetViewActions');
@@ -370,9 +397,14 @@ describe('files sheet — HTML preview', () => {
       expect(actions().querySelector('.is-active')!.textContent).toBe('Preview');
     });
 
-    it('still offers Preview / Edit / Copy for a markdown file (non-regression)', () => {
+    it('still offers Preview / Edit / Copy for a markdown file, plus the review-note tools', () => {
       open(app, { path: 'notes.md', content: '# x' });
-      expect(buttonLabels()).toEqual(['Preview', 'Edit', 'Copy']);
+      expect(buttonLabels()).toEqual(['Preview', 'Edit', 'Copy', 'Note', 'Notes (0)']);
+    });
+
+    it('does not add the review-note tools to an HTML file', () => {
+      open(app, { path: 'page.html', content: '<h1>x</h1>' });
+      expect(buttonLabels()).not.toContain('Note');
     });
 
     it('offers only Copy / Edit for a plain text file', () => {
@@ -565,6 +597,54 @@ describe('src/web/public/app.js — source guards', () => {
     expect(pushes).toHaveLength(2);
     expect(methodBody('filesOpenFile')).toContain(`OverlayHistory.push('files-file'`);
     expect(methodBody('_filesBackFromHistory')).toContain(`OverlayHistory.push('files-file'`);
+  });
+
+  // ── Review-mode regressions (fix cycle 2) ────────────────────────────────
+
+  it('preserves the reading position across a same-document re-render', () => {
+    const body = methodBody('_filesRenderView');
+    expect(body).toContain('this._filesRenderedPath === cur.path');
+    expect(body).toContain('if (keepScroll) content.scrollTop = keepScroll;');
+    // A freshly loaded file must NOT inherit the previous file's offset.
+    expect(methodBody('filesOpenFile')).toContain('this._filesRenderedPath = null;');
+  });
+
+  it('does not re-render the document for note panel toggles or note edits', () => {
+    for (const name of ['filesToggleNotesPanel', '_filesOpenNotesPanel', 'filesDeleteNote', 'filesClearNotes']) {
+      expect(methodBody(name), `${name}() must not call _filesRenderView()`).not.toContain('_filesRenderView()');
+    }
+  });
+
+  it('scopes the review-notes cache to the active session', () => {
+    // filesState survives session switches and notes are keyed by path only, so
+    // a stale cache would leak session A's notes onto session B's TASK.md.
+    const body = methodBody('_filesNotesAll');
+    expect(body).toContain('this.filesState.notesSessionId !== this.activeSessionId');
+    expect(body).toContain('this.filesState.notesSessionId = this.activeSessionId;');
+    expect(methodBody('_filesPersistNotes')).toContain(
+      'if (this.filesState.notesSessionId !== this.activeSessionId) return;'
+    );
+    // The invalidation must be outside the preserveFilesSheet branch, which the
+    // SSE-reconnect path skips.
+    const sel = methodBody('selectSession');
+    const invalidateAt = sel.indexOf('this.filesState.notes = null;');
+    const guardAt = sel.indexOf('if (!opts.preserveFilesSheet');
+    expect(invalidateAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(invalidateAt);
+  });
+
+  it('guards the dirty buffer and the history stack in openFileInEditor', () => {
+    const body = methodBody('openFileInEditor');
+    // Re-opening the same dirty file re-fetches from disk — it must prompt too.
+    expect(body).toContain('if (cur && cur.dirty) {');
+    expect(body).not.toContain('cur.path !== path');
+    expect(methodBody('_filesOpenSheetShell')).toContain("if (!OverlayHistory.has('files-sheet')) {");
+  });
+
+  it('rolls back the optimistic busy state when sending notes fails', () => {
+    const body = methodBody('filesSendNotes');
+    expect(body).toContain('TranscriptView.setWorking(false);');
+    expect(body).toContain("this._updateTabStatusDebounced(sid, 'idle');");
   });
 
   // ── Gap 6 (source side): every content-overwriting path clears is-frame ────

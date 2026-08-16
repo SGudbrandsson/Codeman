@@ -7675,108 +7675,6 @@ kbd {
 .file-tree-item[data-depth="8"] { padding-left: 6.5rem; }
 .file-tree-item[data-depth="9"] { padding-left: 7.25rem; }
 
-/* ========== File Preview Overlay ========== */
-
-.file-preview-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(2px);
-  z-index: 2000;
-  display: none;
-  align-items: center;
-  justify-content: center;
-}
-
-.file-preview-overlay.visible {
-  display: flex;
-}
-
-.file-preview-window {
-  width: 80vw;
-  max-width: 900px;
-  height: 80vh;
-  max-height: 700px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.file-preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.file-preview-title {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-preview-actions {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.file-preview-body {
-  flex: 1;
-  overflow: auto;
-  padding: 0;
-  background: #111;
-}
-
-.file-preview-body pre {
-  margin: 0;
-  padding: 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  line-height: 1.5;
-  color: #d4d4d4;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.file-preview-body pre code {
-  font-family: inherit;
-}
-
-.file-preview-body img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.file-preview-body video {
-  max-width: 100%;
-  max-height: 100%;
-}
-
-.file-preview-body .binary-message {
-  padding: 2rem;
-  text-align: center;
-  color: var(--text-muted);
-}
-
-.file-preview-footer {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 /* ========== Log Viewer Windows (Floating) ========== */
 
 .log-viewer-window {
@@ -13008,6 +12906,8 @@ kbd {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  /* Anchor for the absolutely-positioned .files-note-pill. */
+  position: relative;
 }
 .files-sheet-view-toolbar {
   display: flex;
@@ -13186,6 +13086,118 @@ a.files-sheet-tool { text-decoration: none; }
 .files-binary-dl { margin-top: 10px; }
 
 /* In-sheet create dialog (contextual file/folder creation). */
+/* ── Markdown review notes ─────────────────────────────────────────────── */
+
+/* Floating "Add note" affordance positioned over the selection. Sits inside
+   #filesSheetView (position:relative) so coordinates are host-relative. */
+.files-note-pill {
+  position: absolute;
+  z-index: 6;
+  display: none;
+  background: #1f6feb;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+/* Annotated range inside the preview. */
+mark.files-md-note {
+  background: rgba(210,153,34,0.28);
+  color: inherit;
+  border-bottom: 2px solid rgba(210,153,34,0.75);
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Block currently being read aloud — composes with note highlights. */
+.files-md-preview .files-md-speaking {
+  background: rgba(88,166,255,0.14);
+  box-shadow: inset 3px 0 0 #58a6ff;
+  border-radius: 4px;
+}
+
+/* Review panel drawer, docked under the preview inside the sheet view. */
+.files-notes-panel {
+  flex: 0 0 auto;
+  max-height: 42%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  background: #0d1117;
+}
+.files-notes-head {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.files-notes-list { overflow: auto; -webkit-overflow-scrolling: touch; min-height: 0; }
+.files-notes-empty { padding: 12px; color: #6e7681; font-size: 13px; }
+.files-notes-row {
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.3s ease;
+}
+.files-notes-row.is-flash { background: rgba(210,153,34,0.16); }
+.files-notes-excerpt {
+  color: #8b949e;
+  font-size: 12.5px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.files-notes-note { color: #e6edf3; font-size: 13.5px; margin-top: 4px; overflow-wrap: anywhere; }
+.files-notes-actions { display: flex; gap: 6px; margin-top: 8px; }
+.files-notes-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px 12px calc(8px + var(--safe-area-bottom, 0px));
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Note dialog (reuses .files-create-overlay / .files-create-dialog chrome). */
+.files-note-excerpt {
+  max-height: 30vh;
+  overflow: auto;
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-left: 3px solid rgba(210,153,34,0.75);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  color: #8b949e;
+  font-size: 13px;
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.files-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 8px;
+  color: #e6edf3;
+  font-size: 14px;
+  font-family: inherit;
+  padding: 10px 12px;
+  outline: none;
+  resize: vertical;
+}
+.files-note-input:focus { border-color: #1f6feb; }
+
 .files-create-overlay {
   position: absolute;
   inset: 0;

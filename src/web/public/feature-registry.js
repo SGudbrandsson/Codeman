@@ -59,7 +59,8 @@ window.FeatureRegistry = [
 
   // file-management
   { id: 'file-browser-open',      name: 'File Browser',       category: 'file-management', description: 'File browser panel opened' },
-  { id: 'file-browser-file-click',name: 'File Open',          category: 'file-management', description: 'File opened in preview' },
+  { id: 'file-browser-file-click',name: 'File Open',          category: 'file-management', description: 'File opened from the desktop file-browser tree' },
+  { id: 'file-open-editor',       name: 'File Editor Open',   category: 'file-management', description: 'File opened in the file-editor v2 surface (files sheet)' },
   { id: 'file-upload',            name: 'File Upload',        category: 'file-management', description: 'File uploaded' },
   { id: 'log-viewer-open',        name: 'Log Viewer',         category: 'file-management', description: 'Log viewer window opened' },
 

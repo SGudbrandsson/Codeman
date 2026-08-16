@@ -478,8 +478,9 @@ function _checkFilePathExists(sessionId, path) {
 /**
  * Scan a rendered DOM subtree for inline-code spans that look like project-relative
  * file paths, verify each unique path exists server-side, and turn the existing ones
- * into clickable links that open the read-only file-preview modal via
- * `app.openFilePreview(path)`. Non-paths and missing files are left untouched.
+ * into clickable links that open the file in the file-editor v2 surface (the files
+ * sheet) via `app.openFileInEditor(path)`. Non-paths and missing files are left
+ * untouched.
  * Operates on the live DOM AFTER innerHTML is set so it can attach handlers safely.
  */
 function linkifyFilePaths(rootEl) {
@@ -507,12 +508,12 @@ function linkifyFilePaths(rootEl) {
         el.setAttribute('tabindex', '0');
         el.setAttribute('title', 'Open ' + path);
         el.addEventListener('click', function () {
-          app.openFilePreview(path);
+          app.openFileInEditor(path);
         });
         el.addEventListener('keydown', function (e) {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            app.openFilePreview(path);
+            app.openFileInEditor(path);
           }
         });
       });
@@ -3209,6 +3210,215 @@ const TranscriptTTS = {
     rect.setAttribute('ry', '2');
     svg.appendChild(rect);
     return svg;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// FilesTTS — read a rendered markdown document aloud (files sheet)
+// ═══════════════════════════════════════════════════════════════
+// Web Speech only (no /api/tts round-trip): the doc reader speaks one utterance
+// per rendered block and chains them via onend, which is what makes progress
+// highlighting and iOS reliability possible — iOS Safari truncates long
+// utterances and drops queued ones when the tab is backgrounded.
+const FilesTTS = {
+  supported: typeof window !== 'undefined' && 'speechSynthesis' in window,
+  _gen: 0,
+  _chunks: [],      // [{ el, text }]
+  _index: 0,
+  _playing: false,
+  _visBound: false,
+
+  isPlaying() { return this._playing; },
+
+  /** Rendered-block extraction: preview text, not raw markdown. */
+  BLOCK_SELECTOR: 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td',
+
+  collectChunks(preview, startEl) {
+    const out = [];
+    if (!preview) return out;
+    const blocks = preview.querySelectorAll(this.BLOCK_SELECTOR);
+    let started = !startEl;
+    blocks.forEach((el) => {
+      // Code is skipped per spec — reading punctuation aloud is noise.
+      if (el.closest('pre')) return;
+      if (!started) {
+        if (el === startEl || el.contains(startEl) || startEl.contains(el)) started = true;
+        else return;
+      }
+      // Own text only: a <li> wrapping a nested <ul>, or a <blockquote>
+      // wrapping <p>, would otherwise be read once itself and again per child.
+      const text = this._ownText(el);
+      if (!text) return;
+      for (const piece of this._split(text)) out.push({ el, text: piece });
+    });
+    return out;
+  },
+
+  // textContent minus anything belonging to a nested block (visited separately)
+  // or to a code block (never read aloud).
+  _ownText(el) {
+    let out = '';
+    const visit = (node) => {
+      const kids = node.childNodes;
+      for (let i = 0; i < kids.length; i++) {
+        const child = kids[i];
+        if (child.nodeType === 3) { out += child.data; continue; }
+        if (child.nodeType !== 1) continue;
+        if (child.tagName === 'PRE' || child.matches(this.BLOCK_SELECTOR)) continue;
+        visit(child);
+      }
+    };
+    visit(el);
+    return out.replace(/\s+/g, ' ').trim();
+  },
+
+  // iOS truncates long utterances — split on sentence boundaries at ~300 chars.
+  // Written without a lookbehind assertion: older iOS Safari throws on those at
+  // parse time, which would take the whole bundle down.
+  _split(text) {
+    if (text.length <= 300) return [text];
+    const sentences = [];
+    let sentence = '';
+    for (let i = 0; i < text.length; i++) {
+      sentence += text[i];
+      if ('.!?\u2026'.indexOf(text[i]) !== -1 && (i + 1 >= text.length || /\s/.test(text[i + 1]))) {
+        sentences.push(sentence.trim());
+        sentence = '';
+      }
+    }
+    if (sentence.trim()) sentences.push(sentence.trim());
+    const parts = [];
+    let buf = '';
+    for (const s of sentences) {
+      if (buf && (buf + ' ' + s).length > 300) { parts.push(buf); buf = s; }
+      else buf = buf ? buf + ' ' + s : s;
+    }
+    if (buf) parts.push(buf);
+    // A single sentence can still be huge (no punctuation) — hard-slice it.
+    const out = [];
+    for (const part of parts) {
+      if (part.length <= 400) { out.push(part); continue; }
+      for (let i = 0; i < part.length; i += 400) out.push(part.slice(i, i + 400));
+    }
+    return out;
+  },
+
+  /**
+   * MUST be called synchronously from the click handler — iOS only allows the
+   * first speak() inside a user gesture, so nothing may be awaited before it.
+   */
+  start(preview, startEl, onStateChange) {
+    if (!this.supported) return false;
+    this.stop();
+    const chunks = this.collectChunks(preview, startEl);
+    if (!chunks.length) return false;
+    this._chunks = chunks;
+    this._index = 0;
+    this._playing = true;
+    this._onStateChange = onStateChange || null;
+    this._gen++;
+    this._bindVisibility();
+    this._speakCurrent(this._gen);
+    return true;
+  },
+
+  /**
+   * Re-anchors the block elements after the preview DOM was rebuilt while
+   * speech is playing. Without this, _chunks[].el points at detached nodes and
+   * the progress highlight + scroll-into-view silently die for the rest of the
+   * document (the audio keeps going, which reads as a bug).
+   */
+  rebind(preview) {
+    if (!this._playing || !preview) return;
+    const fresh = this.collectChunks(preview, null);
+    if (!fresh.length) return;
+    const currentText = this._chunks[this._index] && this._chunks[this._index].text;
+    let at = -1;
+    if (currentText != null) at = fresh.findIndex((c) => c.text === currentText);
+    // Same document, so the chunk sequence should be identical; if the text
+    // moved (file changed underneath), keep the old refs rather than jumping.
+    if (at === -1) return;
+    this._chunks = fresh;
+    this._index = at;
+    this._highlight(fresh[at].el);
+  },
+
+  _speakCurrent(gen) {
+    if (gen !== this._gen || !this._playing) return;
+    const chunk = this._chunks[this._index];
+    if (!chunk) { this.stop(); return; }
+    const u = new SpeechSynthesisUtterance(chunk.text);
+    u.onstart = () => {
+      if (gen !== this._gen) return;
+      this._highlight(chunk.el);
+    };
+    u.onend = () => {
+      if (gen !== this._gen || !this._playing) return;
+      this._index++;
+      if (this._index >= this._chunks.length) { this.stop(); return; }
+      this._speakCurrent(gen);
+    };
+    u.onerror = () => {
+      if (gen !== this._gen || !this._playing) return;
+      // A single failed utterance should not strand the rest of the document.
+      this._index++;
+      if (this._index >= this._chunks.length) { this.stop(); return; }
+      this._speakCurrent(gen);
+    };
+    try { window.speechSynthesis.speak(u); } catch (e) { this.stop(); }
+  },
+
+  _highlight(el) {
+    this._clearHighlight();
+    if (!el || !el.classList) return;
+    el.classList.add('files-md-speaking');
+    this._current = el;
+    try {
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > (window.innerHeight || 0)) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+    } catch (e) { /* ignore */ }
+  },
+
+  _clearHighlight() {
+    if (this._current && this._current.classList) this._current.classList.remove('files-md-speaking');
+    this._current = null;
+    // Belt and braces after a preview re-render swapped the nodes out.
+    document.querySelectorAll('.files-md-speaking').forEach((el) => el.classList.remove('files-md-speaking'));
+  },
+
+  stop() {
+    const was = this._playing;
+    this._gen++;
+    this._playing = false;
+    this._chunks = [];
+    this._index = 0;
+    this._clearHighlight();
+    if (this.supported) { try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ } }
+    if (was && this._onStateChange) { try { this._onStateChange(false); } catch (e) { /* ignore */ } }
+    this._onStateChange = null;
+  },
+
+  // iOS pauses/kills speech when the tab is hidden; Chrome auto-pauses ~15s in.
+  // Resume on return, and if the engine really is dead, reset the UI rather
+  // than leaving a Stop button that stops nothing.
+  _bindVisibility() {
+    if (this._visBound || !this.supported) return;
+    this._visBound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!this._playing) return;
+      if (document.hidden) {
+        try { window.speechSynthesis.pause(); } catch (e) { /* ignore */ }
+        return;
+      }
+      try { window.speechSynthesis.resume(); } catch (e) { /* ignore */ }
+      setTimeout(() => {
+        if (!this._playing) return;
+        const ss = window.speechSynthesis;
+        if (!ss.speaking && !ss.pending && !ss.paused) this.stop();
+      }, 600);
+    });
   },
 };
 
@@ -9147,7 +9357,9 @@ class CodemanApp {
       if (restoreId && this.sessions.has(restoreId)) {
         // Soft reconnect: same session still valid, reuse cached terminal content
         this._sseReconnectRestoreId = this.terminalBufferCache.has(restoreId) ? restoreId : null;
-        this.selectSession(restoreId);
+        // Same session re-selected after a reconnect / tab-visible refresh —
+        // keep the files sheet exactly as the user left it.
+        this.selectSession(restoreId, { preserveFilesSheet: restoreId === previousActiveId });
       } else {
         // Ask backend for authoritative answer (persisted active session, tmux-verified)
         try {
@@ -9167,6 +9379,14 @@ class CodemanApp {
           (restoreId && this.sessions.has(restoreId)) ? restoreId : this.sessionOrder[0]
         );
       }
+    }
+    // Page-reload path (iOS discards and reloads backgrounded tabs): reopen the
+    // files sheet on the file/scroll offset persisted in sessionStorage. Runs
+    // once per page load only — a live reconnect keeps the sheet via
+    // preserveFilesSheet above and must not be re-entered here.
+    if (!this._filesRestoreAttempted) {
+      this._filesRestoreAttempted = true;
+      this._filesRestoreState();
     }
   }
 
@@ -9828,13 +10048,25 @@ class CodemanApp {
     this._showArchivedOverlay(archivedSessionId, session?.childSessionId || null);
   }
 
-  async selectSession(sessionId) {
+  async selectSession(sessionId, opts = {}) {
     FeatureTracker.track('session-select');
     if (this.activeSessionId === sessionId) return;
+    // Review notes are keyed by path only and filesState survives session
+    // switches, so the memoised notes object MUST be dropped here — otherwise
+    // session A's notes attach to B's same-named files (TASK.md, README.md …)
+    // and _filesPersistNotes() overwrites B's stored notes with A's. This sits
+    // OUTSIDE the preserveFilesSheet block on purpose: the cache is invalid on
+    // every real session change, sheet preserved or not.
+    if (this.filesState) { this.filesState.notes = null; this.filesState.notesSessionId = null; }
     // Files sheet is per-session; force it closed on a switch and consume its
     // history entries so no ghost back remains. No confirm mid-switch (matches
     // the clear() force-close trade-off).
-    if (OverlayHistory.has('files-sheet')) {
+    // opts.preserveFilesSheet is set by handleInit()'s same-session restore:
+    // handleInit() nulls activeSessionId before re-selecting, which defeats the
+    // identity early-return above, so without this flag every SSE reconnect /
+    // tab-visible refresh would close the sheet out from under the user.
+    if (!opts.preserveFilesSheet && OverlayHistory.has('files-sheet')) {
+      FilesTTS.stop();
       this._doCloseFilesSheet();
       if (OverlayHistory.has('files-file')) OverlayHistory.pop('files-file');
       OverlayHistory.pop('files-sheet');
@@ -19374,7 +19606,6 @@ class CodemanApp {
   fileBrowserFilter = '';
   fileBrowserAllExpanded = false;
   fileBrowserDragListeners = null;
-  filePreviewContent = '';
 
   async loadFileBrowser(sessionId) {
     FeatureTracker.track('file-browser-open');
@@ -19482,7 +19713,7 @@ class CodemanApp {
           this.toggleFileBrowserFolder(path);
         } else {
           FeatureTracker.track('file-browser-file-click');
-          this.openFilePreview(path);
+          this.openFileInEditor(path);
         }
       });
     });
@@ -19589,72 +19820,6 @@ class CodemanApp {
     this.saveAppSettingsToStorage(settings);
   }
 
-  async openFilePreview(filePath) {
-    if (!this.activeSessionId || !filePath) return;
-
-    const overlay = this.$('filePreviewOverlay');
-    const titleEl = this.$('filePreviewTitle');
-    const bodyEl = this.$('filePreviewBody');
-    const footerEl = this.$('filePreviewFooter');
-
-    if (!overlay || !bodyEl) return;
-
-    // Show overlay with loading state
-    overlay.classList.add('visible');
-    titleEl.textContent = filePath;
-    bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
-    footerEl.textContent = '';
-
-    try {
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500`);
-      if (!res.ok) throw new Error('Failed to load file');
-
-      const result = await res.json();
-      if (!result.success) throw new Error(result.error || 'Failed to load file');
-
-      const data = result.data;
-
-      if (data.type === 'image') {
-        const thumbUrl = `/api/sessions/${this.activeSessionId}/file-thumbnail?path=${encodeURIComponent(filePath)}&width=600`;
-        bodyEl.innerHTML = `<img src="${thumbUrl}" alt="${escapeHtml(filePath)}" onclick="window.open('${data.url}', '_blank')" style="cursor:pointer" title="Click to open full size">`;
-        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
-      } else if (data.type === 'video') {
-        bodyEl.innerHTML = `<video src="${data.url}" controls autoplay></video>`;
-        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
-      } else if (data.type === 'binary') {
-        bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview</div>`;
-        footerEl.textContent = data.extension || 'binary';
-      } else {
-        // Text content
-        this.filePreviewContent = data.content;
-        bodyEl.innerHTML = `<pre><code>${escapeHtml(data.content)}</code></pre>`;
-        const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
-        footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
-      }
-    } catch (err) {
-      console.error('Failed to preview file:', err);
-      bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
-    }
-  }
-
-  closeFilePreview() {
-    const overlay = this.$('filePreviewOverlay');
-    if (overlay) {
-      overlay.classList.remove('visible');
-    }
-    this.filePreviewContent = '';
-  }
-
-  copyFilePreviewContent() {
-    if (this.filePreviewContent) {
-      navigator.clipboard.writeText(this.filePreviewContent).then(() => {
-        this.showToast('Copied to clipboard', 'success');
-      }).catch(() => {
-        this.showToast('Failed to copy', 'error');
-      });
-    }
-  }
-
   // ==========================================================================
   // Mobile Files bottom sheet: browse / view / edit / create / delete.
   // SECRETS SAFETY: file content is never logged or echoed to chat/terminal;
@@ -19663,8 +19828,11 @@ class CodemanApp {
 
   filesState = null;
 
-  openFilesSheet() {
-    if (!this.activeSessionId) { this.showToast('No active session', 'error'); return; }
+  // Opens the sheet chrome without deciding what it shows. Split out of
+  // openFilesSheet() so openFileInEditor() can land straight on a file while
+  // still producing the same files-sheet → files-file back stack.
+  _filesOpenSheetShell() {
+    if (!this.activeSessionId) { this.showToast('No active session', 'error'); return false; }
     if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null };
     const sheet = this.$('filesSheet');
     const backdrop = this.$('filesSheetBackdrop');
@@ -19675,15 +19843,56 @@ class CodemanApp {
     if (hid) hid.checked = this.filesState.showHidden;
     this.$('filesSheetTitle').textContent = 'Files';
     this.$('filesSheetBackBtn').style.display = 'none';
-    this._filesShowTree();
-    this.filesLoadTree();
     // Lazy-load the CodeMirror + markdown vendor bundle on first open only.
-    // Fire-and-forget: the editor/preview paths fall back gracefully if it
+    // Fire-and-forget here: the editor/preview paths fall back gracefully if it
     // never resolves, and the app boot path never touches this.
     this._filesEnsureVendor();
-    // Wire into browser back / swipe-back. push() dedupes against the current
-    // top, so reopening while already open is a no-op.
-    OverlayHistory.push('files-sheet', (f) => this._filesSheetCloseFromHistory(f));
+    // Wire into browser back / swipe-back. push() only dedupes against the
+    // current TOP, so guard on has(): opening a file while the sheet is already
+    // showing a file (top = 'files-file') would otherwise stack a second
+    // files-sheet/files-file pair and leave two ghost Back presses behind.
+    if (!OverlayHistory.has('files-sheet')) {
+      OverlayHistory.push('files-sheet', (f) => this._filesSheetCloseFromHistory(f));
+    }
+    this._filesInstallScrollPersist();
+    return true;
+  }
+
+  openFilesSheet() {
+    if (!this._filesOpenSheetShell()) return;
+    this._filesShowTree();
+    this.filesLoadTree();
+    this._filesPersistState();
+  }
+
+  /**
+   * Single entry point for "open this file" from anywhere in the app (transcript
+   * file links, desktop file-browser rows, sessionStorage restore). Routes through
+   * the file-editor v2 surface so markdown lands in Preview, HTML in its sandboxed
+   * frame and images/binaries in their real previews — the old read-only <pre>
+   * modal is gone. Back stack ends up as files-sheet → files-file, so Back walks
+   * file → tree → closed exactly like opening from the sheet.
+   */
+  async openFileInEditor(path, opts = {}) {
+    if (!this.activeSessionId) { this.showToast('No active session', 'error'); return; }
+    if (!path) return;
+    FeatureTracker.track('file-open-editor');
+    // Replacing a dirty file mid-edit uses the same guard as filesSheetBack().
+    // The same-path case counts too: filesOpenFile() re-fetches from disk, so
+    // re-opening the file you are editing would silently drop the unsaved buffer.
+    const cur = this.filesState && this.filesState.current;
+    if (cur && cur.dirty) {
+      if (!confirm('Discard unsaved changes?')) return;
+      cur.dirty = false;
+    }
+    if (!this._filesOpenSheetShell()) return;
+    // Populate the tree in the background so Back lands on a usable tree.
+    this.filesLoadTree();
+    // Await the vendor bundle so a cold open renders markdown as Preview rather
+    // than falling back to an escaped <pre>.
+    await this._filesEnsureVendor();
+    await this.filesOpenFile(path);
+    if (opts.scrollTop) this._filesRestoreScroll(opts.scrollTop);
   }
 
   // Loads dist/web/public/vendor/editor.min.js on demand, exposing
@@ -19707,22 +19916,30 @@ class CodemanApp {
   // DOM-only teardown for the whole sheet (no confirm, no history). Mirrors the
   // _closeInternal pattern other OverlayHistory overlays use.
   _doCloseFilesSheet() {
+    FilesTTS.stop();
+    this._filesTeardownNotesUi();
+    this._filesCloseNoteDialog();
     const sheet = this.$('filesSheet');
     const backdrop = this.$('filesSheetBackdrop');
     if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
     if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
     this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    this._filesPersistClosed();
   }
 
   // DOM-only return from a file view back to the tree (no confirm, no history).
   _doFilesBackToTree() {
+    FilesTTS.stop();
+    this._filesTeardownNotesUi();
+    this._filesCloseNoteDialog();
     this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
     this.$('filesSheetTitle').textContent = 'Files';
     this.$('filesSheetBackBtn').style.display = 'none';
     this._filesShowTree();
     this.filesLoadTree();
+    this._filesPersistState();
   }
 
   // Registered with OverlayHistory for the 'files-sheet' entry. Runs on a real
@@ -19870,6 +20087,7 @@ class CodemanApp {
         if (this.filesState.expanded.has(path)) this.filesState.expanded.delete(path);
         else this.filesState.expanded.add(path);
         this.filesRenderTree();
+        this._filesPersistState();
       } else {
         // Opening a file makes its parent the active dir for new-file defaults.
         const slash = path.lastIndexOf('/');
@@ -19882,6 +20100,9 @@ class CodemanApp {
   async filesOpenFile(path) {
     const sessionId = this.activeSessionId;
     if (!sessionId || !this.filesState) return;
+    FilesTTS.stop();
+    this._filesCloseNoteDialog();
+    this._filesHideNotePill();
     this._filesDestroyEditor();
     this._filesShowView();
     this.$('filesSheetTitle').textContent = path.split('/').pop();
@@ -19896,6 +20117,12 @@ class CodemanApp {
     content.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
     meta.textContent = '';
     actions.innerHTML = '';
+    // A freshly loaded document starts at the top (or at the restored scrollTop),
+    // never at the previous file's offset.
+    this._filesRenderedPath = null;
+    // Cached promise — after the first open this is free, and it stops a cold
+    // open from racing the bundle into the escaped-<pre> fallback.
+    await this._filesEnsureVendor();
     try {
       const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(path)}&lines=10000`, { cache: 'no-store' });
       const result = await res.json().catch(() => ({}));
@@ -19917,6 +20144,7 @@ class CodemanApp {
       };
       this.filesState.pendingContent = null;
       this._filesRenderView();
+      this._filesPersistState();
     } catch (err) {
       content.innerHTML = `<div class="files-sheet-empty">Error: ${escapeHtml(err.message)}</div>`;
     }
@@ -19967,6 +20195,12 @@ class CodemanApp {
     if (!cur) return;
     this._filesDestroyEditor();
     const content = this.$('filesSheetViewContent');
+    // Reassigning content.innerHTML below clamps scrollTop to 0. Re-rendering
+    // the SAME document in Preview (Preview-tab re-entry, note highlights) must
+    // keep the reader where they were — annotating at 60% of a long story and
+    // being thrown back to page 1 makes the review loop unusable. A different
+    // file, or a return from Edit, legitimately starts at the top.
+    const keepScroll = (!cur.editing && this._filesRenderedPath === cur.path && content) ? content.scrollTop : 0;
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
     const trunc = cur.truncated ? ` • showing first 10000/${cur.totalLines} lines` : '';
@@ -20025,12 +20259,31 @@ class CodemanApp {
       const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
       actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
     }
+    // Markdown-Preview-only extras: review notes + read-aloud. Never on the
+    // sandboxed HTML frame, the binary previews or the editor surface.
+    cur.editing = false;
+    if (isMd && !htmlPreview) {
+      this._filesRenderMdTools(actions);
+      this._filesApplyNoteHighlights();
+      this._filesInstallNoteSelection();
+      this._filesRenderNotesPanel();
+    } else {
+      this._filesTeardownNotesUi();
+    }
+    // The re-render swapped every block element out from under a live read —
+    // re-anchor so the speaking highlight keeps tracking.
+    if (FilesTTS.isPlaying()) FilesTTS.rebind(this._filesPreviewEl());
+    // Content height is unchanged by the re-render, so no rAF is needed here.
+    this._filesRenderedPath = cur.path;
+    if (keepScroll) content.scrollTop = keepScroll;
   }
 
   filesStartEdit() {
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
     if (cur.truncated) { this.showToast('File too large to edit safely', 'error'); return; }
+    FilesTTS.stop();
+    this._filesTeardownNotesUi();
     cur.editing = true;
     const content = this.$('filesSheetViewContent');
     const actions = this.$('filesSheetViewActions');
@@ -20159,6 +20412,686 @@ class CodemanApp {
     } catch (err) {
       this.showToast('Save failed: ' + err.message, 'error');
     }
+  }
+
+  // ==========================================================================
+  // Markdown review notes (Preview-only)
+  // --------------------------------------------------------------------------
+  // Notes live in filesState.notes (path -> [{ id, excerpt, occurrence, note }])
+  // and are mirrored to sessionStorage so they survive Edit⇄Preview flips, an
+  // SSE reconnect and an iOS tab discard. File CONTENT is never persisted — only
+  // the user-selected excerpt they explicitly chose to comment on.
+  // ==========================================================================
+
+  _filesNotesKey() { return 'codeman-review-notes:' + this.activeSessionId; }
+
+  _filesNotesAll() {
+    if (!this.filesState) return {};
+    // Notes are keyed by PATH only, so the cache belongs to exactly one session.
+    // notesSessionId makes that explicit: any mismatch reloads from this
+    // session's own storage key instead of serving another session's notes.
+    if (!this.filesState.notes || this.filesState.notesSessionId !== this.activeSessionId) {
+      let loaded = {};
+      // Safari private mode throws on any sessionStorage access.
+      try {
+        const raw = sessionStorage.getItem(this._filesNotesKey());
+        if (raw) loaded = JSON.parse(raw) || {};
+      } catch (e) { loaded = {}; }
+      this.filesState.notes = (loaded && typeof loaded === 'object') ? loaded : {};
+      this.filesState.notesSessionId = this.activeSessionId;
+    }
+    return this.filesState.notes;
+  }
+
+  _filesNotesFor(path) {
+    const all = this._filesNotesAll();
+    if (!Array.isArray(all[path])) all[path] = [];
+    return all[path];
+  }
+
+  _filesPersistNotes() {
+    if (!this.activeSessionId || !this.filesState || !this.filesState.notes) return;
+    // Never write one session's notes under another session's key.
+    if (this.filesState.notesSessionId !== this.activeSessionId) return;
+    try { sessionStorage.setItem(this._filesNotesKey(), JSON.stringify(this.filesState.notes)); } catch (e) { /* ignore */ }
+  }
+
+  _filesPreviewEl() {
+    const content = this.$('filesSheetViewContent');
+    return content ? content.querySelector('.files-md-preview') : null;
+  }
+
+  _filesIsMdPreview() {
+    const cur = this.filesState && this.filesState.current;
+    return !!(cur && /\.(md|markdown)$/i.test(cur.path) && !cur.editing && this._filesPreviewEl());
+  }
+
+  /** Selected text inside the markdown preview, or '' when there is none. */
+  _filesSelectionText() {
+    const preview = this._filesPreviewEl();
+    if (!preview) return '';
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
+    const range = sel.getRangeAt(0);
+    if (!preview.contains(range.commonAncestorContainer)) return '';
+    return (sel.toString() || '').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * 0-based index of this exact excerpt within the preview text, so the
+   * highlight re-attaches to the right occurrence after a re-render.
+   */
+  _filesSelectionOccurrence(excerpt) {
+    const preview = this._filesPreviewEl();
+    if (!preview || !excerpt) return 0;
+    try {
+      const sel = window.getSelection();
+      const range = sel.getRangeAt(0);
+      const prefixRange = document.createRange();
+      prefixRange.setStart(preview, 0);
+      prefixRange.setEnd(range.startContainer, range.startOffset);
+      // Same normalisation as _filesTextProjection(), so the occurrence index
+      // means the same thing at capture time and at highlight time.
+      const prefix = prefixRange.toString().replace(/\s+/g, ' ');
+      let n = 0;
+      let at = prefix.indexOf(excerpt);
+      while (at !== -1) { n++; at = prefix.indexOf(excerpt, at + 1); }
+      return n;
+    } catch (e) { return 0; }
+  }
+
+  // ── Selection affordance ─────────────────────────────────────────────────
+
+  _filesInstallNoteSelection() {
+    if (this._filesNoteSelBound) return;
+    this._filesNoteSelBound = true;
+    document.addEventListener('selectionchange', () => {
+      clearTimeout(this._filesNoteSelTimer);
+      this._filesNoteSelTimer = setTimeout(() => this._filesUpdateNotePill(), 120);
+    });
+    const view = this.$('filesSheetView');
+    if (view) {
+      const nudge = () => setTimeout(() => this._filesUpdateNotePill(), 10);
+      view.addEventListener('pointerup', nudge);
+      view.addEventListener('touchend', nudge);
+      // Clicking a highlight jumps to its note in the review panel.
+      view.addEventListener('click', (e) => {
+        const mark = e.target && e.target.closest ? e.target.closest('mark.files-md-note') : null;
+        if (!mark) return;
+        this._filesScrollToNote(mark.dataset.noteId);
+      });
+    }
+  }
+
+  _filesHideNotePill() {
+    const pill = this.$('filesNotePill');
+    if (pill) pill.style.display = 'none';
+  }
+
+  _filesUpdateNotePill() {
+    const view = this.$('filesSheetView');
+    if (!view) return;
+    if (!this._filesIsMdPreview()) { this._filesHideNotePill(); return; }
+    const excerpt = this._filesSelectionText();
+    if (!excerpt) { this._filesHideNotePill(); return; }
+    let pill = this.$('filesNotePill');
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.id = 'filesNotePill';
+      pill.className = 'files-note-pill';
+      pill.type = 'button';
+      pill.textContent = 'Add note';
+      // pointerdown + preventDefault: iOS Safari collapses the selection as soon
+      // as a pointer goes down outside it, so a click handler would fire with
+      // nothing selected. Read the selection synchronously here instead.
+      pill.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = this._filesSelectionText();
+        const occurrence = this._filesSelectionOccurrence(text);
+        this._filesHideNotePill();
+        if (text) this._filesShowNoteDialog({ excerpt: text, occurrence });
+      });
+      view.appendChild(pill);
+    }
+    let rect;
+    try { rect = window.getSelection().getRangeAt(0).getBoundingClientRect(); } catch (e) { rect = null; }
+    if (!rect || (!rect.width && !rect.height)) { this._filesHideNotePill(); return; }
+    const host = view.getBoundingClientRect();
+    pill.style.display = 'block';
+    const pw = pill.offsetWidth || 96;
+    const ph = pill.offsetHeight || 32;
+    let left = rect.left - host.left + rect.width / 2 - pw / 2;
+    left = Math.max(8, Math.min(left, Math.max(8, host.width - pw - 8)));
+    let top = rect.top - host.top - ph - 10;
+    if (top < 4) top = rect.bottom - host.top + 10;
+    pill.style.left = left + 'px';
+    pill.style.top = top + 'px';
+  }
+
+  /** Toolbar "Note" button — the iOS fallback when the pill is covered by the
+   *  native selection callout. Captures whatever is selected right now. */
+  filesAddNoteFromSelection() {
+    if (!this._filesIsMdPreview()) return;
+    const excerpt = this._filesSelectionText();
+    if (!excerpt) { this.showToast('Select some text in the preview first', 'info'); return; }
+    const occurrence = this._filesSelectionOccurrence(excerpt);
+    this._filesHideNotePill();
+    this._filesShowNoteDialog({ excerpt, occurrence });
+  }
+
+  // ── Note dialog ──────────────────────────────────────────────────────────
+
+  _filesCloseNoteDialog() {
+    const ov = this.$('filesNoteOverlay');
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+  }
+
+  _filesShowNoteDialog({ excerpt, occurrence, id }) {
+    const sheet = this.$('filesSheet');
+    if (!sheet) return;
+    this._filesCloseNoteDialog();
+    const editing = !!id;
+    let existingNote = '';
+    if (editing) {
+      const cur = this.filesState && this.filesState.current;
+      const found = cur ? this._filesNotesFor(cur.path).find((n) => n.id === id) : null;
+      if (!found) return;
+      excerpt = found.excerpt;
+      occurrence = found.occurrence;
+      existingNote = found.note || '';
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'files-create-overlay';
+    overlay.id = 'filesNoteOverlay';
+    overlay.innerHTML = `
+      <div class="files-create-dialog" role="dialog" aria-label="${editing ? 'Edit note' : 'Add note'}">
+        <div class="files-create-title">${editing ? 'Edit note' : 'Add note'}</div>
+        <div class="files-note-excerpt" id="filesNoteExcerpt"></div>
+        <textarea class="files-note-input" id="filesNoteInput" rows="4" spellcheck="true"
+                  placeholder="Your comment on this passage…"></textarea>
+        <div class="files-create-actions">
+          <button class="files-sheet-tool" id="filesNoteCancel">Cancel</button>
+          <button class="files-sheet-tool" id="filesNoteSave">Save</button>
+        </div>
+      </div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) this._filesCloseNoteDialog(); });
+    sheet.appendChild(overlay);
+    // File content is untrusted — the excerpt goes in as text, never as HTML.
+    this.$('filesNoteExcerpt').textContent = excerpt;
+    const input = this.$('filesNoteInput');
+    input.value = existingNote;
+    const submit = () => this._filesSaveNote({ excerpt, occurrence, id, note: input.value });
+    this.$('filesNoteSave').addEventListener('click', submit);
+    this.$('filesNoteCancel').addEventListener('click', () => this._filesCloseNoteDialog());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); this._filesCloseNoteDialog(); }
+    });
+    input.focus();
+  }
+
+  _filesSaveNote({ excerpt, occurrence, id, note }) {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    const text = (note || '').trim();
+    if (!text) { this.showToast('Write a comment first', 'error'); return; }
+    const list = this._filesNotesFor(cur.path);
+    if (id) {
+      const found = list.find((n) => n.id === id);
+      if (found) found.note = text;
+    } else {
+      list.push({
+        id: 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        excerpt,
+        occurrence: occurrence || 0,
+        note: text,
+        createdAt: Date.now(),
+      });
+    }
+    this._filesPersistNotes();
+    this._filesCloseNoteDialog();
+    // Highlight the new excerpt in place; a full _filesRenderView() here would
+    // reset the scroll position and lose the reader's place mid-document.
+    if (!id) {
+      const preview = this._filesPreviewEl();
+      const added = list[list.length - 1];
+      if (preview && added) this._filesHighlightExcerpt(preview, added);
+    }
+    this._filesNotesOpen = true;
+    this._filesRefreshNotesUi();
+  }
+
+  filesEditNote(id) {
+    if (!this._filesIsMdPreview()) return;
+    this._filesShowNoteDialog({ id });
+  }
+
+  filesDeleteNote(id) {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    const all = this._filesNotesAll();
+    all[cur.path] = this._filesNotesFor(cur.path).filter((n) => n.id !== id);
+    this._filesPersistNotes();
+    this._filesUnwrapHighlights(id);
+    this._filesRefreshNotesUi();
+  }
+
+  filesClearNotes() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    if (!this._filesNotesFor(cur.path).length) return;
+    if (!confirm('Delete all review notes for this file?')) return;
+    const all = this._filesNotesAll();
+    all[cur.path] = [];
+    this._filesPersistNotes();
+    this._filesUnwrapHighlights();
+    this._filesRefreshNotesUi();
+  }
+
+  // ── Highlights ───────────────────────────────────────────────────────────
+
+  _filesApplyNoteHighlights() {
+    const preview = this._filesPreviewEl();
+    const cur = this.filesState && this.filesState.current;
+    if (!preview || !cur) return;
+    for (const note of this._filesNotesFor(cur.path)) {
+      if (note && note.excerpt) this._filesHighlightExcerpt(preview, note);
+    }
+  }
+
+  /**
+   * Whitespace-normalised projection of the preview's text nodes.
+   * Returns { text, map } where map[i] is the { node, offset } that produced
+   * text[i]. Excerpts are stored normalised (`\s+` → ' '), but markdown-it keeps
+   * the source line breaks inside a paragraph's text node, so matching against
+   * raw node.data would silently fail on every hard-wrapped selection — which is
+   * exactly the long-prose case this feature targets.
+   */
+  _filesTextProjection(preview) {
+    const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT, null);
+    const map = [];
+    const BLOCKS = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,th,div,section,article';
+    let text = '';
+    let pendingSpace = false;
+    let prevBlock;
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.data) continue;
+      // Nodes already inside a highlight are skipped so overlapping notes do not
+      // nest <mark>s and so occurrence counting stays stable.
+      if (node.parentElement && node.parentElement.closest('mark.files-md-note')) continue;
+      // Selection.toString() puts a line break between block elements, so a
+      // block change counts as whitespace here even when the DOM has none.
+      const block = node.parentElement ? node.parentElement.closest(BLOCKS) : null;
+      if (text && block !== prevBlock) pendingSpace = true;
+      prevBlock = block;
+      const d = node.data;
+      for (let i = 0; i < d.length; i++) {
+        const ch = d[i];
+        if (ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r' || ch === '\f' || ch === '\v') {
+          if (text) pendingSpace = true;
+          continue;
+        }
+        if (pendingSpace) { text += ' '; map.push({ node, offset: i }); pendingSpace = false; }
+        text += ch;
+        map.push({ node, offset: i });
+      }
+    }
+    return { text, map };
+  }
+
+  // Wraps the note's excerpt in <mark>. Works across element boundaries and
+  // across source line breaks: the match is found in the normalised projection
+  // and then applied one text node at a time, so surroundContents() only ever
+  // sees a range inside a single text node.
+  _filesHighlightExcerpt(preview, note) {
+    const excerpt = (note.excerpt || '').replace(/\s+/g, ' ').trim();
+    if (!excerpt) return;
+    const { text, map } = this._filesTextProjection(preview);
+    const target = note.occurrence || 0;
+    let at = text.indexOf(excerpt);
+    let seen = 0;
+    while (at !== -1 && seen < target) { at = text.indexOf(excerpt, at + 1); seen++; }
+    // The excerpt may have fewer occurrences than when it was captured (a note
+    // on an earlier occurrence was deleted, the file changed) — fall back to the
+    // first match rather than leaving the note unhighlighted.
+    if (at === -1 && target > 0) at = text.indexOf(excerpt);
+    if (at === -1) return;
+    const start = map[at];
+    const last = map[at + excerpt.length - 1];
+    if (!start || !last) return;
+    // Collect the per-node slices BEFORE mutating anything: surroundContents
+    // splits the node it wraps, and a stale offset would land in the wrong half.
+    const segments = [];
+    let cursor = null;
+    for (let i = at; i < at + excerpt.length; i++) {
+      const m = map[i];
+      if (!m) return;
+      if (cursor && cursor.node === m.node) cursor.end = m.offset + 1;
+      else { cursor = { node: m.node, start: m.offset, end: m.offset + 1 }; segments.push(cursor); }
+    }
+    // Apply back-to-front: wrapping a later slice cannot then invalidate the
+    // offsets of an earlier slice in the same text node.
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (seg.end <= seg.start) continue;
+      if (!seg.node.data.slice(seg.start, seg.end).trim()) continue;
+      try {
+        const range = document.createRange();
+        range.setStart(seg.node, seg.start);
+        range.setEnd(seg.node, seg.end);
+        const mark = document.createElement('mark');
+        mark.className = 'files-md-note';
+        mark.dataset.noteId = note.id;
+        range.surroundContents(mark);
+      } catch (e) { /* one fragment failed — the rest of the highlight still lands */ }
+    }
+  }
+
+  // ── Review panel ─────────────────────────────────────────────────────────
+
+  _filesRenderMdTools(actions) {
+    const cur = this.filesState && this.filesState.current;
+    if (!actions || !cur) return;
+    const count = this._filesNotesFor(cur.path).length;
+    const parts = [
+      `<button class="files-sheet-tool" onclick="app.filesAddNoteFromSelection()" title="Add a review note for the selected text">Note</button>`,
+      `<button class="files-sheet-tool${this._filesNotesOpen ? ' is-active' : ''}" id="filesNotesBtn" onclick="app.filesToggleNotesPanel()">Notes (${count})</button>`,
+    ];
+    if (FilesTTS.supported) {
+      parts.push(`<button class="files-sheet-tool" id="filesListenBtn" onclick="app.filesToggleListen()">${FilesTTS.isPlaying() ? '■ Stop' : '▶ Listen'}</button>`);
+    }
+    actions.insertAdjacentHTML('beforeend', parts.join(''));
+  }
+
+  filesToggleNotesPanel() {
+    this._filesNotesOpen = !this._filesNotesOpen;
+    this._filesRefreshNotesUi();
+  }
+
+  _filesOpenNotesPanel() {
+    if (this._filesNotesOpen) return;
+    this._filesNotesOpen = true;
+    this._filesRefreshNotesUi();
+  }
+
+  /**
+   * Updates the Notes(N) button + the review panel WITHOUT touching the rendered
+   * document. Every note operation used to go through _filesRenderView(), which
+   * reassigns content.innerHTML and so scrolls the reader back to the top.
+   */
+  _filesRefreshNotesUi() {
+    const cur = this.filesState && this.filesState.current;
+    const btn = this.$('filesNotesBtn');
+    if (btn && cur) {
+      btn.textContent = `Notes (${this._filesNotesFor(cur.path).length})`;
+      btn.classList.toggle('is-active', !!this._filesNotesOpen);
+    }
+    this._filesRenderNotesPanel();
+  }
+
+  /** Unwraps note highlights (all of them, or just one note's) in place. */
+  _filesUnwrapHighlights(noteId) {
+    const preview = this._filesPreviewEl();
+    if (!preview) return;
+    const sel = noteId ? `mark.files-md-note[data-note-id="${noteId}"]` : 'mark.files-md-note';
+    let marks;
+    try { marks = preview.querySelectorAll(sel); } catch (e) { return; }
+    for (const mark of Array.from(marks)) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      // Re-join the split text nodes so the next highlight scan sees whole runs.
+      if (parent.normalize) parent.normalize();
+    }
+  }
+
+  _filesTeardownNotesUi() {
+    this._filesHideNotePill();
+    const panel = this.$('filesNotesPanel');
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+  }
+
+  _filesRenderNotesPanel() {
+    const view = this.$('filesSheetView');
+    const cur = this.filesState && this.filesState.current;
+    let panel = this.$('filesNotesPanel');
+    if (!view || !cur || !this._filesNotesOpen) {
+      if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+      return;
+    }
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'filesNotesPanel';
+      panel.className = 'files-notes-panel';
+      view.appendChild(panel);
+    }
+    const notes = this._filesNotesFor(cur.path);
+    if (!notes.length) {
+      panel.innerHTML = `<div class="files-notes-empty">No notes yet — select text in the preview and tap “Add note”.</div>`;
+      return;
+    }
+    // escapeHtml on both excerpt (file content) and note (user input).
+    const rows = notes.map((n, i) => `
+      <div class="files-notes-row" id="filesNoteRow-${escapeHtml(n.id)}">
+        <div class="files-notes-excerpt">${i + 1}. “${escapeHtml(this._filesTruncate(n.excerpt, 160))}”</div>
+        <div class="files-notes-note">${escapeHtml(n.note)}</div>
+        <div class="files-notes-actions">
+          <button class="files-sheet-tool" onclick="app.filesEditNote('${escapeHtml(n.id)}')">Edit</button>
+          <button class="files-sheet-tool" onclick="app.filesDeleteNote('${escapeHtml(n.id)}')">Delete</button>
+        </div>
+      </div>`).join('');
+    panel.innerHTML = `
+      <div class="files-notes-head">Review notes (${notes.length})</div>
+      <div class="files-notes-list">${rows}</div>
+      <div class="files-notes-foot">
+        <button class="files-sheet-tool" onclick="app.filesClearNotes()">Clear all</button>
+        <button class="files-sheet-tool is-active" onclick="app.filesSendNotes()">Send notes</button>
+      </div>`;
+  }
+
+  _filesScrollToNote(id) {
+    if (!id) return;
+    this._filesOpenNotesPanel();
+    const row = document.getElementById('filesNoteRow-' + id);
+    if (row) {
+      row.scrollIntoView({ block: 'nearest' });
+      row.classList.add('is-flash');
+      setTimeout(() => row.classList.remove('is-flash'), 1200);
+    }
+  }
+
+  _filesTruncate(text, max) {
+    const t = (text || '').replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max - 1) + '…' : t;
+  }
+
+  // ── Send notes to the session ────────────────────────────────────────────
+
+  /**
+   * Composes ONE LLM-friendly message from the file's notes and submits it on
+   * the session-input path (useMux; \n → C-j, trailing \r → Enter). Deliberately
+   * does NOT reuse InputPanel.send(), which would clobber the user's draft.
+   */
+  async filesSendNotes() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    // Capture the session id BEFORE any await — an SSE-driven switch mid-send
+    // must not redirect the message (same reason as InputPanel._sendInner).
+    const sid = this.activeSessionId;
+    if (!sid) { this.showToast('No active session', 'error'); return; }
+    const notes = this._filesNotesFor(cur.path);
+    if (!notes.length) { this.showToast('No notes to send', 'error'); return; }
+
+    // Excerpts are whitespace-normalised to a single line when they are captured
+    // (_filesSelectionText / _filesTruncate), which also keeps the message short:
+    // every \n costs one tmux send-keys exec plus a settle delay.
+    const parts = [`Review notes on \`${cur.path}\`:`, ''];
+    notes.forEach((note, i) => {
+      const excerpt = this._filesTruncate(note.excerpt, 400);
+      parts.push(`${i + 1}.`);
+      parts.push('   > ' + excerpt);
+      parts.push('   — ' + this._filesTruncate(note.note, 800));
+      parts.push('');
+    });
+    let msg = parts.join('\n').trim();
+    // MAX_INPUT_LENGTH is 64 KB server-side; refuse rather than silently truncate.
+    if (msg.length > 32000) {
+      this.showToast('Notes are too long to send — delete a few and try again', 'error');
+      return;
+    }
+    if (typeof SecretDetector !== 'undefined' && SecretDetector.isEnabled()) {
+      const result = SecretDetector.scan(sid, msg);
+      if (result.count > 0) {
+        msg = result.redacted;
+        this.showToast(`${result.count} secret${result.count > 1 ? 's' : ''} redacted before sending`, 'warning');
+      }
+    }
+    // Optimistic UI, but only when the transcript is showing this same session.
+    if (typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === sid) {
+      TranscriptView.appendOptimistic(msg);
+      TranscriptView.setWorking(true);
+    }
+    this._updateTabStatusDebounced(sid, 'busy');
+    try {
+      await this.sendInput(msg + '\r', sid);
+    } catch (err) {
+      // Roll back the optimistic busy state — unlike InputPanel._sendInner()
+      // there is no re-send poller here to correct it.
+      if (typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === sid) {
+        TranscriptView.setWorking(false);
+      }
+      this._updateTabStatusDebounced(sid, 'idle');
+      // Keep the notes on failure — they are the user's only copy.
+      this.showToast('Failed to send notes: ' + err.message, 'error');
+      return;
+    }
+    const all = this._filesNotesAll();
+    all[cur.path] = [];
+    this._filesPersistNotes();
+    this._filesNotesOpen = false;
+    this._filesUnwrapHighlights();
+    this._filesRefreshNotesUi();
+    this.showToast('Notes sent', 'success');
+  }
+
+  // ── Read aloud ───────────────────────────────────────────────────────────
+
+  /**
+   * Toggle handler for the Listen button. Runs FULLY synchronously up to
+   * speechSynthesis.speak() — iOS only permits the first utterance inside the
+   * originating user gesture.
+   */
+  filesToggleListen() {
+    if (!FilesTTS.supported) return;
+    if (FilesTTS.isPlaying()) { FilesTTS.stop(); this._filesUpdateListenBtn(); return; }
+    const preview = this._filesPreviewEl();
+    if (!preview) return;
+    // Start from the selection when there is one, else from the top.
+    let startEl = null;
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && !sel.isCollapsed) {
+        const anchor = sel.anchorNode;
+        const el = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
+        if (el && preview.contains(el)) startEl = el.closest('h1,h2,h3,h4,h5,h6,p,li,blockquote,td');
+      }
+    } catch (e) { startEl = null; }
+    const ok = FilesTTS.start(preview, startEl, () => this._filesUpdateListenBtn());
+    if (!ok) { this.showToast('Nothing to read in this document', 'info'); return; }
+    this._filesUpdateListenBtn();
+  }
+
+  _filesUpdateListenBtn() {
+    const btn = this.$('filesListenBtn');
+    if (btn) btn.textContent = FilesTTS.isPlaying() ? '■ Stop' : '▶ Listen';
+  }
+
+  // ==========================================================================
+  // Files-sheet state persistence (survives an OS-triggered reload / bfcache)
+  // --------------------------------------------------------------------------
+  // SECRETS SAFETY: only the path, view mode, scroll offset and tree expansion
+  // are stored — never file content.
+  // ==========================================================================
+
+  _filesSheetKey() { return 'codeman-files-sheet:' + this.activeSessionId; }
+
+  _filesPersistState() {
+    if (!this.activeSessionId || !this.filesState) return;
+    const sheet = this.$('filesSheet');
+    const open = !!(sheet && sheet.classList.contains('open'));
+    if (!open) { this._filesPersistClosed(); return; }
+    const cur = this.filesState.current;
+    const content = this.$('filesSheetViewContent');
+    const payload = {
+      open: true,
+      path: cur ? cur.path : null,
+      // Restore never re-enters edit mode: unsaved content is not persisted, so
+      // reopening in Preview is the only lossless option.
+      mode: 'preview',
+      scrollTop: content ? content.scrollTop : 0,
+      expanded: Array.from(this.filesState.expanded || []),
+      activeDir: this.filesState.activeDir || '',
+    };
+    try { sessionStorage.setItem(this._filesSheetKey(), JSON.stringify(payload)); } catch (e) { /* ignore */ }
+  }
+
+  _filesPersistClosed() {
+    if (!this.activeSessionId) return;
+    try { sessionStorage.removeItem(this._filesSheetKey()); } catch (e) { /* ignore */ }
+  }
+
+  // Throttled passive scroll capture — a scroll event per frame must not hit
+  // sessionStorage (a synchronous, main-thread write).
+  _filesInstallScrollPersist() {
+    if (this._filesScrollBound) return;
+    const content = this.$('filesSheetViewContent');
+    if (!content) return;
+    this._filesScrollBound = true;
+    content.addEventListener('scroll', () => {
+      if (this._filesScrollTimer) return;
+      this._filesScrollTimer = setTimeout(() => {
+        this._filesScrollTimer = null;
+        this._filesPersistState();
+      }, 250);
+    }, { passive: true });
+    // bfcache restore: the DOM is intact, so just put the scroll offset back
+    // instead of re-fetching the file.
+    window.addEventListener('pageshow', (e) => {
+      if (!e.persisted) return;
+      const saved = this._filesReadState();
+      if (saved && saved.open && saved.scrollTop) this._filesRestoreScroll(saved.scrollTop);
+    });
+  }
+
+  _filesReadState() {
+    if (!this.activeSessionId) return null;
+    try {
+      const raw = sessionStorage.getItem(this._filesSheetKey());
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  // Double rAF: CodeMirror / markdown layout settles a frame after innerHTML,
+  // so a same-frame scrollTop assignment is clamped to 0.
+  _filesRestoreScroll(top) {
+    if (!top) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const content = this.$('filesSheetViewContent');
+      if (content) content.scrollTop = top;
+    }));
+  }
+
+  async _filesRestoreState() {
+    const saved = this._filesReadState();
+    if (!saved || !saved.open) return;
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null };
+    if (Array.isArray(saved.expanded)) this.filesState.expanded = new Set(saved.expanded);
+    if (saved.activeDir) this.filesState.activeDir = saved.activeDir;
+    if (saved.path) await this.openFileInEditor(saved.path, { scrollTop: saved.scrollTop });
+    else this.openFilesSheet();
   }
 
   // Toolbar buttons default to the last-touched directory (activeDir) so the
