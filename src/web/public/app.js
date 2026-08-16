@@ -5154,6 +5154,8 @@ class CodemanApp {
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
     this._isLoadingBuffer = false; // true during chunkedTerminalWrite — blocks live SSE writes
     this._loadBufferQueue = null;  // queued SSE events during buffer load
+    this._terminalWatchdogTimer = null; // interval that detects a stalled render pipeline
+    this._terminalGatedSince = null;    // timestamp output was first observed held back
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -5597,6 +5599,7 @@ class CodemanApp {
     requestAnimationFrame(() => {
       this.initTerminal();
       this.loadFontSize();
+      this.startTerminalWatchdog();
       this.connectSSE();
       // Only fetch state if SSE init event hasn't arrived within 3s (avoids duplicate handleInit)
       this._initFallbackTimer = setTimeout(() => {
@@ -6067,6 +6070,13 @@ class CodemanApp {
       this._webglAddon = null;
     }
 
+    // Stop the render watchdog — nothing left to supervise
+    if (this._terminalWatchdogTimer) {
+      clearInterval(this._terminalWatchdogTimer);
+      this._terminalWatchdogTimer = null;
+    }
+    this._terminalGatedSince = null;
+
     // Dispose the terminal itself
     if (this.terminal) {
       try { this.terminal.dispose(); } catch {}
@@ -6372,35 +6382,43 @@ class CodemanApp {
     if (!this.writeFrameScheduled) {
       this.writeFrameScheduled = true;
       requestAnimationFrame(() => {
-        if (this.pendingWrites.length > 0 && this.terminal) {
-          // Join chunks for sync marker detection
-          const pending = this.pendingWrites.join('');
-          // Check if we have an incomplete sync block (SYNC_START without SYNC_END)
-          const hasStart = pending.includes(DEC_SYNC_START);
-          const hasEnd = pending.includes(DEC_SYNC_END);
+        // writeFrameScheduled gates every future frame: if it is left true, no
+        // further rAF is ever scheduled and all live output is stranded in
+        // pendingWrites until a page reload. Reset it in `finally` so a throw
+        // anywhere below (xterm write error, addon fault) cannot freeze the view.
+        try {
+          if (this.pendingWrites.length > 0 && this.terminal) {
+            // Join chunks for sync marker detection
+            const pending = this.pendingWrites.join('');
+            // Check if we have an incomplete sync block (SYNC_START without SYNC_END)
+            const hasStart = pending.includes(DEC_SYNC_START);
+            const hasEnd = pending.includes(DEC_SYNC_END);
 
-          if (hasStart && !hasEnd) {
-            // Incomplete sync block - wait for more data (up to 50ms max)
-            if (!this.syncWaitTimeout) {
-              this.syncWaitTimeout = setTimeout(() => {
-                this.syncWaitTimeout = null;
-                // Force flush after timeout to prevent stuck state
-                this.flushPendingWrites();
-              }, 50);
+            if (hasStart && !hasEnd) {
+              // Incomplete sync block - wait for more data (up to 50ms max)
+              if (!this.syncWaitTimeout) {
+                this.syncWaitTimeout = setTimeout(() => {
+                  this.syncWaitTimeout = null;
+                  // Force flush after timeout to prevent stuck state
+                  this.flushPendingWrites();
+                }, 50);
+              }
+              return;
             }
-            this.writeFrameScheduled = false;
-            return;
-          }
 
-          // Clear any pending sync wait timeout
-          if (this.syncWaitTimeout) {
-            clearTimeout(this.syncWaitTimeout);
-            this.syncWaitTimeout = null;
-          }
+            // Clear any pending sync wait timeout
+            if (this.syncWaitTimeout) {
+              clearTimeout(this.syncWaitTimeout);
+              this.syncWaitTimeout = null;
+            }
 
-          this.flushPendingWrites();
+            this.flushPendingWrites();
+          }
+        } catch (err) {
+          console.error('[terminal] flush frame failed:', err);
+        } finally {
+          this.writeFrameScheduled = false;
         }
-        this.writeFrameScheduled = false;
       });
     }
   }
@@ -6421,8 +6439,13 @@ class CodemanApp {
     if (!this.writeFrameScheduled) {
       this.writeFrameScheduled = true;
       requestAnimationFrame(() => {
-        this.flushPendingWrites();
-        this.writeFrameScheduled = false;
+        try {
+          this.flushPendingWrites();
+        } catch (err) {
+          console.error('[terminal] flicker flush failed:', err);
+        } finally {
+          this.writeFrameScheduled = false;
+        }
       });
     }
   }
@@ -6485,8 +6508,13 @@ class CodemanApp {
             if (!this.writeFrameScheduled) {
               this.writeFrameScheduled = true;
               requestAnimationFrame(() => {
-                this.flushPendingWrites();
-                this.writeFrameScheduled = false;
+                try {
+                  this.flushPendingWrites();
+                } catch (err) {
+                  console.error('[terminal] deferred flush failed:', err);
+                } finally {
+                  this.writeFrameScheduled = false;
+                }
               });
             }
             deferred = true;
@@ -6611,6 +6639,98 @@ class CodemanApp {
       // Start writing
       requestAnimationFrame(writeChunk);
     });
+  }
+
+  /**
+   * Fetch a terminal buffer with a hard timeout.
+   *
+   * These requests gate live output: `_isLoadingBuffer` stays raised until they
+   * settle, so one that never settles (network dropped after a device wake, or
+   * the server restarted mid-flight during an upgrade) strands every subsequent
+   * SSE chunk and the terminal looks frozen until a full page reload. `fetch`
+   * has no default timeout, so impose one — on abort the caller's catch runs
+   * `_finishBufferLoad()` and the pipeline reopens.
+   */
+  _fetchTerminalBuffer(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TERMINAL_FETCH_TIMEOUT_MS);
+    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Watchdog for the terminal render pipeline.
+   *
+   * Live output passes through two gates — `_isLoadingBuffer` (raised around a
+   * buffer load) and `writeFrameScheduled` (raised between rAF frames). Either
+   * one stuck raised silently diverts or strands all incoming data, which reads
+   * to the user as a terminal that stopped updating and only recovers on a full
+   * page reload. The individual causes are fixed (fetch timeouts, try/finally
+   * around the frame callbacks); this is the backstop that self-heals whatever
+   * is left, so a stuck view repairs itself instead of needing a reload.
+   */
+  startTerminalWatchdog() {
+    if (this._terminalWatchdogTimer) return;
+    this._terminalWatchdogTimer = setInterval(() => {
+      if (!this.terminal || !this.activeSessionId) return;
+      if (document.hidden) return;  // rAF is paused while hidden — stalls there are expected
+
+      const now = Date.now();
+      const gated = this._isLoadingBuffer
+        || (this.pendingWrites.length > 0 && this.writeFrameScheduled)
+        || (this.flickerFilterActive && this.flickerFilterBuffer.length > 0);
+
+      if (!gated) { this._terminalGatedSince = null; return; }
+
+      // Only treat it as a stall once output has actually been held back;
+      // a healthy pipeline clears these flags within a frame or two.
+      if (!this._terminalGatedSince) { this._terminalGatedSince = now; return; }
+      if (now - this._terminalGatedSince < TERMINAL_STALL_TIMEOUT_MS) return;
+
+      console.warn('[terminal] render pipeline stalled — forcing recovery');
+      _crashDiag.log('WATCHDOG: pipeline stalled, recovering');
+      this._terminalGatedSince = null;
+      this.recoverTerminalRender();
+    }, 5000);
+  }
+
+  /**
+   * Force the terminal render pipeline back into a writable state and repaint
+   * from the authoritative server-side buffer. Safe to call at any time.
+   */
+  recoverTerminalRender() {
+    // Drop every gate, preserving data that was already queued behind them.
+    const queued = this._loadBufferQueue || [];
+    this._isLoadingBuffer = false;
+    this._loadBufferQueue = null;
+    this.writeFrameScheduled = false;
+    if (this.flickerFilterTimeout) {
+      clearTimeout(this.flickerFilterTimeout);
+      this.flickerFilterTimeout = null;
+    }
+    if (this.flickerFilterBuffer) {
+      this.pendingWrites.push(this.flickerFilterBuffer);
+      this.flickerFilterBuffer = '';
+    }
+    this.flickerFilterActive = false;
+    if (this.syncWaitTimeout) {
+      clearTimeout(this.syncWaitTimeout);
+      this.syncWaitTimeout = null;
+    }
+    for (const data of queued) this.pendingWrites.push(data);
+
+    // The terminal container may have been left hidden by an interrupted load.
+    document.getElementById('terminalContainer')?.classList.remove('buffer-loading');
+
+    try {
+      this.flushPendingWrites();
+    } catch (err) {
+      console.error('[terminal] recovery flush failed:', err);
+    }
+
+    // Repaint from the server buffer so the view is correct even if the stall
+    // dropped or interleaved data. _onSessionNeedsRefresh already does exactly
+    // this (fetch tail → clear → rewrite → resize).
+    this._onSessionNeedsRefresh();
   }
 
   /**
@@ -7007,7 +7127,7 @@ class CodemanApp {
     // so reload the buffer to recover from any display corruption.
     if (!this.activeSessionId || !this.terminal) return;
     try {
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+      const res = await this._fetchTerminalBuffer(`/api/sessions/${this.activeSessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
       const data = await res.json();
       if (data.terminalBuffer) {
         const termContainer = document.getElementById('terminalContainer');
@@ -7033,7 +7153,7 @@ class CodemanApp {
     if (data.id === this.activeSessionId) {
       // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
       try {
-        const res = await fetch(`/api/sessions/${data.id}/terminal`);
+        const res = await this._fetchTerminalBuffer(`/api/sessions/${data.id}/terminal`);
         const termData = await res.json();
 
         this.terminal.clear();
@@ -8722,6 +8842,16 @@ class CodemanApp {
    */
   _onTabVisible() {
     if (!this.isOnline) return;
+
+    // Returning to the tab is also the moment the user notices a dead terminal.
+    // If output is still gated behind a buffer load that never completed while
+    // we were hidden, recover now rather than making them wait for the watchdog
+    // (or reload the page).
+    if (this.terminal && this._isLoadingBuffer) {
+      _crashDiag.log('TAB_VISIBLE: buffer load still gating output — recovering');
+      this._terminalGatedSince = null;
+      this.recoverTerminalRender();
+    }
     const es = this.eventSource;
     if (!es || es.readyState === EventSource.CLOSED) {
       // Stream dropped — reconnect (triggers INIT event which re-syncs all state)
@@ -9864,7 +9994,7 @@ class CodemanApp {
 
       if (isSoftReconnect && cachedBuffer) {
         _crashDiag.log('SOFT_RECONNECT: fetching to compare');
-        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        const res = await this._fetchTerminalBuffer(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
         const data = await res.json();
         _crashDiag.log(`SOFT_RECONNECT_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} changed=${data.terminalBuffer !== cachedBuffer}`);
@@ -9908,7 +10038,7 @@ class CodemanApp {
         }
 
         _crashDiag.log('FETCH_START');
-        const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        const res = await this._fetchTerminalBuffer(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
         if (selectGen !== this._selectGeneration) { termContainer?.classList.remove('buffer-loading'); if (this._isLoadingBuffer) this._finishBufferLoad(); return; }
         const data = await res.json();
         _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
