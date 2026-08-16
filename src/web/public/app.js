@@ -5441,12 +5441,32 @@ class CodemanApp {
     this.init();
   }
 
-  // Cached element getter - avoids repeated DOM queries
+  // Cached element getter - avoids repeated DOM queries.
+  //
+  // STATIC IDS ONLY. `_elemCache` is never invalidated anywhere in the app, so
+  // `$()` memoises a node FOREVER. That is safe for the ids that live in
+  // index.html and are never removed, and silently wrong for anything created
+  // or destroyed at runtime: once the real node has been replaced, `$()` keeps
+  // handing back the first, now-detached one — writes go nowhere, listeners
+  // attach to nothing and removeChild() removes nothing (see the note-dialog
+  // regression fixed in fix/annotation-selection-capture).
+  // For any id that is created/torn down at runtime, use `$$(id)` instead.
   $(id) {
     if (!this._elemCache[id]) {
       this._elemCache[id] = document.getElementById(id);
     }
     return this._elemCache[id];
+  }
+
+  // Uncached element getter — for ids that are created/destroyed at runtime.
+  $$(id) {
+    return document.getElementById(id);
+  }
+
+  // Drops a memoised node so the next `$()` re-resolves it. Use when a static
+  // id's element is deliberately replaced.
+  _invalidateElem(id) {
+    delete this._elemCache[id];
   }
 
   // Format token count: 1000k -> 1m, 1450k -> 1.45m, 500 -> 500
@@ -20103,6 +20123,8 @@ class CodemanApp {
     FilesTTS.stop();
     this._filesCloseNoteDialog();
     this._filesHideNotePill();
+    this._filesClearSelSnapshot();
+    this._filesTtsStartEl = null;
     this._filesDestroyEditor();
     this._filesShowView();
     this.$('filesSheetTitle').textContent = path.split('/').pop();
@@ -20523,18 +20545,53 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Snapshot of the last usable preview selection, captured at GESTURE time.
+   *
+   * Android Chrome (and iOS Safari) collapse the document selection as soon as
+   * a tap lands outside it, so anything that reads window.getSelection() in a
+   * `click` handler sees nothing. Every affordance therefore captures here on
+   * `pointerdown` / `selectionchange` and later consumes the snapshot instead
+   * of re-reading the (by then empty) selection.
+   */
+  _filesCaptureSelSnapshot(text) {
+    const excerpt = text || this._filesSelectionText();
+    if (!excerpt) return null;
+    this._filesSelSnapshot = {
+      excerpt,
+      occurrence: this._filesSelectionOccurrence(excerpt),
+      ts: Date.now(),
+    };
+    return this._filesSelSnapshot;
+  }
+
+  /** Live selection if there still is one, else the last fresh (<5s) snapshot. */
+  _filesTakeSelSnapshot() {
+    const live = this._filesCaptureSelSnapshot();
+    if (live) return live;
+    const snap = this._filesSelSnapshot;
+    if (snap && Date.now() - snap.ts <= 5000) return snap;
+    return null;
+  }
+
+  _filesClearSelSnapshot() { this._filesSelSnapshot = null; }
+
   _filesHideNotePill() {
-    const pill = this.$('filesNotePill');
+    // Dynamic node: $$ (uncached) — the pill is created and removed at runtime.
+    const pill = this.$$('filesNotePill');
     if (pill) pill.style.display = 'none';
   }
 
   _filesUpdateNotePill() {
     const view = this.$('filesSheetView');
     if (!view) return;
-    if (!this._filesIsMdPreview()) { this._filesHideNotePill(); return; }
+    if (!this._filesIsMdPreview()) { this._filesHideNotePill(); this._filesClearSelSnapshot(); return; }
     const excerpt = this._filesSelectionText();
+    // Selection gone: hide the bar but KEEP the snapshot briefly, so a tap that
+    // collapsed the selection can still be turned into a note.
     if (!excerpt) { this._filesHideNotePill(); return; }
-    let pill = this.$('filesNotePill');
+    this._filesCaptureSelSnapshot(excerpt);
+    let pill = this.$$('filesNotePill');
     if (!pill) {
       pill = document.createElement('button');
       pill.id = 'filesNotePill';
@@ -20547,44 +20604,67 @@ class CodemanApp {
       pill.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const text = this._filesSelectionText();
-        const occurrence = this._filesSelectionOccurrence(text);
+        const snap = this._filesTakeSelSnapshot();
         this._filesHideNotePill();
-        if (text) this._filesShowNoteDialog({ excerpt: text, occurrence });
+        this._filesClearSelSnapshot();
+        if (snap) this._filesShowNoteDialog({ excerpt: snap.excerpt, occurrence: snap.occurrence });
+        else this.showToast('Select some text first', 'info');
       });
       view.appendChild(pill);
     }
-    let rect;
-    try { rect = window.getSelection().getRangeAt(0).getBoundingClientRect(); } catch (e) { rect = null; }
-    if (!rect || (!rect.width && !rect.height)) { this._filesHideNotePill(); return; }
-    const host = view.getBoundingClientRect();
+    // Viewport-anchored bottom bar, NOT anchored to the selection rect: both
+    // Android Chrome's Copy/Cut/Search toolbar and iOS Safari's callout render
+    // adjacent to (normally above) the selection and re-position as it moves,
+    // so any selection-anchored placement can be covered by them. A fixed bar
+    // at the bottom of the preview never collides, needs no rect math (which is
+    // fragile with iOS's delayed selectionchange + visual-viewport offset) and
+    // is thumb-reachable at any scroll position. Placement lives in CSS.
     pill.style.display = 'block';
-    const pw = pill.offsetWidth || 96;
-    const ph = pill.offsetHeight || 32;
-    let left = rect.left - host.left + rect.width / 2 - pw / 2;
-    left = Math.max(8, Math.min(left, Math.max(8, host.width - pw - 8)));
-    let top = rect.top - host.top - ph - 10;
-    if (top < 4) top = rect.bottom - host.top + 10;
-    pill.style.left = left + 'px';
-    pill.style.top = top + 'px';
   }
 
-  /** Toolbar "Note" button — the iOS fallback when the pill is covered by the
-   *  native selection callout. Captures whatever is selected right now. */
+  /** Toolbar "Note" button — second route to the same dialog (and the one that
+   *  works when the native selection menu covers the bottom bar).
+   *  The selection is captured on the button's pointerdown (see
+   *  _filesRenderMdTools) because by click time the tap has collapsed it. */
   filesAddNoteFromSelection() {
     if (!this._filesIsMdPreview()) return;
-    const excerpt = this._filesSelectionText();
-    if (!excerpt) { this.showToast('Select some text in the preview first', 'info'); return; }
-    const occurrence = this._filesSelectionOccurrence(excerpt);
+    const snap = this._filesTakeSelSnapshot();
+    if (!snap) { this.showToast('Select some text in the preview first', 'info'); return; }
     this._filesHideNotePill();
-    this._filesShowNoteDialog({ excerpt, occurrence });
+    this._filesClearSelSnapshot();
+    this._filesShowNoteDialog({ excerpt: snap.excerpt, occurrence: snap.occurrence });
   }
 
   // ── Note dialog ──────────────────────────────────────────────────────────
 
-  _filesCloseNoteDialog() {
-    const ov = this.$('filesNoteOverlay');
+  /**
+   * DOM-only teardown (no history pop) — registered with OverlayHistory, which
+   * has already popped its own entry by the time it runs.
+   * Works off the live overlay reference: `$('filesNoteOverlay')` would memoise
+   * the FIRST dialog and never remove any later one (see the $() contract).
+   */
+  _filesCloseNoteDialogInternal() {
+    const ov = this._filesNoteOverlayEl;
+    this._filesNoteOverlayEl = null;
+    if (this._filesNoteKeydown) {
+      document.removeEventListener('keydown', this._filesNoteKeydown, true);
+      this._filesNoteKeydown = null;
+    }
     if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    // Defensive sweep: never leave an unreachable overlay on screen.
+    const stray = document.getElementById('filesNoteOverlay');
+    if (stray && stray.parentNode) stray.parentNode.removeChild(stray);
+  }
+
+  /** UI-driven close (Cancel / Escape / backdrop / save): tears the dialog down
+   *  AND pops its OverlayHistory entry. */
+  _filesCloseNoteDialog() {
+    const hadHistory = this._filesNoteHistoryOpen;
+    this._filesNoteHistoryOpen = false;
+    this._filesCloseNoteDialogInternal();
+    if (hadHistory && typeof OverlayHistory !== 'undefined' && OverlayHistory.has('files-note')) {
+      OverlayHistory.pop('files-note');
+    }
   }
 
   _filesShowNoteDialog({ excerpt, occurrence, id }) {
@@ -20600,6 +20680,11 @@ class CodemanApp {
       excerpt = found.excerpt;
       occurrence = found.occurrence;
       existingNote = found.note || '';
+    }
+    // Last line of defence: never open a dialog with nothing to annotate.
+    if (!editing && !String(excerpt || '').trim()) {
+      this.showToast('Select some text first', 'info');
+      return;
     }
     const overlay = document.createElement('div');
     overlay.className = 'files-create-overlay';
@@ -20617,18 +20702,40 @@ class CodemanApp {
       </div>`;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this._filesCloseNoteDialog(); });
     sheet.appendChild(overlay);
+    // Every node below is resolved from the overlay we just built — NEVER via
+    // $(), which memoises the first dialog's (detached) nodes forever and made
+    // the second and every later dialog empty and undismissable.
+    this._filesNoteOverlayEl = overlay;
+    const excerptEl = overlay.querySelector('#filesNoteExcerpt');
+    const input = overlay.querySelector('#filesNoteInput');
+    const saveBtn = overlay.querySelector('#filesNoteSave');
+    const cancelBtn = overlay.querySelector('#filesNoteCancel');
     // File content is untrusted — the excerpt goes in as text, never as HTML.
-    this.$('filesNoteExcerpt').textContent = excerpt;
-    const input = this.$('filesNoteInput');
-    input.value = existingNote;
-    const submit = () => this._filesSaveNote({ excerpt, occurrence, id, note: input.value });
-    this.$('filesNoteSave').addEventListener('click', submit);
-    this.$('filesNoteCancel').addEventListener('click', () => this._filesCloseNoteDialog());
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); this._filesCloseNoteDialog(); }
-    });
-    input.focus();
+    if (excerptEl) excerptEl.textContent = excerpt;
+    if (input) input.value = existingNote;
+    const submit = () => this._filesSaveNote({ excerpt, occurrence, id, note: input ? input.value : '' });
+    if (saveBtn) saveBtn.addEventListener('click', submit);
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this._filesCloseNoteDialog());
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
+      });
+    }
+    // Escape at the DOCUMENT level (capture) so it works wherever focus is —
+    // binding it to the textarea alone left the dialog stuck once focus moved.
+    this._filesNoteKeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this._filesCloseNoteDialog(); }
+    };
+    document.addEventListener('keydown', this._filesNoteKeydown, true);
+    // Android/iOS back button closes the DIALOG, not the file view underneath.
+    if (typeof OverlayHistory !== 'undefined') {
+      OverlayHistory.push('files-note', () => {
+        this._filesNoteHistoryOpen = false;
+        this._filesCloseNoteDialogInternal();
+      });
+      this._filesNoteHistoryOpen = true;
+    }
+    if (input) input.focus();
   }
 
   _filesSaveNote({ excerpt, occurrence, id, note }) {
@@ -20796,13 +20903,21 @@ class CodemanApp {
     if (!actions || !cur) return;
     const count = this._filesNotesFor(cur.path).length;
     const parts = [
-      `<button class="files-sheet-tool" onclick="app.filesAddNoteFromSelection()" title="Add a review note for the selected text">Note</button>`,
+      `<button class="files-sheet-tool" id="filesNoteToolBtn" onclick="app.filesAddNoteFromSelection()" title="Add a review note for the selected text">Note</button>`,
       `<button class="files-sheet-tool${this._filesNotesOpen ? ' is-active' : ''}" id="filesNotesBtn" onclick="app.filesToggleNotesPanel()">Notes (${count})</button>`,
     ];
     if (FilesTTS.supported) {
       parts.push(`<button class="files-sheet-tool" id="filesListenBtn" onclick="app.filesToggleListen()">${FilesTTS.isPlaying() ? '■ Stop' : '▶ Listen'}</button>`);
     }
     actions.insertAdjacentHTML('beforeend', parts.join(''));
+    // Both buttons act on the CURRENT selection, but the tap that activates
+    // them collapses it on Android Chrome / iOS Safari — so the selection is
+    // read here, synchronously on pointerdown, and the click handler consumes
+    // what was captured. No preventDefault(): the click must still fire.
+    const noteBtn = actions.querySelector('#filesNoteToolBtn');
+    if (noteBtn) noteBtn.addEventListener('pointerdown', () => { this._filesCaptureSelSnapshot(); });
+    const listenBtn = actions.querySelector('#filesListenBtn');
+    if (listenBtn) listenBtn.addEventListener('pointerdown', () => { this._filesTtsStartEl = this._filesCaptureTtsStart(); });
   }
 
   filesToggleNotesPanel() {
@@ -20823,7 +20938,9 @@ class CodemanApp {
    */
   _filesRefreshNotesUi() {
     const cur = this.filesState && this.filesState.current;
-    const btn = this.$('filesNotesBtn');
+    // $$ (uncached): _filesRenderMdTools() re-creates this button on every view
+    // render, so a memoised node would freeze the count at its first value.
+    const btn = this.$$('filesNotesBtn');
     if (btn && cur) {
       btn.textContent = `Notes (${this._filesNotesFor(cur.path).length})`;
       btn.classList.toggle('is-active', !!this._filesNotesOpen);
@@ -20850,14 +20967,21 @@ class CodemanApp {
 
   _filesTeardownNotesUi() {
     this._filesHideNotePill();
-    const panel = this.$('filesNotesPanel');
+    this._filesClearSelSnapshot();
+    this._filesTtsStartEl = null;
+    // A dangling note dialog must not survive the surface it belongs to (and
+    // its history entry must go with it).
+    this._filesCloseNoteDialog();
+    // $$ (uncached): the panel is removed here and re-created on demand — a
+    // memoised node would make _filesRenderNotesPanel() skip the re-create.
+    const panel = this.$$('filesNotesPanel');
     if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
   }
 
   _filesRenderNotesPanel() {
     const view = this.$('filesSheetView');
     const cur = this.filesState && this.filesState.current;
-    let panel = this.$('filesNotesPanel');
+    let panel = this.$$('filesNotesPanel');
     if (!view || !cur || !this._filesNotesOpen) {
       if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
       return;
@@ -20989,23 +21113,38 @@ class CodemanApp {
     if (FilesTTS.isPlaying()) { FilesTTS.stop(); this._filesUpdateListenBtn(); return; }
     const preview = this._filesPreviewEl();
     if (!preview) return;
-    // Start from the selection when there is one, else from the top.
-    let startEl = null;
-    try {
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount && !sel.isCollapsed) {
-        const anchor = sel.anchorNode;
-        const el = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
-        if (el && preview.contains(el)) startEl = el.closest('h1,h2,h3,h4,h5,h6,p,li,blockquote,td');
-      }
-    } catch (e) { startEl = null; }
+    // Start from the selection when there is one, else from the top. The start
+    // element is captured on the button's pointerdown (the tap has already
+    // collapsed the selection by click time on Android Chrome); FilesTTS.start()
+    // still runs INSIDE this click — iOS only allows the first utterance from
+    // within the originating user gesture.
+    let startEl = this._filesTtsStartEl;
+    this._filesTtsStartEl = null;
+    if (!startEl || !preview.contains(startEl)) startEl = this._filesCaptureTtsStart();
     const ok = FilesTTS.start(preview, startEl, () => this._filesUpdateListenBtn());
     if (!ok) { this.showToast('Nothing to read in this document', 'info'); return; }
     this._filesUpdateListenBtn();
   }
 
+  /** Block element the current selection starts in, or null. Called at gesture
+   *  time (pointerdown), never from a click handler. */
+  _filesCaptureTtsStart() {
+    const preview = this._filesPreviewEl();
+    if (!preview) return null;
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && !sel.isCollapsed) {
+        const anchor = sel.anchorNode;
+        const el = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement);
+        if (el && preview.contains(el)) return el.closest('h1,h2,h3,h4,h5,h6,p,li,blockquote,td');
+      }
+    } catch (e) { /* fall through */ }
+    return null;
+  }
+
   _filesUpdateListenBtn() {
-    const btn = this.$('filesListenBtn');
+    // $$ (uncached): re-created by _filesRenderMdTools() on every view render.
+    const btn = this.$$('filesListenBtn');
     if (btn) btn.textContent = FilesTTS.isPlaying() ? '■ Stop' : '▶ Listen';
   }
 

@@ -13088,18 +13088,28 @@ a.files-sheet-tool { text-decoration: none; }
 /* In-sheet create dialog (contextual file/folder creation). */
 /* ── Markdown review notes ─────────────────────────────────────────────── */
 
-/* Floating "Add note" affordance positioned over the selection. Sits inside
-   #filesSheetView (position:relative) so coordinates are host-relative. */
+/* "Add note" affordance — a bar anchored to the BOTTOM of the sheet view while
+   a selection is active, never to the selection itself. Android Chrome's
+   Copy/Cut/Search toolbar and iOS Safari's callout both render adjacent to (and
+   normally above) the selection and follow it as it changes, so a
+   selection-anchored pill inevitably ends up underneath them. A viewport-
+   anchored bar cannot collide, stays reachable at any scroll position and is
+   thumb-reachable on phones. Sits inside #filesSheetView (position:relative),
+   above the notes panel in z-order. */
 .files-note-pill {
   position: absolute;
-  z-index: 6;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(12px + var(--safe-area-bottom, 0px));
+  max-width: calc(100% - 24px);
+  z-index: 8;
   display: none;
   background: #1f6feb;
   color: #fff;
   border: none;
   border-radius: 999px;
-  padding: 7px 14px;
-  font-size: 13px;
+  padding: 10px 20px;
+  font-size: 14px;
   font-weight: 600;
   box-shadow: 0 6px 18px rgba(0,0,0,0.45);
   cursor: pointer;
@@ -13169,8 +13179,12 @@ mark.files-md-note {
 
 /* Note dialog (reuses .files-create-overlay / .files-create-dialog chrome). */
 .files-note-excerpt {
-  max-height: 30vh;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(30vh, 160px);
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: #0d1117;
   border: 1px solid rgba(255,255,255,0.1);
   border-left: 3px solid rgba(210,153,34,0.75);
@@ -13185,6 +13199,8 @@ mark.files-md-note {
 }
 .files-note-input {
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 72px;
   box-sizing: border-box;
   background: #0d1117;
   border: 1px solid rgba(255,255,255,0.14);
@@ -13205,11 +13221,22 @@ mark.files-md-note {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 18vh 16px 16px;
+  /* Short viewports (phone + on-screen keyboard) get a small top inset, so the
+     actions row is never pushed below the fold; the overlay also scrolls, so it
+     stays reachable even then. */
+  padding: min(18vh, 24px) 16px 16px;
   background: rgba(0,0,0,0.5);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .files-create-dialog {
   width: min(360px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
   background: #161b22;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 12px;
@@ -13232,7 +13259,7 @@ mark.files-md-note {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 .files-create-input:focus { border-color: #1f6feb; }
-.files-create-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.files-create-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 /* Desktop / tablet: centered modal instead of a full-height phone sheet. */
 @media (min-width: 768px) {
