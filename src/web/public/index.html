@@ -1534,6 +1534,36 @@
                 </select>
               </div>
 
+              <div class="settings-section-header">Read Aloud (text-to-speech)</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Playback Engine</span>
+                <span class="voice-provider-status" id="ttsProviderStatus">—</span>
+              </div>
+              <div class="form-row" style="grid-column: 1 / -1;">
+                <label for="ttsProvider">Engine</label>
+                <select id="ttsProvider" class="form-select">
+                  <option value="auto">Auto (Deepgram if a key is set)</option>
+                  <option value="server">Edge TTS (server)</option>
+                  <option value="browser">Browser speech (offline)</option>
+                </select>
+                <span class="form-hint">Uses the Deepgram key above. Falls back to the server, then to the browser engine, if a request fails.</span>
+              </div>
+              <div class="form-row" style="grid-column: 1 / -1;">
+                <label for="ttsVoice">Deepgram Voice</label>
+                <select id="ttsVoice" class="form-select">
+                  <option value="aura-2-thalia-en">Thalia (female, clear)</option>
+                  <option value="aura-2-andromeda-en">Andromeda (female, warm)</option>
+                  <option value="aura-2-helena-en">Helena (female, caring)</option>
+                  <option value="aura-2-asteria-en">Asteria (female, bright)</option>
+                  <option value="aura-2-apollo-en">Apollo (male, confident)</option>
+                  <option value="aura-2-arcas-en">Arcas (male, natural)</option>
+                  <option value="aura-2-orion-en">Orion (male, approachable)</option>
+                  <option value="aura-2-orpheus-en">Orpheus (male, calm)</option>
+                  <option value="aura-asteria-en">Asteria (Aura 1)</option>
+                </select>
+              </div>
+
+              <div class="settings-section-header">Speech Recognition</div>
               <div class="form-row" style="grid-column: 1 / -1;">
                 <label for="voiceKeyterms">Domain Keywords</label>
                 <input type="text" id="voiceKeyterms" placeholder="codeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
@@ -2505,6 +2535,7 @@
   <script defer src="feature-registry.js"></script>
   <script defer src="feature-tracker.js"></script>
   <script defer src="mobile-handlers.js"></script>
+  <script defer src="tts-engine.js"></script>
   <script defer src="voice-input.js"></script>
   <script defer src="notification-manager.js"></script>
   <script defer src="secret-detector.js"></script>

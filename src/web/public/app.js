@@ -3045,128 +3045,72 @@ const PanelBackdrop = {
 // ═══════════════════════════════════════════════════════════════
 const TranscriptTTS = {
   _currentBtn: null,
-  _utterance: null,
-  _audio: null,
-  _audioUrl: null,
-  _gen: 0,
-  supported: 'speechSynthesis' in window || 'Audio' in window,
+  supported: TtsEngine.supported,
 
+  // Chunking, provider selection and playback all live in TtsEngine
+  // (tts-engine.js); this object is only the transcript button's UI state.
   _stripMarkdown(text) {
-    let s = text;
-    // Remove fenced code blocks (don't read raw code aloud)
-    s = s.replace(/```[\s\S]*?```/g, ' ');
-    // Remove inline code
-    s = s.replace(/`[^`]*`/g, '');
-    // Bold and italic — keep inner text
-    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
-    s = s.replace(/__([^_]+)__/g, '$1');
-    s = s.replace(/\*([^*]+)\*/g, '$1');
-    s = s.replace(/_([^_]+)_/g, '$1');
-    // Heading markers
-    s = s.replace(/^#{1,6}\s+/gm, '');
-    // Horizontal rules
-    s = s.replace(/^[-*_]{3,}\s*$/gm, '');
-    // List markers
-    s = s.replace(/^[-*+]\s+/gm, '');
-    s = s.replace(/^\d+\.\s+/gm, '');
-    // Markdown links — keep label only
-    s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
-    // Collapse excess whitespace
-    s = s.replace(/\s{2,}/g, ' ').trim();
-    return s;
+    return TtsEngine.stripMarkdown(text);
   },
 
+  /**
+   * Toggles read-aloud for one assistant message.
+   *
+   * Nothing is awaited before TtsEngine.play(): the reply is split into
+   * paragraph-sized chunks up front and only the FIRST one has to be
+   * synthesised before audio starts, so a long answer no longer means a long
+   * silence. Staying synchronous also keeps iOS's audio permission, which is
+   * only granted inside the gesture that triggered playback.
+   */
   speak(btn, rawText) {
     if (this._currentBtn === btn) {
-      this._stop();
+      this.stop();
       return;
     }
-    this._stop();
-    const strippedText = this._stripMarkdown(rawText);
-    const gen = ++this._gen;
+    this.stop();
+    const chunks = TtsEngine.segment(rawText);
+    if (!chunks.length) return;
     this._currentBtn = btn;
-    this._setSpeakingUI(btn);
-    // Edge TTS first (better voice); fall back to the browser engine on any failure.
-    this._speakEdge(btn, strippedText, gen).catch(() => {
-      if (gen !== this._gen) return;
-      this._speakWeb(btn, strippedText, gen);
+    this._setSpeakingUI(btn, chunks.length);
+    const started = TtsEngine.play({
+      items: chunks,
+      onChunkStart: (_item, index) => this._setProgress(btn, index, chunks.length),
+      onEnd: () => this._reset(btn),
     });
+    if (!started) this._reset(btn);
   },
 
-  async _speakEdge(btn, text, gen) {
-    const resp = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!resp.ok) throw new Error(`tts ${resp.status}`);
-    const blob = await resp.blob();
-    if (gen !== this._gen) return; // stopped/superseded while fetching
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    this._audio = audio;
-    this._audioUrl = url;
-    audio.onended = () => this._reset(btn);
-    audio.onerror = () => this._reset(btn);
-    await audio.play();
+  stop() {
+    const btn = this._currentBtn;
+    TtsEngine.stop();
+    if (btn) this._reset(btn);
   },
 
-  _speakWeb(btn, text, gen) {
-    if (!('speechSynthesis' in window)) {
-      this._reset(btn);
-      return;
-    }
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.onend = () => this._reset(btn);
-    utterance.onerror = () => this._reset(btn);
-    this._utterance = utterance;
-    if (gen !== this._gen) return;
-    window.speechSynthesis.speak(utterance);
-  },
+  // Back-compat alias — older call sites used the private name.
+  _stop() { this.stop(); },
 
-  _setSpeakingUI(btn) {
+  _setSpeakingUI(btn, total) {
     btn.classList.add('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Stop reading aloud');
-    btn.setAttribute('title', 'Stop reading aloud');
+    btn.setAttribute('title', total > 1 ? `Stop reading aloud (1/${total})` : 'Stop reading aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
     btn.appendChild(this._stopSVG());
   },
 
-  _stop() {
-    this._gen++;
-    if (this._audio) {
-      this._audio.pause();
-      this._audio.onended = null;
-      this._audio.onerror = null;
-      this._audio = null;
-    }
-    if (this._audioUrl) {
-      URL.revokeObjectURL(this._audioUrl);
-      this._audioUrl = null;
-    }
-    if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-    if (this._currentBtn) {
-      this._reset(this._currentBtn);
-    }
+  _setProgress(btn, index, total) {
+    if (this._currentBtn !== btn || total <= 1) return;
+    btn.setAttribute('title', `Stop reading aloud (${index + 1}/${total})`);
   },
 
   _reset(btn) {
+    if (!btn) return;
     btn.classList.remove('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Read aloud');
     btn.setAttribute('title', 'Read aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
     btn.appendChild(this._speakerSVG());
-    if (this._audioUrl) {
-      URL.revokeObjectURL(this._audioUrl);
-      this._audioUrl = null;
-    }
-    this._audio = null;
-    this._currentBtn = null;
-    this._utterance = null;
+    if (this._currentBtn === btn) this._currentBtn = null;
   },
-
   _speakerSVG() {
     const svgNS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(svgNS, 'svg');
@@ -3216,17 +3160,17 @@ const TranscriptTTS = {
 // ═══════════════════════════════════════════════════════════════
 // FilesTTS — read a rendered markdown document aloud (files sheet)
 // ═══════════════════════════════════════════════════════════════
-// Web Speech only (no /api/tts round-trip): the doc reader speaks one utterance
-// per rendered block and chains them via onend, which is what makes progress
-// highlighting and iOS reliability possible — iOS Safari truncates long
-// utterances and drops queued ones when the tab is backgrounded.
+// Chunk collection and progress highlighting live here (they need the rendered
+// DOM); synthesis and playback are delegated to TtsEngine, so the doc reader
+// gets the same Deepgram → server → browser provider chain as the transcript
+// player. One block per utterance is what makes the highlight — and iOS
+// reliability — possible: iOS Safari truncates long utterances and drops queued
+// ones when the tab is backgrounded.
 const FilesTTS = {
-  supported: typeof window !== 'undefined' && 'speechSynthesis' in window,
-  _gen: 0,
+  supported: typeof window !== 'undefined' && TtsEngine.supported,
   _chunks: [],      // [{ el, text }]
   _index: 0,
   _playing: false,
-  _visBound: false,
 
   isPlaying() { return this._playing; },
 
@@ -3316,9 +3260,19 @@ const FilesTTS = {
     this._index = 0;
     this._playing = true;
     this._onStateChange = onStateChange || null;
-    this._gen++;
-    this._bindVisibility();
-    this._speakCurrent(this._gen);
+    const started = TtsEngine.play({
+      items: chunks,
+      onChunkStart: (chunk, index) => {
+        this._index = index;
+        // Prefer the live array — rebind() may have swapped in fresh element
+        // refs after a preview re-render, leaving `chunk` pointing at a
+        // detached node.
+        const current = this._chunks[index] || chunk;
+        this._highlight(current.el);
+      },
+      onEnd: () => this._finish(),
+    });
+    if (!started) { this._finish(); return false; }
     return true;
   },
 
@@ -3338,34 +3292,13 @@ const FilesTTS = {
     // Same document, so the chunk sequence should be identical; if the text
     // moved (file changed underneath), keep the old refs rather than jumping.
     if (at === -1) return;
-    this._chunks = fresh;
-    this._index = at;
+    // TtsEngine owns the playback index, so the re-collected array has to stay
+    // aligned with it: collectChunks(null) always starts at the top of the
+    // document, while playback may have started mid-way. Drop that lead-in.
+    const offset = at - this._index;
+    if (offset < 0) return;
+    this._chunks = fresh.slice(offset);
     this._highlight(fresh[at].el);
-  },
-
-  _speakCurrent(gen) {
-    if (gen !== this._gen || !this._playing) return;
-    const chunk = this._chunks[this._index];
-    if (!chunk) { this.stop(); return; }
-    const u = new SpeechSynthesisUtterance(chunk.text);
-    u.onstart = () => {
-      if (gen !== this._gen) return;
-      this._highlight(chunk.el);
-    };
-    u.onend = () => {
-      if (gen !== this._gen || !this._playing) return;
-      this._index++;
-      if (this._index >= this._chunks.length) { this.stop(); return; }
-      this._speakCurrent(gen);
-    };
-    u.onerror = () => {
-      if (gen !== this._gen || !this._playing) return;
-      // A single failed utterance should not strand the rest of the document.
-      this._index++;
-      if (this._index >= this._chunks.length) { this.stop(); return; }
-      this._speakCurrent(gen);
-    };
-    try { window.speechSynthesis.speak(u); } catch (e) { this.stop(); }
   },
 
   _highlight(el) {
@@ -3389,36 +3322,23 @@ const FilesTTS = {
   },
 
   stop() {
+    if (!this._playing) { this._clearHighlight(); return; }
+    // TtsEngine.stop() fires our onEnd, which lands in _finish(); calling it
+    // again directly is harmless and covers the case where the engine had
+    // already moved on to another caller's session.
+    TtsEngine.stop();
+    this._finish();
+  },
+
+  _finish() {
     const was = this._playing;
-    this._gen++;
     this._playing = false;
     this._chunks = [];
     this._index = 0;
     this._clearHighlight();
-    if (this.supported) { try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ } }
-    if (was && this._onStateChange) { try { this._onStateChange(false); } catch (e) { /* ignore */ } }
+    const cb = this._onStateChange;
     this._onStateChange = null;
-  },
-
-  // iOS pauses/kills speech when the tab is hidden; Chrome auto-pauses ~15s in.
-  // Resume on return, and if the engine really is dead, reset the UI rather
-  // than leaving a Stop button that stops nothing.
-  _bindVisibility() {
-    if (this._visBound || !this.supported) return;
-    this._visBound = true;
-    document.addEventListener('visibilitychange', () => {
-      if (!this._playing) return;
-      if (document.hidden) {
-        try { window.speechSynthesis.pause(); } catch (e) { /* ignore */ }
-        return;
-      }
-      try { window.speechSynthesis.resume(); } catch (e) { /* ignore */ }
-      setTimeout(() => {
-        if (!this._playing) return;
-        const ss = window.speechSynthesis;
-        if (!ss.speaking && !ss.pending && !ss.paused) this.stop();
-      }, 600);
-    });
+    if (was && cb) { try { cb(false); } catch (e) { /* ignore */ } }
   },
 };
 
@@ -14275,6 +14195,8 @@ class CodemanApp {
     document.getElementById('voiceLanguage').value = voiceCfg.language || 'en-US';
     document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com';
     document.getElementById('voiceInsertMode').value = voiceCfg.insertMode || 'direct';
+    document.getElementById('ttsProvider').value = voiceCfg.ttsProvider || 'auto';
+    document.getElementById('ttsVoice').value = voiceCfg.ttsVoice || TtsEngine.DEFAULT_VOICE;
     // Reset key visibility to hidden
     const keyInput = document.getElementById('voiceDeepgramKey');
     keyInput.type = 'password';
@@ -14284,6 +14206,12 @@ class CodemanApp {
     const providerEl = document.getElementById('voiceProviderStatus');
     providerEl.textContent = providerName;
     providerEl.className = 'voice-provider-status' + (providerName.startsWith('Deepgram') ? ' active' : '');
+    // Read-aloud engine resolves independently of speech-to-text — it can fall
+    // back to the server proxy even with no Deepgram key present.
+    const ttsName = TtsEngine.providerName();
+    const ttsEl = document.getElementById('ttsProviderStatus');
+    ttsEl.textContent = ttsName;
+    ttsEl.className = 'voice-provider-status' + (ttsName.startsWith('Deepgram') ? ' active' : '');
 
     // Load orchestrator configuration
     this.loadOrchestratorConfigForSettings();
@@ -15039,6 +14967,8 @@ class CodemanApp {
       language: document.getElementById('voiceLanguage').value,
       keyterms: document.getElementById('voiceKeyterms').value.trim(),
       insertMode: document.getElementById('voiceInsertMode').value,
+      ttsProvider: document.getElementById('ttsProvider').value,
+      ttsVoice: document.getElementById('ttsVoice').value,
     };
     VoiceInput._saveDeepgramConfig(voiceSettings);
 

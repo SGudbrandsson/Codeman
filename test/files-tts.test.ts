@@ -16,18 +16,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 // @ts-expect-error — ?raw is a Vite loader suffix, not typed by tsc.
 import appSource from '../src/web/public/app.js?raw';
+// @ts-expect-error — ?raw is a Vite loader suffix, not typed by tsc.
+import engineSource from '../src/web/public/tts-engine.js?raw';
 
 const APP_JS_SOURCE = appSource as string;
+const ENGINE_SOURCE = engineSource as string;
 
 // ─── Real-source extraction ─────────────────────────────────────────────────
 
+/** Source text of a top-level object literal, without its const binding. */
+function objectSource(source: string, decl: string): string {
+  const start = source.indexOf(decl);
+  expect(start, `${decl} not found`).toBeGreaterThan(-1);
+  const end = source.indexOf('\n};\n', start);
+  expect(end, `${decl} has no top-level close`).toBeGreaterThan(start);
+  return source.slice(start + decl.length - 1, end + 2);
+}
+
 /** Source text of the FilesTTS object literal, without the const binding. */
 function filesTtsSource(): string {
-  const start = APP_JS_SOURCE.indexOf('const FilesTTS = {');
-  expect(start, 'FilesTTS not found in app.js').toBeGreaterThan(-1);
-  const end = APP_JS_SOURCE.indexOf('\n};\n', start);
-  expect(end, 'FilesTTS has no top-level close').toBeGreaterThan(start);
-  return APP_JS_SOURCE.slice(start + 'const FilesTTS = '.length, end + 2);
+  return objectSource(APP_JS_SOURCE, 'const FilesTTS = {');
 }
 
 interface Utter {
@@ -58,10 +66,21 @@ function makeTts() {
     pause: vi.fn(),
     resume: vi.fn(),
   };
-  // FilesTTS reads `'speechSynthesis' in window` at definition time, so it must
-  // be compiled AFTER the stub is installed.
-  return new Function('SpeechSynthesisUtterance', `return (${filesTtsSource()});`)(
-    (window as any).SpeechSynthesisUtterance
+  // No Deepgram key and an explicit browser preference: these tests exercise
+  // the Web Speech path, which is what FilesTTS falls back to offline.
+  localStorage.setItem('codeman-voice-settings', JSON.stringify({ ttsProvider: 'browser' }));
+
+  // Both objects read capability flags (`'speechSynthesis' in window`) at
+  // definition time, so they must be compiled AFTER the stub is installed.
+  // The REAL TtsEngine is injected — playback is genuinely delegated to it.
+  const engine = new Function(
+    'SpeechSynthesisUtterance',
+    `return (${objectSource(ENGINE_SOURCE, 'const TtsEngine = {')});`
+  )((window as any).SpeechSynthesisUtterance);
+  (window as any).TtsEngine = engine;
+  return new Function('SpeechSynthesisUtterance', 'TtsEngine', `return (${filesTtsSource()});`)(
+    (window as any).SpeechSynthesisUtterance,
+    engine
   );
 }
 
@@ -215,7 +234,6 @@ describe('FilesTTS playback', () => {
   it('marks the speaking block and clears it on stop', () => {
     const preview = setPreview('<p>one</p><p>two</p>');
     tts.start(preview, null, () => {});
-    spoken[0].onstart!();
     expect(preview.querySelector('p')!.classList.contains('files-md-speaking')).toBe(true);
 
     tts.stop();

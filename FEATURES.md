@@ -284,6 +284,18 @@ Dictate commands and prompts using the browser's Web Speech API — useful for h
 
 Enable: tap the microphone icon in the compose panel or accessory bar. Requires browser microphone permission.
 
+### Read Aloud (text-to-speech)
+
+Every assistant message in the transcript has a speaker button, and the files sheet can read a markdown document aloud. Both run on the same engine (`tts-engine.js`).
+
+- **Paragraph streaming** — the text is split into paragraph-sized chunks and synthesised as a pipeline: the first chunk starts playing while the rest are still being fetched, so a long reply starts speaking in well under a second instead of after the whole answer is generated
+- **Deepgram Aura voices** — if a Deepgram API key is set (the same key used for dictation), synthesis goes straight from the browser to `api.deepgram.com` for natural-sounding speech; pick a voice under Settings → Voice
+- **Automatic fallback** — Deepgram → the server's `/api/tts` edge-tts proxy → the browser's built-in speech engine. The working provider is pinned for the session, and a single failed chunk is skipped rather than stranding the rest of the text
+- **Progress** — the transcript button's tooltip shows the current chunk; the files sheet highlights the block being spoken and scrolls it into view
+- **Offline** — set Settings → Voice → Engine to "Browser speech" to skip the network entirely
+
+Configure: Settings → Voice → Read Aloud. Server-side voice for the edge-tts fallback is set with `CODEMAN_TTS_URL`, `CODEMAN_TTS_KEY` and `CODEMAN_TTS_VOICE`.
+
 ---
 
 ## 7. Live Agent Visualization
