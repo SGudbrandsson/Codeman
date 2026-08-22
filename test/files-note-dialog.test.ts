@@ -41,6 +41,10 @@ function methodSource(name: string): string {
   return lines.slice(0, end + 1).join('\n');
 }
 
+/** Real value of the gesture-grace constant, read from app.js so the tests
+ *  cannot drift from the shipped source. */
+const GRACE_MS = Number(/const FILES_NOTE_GESTURE_GRACE_MS = (\d+);/.exec(APP_JS_SOURCE)?.[1]);
+
 const METHODS = [
   '$',
   '$$',
@@ -54,6 +58,8 @@ const METHODS = [
   '_filesTruncate',
   '_filesHideNotePill',
   '_filesClearSelSnapshot',
+  '_filesNoteInOpenGrace',
+  '_filesClearClickSwallow',
   '_filesShowNoteDialog',
   '_filesCloseNoteDialog',
   '_filesCloseNoteDialogInternal',
@@ -130,7 +136,13 @@ const harnesses: Harness[] = [];
 
 function makeApp(overrides: Record<string, unknown> = {}): Harness {
   const body = METHODS.map(methodSource).join(',\n');
-  const factory = new Function('OverlayHistory', 'FilesTTS', 'escapeHtml', `return ({\n${body}\n});`);
+  const factory = new Function(
+    'OverlayHistory',
+    'FilesTTS',
+    'escapeHtml',
+    'FILES_NOTE_GESTURE_GRACE_MS',
+    `return ({\n${body}\n});`
+  );
 
   const toasts: { msg: string; kind: string }[] = [];
   const history = makeOverlayHistory();
@@ -149,7 +161,7 @@ function makeApp(overrides: Record<string, unknown> = {}): Harness {
   };
   const escapeHtml = (s: string) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-  const app = Object.assign(factory(history, FilesTTS, escapeHtml), {
+  const app = Object.assign(factory(history, FilesTTS, escapeHtml, GRACE_MS), {
     _elemCache: {},
     activeSessionId: 'sess-a',
     filesState: { current: { path: 'docs/story.md' }, notes: null, notesSessionId: null },
@@ -174,6 +186,15 @@ function excerptText(): string {
   return ov ? (ov.querySelector('#filesNoteExcerpt') as HTMLElement).textContent || '' : '';
 }
 
+/**
+ * Rewinds the dialog's gesture-grace window into the past, so a following tap
+ * counts as a deliberate, LATER one rather than the residue of the tap that
+ * opened the dialog (the ghost-click guard in _filesNoteInOpenGrace()).
+ */
+function pastGrace(h: Harness) {
+  h.app._filesNoteOpenedAt = Date.now() - GRACE_MS - 1;
+}
+
 function pressEscape(target: EventTarget = document) {
   target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
@@ -195,6 +216,7 @@ afterEach(() => {
   }
   harnesses.length = 0;
   document.body.innerHTML = '';
+  vi.useRealTimers();
 });
 
 // ─── $ / $$ contract ────────────────────────────────────────────────────────
@@ -320,6 +342,7 @@ describe('note dialog close paths', () => {
   it('closes the SECOND dialog from its Cancel button', () => {
     const h = makeApp();
     secondDialog(h);
+    pastGrace(h);
     (overlay()!.querySelector('#filesNoteCancel') as HTMLButtonElement).click();
     expect(overlay()).toBeNull();
   });
@@ -332,6 +355,7 @@ describe('note dialog close paths', () => {
     );
     expect(overlay()).not.toBeNull();
 
+    pastGrace(h);
     overlay()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(overlay()).toBeNull();
   });
@@ -388,6 +412,109 @@ describe('note dialog close paths', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatchObject({ excerpt: 'second excerpt', occurrence: 1, note: 'typed in dialog two' });
     expect(overlay()).toBeNull();
+  });
+});
+
+// ─── Ghost-click guard (the opening tap's own residual events) ──────────────
+
+describe('note dialog gesture-grace guard', () => {
+  /** Opens a dialog the way the pill does: synchronously, inside one gesture. */
+  function openFromPill(h: Harness) {
+    h.app._filesShowNoteDialog({ excerpt: 'the quick brown', occurrence: 0 });
+    expect(overlay()).not.toBeNull();
+  }
+
+  it('survives the opening tap’s own backdrop click in the same tick', () => {
+    // The reported bug: pointerdown opens the dialog, the SAME tap's click
+    // lands on the freshly-appended backdrop and closed it again instantly.
+    const h = makeApp();
+    openFromPill(h);
+    overlay()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(overlay()).not.toBeNull();
+  });
+
+  it('is time-based, not first-click-only: a 200 ms-late ghost click is still ignored', () => {
+    vi.useFakeTimers();
+    const h = makeApp();
+    openFromPill(h);
+
+    vi.advanceTimersByTime(200);
+    overlay()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(overlay()).not.toBeNull();
+
+    // Past the window the very same event closes it — proving the guard is a
+    // clock, not a one-shot counter.
+    vi.advanceTimersByTime(GRACE_MS);
+    overlay()!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(overlay()).toBeNull();
+  });
+
+  it('ignores a Cancel click inside the window but honours a later one', () => {
+    // On a short viewport the dialog reaches far enough down that Cancel ends
+    // up under the finger that opened it.
+    const h = makeApp();
+    openFromPill(h);
+    const cancel = () => (overlay()!.querySelector('#filesNoteCancel') as HTMLButtonElement).click();
+
+    cancel();
+    expect(overlay()).not.toBeNull();
+
+    pastGrace(h);
+    cancel();
+    expect(overlay()).toBeNull();
+  });
+
+  it('swallows a backdrop pointerup inside the window, and lets a later one through', () => {
+    const h = makeApp();
+    openFromPill(h);
+
+    const early = new Event('pointerup', { bubbles: true, cancelable: true });
+    overlay()!.dispatchEvent(early);
+    expect(early.defaultPrevented).toBe(true);
+    expect(overlay()).not.toBeNull();
+
+    pastGrace(h);
+    const late = new Event('pointerup', { bubbles: true, cancelable: true });
+    overlay()!.dispatchEvent(late);
+    expect(late.defaultPrevented).toBe(false);
+    // Nothing closes on pointerup today — the swallow is purely defensive.
+    expect(overlay()).not.toBeNull();
+  });
+
+  it('never guards Escape — it closes immediately after open', () => {
+    // A tap cannot produce a keydown, so the exemption is safe; asserting it
+    // is what stops a future “guard everything” regression.
+    const h = makeApp();
+    openFromPill(h);
+    expect(h.app._filesNoteInOpenGrace()).toBe(true);
+
+    pressEscape(document.body);
+    expect(overlay()).toBeNull();
+  });
+
+  it('never guards the OverlayHistory back button — it closes immediately after open', () => {
+    const h = makeApp();
+    openFromPill(h);
+    expect(h.app._filesNoteInOpenGrace()).toBe(true);
+
+    h.history.back();
+    expect(overlay()).toBeNull();
+  });
+
+  it('resets the window on close so the next dialog gets a fresh one', () => {
+    const h = makeApp();
+    expect(h.app._filesNoteInOpenGrace()).toBe(false); // nothing ever opened
+
+    openFromPill(h);
+    expect(h.app._filesNoteInOpenGrace()).toBe(true);
+
+    h.app._filesCloseNoteDialog();
+    expect(h.app._filesNoteOpenedAt).toBe(0);
+    expect(h.app._filesNoteInOpenGrace()).toBe(false);
+
+    // Re-opened: guarded again, so a second pill tap is equally protected.
+    openFromPill(h);
+    expect(h.app._filesNoteInOpenGrace()).toBe(true);
   });
 });
 

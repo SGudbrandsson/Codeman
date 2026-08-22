@@ -50,6 +50,10 @@ const METHODS = [
   '_filesTextProjection',
   '_filesHighlightExcerpt',
   '_filesUnwrapHighlights',
+  // The Send button's busy state is DERIVED inside the render function, so the
+  // real panel renderer (and the refresh that drives it) has to run here.
+  '_filesRenderNotesPanel',
+  '_filesRefreshNotesUi',
 ];
 
 interface Harness {
@@ -63,7 +67,7 @@ interface Harness {
 
 function makeApp(overrides: Record<string, unknown> = {}): Harness {
   const body = METHODS.map(methodSource).join(',\n');
-  const factory = new Function('SecretDetector', 'TranscriptView', `return ({\n${body}\n});`);
+  const factory = new Function('SecretDetector', 'TranscriptView', 'escapeHtml', `return ({\n${body}\n});`);
 
   const toasts: { msg: string; kind: string }[] = [];
   const sent: { text: string; sid: string }[] = [];
@@ -90,17 +94,19 @@ function makeApp(overrides: Record<string, unknown> = {}): Harness {
     },
   };
 
-  const app = Object.assign(factory(secretDetector, transcript), {
+  const escapeHtml = (t: string) => String(t).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+  const app = Object.assign(factory(secretDetector, transcript, escapeHtml), {
     activeSessionId: 'sess-a',
     filesState: { current: { path: 'docs/story.md' }, notes: null, notesSessionId: null },
     $: (id: string) => document.getElementById(id),
+    $$: (id: string) => document.getElementById(id),
     showToast: (msg: string, kind: string) => toasts.push({ msg, kind }),
     sendInput: vi.fn(async (text: string, sid: string) => {
       sent.push({ text, sid });
     }),
     _updateTabStatusDebounced: (sid: string, status: string) => tabStatus.push({ sid, status }),
     _filesCloseNoteDialog: vi.fn(),
-    _filesRefreshNotesUi: vi.fn(),
     _filesNotesOpen: false,
     ...overrides,
   });
@@ -396,5 +402,182 @@ describe('filesSendNotes()', () => {
       { sid: 'sess-a', status: 'idle' },
     ]);
     expect(h.toasts.at(-1)).toEqual({ msg: 'Failed to send notes: tmux is gone', kind: 'error' });
+  });
+});
+
+// ─── Single-flight + busy state (Bug 2) ─────────────────────────────────────
+
+describe('filesSendNotes() single-flight and busy state', () => {
+  /** A send that stays in flight until the test resolves/rejects it. */
+  function deferSend(h: Harness) {
+    let settle!: { resolve: () => void; reject: (e: unknown) => void };
+    const promise = new Promise<void>((resolve, reject) => {
+      settle = { resolve: () => resolve(), reject };
+    });
+    const sendInput = vi.fn((text: string, sid: string) => {
+      h.sent.push({ text, sid });
+      return promise;
+    });
+    h.app.sendInput = sendInput;
+    return { ...settle, sendInput, promise };
+  }
+
+  /** Files-sheet DOM so the real _filesRenderNotesPanel() has somewhere to render. */
+  function setSheet() {
+    document.body.innerHTML = `
+      <div id="filesSheet" class="open">
+        <div id="filesSheetView">
+          <div id="filesSheetViewContent">
+            <div class="files-md-preview"><p>some passage</p></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function sendBtn(): HTMLButtonElement | null {
+    return document.querySelector('#filesNotesPanel .files-notes-foot .is-active');
+  }
+
+  function openPanel(h: Harness) {
+    setSheet();
+    h.app._filesNotesOpen = true;
+    h.app._filesRenderNotesPanel();
+  }
+
+  it('delivers the notes ONCE however many times Send is re-tapped in flight', async () => {
+    // The reported bug: sendInput() takes seconds on the mux path and the notes
+    // array — the only thing making a second call a no-op — is cleared last.
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    const send = deferSend(h);
+
+    const first = h.app.filesSendNotes();
+    const second = h.app.filesSendNotes();
+    const third = h.app.filesSendNotes();
+
+    expect(send.sendInput).toHaveBeenCalledTimes(1);
+    expect(h.transcript.optimistic).toHaveLength(1);
+    expect(h.transcript.working).toEqual([true]);
+    expect(h.tabStatus).toEqual([{ sid: 'sess-a', status: 'busy' }]);
+
+    send.resolve();
+    await Promise.all([first, second, third]);
+    expect(send.sendInput).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the Send button disabled and labelled “Sending…” while in flight', async () => {
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    openPanel(h);
+    expect(sendBtn()!.disabled).toBe(false);
+    expect(sendBtn()!.textContent).toBe('Send notes');
+
+    const send = deferSend(h);
+    const done = h.app.filesSendNotes();
+
+    const btn = sendBtn()!;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute('aria-busy')).toBe('true');
+    expect(btn.classList.contains('is-busy')).toBe(true);
+    expect(btn.textContent).toContain('Sending…');
+    expect(btn.querySelector('.files-tool-spinner')).not.toBeNull();
+
+    send.resolve();
+    await done;
+    // Success collapses the panel, so there is no button left to re-enable.
+    expect(h.app._filesNotesOpen).toBe(false);
+    expect(document.getElementById('filesNotesPanel')).toBeNull();
+  });
+
+  it('does not let a concurrent notes refresh resurrect an enabled button', async () => {
+    // _filesRenderNotesPanel() rebuilds the footer innerHTML wholesale, so any
+    // Edit/Delete/Clear/TTS refresh mid-send would undo a poked-on disabled.
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    openPanel(h);
+    const send = deferSend(h);
+    const done = h.app.filesSendNotes();
+
+    h.app._filesRefreshNotesUi();
+
+    expect(sendBtn()!.disabled).toBe(true);
+    expect(sendBtn()!.textContent).toContain('Sending…');
+
+    send.resolve();
+    await done;
+  });
+
+  it('re-enables the button and keeps the notes when the send rejects', async () => {
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    openPanel(h);
+    const send = deferSend(h);
+    const done = h.app.filesSendNotes();
+    expect(sendBtn()!.disabled).toBe(true);
+
+    send.reject(new Error('tmux is gone'));
+    await done;
+
+    expect(h.app._filesSendingNotes).toBe(false);
+    expect(h.app._filesNotesFor('docs/story.md')).toHaveLength(1);
+    expect(h.tabStatus.at(-1)).toEqual({ sid: 'sess-a', status: 'idle' });
+    expect(h.transcript.working).toEqual([true, false]);
+    expect(h.toasts.at(-1)).toEqual({ msg: 'Failed to send notes: tmux is gone', kind: 'error' });
+
+    const btn = sendBtn()!;
+    expect(btn.disabled).toBe(false);
+    expect(btn.getAttribute('aria-busy')).toBeNull();
+    expect(btn.textContent).toBe('Send notes');
+  });
+
+  it('reports a non-Error rejection instead of throwing inside the rollback', async () => {
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    h.app.sendInput = vi.fn(async () => {
+      throw 'socket closed'; // eslint-disable-line no-throw-literal
+    });
+
+    await h.app.filesSendNotes();
+
+    expect(h.toasts.at(-1)).toEqual({ msg: 'Failed to send notes: socket closed', kind: 'error' });
+    // The rollback still ran — a throw inside the catch would have skipped it.
+    expect(h.tabStatus.at(-1)).toEqual({ sid: 'sess-a', status: 'idle' });
+    expect(h.app._filesNotesFor('docs/story.md')).toHaveLength(1);
+  });
+
+  it('clears the in-flight flag after a resolved send', async () => {
+    const h = makeApp();
+    addNote(h, 'tighten this');
+    await h.app.filesSendNotes();
+    expect(h.app._filesSendingNotes).toBe(false);
+
+    // …and a later send still goes through.
+    addNote(h, 'and this');
+    await h.app.filesSendNotes();
+    expect(h.sent).toHaveLength(2);
+  });
+
+  it('never raises the flag on an early return, so the next send still works', async () => {
+    // Latching here would wedge Send permanently — the class of bug that the
+    // terminal render latches were.
+    const h = makeApp();
+    await h.app.filesSendNotes(); // no notes
+    expect(h.app._filesSendingNotes).toBeFalsy();
+
+    h.app.activeSessionId = null;
+    addNote(h, 'tighten this');
+    await h.app.filesSendNotes(); // no session
+    expect(h.app._filesSendingNotes).toBeFalsy();
+
+    h.app.activeSessionId = 'sess-a';
+    for (let i = 0; i < 40; i++) addNote(h, 'x'.repeat(800), 'y'.repeat(400) + ' ' + i);
+    await h.app.filesSendNotes(); // message too long
+    expect(h.app._filesSendingNotes).toBeFalsy();
+    expect(h.sent).toHaveLength(0);
+
+    h.app.filesState.current = { path: 'docs/short.md' };
+    addNote(h, 'now it fits');
+    await h.app.filesSendNotes();
+    expect(h.sent).toHaveLength(1);
   });
 });

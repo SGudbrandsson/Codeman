@@ -12835,6 +12835,28 @@ kbd {
 }
 .files-sheet-tool:hover { background: #1a2230; }
 .files-sheet-tool:active { background: #1a2230; }
+/* Busy / disabled tool button (e.g. "Send notes" while the send is in flight):
+   pointer-events:none makes a re-tap a no-op even where :disabled is ignored. */
+.files-sheet-tool:disabled,
+.files-sheet-tool.is-busy {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+.files-tool-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: rgba(255,255,255,0.85);
+  border-radius: 50%;
+  animation: files-tool-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes files-tool-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .files-tool-spinner { animation: none; }
+}
 .files-sheet-toggle {
   display: inline-flex;
   align-items: center;
