@@ -5206,6 +5206,12 @@ const XTERM_BASE_OPTIONS = {
 // CodemanApp Class — constructor and global state
 // ═══════════════════════════════════════════════════════════════
 
+// Grace window after the note dialog opens during which the OPENING gesture's
+// own residual events (the synthetic `click` that follows a pointerdown-driven
+// open) must not be treated as a dismiss. Time-based on purpose: a genuinely
+// later backdrop/Cancel tap still closes the dialog.
+const FILES_NOTE_GESTURE_GRACE_MS = 400;
+
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
@@ -20542,6 +20548,46 @@ class CodemanApp {
 
   _filesClearSelSnapshot() { this._filesSelSnapshot = null; }
 
+  /**
+   * One-shot, capture-phase `click` swallow on `document`: cancels exactly ONE
+   * click — the synthetic one produced by the gesture that is running right now
+   * — and then uninstalls itself. Also self-uninstalls after the grace window so
+   * a gesture that never produces a click (touchend preventDefault, cancelled
+   * pointer) cannot leave a click-eater armed. Never permanently swallows clicks.
+   */
+  _filesSwallowNextClick() {
+    this._filesClearClickSwallow();
+    const handler = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this._filesClearClickSwallow();
+    };
+    this._filesClickSwallow = handler;
+    document.addEventListener('click', handler, true);
+    this._filesClickSwallowTimer = setTimeout(() => {
+      this._filesClickSwallowTimer = null;
+      this._filesClearClickSwallow();
+    }, FILES_NOTE_GESTURE_GRACE_MS);
+  }
+
+  _filesClearClickSwallow() {
+    if (this._filesClickSwallow) {
+      document.removeEventListener('click', this._filesClickSwallow, true);
+      this._filesClickSwallow = null;
+    }
+    if (this._filesClickSwallowTimer) {
+      clearTimeout(this._filesClickSwallowTimer);
+      this._filesClickSwallowTimer = null;
+    }
+  }
+
+  /** True while the dialog is still inside the grace window of the gesture that
+   *  opened it — i.e. this event can only be that gesture's own residue. */
+  _filesNoteInOpenGrace() {
+    return !!this._filesNoteOpenedAt
+      && (Date.now() - this._filesNoteOpenedAt) < FILES_NOTE_GESTURE_GRACE_MS;
+  }
+
   _filesHideNotePill() {
     // Dynamic node: $$ (uncached) — the pill is created and removed at runtime.
     const pill = this.$$('filesNotePill');
@@ -20570,12 +20616,21 @@ class CodemanApp {
       pill.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // preventDefault() on a POINTERDOWN suppresses only the compatibility
+        // mouse events — the tap's `click` still fires ~20-80 ms later, by which
+        // time the pill is hidden and the dialog backdrop is under the finger.
+        // Swallow exactly that one click (belt) — the open-time grace window in
+        // _filesShowNoteDialog() is the braces.
+        this._filesSwallowNextClick();
         const snap = this._filesTakeSelSnapshot();
         this._filesHideNotePill();
         this._filesClearSelSnapshot();
         if (snap) this._filesShowNoteDialog({ excerpt: snap.excerpt, occurrence: snap.occurrence });
         else this.showToast('Select some text first', 'info');
       });
+      // Same tap, touch path: preventDefault() on touchend DOES suppress the
+      // synthetic click, so on touch the swallower usually never fires.
+      pill.addEventListener('touchend', (e) => { e.preventDefault(); });
       view.appendChild(pill);
     }
     // Viewport-anchored bottom bar, NOT anchored to the selection rect: both
@@ -20612,6 +20667,11 @@ class CodemanApp {
   _filesCloseNoteDialogInternal() {
     const ov = this._filesNoteOverlayEl;
     this._filesNoteOverlayEl = null;
+    // Fresh grace window for the next dialog. The one-shot click swallow is NOT
+    // torn down here: _filesShowNoteDialog() closes any previous dialog first,
+    // so clearing it here would disarm the swallow the opening gesture just
+    // armed. It removes itself on the next click or after its own timeout.
+    this._filesNoteOpenedAt = 0;
     if (this._filesNoteKeydown) {
       document.removeEventListener('keydown', this._filesNoteKeydown, true);
       this._filesNoteKeydown = null;
@@ -20666,12 +20726,25 @@ class CodemanApp {
           <button class="files-sheet-tool" id="filesNoteSave">Save</button>
         </div>
       </div>`;
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) this._filesCloseNoteDialog(); });
+    // Backdrop close, but never from the opening gesture's own residual click /
+    // pointerup: those land on the backdrop because the pill sits at the bottom
+    // of the preview while the dialog box is anchored to the top.
+    overlay.addEventListener('click', (e) => {
+      if (e.target !== overlay) return;
+      if (this._filesNoteInOpenGrace()) return;
+      this._filesCloseNoteDialog();
+    });
+    overlay.addEventListener('pointerup', (e) => {
+      if (e.target === overlay && this._filesNoteInOpenGrace()) { e.preventDefault(); e.stopPropagation(); }
+    });
     sheet.appendChild(overlay);
     // Every node below is resolved from the overlay we just built — NEVER via
     // $(), which memoises the first dialog's (detached) nodes forever and made
     // the second and every later dialog empty and undismissable.
     this._filesNoteOverlayEl = overlay;
+    // Gesture guard: the tap that opened this dialog still has a pointerup +
+    // click in flight. Time-based so a LATER tap closes normally.
+    this._filesNoteOpenedAt = Date.now();
     const excerptEl = overlay.querySelector('#filesNoteExcerpt');
     const input = overlay.querySelector('#filesNoteInput');
     const saveBtn = overlay.querySelector('#filesNoteSave');
@@ -20681,7 +20754,12 @@ class CodemanApp {
     if (input) input.value = existingNote;
     const submit = () => this._filesSaveNote({ excerpt, occurrence, id, note: input ? input.value : '' });
     if (saveBtn) saveBtn.addEventListener('click', submit);
-    if (cancelBtn) cancelBtn.addEventListener('click', () => this._filesCloseNoteDialog());
+    // Cancel is guarded too: on a short viewport the dialog can reach far enough
+    // down that Cancel ends up under the finger that opened it.
+    if (cancelBtn) cancelBtn.addEventListener('click', () => {
+      if (this._filesNoteInOpenGrace()) return;
+      this._filesCloseNoteDialog();
+    });
     if (input) {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
@@ -20973,12 +21051,21 @@ class CodemanApp {
           <button class="files-sheet-tool" onclick="app.filesDeleteNote('${escapeHtml(n.id)}')">Delete</button>
         </div>
       </div>`).join('');
+    // The busy state is DERIVED from the in-flight flag here, not poked onto the
+    // live node: this innerHTML is rebuilt wholesale by every _filesRefreshNotesUi()
+    // (Edit/Delete/Clear/TTS), which would otherwise resurrect an enabled Send
+    // button in the middle of a send.
+    const sending = !!this._filesSendingNotes;
+    const sendAttrs = sending ? ' disabled aria-busy="true"' : '';
+    const sendLabel = sending
+      ? '<span class="files-tool-spinner" aria-hidden="true"></span>Sending…'
+      : 'Send notes';
     panel.innerHTML = `
       <div class="files-notes-head">Review notes (${notes.length})</div>
       <div class="files-notes-list">${rows}</div>
       <div class="files-notes-foot">
         <button class="files-sheet-tool" onclick="app.filesClearNotes()">Clear all</button>
-        <button class="files-sheet-tool is-active" onclick="app.filesSendNotes()">Send notes</button>
+        <button class="files-sheet-tool is-active${sending ? ' is-busy' : ''}" onclick="app.filesSendNotes()"${sendAttrs}>${sendLabel}</button>
       </div>`;
   }
 
@@ -21006,6 +21093,11 @@ class CodemanApp {
    * does NOT reuse InputPanel.send(), which would clobber the user's draft.
    */
   async filesSendNotes() {
+    // Single-flight: sendInput() on the mux path takes SECONDS (one send-keys
+    // exec per newline plus settle delay), and the state that would make a
+    // second call a no-op — the notes array — is only cleared once it resolves.
+    // Without this every impatient re-tap delivered the whole message again.
+    if (this._filesSendingNotes) return;
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
     // Capture the session id BEFORE any await — an SSE-driven switch mid-send
@@ -21039,6 +21131,12 @@ class CodemanApp {
         this.showToast(`${result.count} secret${result.count > 1 ? 's' : ''} redacted before sending`, 'warning');
       }
     }
+    // Latch raised only once the send is actually going ahead; every early
+    // return above leaves it down. Cleared in `finally` so a throw, a torn-down
+    // sheet or a rejected send cannot leave the button stuck (same latch class
+    // as the terminal render latches).
+    this._filesSendingNotes = true;
+    this._filesRefreshNotesUi();
     // Optimistic UI, but only when the transcript is showing this same session.
     if (typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === sid) {
       TranscriptView.appendOptimistic(msg);
@@ -21047,6 +21145,12 @@ class CodemanApp {
     this._updateTabStatusDebounced(sid, 'busy');
     try {
       await this.sendInput(msg + '\r', sid);
+      const all = this._filesNotesAll();
+      all[cur.path] = [];
+      this._filesPersistNotes();
+      this._filesNotesOpen = false;
+      this._filesUnwrapHighlights();
+      this.showToast('Notes sent', 'success');
     } catch (err) {
       // Roll back the optimistic busy state — unlike InputPanel._sendInner()
       // there is no re-send poller here to correct it.
@@ -21055,16 +21159,13 @@ class CodemanApp {
       }
       this._updateTabStatusDebounced(sid, 'idle');
       // Keep the notes on failure — they are the user's only copy.
-      this.showToast('Failed to send notes: ' + err.message, 'error');
-      return;
+      this.showToast('Failed to send notes: ' + (err && err.message ? err.message : err), 'error');
+    } finally {
+      this._filesSendingNotes = false;
+      // Re-render either way: on success the panel is gone, on failure the Send
+      // button comes back enabled so the user can retry with the notes intact.
+      this._filesRefreshNotesUi();
     }
-    const all = this._filesNotesAll();
-    all[cur.path] = [];
-    this._filesPersistNotes();
-    this._filesNotesOpen = false;
-    this._filesUnwrapHighlights();
-    this._filesRefreshNotesUi();
-    this.showToast('Notes sent', 'success');
   }
 
   // ── Read aloud ───────────────────────────────────────────────────────────

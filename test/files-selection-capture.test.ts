@@ -41,6 +41,10 @@ function methodSource(name: string): string {
   return lines.slice(0, end + 1).join('\n');
 }
 
+/** Real value of the gesture-grace constant, read from app.js so the tests
+ *  cannot drift from the shipped source. */
+const GRACE_MS = Number(/const FILES_NOTE_GESTURE_GRACE_MS = (\d+);/.exec(APP_JS_SOURCE)?.[1]);
+
 const METHODS = [
   '$',
   '$$',
@@ -55,6 +59,8 @@ const METHODS = [
   '_filesTakeSelSnapshot',
   '_filesClearSelSnapshot',
   '_filesHideNotePill',
+  '_filesSwallowNextClick',
+  '_filesClearClickSwallow',
   '_filesUpdateNotePill',
   'filesAddNoteFromSelection',
   '_filesRenderMdTools',
@@ -83,9 +89,17 @@ function setSheet(previewHtml = '<p>the quick brown fox</p>') {
   return document.querySelector('.files-md-preview') as HTMLElement;
 }
 
+/**
+ * Every harness built in this file. The pill's pointerdown arms a DOCUMENT-level
+ * capture `click` listener (_filesSwallowNextClick), and jsdom's `document` is
+ * shared by every test in the file — an armed swallower must not eat a click a
+ * later test dispatches.
+ */
+const harnesses: Harness[] = [];
+
 function makeApp(overrides: Record<string, unknown> = {}): Harness {
   const body = METHODS.map(methodSource).join(',\n');
-  const factory = new Function('FilesTTS', `return ({\n${body}\n});`);
+  const factory = new Function('FilesTTS', 'FILES_NOTE_GESTURE_GRACE_MS', `return ({\n${body}\n});`);
 
   const toasts: { msg: string; kind: string }[] = [];
   const dialogs: { excerpt: string; occurrence: number }[] = [];
@@ -104,7 +118,7 @@ function makeApp(overrides: Record<string, unknown> = {}): Harness {
     },
   };
 
-  const app = Object.assign(factory(FilesTTS), {
+  const app = Object.assign(factory(FilesTTS, GRACE_MS), {
     _elemCache: {},
     activeSessionId: 'sess-a',
     filesState: { current: { path: 'docs/story.md', editing: false }, notes: null, notesSessionId: null },
@@ -114,7 +128,9 @@ function makeApp(overrides: Record<string, unknown> = {}): Harness {
     ...overrides,
   });
 
-  return { app, toasts, dialogs, tts };
+  const harness = { app, toasts, dialogs, tts };
+  harnesses.push(harness);
+  return harness;
 }
 
 /** Stubs window.getSelection() with a Selection-shaped view of `range`. */
@@ -157,6 +173,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const h of harnesses) {
+    try {
+      h.app._filesClearClickSwallow();
+    } catch {
+      /* harness already torn down */
+    }
+  }
+  harnesses.length = 0;
   vi.useRealTimers();
 });
 
@@ -312,6 +336,93 @@ describe('_filesUpdateNotePill()', () => {
 
     expect(h.dialogs).toEqual([]);
     expect(h.toasts).toEqual([{ msg: 'Select some text first', kind: 'info' }]);
+  });
+});
+
+// ─── One-shot click swallow (the ghost click at its source) ─────────────────
+
+describe('_filesSwallowNextClick() via the pill’s pointerdown', () => {
+  /** Shows the pill with a live selection and taps it, as a finger would. */
+  function tapPill(h: Harness) {
+    selectRange(textRange(preview, 4, 9));
+    h.app._filesUpdateNotePill();
+    const pill = document.getElementById('filesNotePill')!;
+    collapseSelection();
+    pill.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    return pill;
+  }
+
+  function click() {
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    return ev;
+  }
+
+  it('cancels exactly ONE following click and then lets clicks through again', () => {
+    // The tap's own synthetic click is what closed the dialog it had just
+    // opened. Eating it permanently would break every other button, so the
+    // swallower must uninstall itself on the first bite.
+    const h = makeApp();
+    tapPill(h);
+    expect(typeof h.app._filesClickSwallow).toBe('function');
+
+    expect(click().defaultPrevented).toBe(true);
+    expect(h.app._filesClickSwallow).toBeNull();
+
+    expect(click().defaultPrevented).toBe(false);
+  });
+
+  it('self-uninstalls after the grace window when no click ever arrives', () => {
+    // On the touch path the pill's touchend preventDefault() already suppressed
+    // the synthetic click — nothing must be left armed (the latch class this
+    // project has been bitten by before).
+    vi.useFakeTimers();
+    const h = makeApp();
+    tapPill(h);
+    expect(typeof h.app._filesClickSwallow).toBe('function');
+
+    vi.advanceTimersByTime(GRACE_MS + 1);
+
+    expect(h.app._filesClickSwallow).toBeNull();
+    expect(h.app._filesClickSwallowTimer).toBeNull();
+    expect(click().defaultPrevented).toBe(false);
+  });
+
+  it('does not stack listeners or timers across repeated pill taps', () => {
+    const h = makeApp();
+    const add = vi.spyOn(document, 'addEventListener');
+    const remove = vi.spyOn(document, 'removeEventListener');
+
+    tapPill(h);
+    // Second tap: the snapshot was consumed by the first, so this is the
+    // "Select some text first" branch — which arms the swallower all the same.
+    document
+      .getElementById('filesNotePill')!
+      .dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    expect(h.toasts).toEqual([{ msg: 'Select some text first', kind: 'info' }]);
+
+    const armed = add.mock.calls.filter((c) => c[0] === 'click' && c[2] === true);
+    const disarmed = remove.mock.calls.filter((c) => c[0] === 'click' && c[2] === true);
+    expect(armed).toHaveLength(2);
+    expect(disarmed).toHaveLength(1); // the re-arm cleared the previous one first
+
+    // Still exactly one live swallower: one click eaten, the next gets through.
+    expect(click().defaultPrevented).toBe(true);
+    expect(click().defaultPrevented).toBe(false);
+
+    add.mockRestore();
+    remove.mockRestore();
+  });
+
+  it('cancels the pill’s touchend so the touch path never emits the ghost click', () => {
+    const h = makeApp();
+    selectRange(textRange(preview, 4, 9));
+    h.app._filesUpdateNotePill();
+
+    const ev = new Event('touchend', { bubbles: true, cancelable: true });
+    document.getElementById('filesNotePill')!.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(true);
   });
 });
 
