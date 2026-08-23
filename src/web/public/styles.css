@@ -13152,7 +13152,8 @@ mark.files-md-note {
 }
 
 /* Block currently being read aloud — composes with note highlights. */
-.files-md-preview .files-md-speaking {
+.files-md-preview .files-md-speaking,
+.tv-markdown .files-md-speaking {
   background: rgba(88,166,255,0.14);
   box-shadow: inset 3px 0 0 #58a6ff;
   border-radius: 4px;
@@ -13299,4 +13300,126 @@ mark.files-md-note {
     box-shadow: 0 20px 60px rgba(0,0,0,0.55);
     animation: files-modal-in 0.18s ease;
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   Read-aloud playback bar
+   ═══════════════════════════════════════════════════════════════
+   Transport for an active read-aloud session. Position is counted in BLOCKS
+   (paragraphs/headings/list items), not seconds: per-block durations are not
+   known until each block has been synthesised, so a time readout would be a
+   guess. z-index sits just above the mobile keyboard accessory bar (1150) so
+   the controls stay reachable while the keyboard is up. */
+.tts-bar {
+  position: fixed;
+  bottom: var(--safe-area-bottom, 0px);
+  left: 50%;
+  transform: translate(-50%, 130%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 24px));
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  z-index: 1160;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+
+.tts-bar.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Sit above the accessory bar rather than under it when the keyboard is up. */
+body.keyboard-visible .tts-bar {
+  bottom: calc(44px + var(--safe-area-bottom, 0px));
+}
+
+.tts-bar-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text, #e6edf3);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tts-bar-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.tts-bar-btn:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 1px; }
+
+.tts-bar-toggle {
+  background: var(--accent, #58a6ff);
+  color: #0d1117;
+}
+
+.tts-bar-toggle:hover { background: var(--accent, #58a6ff); filter: brightness(1.1); }
+
+.tts-bar-track {
+  flex: 1 1 auto;
+  height: 20px;           /* generous hit target; the visible rail is thinner */
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+}
+
+.tts-bar-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.tts-bar-track:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px; border-radius: 4px; }
+
+.tts-bar-fill {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent, #58a6ff);
+  transition: width 0.2s ease;
+  min-width: 4px;
+}
+
+.tts-bar.is-paused .tts-bar-fill { background: var(--text-dim, #8b949e); }
+
+.tts-bar-count {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim, #8b949e);
+  white-space: nowrap;
+}
+
+/* Touch: 32px is a comfortable mouse target but under the 44px finger
+   guideline, and this bar sits at the very bottom edge where mis-taps are
+   most likely. */
+@media (hover: none) and (pointer: coarse) {
+  .tts-bar { gap: 6px; padding: 6px 10px; }
+  .tts-bar-btn { min-width: 44px; height: 44px; }
+  .tts-bar-track { height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tts-bar { transition: none; }
+  .tts-bar-fill { transition: none; }
 }

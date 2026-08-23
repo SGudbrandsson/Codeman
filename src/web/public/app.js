@@ -194,16 +194,40 @@ window._copyCode = function (btn) {
  * @returns {string} the document without its frontmatter
  */
 const MAX_FRONTMATTER_LINES = 100;
+// A blank line, a `key:` mapping, a `- ` sequence entry, or an indented
+// continuation of either.
+const YAML_LINE = /^(\s*|[\w.$-]+\s*:.*|-\s+.*|\s+\S.*)$/;
 function stripFrontmatter(text) {
   if (typeof text !== 'string') return text;
   // Tolerate a UTF-8 BOM and trailing whitespace on the fence line itself.
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const lines = body.split('\n');
-  if (!/^---[ \t]*\r?$/.test(lines[0]) && lines[0].trim() !== '---') return text;
+  if (lines[0].trim() !== '---') return text;
   const limit = Math.min(lines.length, MAX_FRONTMATTER_LINES + 1);
+  let sawContent = false;
   for (let i = 1; i < limit; i++) {
     const line = lines[i].trim();
-    if (line !== '---' && line !== '...') continue;
+    if (line !== '---' && line !== '...') {
+      // The first non-blank line must be a `key:` mapping. Real frontmatter
+      // always opens with one (name:, title:, description:), while a markdown
+      // document that opens with a rule followed by a bullet list — which the
+      // generic YAML shapes below would happily accept — is entirely plausible.
+      if (!sawContent && line) {
+        if (!/^[\w.$-]+\s*:/.test(line)) return text;
+        sawContent = true;
+      }
+      // Everything up to the closing fence must actually look like YAML.
+      // Without this, a document that merely opens with a horizontal rule and
+      // uses another one later would have its whole first section eaten:
+      //   ---
+      //   # Title
+      //   Some prose
+      //   ---
+      // A leading '#' is ambiguous (YAML comment vs markdown H1); treated as
+      // prose, because losing a heading is the worse failure.
+      if (!YAML_LINE.test(line)) return text;
+      continue;
+    }
     const rest = lines.slice(i + 1).join('\n');
     // An empty remainder means the whole file was the fence — more likely a
     // document that opens and closes with rules than metadata, so leave it.
@@ -3079,38 +3103,254 @@ const PanelBackdrop = {
 // ═══════════════════════════════════════════════════════════════
 // TranscriptTTS — text-to-speech singleton for assistant messages
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// TtsPlaybackBar — transport controls for an active read-aloud session
+// ═══════════════════════════════════════════════════════════════
+// Built in JS rather than markup so it exists only while something is playing.
+// Position is expressed in BLOCKS, not seconds: per-block durations are not
+// known until each block has been fetched, so a time readout would be a guess.
+const TtsPlaybackBar = {
+  _el: null,
+  _parts: null,
+
+  _ensure() {
+    if (this._el) return this._el;
+    const bar = document.createElement('div');
+    bar.className = 'tts-bar';
+    bar.id = 'ttsBar';
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', 'Read aloud controls');
+    bar.innerHTML = `
+      <button class="tts-bar-btn" data-act="prev" type="button" aria-label="Previous block" title="Previous block">&#9198;</button>
+      <button class="tts-bar-btn tts-bar-toggle" data-act="toggle" type="button" aria-label="Pause" title="Pause">&#9208;</button>
+      <button class="tts-bar-btn" data-act="next" type="button" aria-label="Next block" title="Next block">&#9197;</button>
+      <div class="tts-bar-track" data-act="seek" tabindex="0" role="slider"
+           aria-label="Position" aria-valuemin="1" aria-valuenow="1" aria-valuemax="1">
+        <div class="tts-bar-fill"></div>
+      </div>
+      <span class="tts-bar-count" aria-live="off">&nbsp;</span>
+      <button class="tts-bar-btn" data-act="stop" type="button" aria-label="Stop reading" title="Stop reading">&#10005;</button>
+    `;
+    document.body.appendChild(bar);
+    this._parts = {
+      toggle: bar.querySelector('.tts-bar-toggle'),
+      track: bar.querySelector('.tts-bar-track'),
+      fill: bar.querySelector('.tts-bar-fill'),
+      count: bar.querySelector('.tts-bar-count'),
+    };
+    bar.addEventListener('click', (e) => {
+      const target = e.target.closest('[data-act]');
+      if (!target) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const act = target.dataset.act;
+      if (act === 'toggle') TtsEngine.toggle();
+      else if (act === 'next') TtsEngine.next();
+      else if (act === 'prev') TtsEngine.prev();
+      else if (act === 'stop') ReadAloud.stop();
+      else if (act === 'seek') this._seekFromEvent(e, target);
+    });
+    // Arrow keys on the focused track step blocks — the scrub is block-granular
+    // anyway, so this is the same resolution as dragging would be.
+    this._parts.track.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); TtsEngine.next(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); TtsEngine.prev(); }
+      else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); TtsEngine.toggle(); }
+    });
+    this._el = bar;
+    return bar;
+  },
+
+  _seekFromEvent(e, track) {
+    const total = TtsEngine.position().total;
+    if (!total) return;
+    const rect = track.getBoundingClientRect();
+    if (!rect.width) return;
+    const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    // Round down so the left edge is unambiguously block 1 and the right edge
+    // is the last block, rather than the last block owning half a pixel.
+    TtsEngine.seek(Math.min(Math.floor(ratio * total), total - 1));
+  },
+
+  show(state) {
+    const bar = this._ensure();
+    bar.classList.add('is-visible');
+    document.body.classList.add('has-tts-bar');
+    this.update(state);
+  },
+
+  update(state) {
+    if (!this._el || !state) return;
+    const { toggle, track, fill, count } = this._parts;
+    const total = state.total || 0;
+    const at = Math.min(state.index + 1, total);
+    count.textContent = total ? `${at} / ${total}` : '';
+    fill.style.width = total ? `${(at / total) * 100}%` : '0%';
+    track.setAttribute('aria-valuemin', '1');
+    track.setAttribute('aria-valuemax', String(Math.max(total, 1)));
+    track.setAttribute('aria-valuenow', String(Math.max(at, 1)));
+    track.setAttribute('aria-valuetext', total ? `Block ${at} of ${total}` : '');
+    toggle.innerHTML = state.paused ? '&#9205;' : '&#9208;';
+    toggle.setAttribute('aria-label', state.paused ? 'Resume' : 'Pause');
+    toggle.setAttribute('title', state.paused ? 'Resume' : 'Pause');
+    this._el.classList.toggle('is-paused', !!state.paused);
+  },
+
+  hide() {
+    if (!this._el) return;
+    this._el.classList.remove('is-visible');
+    document.body.classList.remove('has-tts-bar');
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// ReadAloud — one owner for engine + highlight + playback bar
+// ═══════════════════════════════════════════════════════════════
+// Both callers (the transcript's per-message button and the files sheet's
+// Listen button) route through here, so the wiring between the engine, the
+// speaking-block highlight and the transport bar exists in exactly one place.
+const ReadAloud = {
+  _owner: null,       // 'transcript' | 'files' — which caller is playing
+  _current: null,     // element currently highlighted
+  _onEnd: null,
+
+  isActive(owner) { return TtsEngine.isPlaying() && (!owner || this._owner === owner); },
+
+  /**
+   * MUST be called synchronously from the click handler — iOS grants audio
+   * permission only inside the gesture, so nothing may be awaited first.
+   *
+   * @param {object} opts - { owner, root, startEl, title, onEnd }
+   * @returns {boolean} false when there is nothing readable
+   */
+  start(opts) {
+    this.stop();
+    const blocks = TtsEngine.collectBlocks(opts.root, opts.startEl);
+    if (!blocks.length) return false;
+    this._owner = opts.owner;
+    this._onEnd = opts.onEnd || null;
+    const started = TtsEngine.play({
+      blocks,
+      title: opts.title || 'Codeman',
+      onBlockStart: (block) => this._highlight(block && block.el),
+      onStateChange: (state) => TtsPlaybackBar.update(state),
+      onEnd: () => this._finish(),
+    });
+    // isPlaying() as well as the return value: a session can die between play()
+    // starting it and returning, and a bar left on screen with nothing playing
+    // is worse than no bar.
+    if (!started || !TtsEngine.isPlaying()) { this._finish(); return false; }
+    TtsPlaybackBar.show(TtsEngine.position());
+    return true;
+  },
+
+  stop() {
+    if (!TtsEngine.isPlaying()) { this._finish(); return; }
+    TtsEngine.stop();   // fires onEnd → _finish()
+    this._finish();     // idempotent; covers an already-stopped engine
+  },
+
+  /**
+   * Re-anchors block elements after the container was re-rendered mid-playback.
+   * Without this the highlight points at detached nodes and silently dies for
+   * the rest of the document while the audio keeps going — which reads as a bug.
+   */
+  rebind(root) {
+    if (!TtsEngine.isPlaying() || !root) return;
+    const fresh = TtsEngine.collectBlocks(root, null);
+    if (!fresh.length) return;
+    const pos = TtsEngine.position();
+    const currentText = (TtsEngine.blockAt(pos.index) || {}).text;
+    if (currentText == null) return;
+    const at = fresh.indexOf(fresh.find((b) => b.text === currentText));
+    if (at === -1) return;
+    // collectBlocks(null) always starts at the top of the document while
+    // playback may have started mid-way; drop that lead-in so the fresh array
+    // lines up with the indices the engine is already using.
+    const offset = at - pos.index;
+    if (offset < 0) return;
+    const aligned = fresh.slice(offset);
+    if (TtsEngine.rebindBlocks(aligned)) this._highlight(aligned[pos.index].el);
+  },
+
+  _highlight(el) {
+    this._clearHighlight();
+    if (!el || !el.classList) return;
+    el.classList.add('files-md-speaking');
+    this._current = el;
+    try {
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > (window.innerHeight || 0)) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+    } catch (e) { /* ignore */ }
+  },
+
+  _clearHighlight() {
+    if (this._current && this._current.classList) this._current.classList.remove('files-md-speaking');
+    this._current = null;
+    // Belt and braces after a re-render swapped the nodes out.
+    document.querySelectorAll('.files-md-speaking').forEach((el) => el.classList.remove('files-md-speaking'));
+  },
+
+  _finish() {
+    const cb = this._onEnd;
+    this._onEnd = null;
+    this._owner = null;
+    this._clearHighlight();
+    TtsPlaybackBar.hide();
+    if (cb) { try { cb(); } catch (e) { /* ignore */ } }
+  },
+
+  /**
+   * The block the user is pointing at, so playback can start there instead of
+   * at the top. Mirrors the files sheet's select-then-play gesture.
+   */
+  selectionAnchor(root) {
+    try {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return null;
+      let node = sel.anchorNode;
+      if (!node) return null;
+      if (node.nodeType === 3) node = node.parentElement;
+      if (!node || !root.contains(node)) return null;
+      return node;
+    } catch (e) {
+      return null;
+    }
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// TranscriptTTS — read-aloud button on assistant messages
+// ═══════════════════════════════════════════════════════════════
 const TranscriptTTS = {
   _currentBtn: null,
   supported: TtsEngine.supported,
 
-  // Chunking, provider selection and playback all live in TtsEngine
-  // (tts-engine.js); this object is only the transcript button's UI state.
-  _stripMarkdown(text) {
-    return TtsEngine.stripMarkdown(text);
-  },
-
   /**
    * Toggles read-aloud for one assistant message.
    *
-   * Nothing is awaited before TtsEngine.play(): the reply is split into
-   * paragraph-sized chunks up front and only the FIRST one has to be
-   * synthesised before audio starts, so a long answer no longer means a long
-   * silence. Staying synchronous also keeps iOS's audio permission, which is
-   * only granted inside the gesture that triggered playback.
+   * Reads the RENDERED message rather than the raw markdown: that is what makes
+   * inline code audible, fenced code skippable, and per-block highlighting and
+   * seeking possible at all. If the user has selected text inside the message,
+   * playback starts from that block.
    */
-  speak(btn, rawText) {
+  speak(btn, contentEl) {
     if (this._currentBtn === btn) {
       this.stop();
       return;
     }
     this.stop();
-    const chunks = TtsEngine.segment(rawText);
-    if (!chunks.length) return;
+    if (!contentEl) return;
+    const startEl = ReadAloud.selectionAnchor(contentEl);
     this._currentBtn = btn;
-    this._setSpeakingUI(btn, chunks.length);
-    const started = TtsEngine.play({
-      items: chunks,
-      onChunkStart: (_item, index) => this._setProgress(btn, index, chunks.length),
+    this._setSpeakingUI(btn);
+    const started = ReadAloud.start({
+      owner: 'transcript',
+      root: contentEl,
+      startEl,
+      title: 'Claude response',
       onEnd: () => this._reset(btn),
     });
     if (!started) this._reset(btn);
@@ -3118,24 +3358,16 @@ const TranscriptTTS = {
 
   stop() {
     const btn = this._currentBtn;
-    TtsEngine.stop();
+    if (ReadAloud.isActive('transcript')) ReadAloud.stop();
     if (btn) this._reset(btn);
   },
 
-  // Back-compat alias — older call sites used the private name.
-  _stop() { this.stop(); },
-
-  _setSpeakingUI(btn, total) {
+  _setSpeakingUI(btn) {
     btn.classList.add('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Stop reading aloud');
-    btn.setAttribute('title', total > 1 ? `Stop reading aloud (1/${total})` : 'Stop reading aloud');
+    btn.setAttribute('title', 'Stop reading aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
     btn.appendChild(this._stopSVG());
-  },
-
-  _setProgress(btn, index, total) {
-    if (this._currentBtn !== btn || total <= 1) return;
-    btn.setAttribute('title', `Stop reading aloud (${index + 1}/${total})`);
   },
 
   _reset(btn) {
@@ -3196,92 +3428,13 @@ const TranscriptTTS = {
 // ═══════════════════════════════════════════════════════════════
 // FilesTTS — read a rendered markdown document aloud (files sheet)
 // ═══════════════════════════════════════════════════════════════
-// Chunk collection and progress highlighting live here (they need the rendered
-// DOM); synthesis and playback are delegated to TtsEngine, so the doc reader
-// gets the same Deepgram → server → browser provider chain as the transcript
-// player. One block per utterance is what makes the highlight — and iOS
-// reliability — possible: iOS Safari truncates long utterances and drops queued
-// ones when the tab is backgrounded.
+// A thin adapter over ReadAloud, kept as its own name because the files sheet
+// calls it from several places. Block collection, highlighting, transport and
+// synthesis all live in ReadAloud/TtsEngine.
 const FilesTTS = {
   supported: typeof window !== 'undefined' && TtsEngine.supported,
-  _chunks: [],      // [{ el, text }]
-  _index: 0,
-  _playing: false,
 
-  isPlaying() { return this._playing; },
-
-  /** Rendered-block extraction: preview text, not raw markdown. */
-  BLOCK_SELECTOR: 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td',
-
-  collectChunks(preview, startEl) {
-    const out = [];
-    if (!preview) return out;
-    const blocks = preview.querySelectorAll(this.BLOCK_SELECTOR);
-    let started = !startEl;
-    blocks.forEach((el) => {
-      // Code is skipped per spec — reading punctuation aloud is noise.
-      if (el.closest('pre')) return;
-      if (!started) {
-        if (el === startEl || el.contains(startEl) || startEl.contains(el)) started = true;
-        else return;
-      }
-      // Own text only: a <li> wrapping a nested <ul>, or a <blockquote>
-      // wrapping <p>, would otherwise be read once itself and again per child.
-      const text = this._ownText(el);
-      if (!text) return;
-      for (const piece of this._split(text)) out.push({ el, text: piece });
-    });
-    return out;
-  },
-
-  // textContent minus anything belonging to a nested block (visited separately)
-  // or to a code block (never read aloud).
-  _ownText(el) {
-    let out = '';
-    const visit = (node) => {
-      const kids = node.childNodes;
-      for (let i = 0; i < kids.length; i++) {
-        const child = kids[i];
-        if (child.nodeType === 3) { out += child.data; continue; }
-        if (child.nodeType !== 1) continue;
-        if (child.tagName === 'PRE' || child.matches(this.BLOCK_SELECTOR)) continue;
-        visit(child);
-      }
-    };
-    visit(el);
-    return out.replace(/\s+/g, ' ').trim();
-  },
-
-  // iOS truncates long utterances — split on sentence boundaries at ~300 chars.
-  // Written without a lookbehind assertion: older iOS Safari throws on those at
-  // parse time, which would take the whole bundle down.
-  _split(text) {
-    if (text.length <= 300) return [text];
-    const sentences = [];
-    let sentence = '';
-    for (let i = 0; i < text.length; i++) {
-      sentence += text[i];
-      if ('.!?\u2026'.indexOf(text[i]) !== -1 && (i + 1 >= text.length || /\s/.test(text[i + 1]))) {
-        sentences.push(sentence.trim());
-        sentence = '';
-      }
-    }
-    if (sentence.trim()) sentences.push(sentence.trim());
-    const parts = [];
-    let buf = '';
-    for (const s of sentences) {
-      if (buf && (buf + ' ' + s).length > 300) { parts.push(buf); buf = s; }
-      else buf = buf ? buf + ' ' + s : s;
-    }
-    if (buf) parts.push(buf);
-    // A single sentence can still be huge (no punctuation) — hard-slice it.
-    const out = [];
-    for (const part of parts) {
-      if (part.length <= 400) { out.push(part); continue; }
-      for (let i = 0; i < part.length; i += 400) out.push(part.slice(i, i + 400));
-    }
-    return out;
-  },
+  isPlaying() { return ReadAloud.isActive('files'); },
 
   /**
    * MUST be called synchronously from the click handler — iOS only allows the
@@ -3289,92 +3442,21 @@ const FilesTTS = {
    */
   start(preview, startEl, onStateChange) {
     if (!this.supported) return false;
-    this.stop();
-    const chunks = this.collectChunks(preview, startEl);
-    if (!chunks.length) return false;
-    this._chunks = chunks;
-    this._index = 0;
-    this._playing = true;
-    this._onStateChange = onStateChange || null;
-    const started = TtsEngine.play({
-      items: chunks,
-      onChunkStart: (chunk, index) => {
-        this._index = index;
-        // Prefer the live array — rebind() may have swapped in fresh element
-        // refs after a preview re-render, leaving `chunk` pointing at a
-        // detached node.
-        const current = this._chunks[index] || chunk;
-        this._highlight(current.el);
-      },
-      onEnd: () => this._finish(),
+    return ReadAloud.start({
+      owner: 'files',
+      root: preview,
+      startEl,
+      title: 'Document',
+      onEnd: () => { if (onStateChange) onStateChange(false); },
     });
-    if (!started) { this._finish(); return false; }
-    return true;
-  },
-
-  /**
-   * Re-anchors the block elements after the preview DOM was rebuilt while
-   * speech is playing. Without this, _chunks[].el points at detached nodes and
-   * the progress highlight + scroll-into-view silently die for the rest of the
-   * document (the audio keeps going, which reads as a bug).
-   */
-  rebind(preview) {
-    if (!this._playing || !preview) return;
-    const fresh = this.collectChunks(preview, null);
-    if (!fresh.length) return;
-    const currentText = this._chunks[this._index] && this._chunks[this._index].text;
-    let at = -1;
-    if (currentText != null) at = fresh.findIndex((c) => c.text === currentText);
-    // Same document, so the chunk sequence should be identical; if the text
-    // moved (file changed underneath), keep the old refs rather than jumping.
-    if (at === -1) return;
-    // TtsEngine owns the playback index, so the re-collected array has to stay
-    // aligned with it: collectChunks(null) always starts at the top of the
-    // document, while playback may have started mid-way. Drop that lead-in.
-    const offset = at - this._index;
-    if (offset < 0) return;
-    this._chunks = fresh.slice(offset);
-    this._highlight(fresh[at].el);
-  },
-
-  _highlight(el) {
-    this._clearHighlight();
-    if (!el || !el.classList) return;
-    el.classList.add('files-md-speaking');
-    this._current = el;
-    try {
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > (window.innerHeight || 0)) {
-        el.scrollIntoView({ block: 'nearest' });
-      }
-    } catch (e) { /* ignore */ }
-  },
-
-  _clearHighlight() {
-    if (this._current && this._current.classList) this._current.classList.remove('files-md-speaking');
-    this._current = null;
-    // Belt and braces after a preview re-render swapped the nodes out.
-    document.querySelectorAll('.files-md-speaking').forEach((el) => el.classList.remove('files-md-speaking'));
   },
 
   stop() {
-    if (!this._playing) { this._clearHighlight(); return; }
-    // TtsEngine.stop() fires our onEnd, which lands in _finish(); calling it
-    // again directly is harmless and covers the case where the engine had
-    // already moved on to another caller's session.
-    TtsEngine.stop();
-    this._finish();
+    if (ReadAloud.isActive('files')) ReadAloud.stop();
   },
 
-  _finish() {
-    const was = this._playing;
-    this._playing = false;
-    this._chunks = [];
-    this._index = 0;
-    this._clearHighlight();
-    const cb = this._onStateChange;
-    this._onStateChange = null;
-    if (was && cb) { try { cb(false); } catch (e) { /* ignore */ } }
+  rebind(preview) {
+    if (ReadAloud.isActive('files')) ReadAloud.rebind(preview);
   },
 };
 
@@ -4774,7 +4856,6 @@ const TranscriptView = {
         div.appendChild(ts);
       }
       if (TranscriptTTS.supported) {
-        const capturedText = block.text;
         const ttsBtn = document.createElement('button');
         ttsBtn.className = 'tv-tts-btn';
         ttsBtn.setAttribute('aria-label', 'Read aloud');
@@ -4782,7 +4863,7 @@ const TranscriptView = {
         ttsBtn.appendChild(TranscriptTTS._speakerSVG());
         ttsBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          TranscriptTTS.speak(ttsBtn, capturedText);
+          TranscriptTTS.speak(ttsBtn, content);
         });
         div.appendChild(ttsBtn);
       }

@@ -286,12 +286,17 @@ Enable: tap the microphone icon in the compose panel or accessory bar. Requires 
 
 ### Read Aloud (text-to-speech)
 
-Every assistant message in the transcript has a speaker button, and the files sheet can read a markdown document aloud. Both run on the same engine (`tts-engine.js`).
+Every assistant message in the transcript has a speaker button, and the files sheet can read a markdown document aloud. Both run on the same engine (`tts-engine.js`) and the same controller (`ReadAloud`).
 
-- **Paragraph streaming** — the text is split into paragraph-sized chunks and synthesised as a pipeline: the first chunk starts playing while the rest are still being fetched, so a long reply starts speaking in well under a second instead of after the whole answer is generated
-- **Deepgram Aura voices** — if a Deepgram API key is set (the same key used for dictation), synthesis goes straight from the browser to `api.deepgram.com` for natural-sounding speech; pick a voice under Settings → Voice
-- **Automatic fallback** — Deepgram → the server's `/api/tts` edge-tts proxy → the browser's built-in speech engine. The working provider is pinned for the session, and a single failed chunk is skipped rather than stranding the rest of the text
-- **Progress** — the transcript button's tooltip shows the current chunk; the files sheet highlights the block being spoken and scrolls it into view
+- **Paragraph streaming** — the rendered text is split into **blocks** (one paragraph, heading or list item) and synthesised as a pipeline: the first block starts playing while the rest are still being fetched, so a long reply starts speaking in ~100 ms instead of after the whole answer is generated
+- **Natural cut points** — blocks are never merged, so the pause between two paragraphs is a real pause. A block longer than one request splits only at sentence boundaries; nothing is cut mid-sentence
+- **Playback bar** — appears while reading: play/pause, previous/next block, click-to-seek and a block counter. Position is counted in blocks, not seconds, because per-block durations aren't known until each block is fetched
+- **Start anywhere** — select text (or place the cursor) inside a message or document, then press play to start from that block instead of the top
+- **Block highlighting** — the block being spoken is highlighted and scrolled into view, in both the transcript and the files sheet
+- **OS media controls** — hardware keys, the lock screen and Chrome's media popup control playback via the MediaSession API (audio providers only; the browser-speech fallback has no media element)
+- **Deepgram Aura voices** — if a Deepgram API key is set (the same key used for dictation), synthesis goes straight from the browser to `api.deepgram.com`; pick a voice under Settings → Voice
+- **Automatic fallback** — Deepgram → the server's `/api/tts` edge-tts proxy → the browser's built-in speech engine. The working provider is pinned for the rest of that session, and a single failed block is skipped rather than stranding the text
+- **Reads what you see** — inline code is spoken as part of the sentence; fenced code blocks are skipped; YAML frontmatter is stripped from markdown documents before rendering, so metadata is neither displayed nor read
 - **Offline** — set Settings → Voice → Engine to "Browser speech" to skip the network entirely
 
 Configure: Settings → Voice → Read Aloud. Server-side voice for the edge-tts fallback is set with `CODEMAN_TTS_URL`, `CODEMAN_TTS_KEY` and `CODEMAN_TTS_VOICE`.

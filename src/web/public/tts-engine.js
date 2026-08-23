@@ -1,13 +1,20 @@
 /**
  * @fileoverview Chunked text-to-speech engine with a Deepgram → server → browser
- * provider chain.
+ * provider chain, block-level position tracking and transport controls.
  *
- * The old transcript player synthesised a whole assistant reply as ONE request,
- * so a long answer meant many seconds of silence before anything played. This
- * engine instead splits the text into paragraph-sized chunks and pipelines them:
- * chunk 0 starts playing as soon as its audio lands while chunks 1..N are still
- * being fetched. Time-to-first-audio becomes a function of the first paragraph,
- * not the whole reply.
+ * Two levels of granularity, and keeping them straight is the whole design:
+ *
+ *   - A BLOCK is one rendered element (a paragraph, heading, list item, table
+ *     cell). Blocks are what the caller highlights, what the playback bar
+ *     counts, and what seeking targets. Blocks are never merged — the pause
+ *     between two paragraphs is the pause you hear.
+ *   - A SEGMENT is one synthesis request. Normally a block is one segment; an
+ *     over-long block splits into several, ONLY at sentence boundaries, all
+ *     pointing back at the same block. So a long paragraph still streams
+ *     without a mid-sentence cut, and the highlight stays put while it does.
+ *
+ * The first segment is deliberately tiny: it alone decides how long the user
+ * waits before hearing anything.
  *
  * Providers, in order:
  *   1. Deepgram Aura  — direct browser → api.deepgram.com, reusing the API key
@@ -16,29 +23,31 @@
  *   3. Web Speech     — always available offline fallback, no network at all.
  *
  * The chosen provider is pinned after the first success so a missing/expired
- * Deepgram key costs one failed request per session, not one per chunk.
+ * Deepgram key costs one failed request per session, not one per segment.
  *
  * @globals {object} TtsEngine
- * @dependency none (standalone; app.js and voice-input.js consume it)
+ * @dependency none (standalone; app.js consumes it)
  * @loadorder before voice-input.js and app.js
  */
 
 const TtsEngine = {
   // ── Tunables ──────────────────────────────────────────────────────────────
   // Deepgram's /v1/speak caps a request at 2000 chars; we stay well under so a
-  // chunk is a natural speech unit rather than a size limit artifact.
-  MAX_CHUNK: 600,
-  // The first chunk is deliberately tiny — it alone determines how long the
-  // user stares at a spinning button before hearing anything.
-  FIRST_CHUNK: 200,
-  // Short paragraphs (list items!) are merged up to this size so a 30-bullet
-  // answer is not 30 HTTP round-trips.
-  MERGE_TARGET: 400,
-  // How many chunks to fetch ahead of the one playing. 2 is enough to cover a
-  // ~1s request while a ~10s chunk plays, without stampeding the API.
+  // segment is a natural speech unit rather than a size-limit artifact.
+  MAX_SEGMENT: 600,
+  // Time-to-first-audio is a function of this number alone.
+  FIRST_SEGMENT: 200,
+  // How many segments to fetch ahead of the one playing. 2 covers a ~1s request
+  // during a ~10s segment without stampeding the API.
   PREFETCH: 2,
+  // Web Speech sometimes ignores resume(); if it has not restarted by now,
+  // treat the utterance as dead and re-speak the current segment.
+  RESUME_GRACE_MS: 350,
 
   DEFAULT_VOICE: 'aura-2-thalia-en',
+
+  /** Rendered elements that count as their own spoken block. */
+  BLOCK_SELECTOR: 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td',
 
   supported: typeof window !== 'undefined'
     && ('speechSynthesis' in window || typeof window.Audio !== 'undefined'),
@@ -46,14 +55,20 @@ const TtsEngine = {
   // ── State ─────────────────────────────────────────────────────────────────
   _gen: 0,
   _playing: false,
-  _items: [],
-  _index: 0,
-  _audio: null,
-  _urls: new Map(),      // index → Promise<objectURL>
+  _paused: false,
+  _blocks: [],           // [{ el, text }]
+  _segments: [],         // [{ blockIndex, text }]
+  _blockStarts: [],      // blockIndex → first segment index
+  _segIndex: 0,
+  _audios: [],           // two alternating elements; see _unlockAudio()
+  _which: 0,
+  _urls: new Map(),      // segment index → Promise<objectURL>
   _pinned: null,         // 'deepgram' | 'server' — set after the first success
   _provider: null,       // 'deepgram' | 'server' | 'web' — active this session
+  _title: '',
   _visBound: false,
-  _onChunkStart: null,
+  _onBlockStart: null,
+  _onStateChange: null,
   _onEnd: null,
 
   // ═══════════════════════════════════════════════════════════════
@@ -69,13 +84,9 @@ const TtsEngine = {
     }
   },
 
-  apiKey() {
-    return (this.config().apiKey || '').trim();
-  },
+  apiKey() { return (this.config().apiKey || '').trim(); },
 
-  voice() {
-    return (this.config().ttsVoice || '').trim() || this.DEFAULT_VOICE;
-  },
+  voice() { return (this.config().ttsVoice || '').trim() || this.DEFAULT_VOICE; },
 
   /**
    * Which provider a session would use right now, without starting one.
@@ -98,83 +109,108 @@ const TtsEngine = {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // Text → chunks
+  // DOM → blocks
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Strips Markdown syntax but — unlike the old single-shot stripper — keeps
-   * blank lines intact, because those blank lines ARE the chunk boundaries.
-   */
-  stripMarkdown(text) {
-    let s = String(text == null ? '' : text);
-    // Fenced code blocks: never read raw code aloud. Leave a paragraph break
-    // behind so the prose either side does not get glued together.
-    s = s.replace(/```[\s\S]*?```/g, '\n\n');
-    s = s.replace(/`[^`]*`/g, '');
-    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
-    s = s.replace(/__([^_]+)__/g, '$1');
-    s = s.replace(/\*([^*]+)\*/g, '$1');
-    s = s.replace(/_([^_]+)_/g, '$1');
-    s = s.replace(/^#{1,6}\s+/gm, '');
-    s = s.replace(/^[-*_]{3,}\s*$/gm, '');
-    s = s.replace(/^\s*[-*+]\s+/gm, '');
-    s = s.replace(/^\s*\d+\.\s+/gm, '');
-    // Markdown links and images — keep the label only.
-    s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
-    s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
-    // Collapse runs of spaces/tabs, but not newlines.
-    s = s.replace(/[ \t]{2,}/g, ' ');
-    // Trim each line, then collapse 3+ blank lines down to a single break.
-    s = s.split('\n').map((line) => line.trim()).join('\n');
-    s = s.replace(/\n{3,}/g, '\n\n');
-    return s.trim();
-  },
-
-  /**
-   * Markdown → speakable chunks. Paragraphs are the unit; oversized ones are
-   * split on sentence boundaries and undersized ones merged, so every chunk is
-   * a sane request size. Chunk 0 is capped hard for time-to-first-audio.
+   * Collects spoken blocks from a rendered container, in document order.
    *
-   * @returns {string[]}
+   * Rendered text, not raw markdown: that is what makes inline code audible
+   * (it is just text inside the block), fenced code skippable (it lives in a
+   * <pre>), and block highlighting possible at all.
+   *
+   * @param {Element} root - rendered container (.tv-markdown, .files-md-preview)
+   * @param {Element} [startEl] - begin at the block containing this element
+   * @returns {Array<{el: Element, text: string}>}
    */
-  segment(rawText) {
-    const clean = this.stripMarkdown(rawText);
-    if (!clean) return [];
-
-    // 1. Paragraphs, each split down to MAX_CHUNK on sentence boundaries.
-    const pieces = [];
-    for (const para of clean.split(/\n{2,}/)) {
-      const p = para.replace(/\n/g, ' ').trim();
-      if (p) for (const part of this._splitLong(p, this.MAX_CHUNK)) pieces.push(part);
-    }
-    if (!pieces.length) return [];
-
-    // 2. Merge short neighbours so a bullet list is not one request per bullet.
-    const merged = [];
-    for (const piece of pieces) {
-      const last = merged.length ? merged[merged.length - 1] : null;
-      if (last !== null && (last.length + 1 + piece.length) <= this.MERGE_TARGET) {
-        merged[merged.length - 1] = last + ' ' + piece;
-      } else {
-        merged.push(piece);
+  collectBlocks(root, startEl) {
+    const out = [];
+    if (!root) return out;
+    const els = root.querySelectorAll(this.BLOCK_SELECTOR);
+    let started = !startEl;
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      // Code is skipped per spec — reading punctuation aloud is noise.
+      if (el.closest('pre')) continue;
+      if (!started) {
+        if (el === startEl || el.contains(startEl) || startEl.contains(el)) started = true;
+        else continue;
       }
+      const text = this._ownText(el);
+      if (!text) continue;
+      out.push({ el, text });
     }
-
-    // 3. Shrink chunk 0: the whole point is to start talking fast.
-    if (merged[0].length > this.FIRST_CHUNK) {
-      const head = this._splitLong(merged[0], this.FIRST_CHUNK);
-      merged.splice(0, 1, ...head);
-    }
-    return merged;
+    return out;
   },
 
   /**
-   * Splits `text` into parts of at most `max` chars, preferring sentence ends.
+   * textContent minus anything belonging to a nested block (visited separately)
+   * or to a code block (never read aloud). Inline <code> is NOT excluded — it
+   * reads as part of the sentence, which is the point.
+   */
+  _ownText(el) {
+    let out = '';
+    const visit = (node) => {
+      const kids = node.childNodes;
+      for (let i = 0; i < kids.length; i++) {
+        const child = kids[i];
+        if (child.nodeType === 3) { out += child.data; continue; }
+        if (child.nodeType !== 1) continue;
+        if (child.tagName === 'PRE' || child.matches(this.BLOCK_SELECTOR)) continue;
+        visit(child);
+      }
+    };
+    visit(el);
+    return out.replace(/\s+/g, ' ').trim();
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Blocks → segments
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Expands blocks into synthesis segments. Blocks are never merged and never
+   * cut mid-sentence; only a block longer than MAX_SEGMENT is split, and only
+   * between sentences.
+   *
+   * @returns {{segments: Array<{blockIndex:number, text:string}>, blockStarts: number[]}}
+   */
+  buildSegments(blocks) {
+    const segments = [];
+    const blockStarts = [];
+    blocks.forEach((block, blockIndex) => {
+      blockStarts.push(segments.length);
+      let text = block.text;
+      // The session's opening segment is capped harder than the rest so
+      // playback starts fast. The cut still lands between sentences; only the
+      // opening slice is small, the remainder of that block is normal-sized.
+      if (segments.length === 0) {
+        // hardCap Infinity: the opening carve may only take a whole sentence.
+        // Without it, a first block that is one long unpunctuated sentence gets
+        // word-sliced at 2x FIRST_SEGMENT — a mid-sentence cut in the one place
+        // the user is guaranteed to hear it.
+        const opening = this._splitSentences(text, this.FIRST_SEGMENT, Infinity);
+        if (opening.length > 1) {
+          segments.push({ blockIndex, text: opening[0] });
+          text = opening.slice(1).join(' ');
+        }
+      }
+      for (const part of this._splitSentences(text, this.MAX_SEGMENT)) {
+        if (part) segments.push({ blockIndex, text: part });
+      }
+    });
+    return { segments, blockStarts };
+  },
+
+  /**
+   * Splits `text` into parts of at most `max` chars at sentence boundaries.
+   *
    * Written without lookbehind assertions: older iOS Safari throws on those at
    * parse time, which would take the whole bundle down.
    */
-  _splitLong(text, max) {
+  _splitSentences(text, max, hardCap) {
     if (text.length <= max) return [text];
+    const limit = hardCap == null ? max * 2 : hardCap;
     const sentences = [];
     let sentence = '';
     for (let i = 0; i < text.length; i++) {
@@ -190,20 +226,22 @@ const TtsEngine = {
     const parts = [];
     let buf = '';
     for (const s of sentences) {
+      // A single sentence over the cap is kept whole rather than cut in half —
+      // going over is better than splitting mid-thought.
       if (buf && (buf + ' ' + s).length > max) { parts.push(buf); buf = s; }
       else buf = buf ? buf + ' ' + s : s;
     }
     if (buf) parts.push(buf);
 
-    // A single sentence can still exceed max (no punctuation at all) — fall
-    // back to word-boundary slicing rather than cutting mid-word.
+    // Last resort: a punctuation-free run (a URL-stuffed line) that no sentence
+    // rule can break. Slice on word boundaries so at least no word is severed.
     const out = [];
     for (const part of parts) {
-      if (part.length <= max) { out.push(part); continue; }
+      if (part.length <= limit) { out.push(part); continue; }
       let rest = part;
-      while (rest.length > max) {
-        let cut = rest.lastIndexOf(' ', max);
-        if (cut < max * 0.5) cut = max;
+      while (rest.length > limit) {
+        let cut = rest.lastIndexOf(' ', limit);
+        if (cut < limit * 0.5) cut = limit;
         out.push(rest.slice(0, cut).trim());
         rest = rest.slice(cut).trim();
       }
@@ -213,38 +251,66 @@ const TtsEngine = {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // Playback
+  // Transport
   // ═══════════════════════════════════════════════════════════════
 
   isPlaying() { return this._playing; },
+  isPaused() { return this._paused; },
   activeProvider() { return this._provider; },
+
+  /** Current position as blocks, which is what the UI counts in. */
+  position() {
+    const seg = this._segments[this._segIndex];
+    return {
+      index: seg ? seg.blockIndex : 0,
+      total: this._blocks.length,
+      playing: this._playing,
+      paused: this._paused,
+      provider: this._provider,
+    };
+  },
 
   /**
    * Starts a playback session.
    *
-   * MUST be called synchronously from a user gesture: the audio element is
+   * MUST be called synchronously from a user gesture: the audio elements are
    * unlocked (and, on the browser path, the first utterance is queued) before
    * this function awaits anything, because iOS only grants playback permission
    * inside the gesture that triggered it.
    *
    * @param {object} opts
-   * @param {Array<string|{text:string}>} opts.items - chunks to speak
-   * @param {function(any, number)} [opts.onChunkStart] - (item, index)
-   * @param {function(boolean)} [opts.onEnd] - called once when playback stops
+   * @param {Array<{el?: Element, text: string}>} opts.blocks
+   * @param {number} [opts.startIndex] - block to begin at
+   * @param {string} [opts.title] - shown in OS media controls
+   * @param {function({el?:Element,text:string}, number)} [opts.onBlockStart]
+   * @param {function(object)} [opts.onStateChange] - receives position()
+   * @param {function(boolean)} [opts.onEnd]
    * @returns {boolean} false if there was nothing to say
    */
   play(opts) {
-    const items = (opts && opts.items) || [];
-    if (!this.supported || !items.length) return false;
+    const blocks = (opts && opts.blocks) || [];
+    if (!this.supported || !blocks.length) return false;
     this.stop();
 
+    const built = this.buildSegments(blocks);
+    if (!built.segments.length) return false;
+
     const gen = ++this._gen;
-    this._items = items;
-    this._index = 0;
+    this._blocks = blocks;
+    this._segments = built.segments;
+    this._blockStarts = built.blockStarts;
+    this._segIndex = built.blockStarts[Math.min(Math.max(opts.startIndex || 0, 0), blocks.length - 1)] || 0;
     this._playing = true;
-    this._onChunkStart = (opts && opts.onChunkStart) || null;
+    this._paused = false;
+    this._title = (opts && opts.title) || 'Codeman';
+    this._onBlockStart = (opts && opts.onBlockStart) || null;
+    this._onStateChange = (opts && opts.onStateChange) || null;
     this._onEnd = (opts && opts.onEnd) || null;
     this._provider = this.preferredProvider();
+    // Pinning is a within-session optimisation: settings (a newly added or
+    // corrected Deepgram key) can change between sessions, so a fallback must
+    // not be sticky for the lifetime of the page.
+    this._pinned = null;
     this._bindVisibility();
 
     if (this._provider === 'web') {
@@ -254,61 +320,183 @@ const TtsEngine = {
       this._unlockAudio();
       this._pumpRemote(gen);
     }
-    return true;
+    this._setupMediaSession();
+    this._emitState();
+    // Not `true`: the browser path speaks synchronously, so a speak() that
+    // throws has already run stop() by now. Reporting success there would leave
+    // the caller showing transport controls for a session that never started.
+    return this._playing;
   },
 
   stop() {
     const was = this._playing;
     this._gen++;
     this._playing = false;
-    this._items = [];
-    this._index = 0;
+    this._paused = false;
+    this._blocks = [];
+    this._segments = [];
+    this._blockStarts = [];
+    this._segIndex = 0;
     this._provider = null;
     this._releaseUrls();
-    if (this._audio) {
-      try { this._audio.pause(); } catch (_e) { /* ignore */ }
-      this._audio.onended = null;
-      this._audio.onerror = null;
-      try { this._audio.removeAttribute('src'); this._audio.load(); } catch (_e) { /* ignore */ }
-    }
-    if ('speechSynthesis' in window) {
+    this._audios.forEach((a) => {
+      try { a.pause(); } catch (_e) { /* ignore */ }
+      a.onended = null;
+      a.onerror = null;
+      try { a.removeAttribute('src'); a.load(); } catch (_e) { /* ignore */ }
+    });
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try { window.speechSynthesis.cancel(); } catch (_e) { /* ignore */ }
     }
-    const cb = this._onEnd;
-    this._onChunkStart = null;
+    this._clearMediaSession();
+    const onEnd = this._onEnd;
+    const onState = this._onStateChange;
+    this._onBlockStart = null;
     this._onEnd = null;
-    if (was && cb) { try { cb(false); } catch (_e) { /* ignore */ } }
+    this._onStateChange = null;
+    if (was && onState) { try { onState(this.position()); } catch (_e) { /* ignore */ } }
+    if (was && onEnd) { try { onEnd(false); } catch (_e) { /* ignore */ } }
   },
 
   pause() {
-    if (!this._playing) return;
+    if (!this._playing || this._paused) return;
+    this._paused = true;
     if (this._provider === 'web') {
       try { window.speechSynthesis.pause(); } catch (_e) { /* ignore */ }
-    } else if (this._audio) {
-      try { this._audio.pause(); } catch (_e) { /* ignore */ }
+    } else {
+      const a = this._audios[this._which];
+      if (a) { try { a.pause(); } catch (_e) { /* ignore */ } }
     }
+    this._updateMediaState();
+    this._emitState();
   },
 
   resume() {
-    if (!this._playing) return;
+    if (!this._playing || !this._paused) return;
+    this._paused = false;
+    const gen = this._gen;
     if (this._provider === 'web') {
       try { window.speechSynthesis.resume(); } catch (_e) { /* ignore */ }
-    } else if (this._audio) {
-      this._audio.play().catch(() => { /* user must re-tap */ });
+      // speechSynthesis.pause()/resume() is unreliable across engines: some
+      // ignore resume, some drop the utterance entirely. If nothing is speaking
+      // shortly after, restart the current segment rather than sit there mute.
+      setTimeout(() => {
+        if (gen !== this._gen || !this._playing || this._paused) return;
+        const ss = window.speechSynthesis;
+        if (ss && !ss.speaking && !ss.pending) this._speakWeb(gen);
+      }, this.RESUME_GRACE_MS);
+    } else {
+      const a = this._audios[this._which];
+      if (a && a.play) {
+        const p = a.play();
+        if (p && p.catch) p.catch(() => { /* user must re-tap */ });
+      }
     }
+    this._updateMediaState();
+    this._emitState();
   },
 
-  _text(item) { return typeof item === 'string' ? item : (item && item.text) || ''; },
+  toggle() {
+    if (!this._playing) return;
+    if (this._paused) this.resume();
+    else this.pause();
+  },
 
-  _announce(gen, item, index) {
-    if (gen !== this._gen || !this._onChunkStart) return;
-    try { this._onChunkStart(item, index); } catch (_e) { /* ignore */ }
+  /**
+   * Jumps to a block. Block-granular by design: we have no per-block duration
+   * until each one has been fetched, so an arbitrary time offset is not
+   * something the engine can honestly offer.
+   */
+  seek(blockIndex) {
+    if (!this._playing) return false;
+    const clamped = Math.min(Math.max(blockIndex, 0), this._blocks.length - 1);
+    const segIndex = this._blockStarts[clamped];
+    if (segIndex == null) return false;
+
+    // A new generation cancels in-flight audio and any queued utterance, but
+    // must NOT tear the session down — the bar, callbacks and unlocked audio
+    // elements all stay live across a seek.
+    const gen = ++this._gen;
+    this._releaseUrls();
+    if (this._provider === 'web') {
+      try { window.speechSynthesis.cancel(); } catch (_e) { /* ignore */ }
+    } else {
+      this._audios.forEach((a) => {
+        a.onended = null;
+        a.onerror = null;
+        try { a.pause(); } catch (_e) { /* ignore */ }
+        // Drop the loaded clip too. The new one only arrives after an await, so
+        // a resume() in that window would otherwise replay the block the user
+        // just seeked away from.
+        try { a.removeAttribute('src'); a.load(); } catch (_e) { /* ignore */ }
+      });
+    }
+    this._segIndex = segIndex;
+    const wasPaused = this._paused;
+    this._paused = false;
+    if (this._provider === 'web') this._speakWeb(gen);
+    else this._pumpRemote(gen);
+    // Seeking while paused lands on the new block and stays paused, which is
+    // what a scrub-then-look-at-it gesture expects.
+    if (wasPaused) this.pause();
+    else this._emitState();
+    return true;
+  },
+
+  next() {
+    const at = this.position().index;
+    if (at + 1 >= this._blocks.length) { this.stop(); return; }
+    this.seek(at + 1);
+  },
+
+  prev() { this.seek(Math.max(this.position().index - 1, 0)); },
+
+  /** The block at an index, for callers re-anchoring after a re-render. */
+  blockAt(index) { return this._blocks[index] || null; },
+
+  /**
+   * Swaps in freshly collected blocks after the container was re-rendered.
+   * Refuses unless the text sequence is identical — if the document actually
+   * changed underneath, keeping the stale element refs is safer than jumping
+   * the highlight to unrelated content.
+   *
+   * @returns {boolean} whether the swap was accepted
+   */
+  rebindBlocks(blocks) {
+    if (!this._playing || !blocks || blocks.length !== this._blocks.length) return false;
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i].text !== this._blocks[i].text) return false;
+    }
+    this._blocks = blocks;
+    return true;
+  },
+
+  _text(seg) { return (seg && seg.text) || ''; },
+
+  _emitState() {
+    if (!this._onStateChange) return;
+    try { this._onStateChange(this.position()); } catch (_e) { /* ignore */ }
+  },
+
+  /** Announces the block a segment belongs to, but only when it changes. */
+  _announce(gen, segIndex) {
+    if (gen !== this._gen) return;
+    const seg = this._segments[segIndex];
+    if (!seg) return;
+    // A block start is always the first segment of its block, so comparing with
+    // the previous segment is enough — including right after a seek.
+    const prev = this._segments[segIndex - 1];
+    const isNewBlock = !prev || prev.blockIndex !== seg.blockIndex;
+    if (isNewBlock && this._onBlockStart) {
+      try { this._onBlockStart(this._blocks[seg.blockIndex], seg.blockIndex); } catch (_e) { /* ignore */ }
+    }
+    if (isNewBlock) this._emitState();
   },
 
   _advance(gen) {
     if (gen !== this._gen || !this._playing) return false;
-    this._index++;
-    if (this._index >= this._items.length) { this.stop(); return false; }
+    this._segIndex++;
+    if (this._segIndex >= this._segments.length) { this.stop(); return false; }
     return true;
   },
 
@@ -317,34 +505,45 @@ const TtsEngine = {
   /**
    * iOS refuses `audio.play()` outside a user gesture, and our first real audio
    * only exists after a network round-trip. So we claim the permission during
-   * the gesture with a silent clip on a REUSED element, then swap `src` per
-   * chunk — the element stays "blessed" for the rest of the session.
+   * the gesture with a silent clip on REUSED elements, then swap `src` per
+   * segment — the elements stay "blessed" for the rest of the session.
+   *
+   * Two of them, alternating: the next segment is decoded in the idle element
+   * while the current one plays, so the seam between blocks is a few
+   * milliseconds instead of a load-and-decode stall.
    */
   _unlockAudio() {
-    if (!this._audio) {
-      try { this._audio = new Audio(); } catch (_e) { return; }
-      this._audio.preload = 'auto';
+    if (!this._audios.length) {
+      for (let i = 0; i < 2; i++) {
+        try {
+          const a = new Audio();
+          a.preload = 'auto';
+          this._audios.push(a);
+        } catch (_e) { return; }
+      }
     }
-    this._audio.onended = null;
-    this._audio.onerror = null;
-    try {
-      this._audio.src = 'data:audio/mpeg;base64,'
-        + '//uQxAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQCA';
-      const p = this._audio.play();
-      if (p && p.catch) p.catch(() => { /* silent clip may be rejected; harmless */ });
-    } catch (_e) { /* ignore */ }
+    this._audios.forEach((a) => {
+      a.onended = null;
+      a.onerror = null;
+      try {
+        a.src = 'data:audio/mpeg;base64,'
+          + '//uQxAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQCA';
+        const p = a.play();
+        if (p && p.catch) p.catch(() => { /* silent clip may be rejected; harmless */ });
+      } catch (_e) { /* ignore */ }
+    });
   },
 
   async _pumpRemote(gen) {
     let url;
     try {
-      // Deliberately NOT prefetching before this resolves: the first request
-      // is what pins the provider, and firing three concurrent requests at a
-      // dead Deepgram key would burn three 401s instead of one.
-      url = await this._urlFor(gen, this._index);
+      // Deliberately NOT prefetching before this resolves: the first request is
+      // what pins the provider, and firing three concurrent requests at a dead
+      // Deepgram key would burn three 401s instead of one.
+      url = await this._urlFor(gen, this._segIndex);
     } catch (_e) {
-      // Every network provider failed for this chunk — degrade the rest of the
-      // session to the browser engine rather than dropping the user's request.
+      // Every network provider failed — degrade the rest of the session to the
+      // browser engine rather than dropping the user's request.
       if (gen !== this._gen || !this._playing) return;
       this._provider = 'web';
       this._releaseUrls();
@@ -354,47 +553,62 @@ const TtsEngine = {
     if (gen !== this._gen || !this._playing) return;
     this._prefetch(gen);
 
-    const item = this._items[this._index];
-    const audio = this._audio || (this._audio = new Audio());
+    const audio = this._audios[this._which];
+    if (!audio) { this.stop(); return; }
     // A failed clip can report itself through `onerror` AND a rejected play()
-    // promise; without this latch the session would skip two chunks instead of
-    // one.
+    // promise; without this latch the session would skip two segments.
     let settled = false;
     const next = () => {
       if (settled || gen !== this._gen) return;
       settled = true;
-      this._revoke(this._index);
+      this._revoke(this._segIndex);
+      this._which ^= 1;
       if (this._advance(gen)) this._pumpRemote(gen);
     };
     audio.onended = next;
     audio.onerror = next;
     audio.src = url;
-    this._announce(gen, item, this._index);
+    this._announce(gen, this._segIndex);
+    this._preloadNext(gen);
+    if (this._paused) return; // seeked into a paused session; wait for resume
     try {
       await audio.play();
     } catch (err) {
       if (gen !== this._gen || settled) return;
       // NotAllowedError means the gesture was lost, and Web Speech is under the
       // same restriction — nothing left to fall back to. Anything else (a
-      // truncated or undecodable response) is this clip's problem alone, so
-      // skip it rather than stranding the rest of the text.
+      // truncated or undecodable response) is this clip's problem alone.
       if (err && err.name === 'NotAllowedError') { this.stop(); return; }
       next();
     }
   },
 
-  /** Kicks off fetches for the current chunk and the next PREFETCH ones. */
+  /** Loads the following segment into the idle element so the swap is instant. */
+  _preloadNext(gen) {
+    const nextIndex = this._segIndex + 1;
+    if (nextIndex >= this._segments.length) return;
+    const idle = this._audios[this._which ^ 1];
+    if (!idle) return;
+    this._urlFor(gen, nextIndex).then((url) => {
+      if (gen !== this._gen) return;
+      // Guard against a seek having reassigned the elements in the meantime.
+      if (this._segIndex + 1 !== nextIndex) return;
+      try { idle.src = url; idle.load(); } catch (_e) { /* ignore */ }
+    }).catch(() => { /* handled at play time */ });
+  },
+
+  /** Kicks off fetches for the current segment and the next PREFETCH ones. */
   _prefetch(gen) {
-    for (let i = this._index; i <= this._index + this.PREFETCH; i++) {
-      if (i >= this._items.length) break;
+    for (let i = this._segIndex; i <= this._segIndex + this.PREFETCH; i++) {
+      if (i >= this._segments.length) break;
       this._urlFor(gen, i).catch(() => { /* handled at play time */ });
     }
   },
 
   _urlFor(gen, index) {
     if (this._urls.has(index)) return this._urls.get(index);
-    const text = this._text(this._items[index]);
-    const promise = this._synthesize(text).then((blob) => {
+    const text = this._text(this._segments[index]);
+    const promise = this._synthesize(text, gen).then((blob) => {
       if (gen !== this._gen) {
         // Session ended mid-flight — do not leak an unreferenced object URL.
         throw new Error('stale');
@@ -419,9 +633,10 @@ const TtsEngine = {
 
   /**
    * Tries each remote provider in turn and pins the first that works, so a bad
-   * Deepgram key costs one failed request per session rather than one per chunk.
+   * Deepgram key costs one failed request per session rather than one per
+   * segment.
    */
-  async _synthesize(text) {
+  async _synthesize(text, gen) {
     const order = this._pinned
       ? [this._pinned]
       : (this.preferredProvider() === 'deepgram' ? ['deepgram', 'server'] : ['server']);
@@ -431,8 +646,14 @@ const TtsEngine = {
         const blob = provider === 'deepgram'
           ? await this._fetchDeepgram(text)
           : await this._fetchServer(text);
-        this._pinned = provider;
-        this._provider = provider;
+        // Only the live generation may repoint the session. A request left over
+        // from a stopped session resolving here would otherwise flip _provider
+        // to a remote value mid browser-speech playback, and pause() would then
+        // pause a silent <audio> element while the speech kept going.
+        if (gen == null || gen === this._gen) {
+          this._pinned = provider;
+          this._provider = provider;
+        }
         return blob;
       } catch (err) {
         lastErr = err;
@@ -467,23 +688,23 @@ const TtsEngine = {
   // ── Browser Web Speech fallback ───────────────────────────────────────────
 
   /**
-   * One utterance per chunk, chained via onend. This is deliberately NOT one
+   * One utterance per segment, chained via onend. This is deliberately NOT one
    * big utterance: iOS Safari truncates long ones and drops queued ones when
    * the tab is backgrounded.
    */
   _speakWeb(gen) {
     if (gen !== this._gen || !this._playing) return;
-    if (!('speechSynthesis' in window)) { this.stop(); return; }
-    const item = this._items[this._index];
-    if (!item) { this.stop(); return; }
-    const u = new SpeechSynthesisUtterance(this._text(item));
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) { this.stop(); return; }
+    const seg = this._segments[this._segIndex];
+    if (!seg) { this.stop(); return; }
+    const u = new SpeechSynthesisUtterance(seg.text);
     u.onend = () => { if (this._advance(gen)) this._speakWeb(gen); };
     // A single failed utterance must not strand the rest of the text.
     u.onerror = () => { if (this._advance(gen)) this._speakWeb(gen); };
     // Announced at queue time rather than from `onstart`: only one utterance is
     // ever outstanding, and some engines never fire onstart at all — which
     // would leave the caller's progress highlight stuck on the first block.
-    this._announce(gen, item, this._index);
+    this._announce(gen, this._segIndex);
     try {
       window.speechSynthesis.speak(u);
     } catch (_e) {
@@ -491,19 +712,60 @@ const TtsEngine = {
     }
   },
 
+  // ── OS media controls ─────────────────────────────────────────────────────
+
+  /**
+   * Hardware keys, the lock screen and Chrome's media popup, wired to the same
+   * actions as the in-app bar. Audio path only — Web Speech has no media
+   * element for the browser to attach controls to.
+   */
+  _setupMediaSession() {
+    const ms = typeof navigator !== 'undefined' && navigator.mediaSession;
+    if (!ms || this._provider === 'web') return;
+    try {
+      if (typeof MediaMetadata !== 'undefined') {
+        ms.metadata = new MediaMetadata({ title: this._title, artist: 'Codeman', album: 'Read aloud' });
+      }
+      ms.setActionHandler('play', () => this.resume());
+      ms.setActionHandler('pause', () => this.pause());
+      ms.setActionHandler('previoustrack', () => this.prev());
+      ms.setActionHandler('nexttrack', () => this.next());
+      ms.setActionHandler('stop', () => this.stop());
+      ms.playbackState = 'playing';
+    } catch (_e) { /* not all browsers accept every action */ }
+  },
+
+  _updateMediaState() {
+    const ms = typeof navigator !== 'undefined' && navigator.mediaSession;
+    if (!ms) return;
+    try { ms.playbackState = this._paused ? 'paused' : 'playing'; } catch (_e) { /* ignore */ }
+  },
+
+  _clearMediaSession() {
+    const ms = typeof navigator !== 'undefined' && navigator.mediaSession;
+    if (!ms) return;
+    try {
+      ms.playbackState = 'none';
+      ms.metadata = null;
+      ['play', 'pause', 'previoustrack', 'nexttrack', 'stop'].forEach((a) => ms.setActionHandler(a, null));
+    } catch (_e) { /* ignore */ }
+  },
+
   // iOS kills speech when the tab is hidden; Chrome auto-pauses ~15s in.
-  // Resume on return, and if the engine really is dead, reset rather than
-  // leaving a Stop button that stops nothing.
+  // Only the Web Speech path needs this babysitting — a media element plays
+  // happily in the background, which is the entire point of MediaSession.
   _bindVisibility() {
     if (this._visBound || typeof document === 'undefined') return;
     this._visBound = true;
     document.addEventListener('visibilitychange', () => {
-      if (!this._playing) return;
-      if (document.hidden) { this.pause(); return; }
-      this.resume();
-      if (this._provider !== 'web') return;
+      if (!this._playing || this._provider !== 'web' || this._paused) return;
+      if (document.hidden) {
+        try { window.speechSynthesis.pause(); } catch (_e) { /* ignore */ }
+        return;
+      }
+      try { window.speechSynthesis.resume(); } catch (_e) { /* ignore */ }
       setTimeout(() => {
-        if (!this._playing || this._provider !== 'web') return;
+        if (!this._playing || this._provider !== 'web' || this._paused) return;
         const ss = window.speechSynthesis;
         if (ss && !ss.speaking && !ss.pending && !ss.paused) this.stop();
       }, 600);
