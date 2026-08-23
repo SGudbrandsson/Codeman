@@ -178,6 +178,42 @@ window._copyCode = function (btn) {
 // ═══════════════════════════════════════════════════════════════
 
 /**
+ * Strips a leading YAML frontmatter fence from a markdown document.
+ *
+ * markdown-it has no frontmatter support, and a `---` line directly under text
+ * is setext-heading syntax rather than a rule — so `---\nname: x\n---` renders
+ * as an <hr> plus one oversized <h2> containing the whole metadata block. That
+ * is both a display bug and, because <h2> is a read-aloud block, something the
+ * document reader announces before reaching the actual content.
+ *
+ * Guarded so a document that legitimately opens with a horizontal rule does not
+ * lose its first section: the fence must start on line 1, close within
+ * MAX_FRONTMATTER_LINES, and leave a non-empty body behind.
+ *
+ * @param {string} text
+ * @returns {string} the document without its frontmatter
+ */
+const MAX_FRONTMATTER_LINES = 100;
+function stripFrontmatter(text) {
+  if (typeof text !== 'string') return text;
+  // Tolerate a UTF-8 BOM and trailing whitespace on the fence line itself.
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const lines = body.split('\n');
+  if (!/^---[ \t]*\r?$/.test(lines[0]) && lines[0].trim() !== '---') return text;
+  const limit = Math.min(lines.length, MAX_FRONTMATTER_LINES + 1);
+  for (let i = 1; i < limit; i++) {
+    const line = lines[i].trim();
+    if (line !== '---' && line !== '...') continue;
+    const rest = lines.slice(i + 1).join('\n');
+    // An empty remainder means the whole file was the fence — more likely a
+    // document that opens and closes with rules than metadata, so leave it.
+    if (!rest.trim()) return text;
+    return rest.replace(/^\n+/, '');
+  }
+  return text;
+}
+
+/**
  * Minimal Markdown to HTML renderer.
  * SECURITY: All user/assistant text is HTML-escaped via esc() before processing.
  * Link hrefs are protocol-validated (only http/https/relative allowed).
@@ -20169,7 +20205,7 @@ class CodemanApp {
     content.classList.toggle('is-frame', htmlPreview);
     let rendered = null;
     if (!htmlPreview && isMd && window.CodemanMarkdown) {
-      try { rendered = window.CodemanMarkdown.render(cur.content); } catch (e) { rendered = null; }
+      try { rendered = window.CodemanMarkdown.render(stripFrontmatter(cur.content)); } catch (e) { rendered = null; }
     }
     if (htmlPreview) {
       // HTML preview: the document is arbitrary project content, so it is
