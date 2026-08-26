@@ -455,6 +455,19 @@ const TtsEngine = {
   blockAt(index) { return this._blocks[index] || null; },
 
   /**
+   * Index of a rendered element in the live session, or -1. Lets a caller turn
+   * "play from this block" into a seek when the block is already part of what
+   * is playing, instead of tearing the session down and starting again.
+   */
+  indexOfBlock(el) {
+    if (!this._playing || !el) return -1;
+    for (let i = 0; i < this._blocks.length; i++) {
+      if (this._blocks[i].el === el) return i;
+    }
+    return -1;
+  },
+
+  /**
    * Swaps in freshly collected blocks after the container was re-rendered.
    * Refuses unless the text sequence is identical — if the document actually
    * changed underneath, keeping the stale element refs is safer than jumping

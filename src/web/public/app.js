@@ -3177,6 +3177,8 @@ const TtsPlaybackBar = {
     bar.classList.add('is-visible');
     document.body.classList.add('has-tts-bar');
     this.update(state);
+    // The bar is one of the things the selection pill has to clear.
+    if (typeof TranscriptPlayPill !== 'undefined') TranscriptPlayPill.reposition();
   },
 
   update(state) {
@@ -3200,6 +3202,7 @@ const TtsPlaybackBar = {
     if (!this._el) return;
     this._el.classList.remove('is-visible');
     document.body.classList.remove('has-tts-bar');
+    if (typeof TranscriptPlayPill !== 'undefined') TranscriptPlayPill.reposition();
   },
 };
 
@@ -3299,6 +3302,7 @@ const ReadAloud = {
     this._owner = null;
     this._clearHighlight();
     TtsPlaybackBar.hide();
+    if (typeof TranscriptPlayPill !== 'undefined') TranscriptPlayPill.hide();
     if (cb) { try { cb(); } catch (e) { /* ignore */ } }
   },
 
@@ -3322,6 +3326,157 @@ const ReadAloud = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// TranscriptPlayPill — "Play from here" affordance for a transcript selection
+// ═══════════════════════════════════════════════════════════════
+// Selecting text inside an assistant message and pressing the message's play
+// button has always started from that block, but nothing said so. This makes
+// the route visible, mirroring the files sheet's Add-note pill — including its
+// gesture rules, which are not optional: the tap collapses the selection, so it
+// must be read on pointerdown, and playback must START inside that gesture
+// because iOS grants audio permission nowhere else.
+const TranscriptPlayPill = {
+  _el: null,
+  _bound: false,
+  _snapshot: null,   // { content, block, text } captured when the pill appeared
+
+  init() {
+    if (this._bound || typeof document === 'undefined') return;
+    this._bound = true;
+    document.addEventListener('selectionchange', () => this.update());
+  },
+
+  /** The message element and rendered block a selection starts in, or null. */
+  _target() {
+    try {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+      if (!String(sel).trim()) return null;
+      const node = sel.anchorNode;
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      if (!el || !el.closest) return null;
+      const content = el.closest('.tv-content.tv-markdown');
+      const view = document.getElementById('transcriptView');
+      if (!content || !view || !view.contains(content)) return null;
+      const block = el.closest(TtsEngine.BLOCK_SELECTOR);
+      // A selection anchored on the message wrapper itself has no block to
+      // start from; fall back to the first one so the pill still does something.
+      const target = block && content.contains(block)
+        ? block
+        : content.querySelector(TtsEngine.BLOCK_SELECTOR);
+      return target ? { content, block: target } : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /**
+   * Lifts the pill clear of whatever is docked at the bottom right now — the
+   * compose panel, the mobile keyboard accessory, the playback bar — by
+   * MEASURING them rather than guessing with static CSS offsets. The compose
+   * panel's height is dynamic and does not always reach the viewport bottom, so
+   * a fixed offset overlapped it on both desktop and mobile.
+   */
+  reposition() {
+    const el = this._el;
+    if (!el || el.style.display === 'none') return;
+    const vh = window.innerHeight || 0;
+    let bottom = 12;
+    const clearOf = (node) => {
+      if (!node) return;
+      const r = node.getBoundingClientRect();
+      // Only things actually docked low; a tall scrolled panel is not a dock.
+      if (!r.height || r.top < vh * 0.4) return;
+      bottom = Math.max(bottom, vh - r.top + 8);
+    };
+    clearOf(document.getElementById('mobileInputPanel'));
+    clearOf(document.querySelector('.keyboard-accessory-bar.visible'));
+    clearOf(document.querySelector('.tts-bar.is-visible'));
+    el.style.bottom = 'calc(' + bottom + 'px + var(--safe-area-bottom, 0px))';
+  },
+
+  update() {
+    if (!TranscriptTTS.supported) return;
+    const target = this._target();
+    if (!target) { this.hide(); return; }
+    // Snapshot at show time. The transcript is live: an SSE update can replace
+    // these nodes — and with them the selection — between the pill appearing
+    // and the user tapping it, which would otherwise make the pill do nothing
+    // on exactly the sessions that are busiest.
+    this._snapshot = { content: target.content, block: target.block, text: target.block.textContent || '' };
+    this._ensure().style.display = 'block';
+    this.reposition();
+  },
+
+  hide() {
+    if (this._el) this._el.style.display = 'none';
+  },
+
+  /**
+   * The block to start from at tap time: the live selection if it survived,
+   * else the snapshot, else the same block re-found by text after a re-render
+   * swapped the nodes out underneath it.
+   */
+  _resolveTarget() {
+    const live = this._target();
+    if (live) return live;
+    const snap = this._snapshot;
+    if (!snap) return null;
+    if (snap.block.isConnected && snap.content.isConnected) {
+      return { content: snap.content, block: snap.block };
+    }
+    const view = document.getElementById('transcriptView');
+    if (!view || !snap.text.trim()) return null;
+    const blocks = view.querySelectorAll(TtsEngine.BLOCK_SELECTOR);
+    for (let i = 0; i < blocks.length; i++) {
+      if ((blocks[i].textContent || '') !== snap.text) continue;
+      const content = blocks[i].closest('.tv-content.tv-markdown');
+      if (content) return { content, block: blocks[i] };
+    }
+    return null;
+  },
+
+  _ensure() {
+    if (this._el) return this._el;
+    const btn = document.createElement('button');
+    btn.id = 'transcriptPlayPill';
+    btn.className = 'files-note-pill files-play-pill transcript-play-pill';
+    btn.type = 'button';
+    btn.textContent = '▶ Play from here';
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const target = this._resolveTarget();
+      this.hide();
+      this._snapshot = null;
+      if (target) this.playFrom(target);
+    });
+    // Same tap, touch path: preventDefault() on touchend suppresses the
+    // synthetic click that would otherwise land on whatever is underneath.
+    btn.addEventListener('touchend', (e) => { e.preventDefault(); });
+    document.body.appendChild(btn);
+    this._el = btn;
+    return btn;
+  },
+
+  /**
+   * Re-targets the running session when the block is already part of it, so
+   * this doubles as a precise scrub while listening; otherwise starts a new
+   * session at that block.
+   */
+  playFrom(target) {
+    const at = TtsEngine.indexOfBlock(target.block);
+    if (at !== -1 && ReadAloud.isActive('transcript')) { TtsEngine.seek(at); return; }
+    TranscriptTTS.speak(this._ttsButtonFor(target.content), target.content, target.block);
+  },
+
+  /** The play button belonging to the same message, so its icon stays in sync. */
+  _ttsButtonFor(content) {
+    const wrap = content.parentElement;
+    return wrap ? wrap.querySelector('.tv-tts-btn') : null;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
 // TranscriptTTS — read-aloud button on assistant messages
 // ═══════════════════════════════════════════════════════════════
 const TranscriptTTS = {
@@ -3336,14 +3491,17 @@ const TranscriptTTS = {
    * seeking possible at all. If the user has selected text inside the message,
    * playback starts from that block.
    */
-  speak(btn, contentEl) {
-    if (this._currentBtn === btn) {
+  speak(btn, contentEl, startBlock) {
+    // An explicit start block means "play from here", which must never be
+    // read as a second tap on a playing button and stop instead.
+    const explicit = startBlock !== undefined;
+    if (!explicit && this._currentBtn === btn) {
       this.stop();
       return;
     }
     this.stop();
     if (!contentEl) return;
-    const startEl = ReadAloud.selectionAnchor(contentEl);
+    const startEl = explicit ? startBlock : ReadAloud.selectionAnchor(contentEl);
     this._currentBtn = btn;
     this._setSpeakingUI(btn);
     const started = ReadAloud.start({
@@ -3363,6 +3521,7 @@ const TranscriptTTS = {
   },
 
   _setSpeakingUI(btn) {
+    if (!btn) return;
     btn.classList.add('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Stop reading aloud');
     btn.setAttribute('title', 'Stop reading aloud');
@@ -3488,6 +3647,7 @@ const TranscriptView = {
   init() {
     this._container = document.getElementById('transcriptView');
     if (!this._container) return;
+    TranscriptPlayPill.init();
     // Keep padding-bottom in sync with compose panel height so last message is never hidden
     const panel = document.getElementById('mobileInputPanel');
     if (panel && window.ResizeObserver) {
@@ -20887,9 +21047,11 @@ class CodemanApp {
   }
 
   _filesHideNotePill() {
-    // Dynamic node: $$ (uncached) — the pill is created and removed at runtime.
+    // Dynamic nodes: $$ (uncached) — the pills are created and removed at runtime.
     const pill = this.$$('filesNotePill');
     if (pill) pill.style.display = 'none';
+    const play = this.$$('filesPlayPill');
+    if (play) play.style.display = 'none';
   }
 
   _filesUpdateNotePill() {
@@ -20901,6 +21063,15 @@ class CodemanApp {
     // collapsed the selection can still be turned into a note.
     if (!excerpt) { this._filesHideNotePill(); return; }
     this._filesCaptureSelSnapshot(excerpt);
+    // Both pills share one centred row; creating them separately would leave two
+    // absolutely-positioned buttons stacked on top of each other.
+    let host = this.$$('filesSelPills');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'filesSelPills';
+      host.className = 'files-sel-pills';
+      view.appendChild(host);
+    }
     let pill = this.$$('filesNotePill');
     if (!pill) {
       pill = document.createElement('button');
@@ -20929,8 +21100,33 @@ class CodemanApp {
       // Same tap, touch path: preventDefault() on touchend DOES suppress the
       // synthetic click, so on touch the swallower usually never fires.
       pill.addEventListener('touchend', (e) => { e.preventDefault(); });
-      view.appendChild(pill);
+      host.appendChild(pill);
     }
+
+    let play = this.$$('filesPlayPill');
+    if (!play) {
+      play = document.createElement('button');
+      play.id = 'filesPlayPill';
+      play.className = 'files-note-pill files-play-pill';
+      play.type = 'button';
+      play.textContent = '\u25B6 Play from here';
+      // Identical gesture rules to the note pill: the selection must be read
+      // synchronously on pointerdown (the tap collapses it), and playback must
+      // START inside this gesture — iOS grants audio permission nowhere else.
+      play.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._filesSwallowNextClick();
+        const startEl = this._filesCaptureTtsStart();
+        this._filesHideNotePill();
+        this._filesClearSelSnapshot();
+        if (!startEl) { this.showToast('Select some text first', 'info'); return; }
+        this.filesPlayFromBlock(startEl);
+      });
+      play.addEventListener('touchend', (e) => { e.preventDefault(); });
+      host.appendChild(play);
+    }
+    play.style.display = FilesTTS.supported ? 'block' : 'none';
     // Viewport-anchored bottom bar, NOT anchored to the selection rect: both
     // Android Chrome's Copy/Cut/Search toolbar and iOS Safari's callout render
     // adjacent to (normally above) the selection and re-position as it moves,
@@ -21488,6 +21684,23 @@ class CodemanApp {
     if (!startEl || !preview.contains(startEl)) startEl = this._filesCaptureTtsStart();
     const ok = FilesTTS.start(preview, startEl, () => this._filesUpdateListenBtn());
     if (!ok) { this.showToast('Nothing to read in this document', 'info'); return; }
+    this._filesUpdateListenBtn();
+  }
+
+  /**
+   * Starts read-aloud at a specific rendered block, or re-targets the running
+   * session if that block is already part of it — so "Play from here" doubles
+   * as a precise scrub while listening rather than restarting the document.
+   *
+   * MUST be called synchronously from the gesture (see the pill's pointerdown).
+   */
+  filesPlayFromBlock(startEl) {
+    const preview = this._filesPreviewEl();
+    if (!preview || !startEl) return;
+    const at = TtsEngine.indexOfBlock(startEl);
+    if (at !== -1 && FilesTTS.isPlaying()) { TtsEngine.seek(at); return; }
+    const ok = FilesTTS.start(preview, startEl, () => this._filesUpdateListenBtn());
+    if (!ok) { this.showToast('Nothing to read from here', 'info'); return; }
     this._filesUpdateListenBtn();
   }
 

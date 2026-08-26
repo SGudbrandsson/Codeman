@@ -13166,13 +13166,28 @@ a.files-sheet-tool { text-decoration: none; }
    anchored bar cannot collide, stays reachable at any scroll position and is
    thumb-reachable on phones. Sits inside #filesSheetView (position:relative),
    above the notes panel in z-order. */
-.files-note-pill {
+/* Row hosting the selection pills, centred at the bottom of the preview.
+   Deliberately NOT anchored to the selection rect: Android Chrome's Copy/Cut
+   toolbar and iOS Safari's callout render adjacent to the selection and would
+   cover anything placed there. */
+.files-sel-pills {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(12px + var(--safe-area-bottom, 0px));
+  bottom: calc(12px + var(--safe-area-bottom, 0px) + var(--tts-pill-lift, 0px));
   max-width: calc(100% - 24px);
   z-index: 8;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;   /* the row is a layout box; only the pills take taps */
+}
+
+.files-sel-pills > * { pointer-events: auto; }
+
+.files-note-pill {
+  max-width: 100%;
   display: none;
   background: #1f6feb;
   color: #fff;
@@ -13470,4 +13485,41 @@ body.keyboard-visible .tts-bar {
 @media (prefers-reduced-motion: reduce) {
   .tts-bar { transition: none; }
   .tts-bar-fill { transition: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   Selection pills vs the read-aloud bar
+   ═══════════════════════════════════════════════════════════════
+   The playback bar is viewport-fixed at z-index 1160; the selection pills sit
+   at the bottom of their own container. Without a lift they overlap whenever a
+   selection is live while something is being read aloud. --tts-pill-lift is
+   the single knob both pills read. */
+:root { --tts-pill-lift: 0px; }
+body.has-tts-bar { --tts-pill-lift: 60px; }
+body.keyboard-visible { --tts-pill-lift: 44px; }
+body.has-tts-bar.keyboard-visible { --tts-pill-lift: 104px; }
+
+/* Transcript pill: viewport-fixed, because .transcript-view scrolls — an
+   absolutely-positioned child would scroll away with the content. Cleared of
+   the compose panel as well as the bar. */
+.transcript-play-pill {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Starting point only — TranscriptPlayPill.reposition() overwrites `bottom`
+     with a measured value, because the compose panel's height is dynamic and
+     any static guess overlapped it. */
+  bottom: calc(12px + var(--safe-area-bottom, 0px) + var(--desktop-compose-height, 60px));
+  max-width: calc(100vw - 24px);
+  z-index: 1161;   /* just above the playback bar */
+  display: none;
+}
+
+.files-play-pill {
+  background: #238636;   /* distinct from Add note's blue */
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .files-note-pill { padding: 12px 20px; }
 }
