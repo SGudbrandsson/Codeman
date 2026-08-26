@@ -4855,6 +4855,7 @@ const TranscriptView = {
         ts.textContent = tsText;
         div.appendChild(ts);
       }
+      div.appendChild(this._buildBlockActions(block, content));
       if (TranscriptTTS.supported) {
         const ttsBtn = document.createElement('button');
         ttsBtn.className = 'tv-tts-btn';
@@ -4869,6 +4870,182 @@ const TranscriptView = {
       }
     }
     return div;
+  },
+
+  /**
+   * Builds the per-response action row: copy the raw markdown source, or copy
+   * the rendered response as rich text (text/html) for pasting into editors.
+   *
+   * Appended as a sibling of `.tv-content` so `_typewriterReveal`, which only
+   * rewrites the content node, never destroys it.
+   *
+   * @param {{text: string}} block the transcript block being rendered
+   * @param {HTMLElement} content the rendered `.tv-content` node
+   * @returns {HTMLElement} the actions row
+   */
+  _buildBlockActions(block, content) {
+    const actions = document.createElement('div');
+    actions.className = 'tv-block-actions';
+
+    const mdBtn = document.createElement('button');
+    mdBtn.type = 'button';
+    mdBtn.className = 'tv-copy-btn';
+    mdBtn.textContent = 'Copy';
+    mdBtn.title = 'Copy response as markdown';
+    mdBtn.setAttribute('aria-label', 'Copy response as markdown');
+    mdBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._copyMarkdown(mdBtn, block.text || '');
+    });
+
+    const rtBtn = document.createElement('button');
+    rtBtn.type = 'button';
+    rtBtn.className = 'tv-copy-btn';
+    rtBtn.textContent = 'Copy rich text';
+    rtBtn.title = 'Copy response as rich text (formatted)';
+    rtBtn.setAttribute('aria-label', 'Copy response as rich text');
+    rtBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Safari requires ClipboardItem to be constructed synchronously inside
+      // the user-gesture handler, so build the payload before any await.
+      this._copyRichText(rtBtn, this._richHtmlFor(content), block.text || '');
+    });
+
+    actions.appendChild(mdBtn);
+    actions.appendChild(rtBtn);
+    return actions;
+  },
+
+  /**
+   * Produces clipboard-ready HTML for a rendered response: works on a clone so
+   * the live DOM is untouched, drops the per-code-block Copy buttons and the
+   * line-number span chrome, and absolutises image srcs so pasted images still
+   * resolve outside the app.
+   *
+   * @param {HTMLElement} content the rendered `.tv-content` node
+   * @returns {string} the HTML to place on the clipboard
+   */
+  _richHtmlFor(content) {
+    const clone = content.cloneNode(true);
+    clone.querySelectorAll('.tv-code-copy').forEach((b) => b.remove());
+    // `.tv-code-line` spans carry no newlines (line numbers come from CSS
+    // counters), so flatten them back to plain newline-separated code.
+    clone.querySelectorAll('.tv-code-block code, pre code, pre').forEach((codeEl) => {
+      const lines = codeEl.querySelectorAll(':scope > .tv-code-line');
+      if (lines.length) {
+        codeEl.textContent = Array.from(lines).map((l) => l.textContent).join('\n');
+      }
+    });
+    clone.querySelectorAll('img[src]').forEach((img) => {
+      try {
+        img.setAttribute('src', new URL(img.getAttribute('src'), location.origin).href);
+      } catch { /* leave unresolvable srcs alone */ }
+    });
+    clone.querySelectorAll('a[href]').forEach((a) => {
+      try {
+        a.setAttribute('href', new URL(a.getAttribute('href'), location.origin).href);
+      } catch { /* leave unresolvable hrefs alone */ }
+    });
+    return clone.innerHTML;
+  },
+
+  /** Copies the raw markdown source of a response. */
+  async _copyMarkdown(btn, text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else if (!this._execCopyText(text)) {
+        throw new Error('copy unsupported');
+      }
+      this._flashCopied(btn);
+    } catch {
+      this._copyFailed();
+    }
+  },
+
+  /**
+   * Copies a response as rich text (`text/html` + a `text/plain` markdown
+   * fallback). Falls back to a hidden contenteditable + execCommand when
+   * ClipboardItem is unavailable — e.g. the plain-HTTP LAN/tailscale URLs this
+   * app is also served from, where the async clipboard API is disabled.
+   */
+  async _copyRichText(btn, html, plain) {
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write) {
+        const item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        });
+        await navigator.clipboard.write([item]);
+      } else if (!this._execCopyHtml(html)) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(plain);
+        } else if (!this._execCopyText(plain)) {
+          throw new Error('copy unsupported');
+        }
+      }
+      this._flashCopied(btn);
+    } catch {
+      this._copyFailed();
+    }
+  },
+
+  /** execCommand fallback for rich text: selects a detached contenteditable. */
+  _execCopyHtml(html) {
+    const holder = document.createElement('div');
+    holder.setAttribute('contenteditable', 'true');
+    holder.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;white-space:pre-wrap;';
+    holder.innerHTML = html; // eslint-disable-line no-unsanitized/property -- cloned from already-sanitised rendered markdown
+    document.body.appendChild(holder);
+    let ok = false;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(holder);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      ok = document.execCommand('copy');
+      sel.removeAllRanges();
+    } catch {
+      ok = false;
+    }
+    holder.remove();
+    return ok;
+  },
+
+  /** execCommand fallback for plain text. */
+  _execCopyText(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+    document.body.appendChild(ta);
+    let ok = false;
+    try {
+      ta.select();
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  },
+
+  /** Swaps a copy button's label to a confirmation for ~2s. */
+  _flashCopied(btn) {
+    if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+    if (btn._copyLabel === undefined) btn._copyLabel = btn.textContent;
+    btn.textContent = '\u2713 Copied';
+    btn.classList.add('copied');
+    btn._copyResetTimer = setTimeout(() => {
+      btn.textContent = btn._copyLabel;
+      btn.classList.remove('copied');
+      btn._copyResetTimer = null;
+    }, 2000);
+  },
+
+  _copyFailed() {
+    if (window.app && app.showToast) app.showToast('Copy failed', 'error');
   },
 
   _formatTimestamp(isoString) {

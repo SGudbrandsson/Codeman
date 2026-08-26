@@ -10186,6 +10186,54 @@ kbd {
   color: #4ade80;
   border-color: rgba(74,222,128,0.3);
 }
+/* Per-response copy controls (markdown / rich text).
+   Always visible — a hover-only row would be unreachable on touch devices. */
+.tv-block-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.tv-block--assistant:hover .tv-block-actions,
+.tv-block-actions:focus-within {
+  opacity: 1;
+}
+.tv-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 0.7rem;
+  font-family: inherit;
+  line-height: 1;
+  color: #94a3b8;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.tv-copy-btn:hover {
+  color: #e2e8f0;
+  background: rgba(255,255,255,0.12);
+}
+.tv-copy-btn.copied {
+  color: #4ade80;
+  border-color: rgba(74,222,128,0.3);
+}
+@media (pointer: coarse) {
+  .tv-block-actions {
+    opacity: 1;
+  }
+  .tv-copy-btn {
+    min-height: 44px;
+    padding: 8px 14px;
+  }
+}
 .tv-tts-btn {
   position: absolute;
   top: 0;
