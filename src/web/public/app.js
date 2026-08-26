@@ -12078,7 +12078,13 @@ class CodemanApp {
   // Session Context Menu (gear icon dropdown)
   // ═══════════════════════════════════════════════════════════════
 
-  openSessionContextMenu(event, sessionId) {
+  /**
+   * @param {Object} [options]
+   * @param {Function} [options.onRename] Caller-supplied rename flow. Used by the
+   *   session drawer so Rename edits the visible drawer row instead of the
+   *   desktop tab strip (which is display:none on mobile).
+   */
+  openSessionContextMenu(event, sessionId, options = {}) {
     // Remove any existing context menu
     this.closeSessionContextMenu();
 
@@ -12132,7 +12138,8 @@ class CodemanApp {
     renameItem.appendChild(renameLabel);
     renameItem.addEventListener('click', () => {
       this.closeSessionContextMenu();
-      this.startInlineRename(sessionId);
+      if (typeof options.onRename === 'function') options.onRename();
+      else this.startInlineRename(sessionId);
     });
     menu.appendChild(renameItem);
 
@@ -12191,22 +12198,37 @@ class CodemanApp {
     menu.style.top = `${top}px`;
     menu.style.left = `${left}px`;
 
-    // Close on outside click (delayed to avoid catching the opening click)
-    this._sessionCtxMenuCleanup = () => {
+    // Close on outside tap. Armed behind a gesture-grace window (same pattern as
+    // KeyboardAccessoryBar.openDrawer) so the opening tap — and any residual
+    // compatibility click a touch device synthesises from it — cannot dismiss the
+    // menu inside its own gesture. Dismiss on pointerdown so a drag/scroll outside
+    // also closes it; the grace check is belt-and-braces against a late replay.
+    const graceMs = 250;
+    const openedAt = Date.now();
+    this._sessionCtxMenuCleanup = (e) => {
+      if (e && e.target && menu.contains(e.target)) return;
+      if (Date.now() - openedAt < graceMs) return;
       this.closeSessionContextMenu();
     };
-    setTimeout(() => {
+    this._sessionCtxMenuArmTimer = setTimeout(() => {
+      this._sessionCtxMenuArmTimer = null;
+      document.addEventListener('pointerdown', this._sessionCtxMenuCleanup);
       document.addEventListener('click', this._sessionCtxMenuCleanup);
-      document.addEventListener('keydown', this._sessionCtxMenuKeyHandler = (e) => {
-        if (e.key === 'Escape') this.closeSessionContextMenu();
-      });
-    }, 0);
+    }, graceMs);
+    document.addEventListener('keydown', this._sessionCtxMenuKeyHandler = (e) => {
+      if (e.key === 'Escape') this.closeSessionContextMenu();
+    });
   }
 
   closeSessionContextMenu() {
     const existing = document.querySelector('.session-context-menu');
     if (existing) existing.remove();
+    if (this._sessionCtxMenuArmTimer) {
+      clearTimeout(this._sessionCtxMenuArmTimer);
+      this._sessionCtxMenuArmTimer = null;
+    }
     if (this._sessionCtxMenuCleanup) {
+      document.removeEventListener('pointerdown', this._sessionCtxMenuCleanup);
       document.removeEventListener('click', this._sessionCtxMenuCleanup);
       this._sessionCtxMenuCleanup = null;
     }
@@ -13963,6 +13985,12 @@ class CodemanApp {
 
     const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"], .drawer-session-name[data-session-id="${sessionId}"]`);
     if (!tabName) return;
+
+    // Never build the rename input inside a node with no layout box: on mobile the
+    // desktop tab strip (#sessionTabs) is display:none, so focus() silently fails
+    // and the user types into an invisible field with the keyboard up.
+    const nameRect = tabName.getBoundingClientRect();
+    if (!tabName.offsetParent || nameRect.width === 0 || nameRect.height === 0) return;
 
     const currentName = this.getSessionName(session);
     const input = document.createElement('input');
@@ -24457,8 +24485,19 @@ const SessionDrawer = {
     gearBtn.textContent = '⚙';
     gearBtn.addEventListener('click', e => {
       e.stopPropagation();
-      SessionDrawer.close();
-      app.openSessionContextMenu(e, s.id);
+      // Do NOT close the drawer — the context menu is appended to <body> at
+      // z-index:10000 and already renders above the drawer (z-index:9000).
+      // Closing it slid the sidebar (and the rename target) off-screen.
+      app.openSessionContextMenu(e, s.id, {
+        onRename: () => {
+          // Resolve the row/name nodes fresh: the drawer may have re-rendered
+          // between opening the menu and picking Rename.
+          const drawerEl = SessionDrawer._getEl?.();
+          const freshRow = drawerEl?.querySelector(`.drawer-session-row[data-session-id="${CSS.escape(s.id)}"]`) || row;
+          const freshName = freshRow.querySelector('.drawer-session-name') || name;
+          SessionDrawer._startInlineRename(freshRow, freshName, s);
+        },
+      });
     });
 
     const closeBtn = document.createElement('button');
