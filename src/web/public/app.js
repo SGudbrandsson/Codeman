@@ -20249,8 +20249,7 @@ class CodemanApp {
     const name = (data.path || '').split('/').pop();
     const rawUrl = data.url || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(data.path)}`;
     meta.textContent = `${this.formatFileSize(data.size)}${ext ? ' • ' + ext : ''}`;
-    const dl = `<a class="files-sheet-tool" href="${escapeHtml(rawUrl)}" download="${escapeHtml(name)}">Download</a>`;
-    actions.innerHTML = dl;
+    actions.innerHTML = this._filesDownloadHtml(data.path);
     if (data.type === 'image') {
       content.innerHTML = `<div class="files-img-wrap"><img class="files-img" src="${escapeHtml(rawUrl)}" alt="${escapeHtml(name)}"></div>`;
     } else if (data.type === 'video') {
@@ -20263,6 +20262,15 @@ class CodemanApp {
         <a class="files-sheet-tool files-binary-dl" href="${escapeHtml(rawUrl)}" download="${escapeHtml(name)}">Download</a>
       </div>`;
     }
+  }
+
+  // Download link for the file currently open in the sheet. file-raw streams
+  // straight from disk with Content-Disposition: attachment, so this is always
+  // the FULL file — even when the in-sheet view is truncated at 10000 lines.
+  _filesDownloadHtml(path) {
+    const name = String(path || '').split('/').pop();
+    const url = `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(path)}&download=1`;
+    return `<a class="files-sheet-tool" href="${escapeHtml(url)}" download="${escapeHtml(name)}">Download</a>`;
   }
 
   _filesRenderView() {
@@ -20329,10 +20337,10 @@ class CodemanApp {
     }
     // Markdown and HTML files get an Edit ⇄ Preview tab pair (tabs, not split-pane).
     if ((isMd || isHtml) && !cur.truncated) {
-      actions.innerHTML = `<button class="files-sheet-tool is-active" onclick="app._filesRenderView()">Preview</button><button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button><button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>`;
+      actions.innerHTML = `<button class="files-sheet-tool is-active" onclick="app._filesRenderView()">Preview</button><button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button><button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${this._filesDownloadHtml(cur.path)}`;
     } else {
       const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
-      actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}`;
+      actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}${this._filesDownloadHtml(cur.path)}`;
     }
     // Markdown-Preview-only extras: review notes + read-aloud. Never on the
     // sandboxed HTML frame, the binary previews or the editor surface.
@@ -20369,7 +20377,11 @@ class CodemanApp {
     // has a single code path.
     if (window.CodemanEditor) {
       content.innerHTML = `<div class="files-cm-host" id="filesSheetEditor"></div>`;
-      const host = this.$('filesSheetEditor');
+      // $$ (uncached): this host is created and destroyed on every Edit press.
+      // `$()` memoises forever, so a second Edit would hand back the detached
+      // node from the first one and CodeMirror would mount off-screen — the
+      // editor came up blank (see the $() note above _elemCache).
+      const host = this.$$('filesSheetEditor');
       try {
         this.filesState.editor = window.CodemanEditor.create(host, {
           doc: cur.content,
@@ -20380,7 +20392,7 @@ class CodemanApp {
     }
     if (!this.filesState.editor) {
       content.innerHTML = `<textarea class="files-sheet-editor" id="filesSheetEditor" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>`;
-      const ta = this.$('filesSheetEditor');
+      const ta = this.$$('filesSheetEditor'); // $$ (uncached): see above.
       ta.value = cur.content;
       ta.addEventListener('input', () => { cur.dirty = ta.value !== cur.content; });
       this.filesState.editor = {

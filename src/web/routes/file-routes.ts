@@ -264,7 +264,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
   // Serve raw file content (for images/binary files)
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { path: filePath } = req.query as { path?: string };
+    const { path: filePath, download } = req.query as { path?: string; download?: string };
     const session = findSessionOrFail(ctx, id);
 
     if (!filePath) {
@@ -325,6 +325,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
 
       const content = await fs.readFile(resolvedPath);
       reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+      // ?download=1 forces a save instead of an in-browser preview. The <a download>
+      // attribute alone is unreliable on iOS Safari, and text/PDF/image types would
+      // otherwise open in a tab. Quotes and control chars are stripped from the
+      // filename so they cannot break out of the header value.
+      if (download === '1' || download === 'true') {
+        const safeName = basename(resolvedPath).replace(/["\\\r\n]/g, '_');
+        reply.header(
+          'Content-Disposition',
+          `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+        );
+      }
       reply.send(content);
     } catch (err) {
       reply
