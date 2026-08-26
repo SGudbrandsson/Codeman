@@ -12,7 +12,8 @@
  *   indicator, level meter (AnalyserNode), and elapsed timer. Two insert modes: "direct"
  *   (inject into local echo overlay or PTY) and "compose" (editable textarea overlay).
  *   Includes a temporary green Send button that replaces the settings gear icon after voice input.
- *   Web Speech API has auto-retry (up to 2x) for premature onend and iOS Safari stability check.
+ *   Web Speech API has auto-retry (up to 2x) for premature onend, plus an iOS-only stability
+ *   check (iOS WebKit never sets isFinal); other browsers use their own final results.
  *
  * @globals {object} DeepgramProvider
  * @globals {object} VoiceInput
@@ -281,6 +282,9 @@ const VoiceInput = {
   _composeBarMode: false, // when true, insert text into compose textarea instead of PTY
   _userRequestedStop: false, // true when user explicitly clicked stop (vs unexpected end)
   _lastInterimLength: 0, // chars of interim text appended to compose textarea
+  _webSpeechSawFinal: false, // browser delivered a real isFinal result this session
+  _stabilityCommittedText: '', // normalized text last committed by the iOS stability timer
+  _stabilityCommittedAt: 0, // timestamp of that commit (dedupe window)
 
   init() {
     this._initRecognition();
@@ -424,6 +428,9 @@ const VoiceInput = {
     this._activeProvider = 'webspeech';
     this._accumulatedFinal = '';
     this._lastTranscript = '';
+    this._webSpeechSawFinal = false;
+    this._stabilityCommittedText = '';
+    this._stabilityCommittedAt = 0;
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
@@ -504,11 +511,18 @@ const VoiceInput = {
     }
 
     if (finalText) {
+      // This browser delivers real final results, so the iOS stability fallback
+      // must never commit interim text again — it would insert the utterance twice.
+      this._webSpeechSawFinal = true;
+      clearTimeout(this._stabilityTimer);
+      this._stabilityTimer = null;
       this._clearInterimFromCompose();
-      this._insertText(finalText);
+      if (!this._isDuplicateOfStabilityCommit(finalText)) {
+        this._insertText(finalText);
+      }
+      this._stabilityCommittedText = '';
       this._accumulatedFinal = '';
       this._lastTranscript = '';
-      clearTimeout(this._stabilityTimer);
     }
     if (interim) {
       this._showPreview(interim);
@@ -723,7 +737,40 @@ const VoiceInput = {
     this._interimInsertOffset = undefined;
   },
 
+  /**
+   * Whether the interim-stability fallback should run.
+   *
+   * Only iOS WebKit needs it — there `isFinal` is never set on results, so
+   * stable interim text is the only signal an utterance ended. Every other
+   * browser delivers its own final result; committing stable interim text
+   * there inserts the same utterance a second time.
+   */
+  _needsStabilityFallback() {
+    if (this._webSpeechSawFinal) return false;
+    if (typeof MobileDetection !== 'undefined' && MobileDetection.isIOS) {
+      return MobileDetection.isIOS();
+    }
+    return /iPad|iPhone|iPod/.test(navigator.userAgent || '');
+  },
+
+  /** Normalize a transcript for duplicate comparison (case/space/trailing punctuation). */
+  _normalizeTranscript(text) {
+    return (text || '').toLowerCase().replace(/\s+/g, ' ').replace(/[.,!?;:]+$/, '').trim();
+  },
+
+  /**
+   * True when a late final result just repeats what the stability timer already
+   * inserted (iOS versions that eventually do emit a final for the utterance).
+   * Limited to a short window so a genuinely repeated phrase still goes through.
+   */
+  _isDuplicateOfStabilityCommit(finalText) {
+    if (!this._stabilityCommittedText) return false;
+    if (Date.now() - this._stabilityCommittedAt > 2000) return false;
+    return this._normalizeTranscript(finalText) === this._stabilityCommittedText;
+  },
+
   _iosStabilityCheck(transcript) {
+    if (!this._needsStabilityFallback()) return;
     if (transcript !== this._lastTranscript) {
       this._lastTranscript = transcript;
       clearTimeout(this._stabilityTimer);
@@ -732,6 +779,8 @@ const VoiceInput = {
           // iOS Safari: treat stable interim as final segment, but keep listening
           this._clearInterimFromCompose();
           this._insertText(transcript);
+          this._stabilityCommittedText = this._normalizeTranscript(transcript);
+          this._stabilityCommittedAt = Date.now();
           this._lastTranscript = '';
           this._showPreview('Listening...');
         }
@@ -922,6 +971,9 @@ const VoiceInput = {
     this._stabilityTimer = null;
     this._accumulatedFinal = '';
     this._lastTranscript = '';
+    this._webSpeechSawFinal = false;
+    this._stabilityCommittedText = '';
+    this._stabilityCommittedAt = 0;
     this._retryCount = 0;
     this._hasReceivedResult = false;
   }
