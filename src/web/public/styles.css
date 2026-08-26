@@ -13495,10 +13495,12 @@ body.keyboard-visible .tts-bar {
    at the bottom of their own container. Without a lift they overlap whenever a
    selection is live while something is being read aloud. --tts-pill-lift is
    the single knob both pills read. */
+/* Fallback only — both pills set an inline, MEASURED `bottom` when shown
+   (bottomDockLift in app.js). Static offsets could not track the compose
+   panel, whose height is dynamic and which expands over the whole screen on
+   mobile. */
 :root { --tts-pill-lift: 0px; }
 body.has-tts-bar { --tts-pill-lift: 60px; }
-body.keyboard-visible { --tts-pill-lift: 44px; }
-body.has-tts-bar.keyboard-visible { --tts-pill-lift: 104px; }
 
 /* Transcript pill: viewport-fixed, because .transcript-view scrolls — an
    absolutely-positioned child would scroll away with the content. Cleared of

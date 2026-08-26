@@ -30,6 +30,15 @@ function objectSource(source: string, decl: string): string {
   return source.slice(start + decl.length - 1, end + 2);
 }
 
+/** Source of a top-level function declaration, including its body. */
+function functionDecl(name: string): string {
+  const start = APP_JS_SOURCE.indexOf(`function ${name}(`);
+  expect(start, `${name} not found`).toBeGreaterThan(-1);
+  const end = APP_JS_SOURCE.indexOf('\n}\n', start);
+  expect(end, `${name} has no close`).toBeGreaterThan(start);
+  return APP_JS_SOURCE.slice(start, end + 2);
+}
+
 interface Utter {
   text: string;
   onend?: () => void;
@@ -80,6 +89,7 @@ function build() {
   const factory = new Function(
     'TtsEngine',
     `
+    ${functionDecl('bottomDockLift')}
     const TtsPlaybackBar = ${objectSource(APP_JS_SOURCE, 'const TtsPlaybackBar = {')};
     const ReadAloud = ${objectSource(APP_JS_SOURCE, 'const ReadAloud = {')};
     const TranscriptPlayPill = ${objectSource(APP_JS_SOURCE, 'const TranscriptPlayPill = {')};

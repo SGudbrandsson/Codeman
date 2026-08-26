@@ -3103,6 +3103,33 @@ const PanelBackdrop = {
 // ═══════════════════════════════════════════════════════════════
 // TranscriptTTS — text-to-speech singleton for assistant messages
 // ═══════════════════════════════════════════════════════════════
+/**
+ * How far above the viewport bottom a floating control must sit to clear
+ * whatever is docked down there right now.
+ *
+ * Measured rather than expressed as static CSS offsets: the compose panel's
+ * height is dynamic and on mobile it expands to most of the screen, so every
+ * fixed guess ended up either overlapping the message input or floating in the
+ * middle of nowhere. "Docked" means reaching into the bottom third — not flush
+ * with the edge, since the compose panel sits above the keyboard accessory bar.
+ *
+ * @param {string[]} selectors - candidate docks, any of which may be absent
+ * @returns {number} offset in px (never less than 12)
+ */
+function bottomDockLift(selectors) {
+  const vh = window.innerHeight || 0;
+  let bottom = 12;
+  for (const selector of selectors) {
+    const node = document.querySelector(selector);
+    if (!node) continue;
+    const r = node.getBoundingClientRect();
+    if (!r.height || getComputedStyle(node).display === 'none') continue;
+    if (r.bottom < vh * 0.66) continue;
+    bottom = Math.max(bottom, vh - r.top + 8);
+  }
+  return bottom;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TtsPlaybackBar — transport controls for an active read-aloud session
 // ═══════════════════════════════════════════════════════════════
@@ -3177,8 +3204,24 @@ const TtsPlaybackBar = {
     bar.classList.add('is-visible');
     document.body.classList.add('has-tts-bar');
     this.update(state);
+    this.reposition();
     // The bar is one of the things the selection pill has to clear.
     if (typeof TranscriptPlayPill !== 'undefined') TranscriptPlayPill.reposition();
+  },
+
+  /**
+   * Lifts the bar clear of the mobile keyboard accessory bar by measuring it.
+   * The accessory is visible in layouts where `body.keyboard-visible` is not
+   * set, so the CSS-class-only lift left the transport controls interleaved
+   * with the accessory buttons.
+   */
+  reposition() {
+    if (!this._el) return;
+    this._el.style.marginBottom = bottomDockLift([
+      '.keyboard-accessory-bar.visible',
+      '.keyboard-accessory-bar',
+      '#mobileInputPanel',
+    ]) + 'px';
   },
 
   update(state) {
@@ -3380,24 +3423,47 @@ const TranscriptPlayPill = {
     const el = this._el;
     if (!el || el.style.display === 'none') return;
     const vh = window.innerHeight || 0;
-    let bottom = 12;
-    const clearOf = (node) => {
-      if (!node) return;
-      const r = node.getBoundingClientRect();
-      // Only things actually docked low; a tall scrolled panel is not a dock.
-      if (!r.height || r.top < vh * 0.4) return;
-      bottom = Math.max(bottom, vh - r.top + 8);
-    };
-    clearOf(document.getElementById('mobileInputPanel'));
-    clearOf(document.querySelector('.keyboard-accessory-bar.visible'));
-    clearOf(document.querySelector('.tts-bar.is-visible'));
-    el.style.bottom = 'calc(' + bottom + 'px + var(--safe-area-bottom, 0px))';
+    const bottom = bottomDockLift([
+      '#mobileInputPanel',
+      '.keyboard-accessory-bar.visible',
+      '.tts-bar.is-visible',
+    ]);
+    // Never push the pill off the top of the screen chasing a full-height dock;
+    // in that case there is nothing to read anyway and update() hides it.
+    const maxLift = Math.max(vh - el.getBoundingClientRect().height - 12, 12);
+    el.style.bottom = 'calc(' + Math.min(bottom, maxLift) + 'px + var(--safe-area-bottom, 0px))';
+  },
+
+  /**
+   * True when the selected block is actually on screen and not buried under an
+   * overlay. On mobile the compose panel expands over the whole transcript, and
+   * offering to read something the user cannot see — with the pill floating on
+   * top of the textarea they are typing into — is worse than offering nothing.
+   */
+  _blockIsVisible(block) {
+    try {
+      const r = block.getBoundingClientRect();
+      const vh = window.innerHeight || 0;
+      const vw = window.innerWidth || 0;
+      // An all-zero rect means there is no layout engine (jsdom under test), not
+      // that the block is hidden — a genuinely hidden block cannot hold a
+      // selection in the first place. Judge nothing rather than suppress.
+      if (!r.width && !r.height && !r.top && !r.left) return true;
+      if (!r.height || r.bottom <= 0 || r.top >= vh) return false;
+      const x = Math.min(Math.max(r.left + r.width / 2, 1), vw - 1);
+      const y = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+      const hit = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
+      if (!hit) return true;   // cannot hit-test here; do not suppress
+      return block.contains(hit) || hit.contains(block);
+    } catch (e) {
+      return true;   // no layout to judge by; do not suppress the affordance
+    }
   },
 
   update() {
     if (!TranscriptTTS.supported) return;
     const target = this._target();
-    if (!target) { this.hide(); return; }
+    if (!target || !this._blockIsVisible(target.block)) { this.hide(); return; }
     // Snapshot at show time. The transcript is live: an SSE update can replace
     // these nodes — and with them the selection — between the pill appearing
     // and the user tapping it, which would otherwise make the pill do nothing
@@ -21127,6 +21193,9 @@ class CodemanApp {
       host.appendChild(play);
     }
     play.style.display = FilesTTS.supported ? 'block' : 'none';
+    // Same measured lift as the transcript pill, so the row clears the
+    // read-aloud bar instead of relying on a static CSS guess.
+    host.style.bottom = 'calc(' + bottomDockLift(['.tts-bar.is-visible']) + 'px + var(--safe-area-bottom, 0px))';
     // Viewport-anchored bottom bar, NOT anchored to the selection rect: both
     // Android Chrome's Copy/Cut/Search toolbar and iOS Safari's callout render
     // adjacent to (normally above) the selection and re-position as it moves,

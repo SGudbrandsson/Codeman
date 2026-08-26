@@ -97,9 +97,23 @@ function setSheet(previewHtml = '<p>the quick brown fox</p>') {
  */
 const harnesses: Harness[] = [];
 
+/** Source of a top-level function declaration in app.js, including its body. */
+function functionDecl(name: string): string {
+  const start = APP_JS_SOURCE.indexOf(`function ${name}(`);
+  expect(start, `${name} not found`).toBeGreaterThan(-1);
+  const end = APP_JS_SOURCE.indexOf('\n}\n', start);
+  expect(end, `${name} has no close`).toBeGreaterThan(start);
+  return APP_JS_SOURCE.slice(start, end + 2);
+}
+
 function makeApp(overrides: Record<string, unknown> = {}): Harness {
   const body = METHODS.map(methodSource).join(',\n');
-  const factory = new Function('FilesTTS', 'FILES_NOTE_GESTURE_GRACE_MS', `return ({\n${body}\n});`);
+  // The pill row positions itself with the shared measured-lift helper.
+  const factory = new Function(
+    'FilesTTS',
+    'FILES_NOTE_GESTURE_GRACE_MS',
+    `${functionDecl('bottomDockLift')}\nreturn ({\n${body}\n});`
+  );
 
   const toasts: { msg: string; kind: string }[] = [];
   const dialogs: { excerpt: string; occurrence: number }[] = [];
