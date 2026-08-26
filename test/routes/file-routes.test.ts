@@ -30,6 +30,10 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     realpathSync: vi.fn((p: string) => p),
+    // The files route stat()s a resolved `?path=` target to reject non-directories.
+    // Default to "is a directory" so subtree tests don't need a real filesystem;
+    // the non-directory case overrides this explicitly.
+    statSync: vi.fn(() => ({ isDirectory: () => true })),
     // Default false (create-route targets don't exist yet), BUT report the
     // module-load THUMB_CACHE_DIR as existing so the import-time bootstrap
     // `if (!existsSync(THUMB_CACHE_DIR)) mkdirSync(...)` is skipped — homedir is
@@ -56,7 +60,7 @@ vi.mock('../../src/file-stream-manager.js', () => ({
 }));
 
 import fs from 'node:fs/promises';
-import { realpathSync, existsSync } from 'node:fs';
+import { realpathSync, existsSync, statSync } from 'node:fs';
 import { fileStreamManager } from '../../src/file-stream-manager.js';
 
 const mockedReaddir = vi.mocked(fs.readdir);
@@ -68,6 +72,7 @@ const mockedRm = vi.mocked(fs.rm);
 const mockedUnlink = vi.mocked(fs.unlink);
 const mockedRealpathSync = vi.mocked(realpathSync);
 const mockedExistsSync = vi.mocked(existsSync);
+const mockedStatSync = vi.mocked(statSync);
 const mockedFileStreamManager = vi.mocked(fileStreamManager);
 
 describe('file-routes', () => {
@@ -195,6 +200,316 @@ describe('file-routes', () => {
       const body = JSON.parse(res.body);
       // node_modules and .git are in excludeDirs set — only src should be counted
       expect(body.data.totalDirectories).toBe(1); // only src
+    });
+
+    // ── Breadth-first walk, lazy per-directory loading, and the `path` param ──
+    //
+    // BFS visits directories LEVEL by level, so call-sequence readdir mocks
+    // (mockResolvedValueOnce chains) are fragile here. Everything below drives a
+    // path-keyed table instead: unlisted directories throw ENOENT, which is also
+    // how the "unreadable directory" cases are expressed.
+
+    /** Dirent-alike accepted by the route (only name + isDirectory are used). */
+    const dirent = (name: string, isDir = false) => ({ name, isDirectory: () => isDir });
+
+    const errno = (code: string) => Object.assign(new Error(code), { code });
+
+    /**
+     * Path-keyed readdir mock.
+     * Values are either an entry array or an Error to throw for that directory.
+     */
+    function mockDirs(table: Record<string, Array<ReturnType<typeof dirent>> | Error>) {
+      mockedReaddir.mockImplementation(async (dir: unknown) => {
+        const entry = table[String(dir)];
+        if (entry === undefined) throw errno('ENOENT');
+        if (entry instanceof Error) throw entry;
+        return entry as never;
+      });
+    }
+
+    const wd = () => harness.ctx._session.workingDir as string;
+    const names = (nodes: Array<{ name: string }>) => nodes.map((n) => n.name);
+    const byName = (nodes: Array<{ name: string }>, name: string) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodes.find((n) => n.name === name) as any;
+
+    // Gap 1 — THE regression test for the reported bug.
+    it('keeps root-level files when a sibling subtree exhausts the entry budget', async () => {
+      // `big/` alone blows the 5000-entry budget. Under the old depth-first walk
+      // the recursion into `big/` happened BEFORE the loop reached the root's file
+      // entries (directories sort first), so package.json / README.md were silently
+      // dropped from the response — exactly the reported data loss. Breadth-first
+      // finishes the whole root level before descending, so they must survive and
+      // the cut must land on `big/` instead.
+      mockDirs({
+        [wd()]: [dirent('big', true), dirent('package.json'), dirent('README.md')],
+        [`${wd()}/big`]: Array.from({ length: 5200 }, (_, i) => dirent(`f${i}.txt`)),
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      // The whole root level survives — this is the assertion that fails under DFS.
+      expect(names(body.data.tree)).toEqual(['big', 'package.json', 'README.md']);
+
+      // ...and the truncation is explicit and per-directory, on the deepest frontier.
+      const big = byName(body.data.tree, 'big');
+      expect(big.childrenLoaded).toBe(false);
+      expect(big.hasChildren).toBe(true);
+      expect(big.remainingChildren).toBeGreaterThan(0);
+      expect(big.children.length + big.remainingChildren).toBe(5200);
+      expect(body.data.truncated).toBe(true);
+      // Nothing was cut at the root level itself.
+      expect(body.data.remainingChildren).toBe(0);
+    });
+
+    // Gap 2 — `?path=` returns a subtree, and the paths it returns round-trip.
+    it('returns a subtree for ?path= and round-trips child paths', async () => {
+      mockedStatSync.mockReturnValue({ isDirectory: () => true } as never);
+      mockDirs({
+        [wd()]: [dirent('src', true), dirent('package.json')],
+        [`${wd()}/src`]: [dirent('a', true), dirent('index.ts')],
+        [`${wd()}/src/a`]: [dirent('b.ts')],
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=src&depth=2`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.path).toBe('src');
+      expect(names(body.data.tree)).toEqual(['a', 'index.ts']);
+      const a = byName(body.data.tree, 'a');
+      expect(a.path).toBe('src/a');
+      expect(names(a.children)).toEqual(['b.ts']);
+      expect(a.children[0].path).toBe('src/a/b.ts');
+      expect(a.childrenLoaded).toBe(true);
+
+      // The client sends exactly that path back when the user expands `a`.
+      const res2 = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=${encodeURIComponent(a.path)}&depth=2`,
+      });
+      expect(res2.statusCode).toBe(200);
+      const body2 = JSON.parse(res2.body);
+      expect(body2.success).toBe(true);
+      expect(body2.data.path).toBe('src/a');
+      expect(body2.data.tree[0].path).toBe('src/a/b.ts');
+    });
+
+    // Gap 3 — containment.
+    it.each([
+      ['../outside', 'relative traversal'],
+      ['/etc', 'absolute path'],
+    ])('rejects ?path=%s (%s) as outside the working directory', async (badPath) => {
+      mockDirs({ [wd()]: [] });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=${encodeURIComponent(badPath)}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INVALID_INPUT');
+      expect(body.error).toContain('within working directory');
+    });
+
+    // Gap 4 — symlink escape (realpathSync resolves outside workingDir).
+    it('rejects a ?path= symlink that resolves outside the working directory', async () => {
+      mockedRealpathSync.mockReturnValue('/etc' as never);
+      mockDirs({ [wd()]: [] });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=sneaky-link`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INVALID_INPUT');
+    });
+
+    // Gap 5 — nonexistent path.
+    it('returns NOT_FOUND when ?path= does not exist', async () => {
+      mockedRealpathSync.mockImplementation(() => {
+        throw errno('ENOENT');
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=nope`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('NOT_FOUND');
+      expect(body.error).toContain('Directory not found');
+    });
+
+    // Gap 6 — non-directory target must not be a silent empty success.
+    it('returns INVALID_INPUT when ?path= is a file, not a directory', async () => {
+      mockedStatSync.mockReturnValueOnce({ isDirectory: () => false } as never);
+      mockDirs({ [wd()]: [dirent('package.json')] });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=package.json`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INVALID_INPUT');
+      expect(body.error).toContain('not a directory');
+    });
+
+    // Gap 7 — empty path means the root.
+    it("treats path='' as the working directory root", async () => {
+      mockDirs({
+        [wd()]: [dirent('src', true), dirent('package.json')],
+        [`${wd()}/src`]: [],
+      });
+
+      const withEmpty = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=&depth=2`,
+      });
+      const omitted = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?depth=2`,
+      });
+      expect(withEmpty.statusCode).toBe(200);
+      const a = JSON.parse(withEmpty.body);
+      const b = JSON.parse(omitted.body);
+      expect(a.success).toBe(true);
+      expect(a.data.path).toBe('');
+      expect(a.data).toEqual(b.data);
+      expect(names(a.data.tree)).toEqual(['src', 'package.json']);
+    });
+
+    // Gap 8 + 11 — the three distinct per-directory states, side by side.
+    it('distinguishes loaded-empty, budget-cut and unreadable directories', async () => {
+      // Names chosen so the level is walked in this order: the budget is still
+      // intact when `aempty` and `blocked` are processed, and `zbig` is what
+      // exhausts it.
+      mockDirs({
+        [wd()]: [dirent('aempty', true), dirent('blocked', true), dirent('zbig', true)],
+        [`${wd()}/aempty`]: [],
+        [`${wd()}/blocked`]: errno('EACCES'),
+        [`${wd()}/zbig`]: Array.from({ length: 5200 }, (_, i) => dirent(`f${i}.txt`)),
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      const tree = body.data.tree;
+
+      // 1. Loaded and genuinely empty.
+      const empty = byName(tree, 'aempty');
+      expect(empty.childrenLoaded).toBe(true);
+      expect(empty.hasChildren).toBe(false);
+      expect(empty.error).toBeUndefined();
+      expect(empty.remainingChildren).toBeUndefined();
+
+      // 2. Cut by the entry budget — NOT empty, and it says how much is left.
+      const cut = byName(tree, 'zbig');
+      expect(cut.childrenLoaded).toBe(false);
+      expect(cut.hasChildren).toBe(true);
+      expect(cut.remainingChildren).toBeGreaterThan(0);
+      expect(cut.error).toBeUndefined();
+
+      // 3. Unreadable — a third state, never folded back into "empty".
+      const locked = byName(tree, 'blocked');
+      expect(locked.childrenLoaded).toBe(false);
+      expect(locked.hasChildren).toBe(true);
+      expect(locked.error).toBe('Cannot read directory (EACCES)');
+
+      // Gap 11: error labels are errno-only — they never leak an absolute path.
+      // (`data.root` legitimately carries the working dir, so assert on the label.)
+      expect(locked.error).not.toContain(wd());
+    });
+
+    // Gap 9 — unreadable AT the depth frontier keeps the third state (chevron).
+    it('keeps the unreadable state for a directory at the depth frontier', async () => {
+      mockDirs({
+        [wd()]: [dirent('emptydir', true), dirent('locked', true), dirent('root.txt')],
+        [`${wd()}/emptydir`]: [],
+        [`${wd()}/locked`]: errno('EACCES'),
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?depth=1`,
+      });
+      expect(res.statusCode).toBe(200);
+      const tree = JSON.parse(res.body).data.tree;
+
+      const locked = byName(tree, 'locked');
+      expect(locked.childrenLoaded).toBe(false);
+      // hasChildren MUST stay true, or the chevron disappears and the folder looks
+      // silently empty with no way to see the real error.
+      expect(locked.hasChildren).toBe(true);
+      expect(locked.error).toBe('Cannot read directory (EACCES)');
+
+      // A frontier directory that is merely empty still reports no children.
+      const empty = byName(tree, 'emptydir');
+      expect(empty.childrenLoaded).toBe(false);
+      expect(empty.hasChildren).toBe(false);
+      expect(empty.error).toBeUndefined();
+
+      expect(names(tree)).toContain('root.txt');
+    });
+
+    // Gap 10 — unreadable REQUESTED root is an error, not an empty success.
+    it('returns INTERNAL_ERROR when the requested subtree root is unreadable', async () => {
+      mockedStatSync.mockReturnValue({ isDirectory: () => true } as never);
+      mockDirs({
+        [wd()]: [dirent('locked', true)],
+        [`${wd()}/locked`]: errno('EACCES'),
+      });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?path=locked`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('INTERNAL_ERROR');
+      expect(body.error).toBe('Cannot read directory (EACCES)');
+      // The label is errno-only — no absolute path leaks to the client.
+      expect(body.error).not.toContain(wd());
+    });
+
+    // Gap 12 — depth clamping, asserted on the echoed value.
+    it.each([
+      ['abc', 5],
+      ['0', 5],
+      ['-3', 5],
+      ['', 5],
+      ['2', 2],
+      ['99', 10],
+    ])('clamps depth=%s to %i', async (depth, expected) => {
+      mockDirs({ [wd()]: [] });
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/files?depth=${encodeURIComponent(depth)}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.depth).toBe(expected);
     });
   });
 

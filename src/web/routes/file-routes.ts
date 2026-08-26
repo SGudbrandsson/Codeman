@@ -5,7 +5,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { join, resolve, relative, isAbsolute, extname, dirname, basename } from 'node:path';
-import { realpathSync, existsSync, mkdirSync } from 'node:fs';
+import { realpathSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -30,15 +30,49 @@ function thumbCacheKey(resolvedPath: string, mtimeMs: number, width: number): st
 }
 
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void {
-  // File tree listing
+  // File tree listing (breadth-first, level-by-level, with per-directory lazy loading)
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden } = req.query as { depth?: string; showHidden?: string };
+    const {
+      depth,
+      showHidden,
+      path: requestedPath,
+    } = req.query as { depth?: string; showHidden?: string; path?: string };
     const session = findSessionOrFail(ctx, id);
 
-    const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
+    const parsedDepth = parseInt(depth || '5', 10);
+    const maxDepth = Math.min(Number.isFinite(parsedDepth) && parsedDepth > 0 ? parsedDepth : 5, 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
+
+    // Resolve the subtree root. `path` is relative to workingDir; empty/omitted means the root.
+    // Same containment idiom used by the sibling read/write routes in this file.
+    let startDir = workingDir;
+    let startRelative = '';
+    if (requestedPath) {
+      const fullPath = resolve(workingDir, requestedPath);
+      let resolvedPath: string;
+      try {
+        resolvedPath = realpathSync(fullPath);
+      } catch {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Directory not found');
+      }
+      const relativePath = relative(workingDir, resolvedPath);
+      if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
+      }
+      // A non-directory target would otherwise fall through and return an empty
+      // tree with success:true (the readdir failure is swallowed further down).
+      try {
+        if (!statSync(resolvedPath).isDirectory()) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path is not a directory');
+        }
+      } catch {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Directory not found');
+      }
+      startDir = resolvedPath;
+      startRelative = relativePath;
+    }
 
     // Default excludes - large/generated directories
     const excludeDirs = new Set([
@@ -65,6 +99,14 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       size?: number;
       extension?: string;
       children?: FileTreeNode[];
+      /** Directories only: false when children were not (fully) fetched yet. */
+      childrenLoaded?: boolean;
+      /** Directories only: whether the directory has at least one visible entry. */
+      hasChildren?: boolean;
+      /** Directories only: number of children omitted because the entry budget ran out. */
+      remainingChildren?: number;
+      /** Directories only: set when the directory could not be read (e.g. EACCES). */
+      error?: string;
     }
 
     let totalFiles = 0;
@@ -72,47 +114,130 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     let truncated = false;
     const maxFiles = 5000;
 
-    const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
-      if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
-        truncated = true;
-        return [];
-      }
+    const isVisible = (entry: { name: string; isDirectory(): boolean }): boolean => {
+      if (!includeHidden && entry.name.startsWith('.')) return false;
+      if (entry.isDirectory() && excludeDirs.has(entry.name)) return false;
+      return true;
+    };
 
+    /** Read a directory, filtered and sorted (directories first, then alphabetically). */
+    const listDir = async (dirPath: string) => {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      const visible = entries.filter(isVisible);
+      visible.sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory()) return -1;
+        if (!a.isDirectory() && b.isDirectory()) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      return visible;
+    };
+
+    /** Short, path-free label for a directory that could not be read (e.g. "EACCES"). */
+    const readErrorLabel = (err: unknown): string => {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      return code ? `Cannot read directory (${code})` : 'Cannot read directory';
+    };
+
+    /** Cheap probe so unfetched directories still render a correct chevron. */
+    const probeHasChildren = async (dirPath: string): Promise<{ hasChildren: boolean; error?: string }> => {
       try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        const nodes: FileTreeNode[] = [];
+        return { hasChildren: entries.some(isVisible) };
+      } catch (err) {
+        // Unreadable at the depth frontier is the SAME third state as an unreadable
+        // directory mid-walk - never fold it back into "empty", or the chevron would
+        // disappear and the folder would be silently un-expandable.
+        return { hasChildren: true, error: readErrorLabel(err) };
+      }
+    };
 
-        // Sort: directories first, then alphabetically
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name);
-        });
+    interface PendingDir {
+      /** The node whose children we still have to fill (null for the requested root). */
+      node: FileTreeNode | null;
+      dirPath: string;
+      /** Depth of the CHILDREN produced from this directory. */
+      depth: number;
+      out: FileTreeNode[];
+    }
 
-        for (const entry of entries) {
-          if (totalFiles + totalDirectories > maxFiles) {
-            truncated = true;
-            break;
+    const tree: FileTreeNode[] = [];
+    let rootRemaining = 0;
+    let rootError: string | null = null;
+    let level: PendingDir[] = [{ node: null, dirPath: startDir, depth: 1, out: tree }];
+
+    // Breadth-first: finish an entire level before descending. The entry budget can then only
+    // ever truncate the deepest frontier - shallow siblings (notably root-level files, which
+    // sort last) can no longer be starved by a large subtree.
+    while (level.length > 0) {
+      const nextLevel: PendingDir[] = [];
+
+      for (const pending of level) {
+        // Budget already spent: mark this directory as not-yet-loaded rather than empty.
+        if (totalFiles + totalDirectories >= maxFiles) {
+          truncated = true;
+          if (pending.node) {
+            pending.node.childrenLoaded = false;
+            pending.node.hasChildren = true;
           }
+          continue;
+        }
 
-          // Skip hidden files unless requested
-          if (!includeHidden && entry.name.startsWith('.')) continue;
+        let entries;
+        try {
+          entries = await listDir(pending.dirPath);
+        } catch (err) {
+          // Can't read the directory (permission denied, vanished mid-walk, ...).
+          // This is a THIRD state, distinct from both "empty" and "not fetched":
+          // never fold it back into an empty `children: []`.
+          if (pending.node) {
+            pending.node.childrenLoaded = false;
+            pending.node.hasChildren = true;
+            pending.node.error = readErrorLabel(err);
+          } else {
+            // The requested subtree root itself is unreadable - that is an error
+            // for the whole request, not an empty success.
+            rootError = readErrorLabel(err);
+          }
+          continue;
+        }
 
-          // Skip excluded directories
-          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
+        let index = 0;
+        for (; index < entries.length; index++) {
+          if (totalFiles + totalDirectories >= maxFiles) break;
 
-          const fullPath = join(dirPath, entry.name);
-          const relativePath = fullPath.slice(workingDir.length + 1);
+          const entry = entries[index];
+          const fullPath = join(pending.dirPath, entry.name);
+          const childRelative = pending.node
+            ? join(pending.node.path, entry.name)
+            : startRelative
+              ? join(startRelative, entry.name)
+              : entry.name;
 
           if (entry.isDirectory()) {
             totalDirectories++;
-            const children = await scanDirectory(fullPath, currentDepth + 1);
-            nodes.push({
+            const dirNode: FileTreeNode = {
               name: entry.name,
-              path: relativePath,
+              path: childRelative,
               type: 'directory',
-              children,
-            });
+              children: [],
+              childrenLoaded: false,
+              hasChildren: true,
+            };
+            pending.out.push(dirNode);
+            if (pending.depth + 1 <= maxDepth) {
+              nextLevel.push({
+                node: dirNode,
+                dirPath: fullPath,
+                depth: pending.depth + 1,
+                out: dirNode.children as FileTreeNode[],
+              });
+            } else {
+              // Depth frontier: children are not fetched, but say whether there are any.
+              truncated = true;
+              const probe = await probeHasChildren(fullPath);
+              dirNode.hasChildren = probe.hasChildren;
+              if (probe.error) dirNode.error = probe.error;
+            }
           } else {
             totalFiles++;
             const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
@@ -123,9 +248,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
             } catch {
               // Skip if can't stat
             }
-            nodes.push({
+            pending.out.push({
               name: entry.name,
-              path: relativePath,
+              path: childRelative,
               type: 'file',
               size,
               extension: ext,
@@ -133,22 +258,37 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
           }
         }
 
-        return nodes;
-      } catch {
-        // Can't read directory (permission denied, etc.)
-        return [];
+        const remaining = entries.length - index;
+        if (pending.node) {
+          pending.node.childrenLoaded = remaining === 0;
+          pending.node.hasChildren = entries.length > 0;
+        }
+        if (remaining > 0) {
+          truncated = true;
+          if (pending.node) pending.node.remainingChildren = remaining;
+          else rootRemaining = remaining;
+        }
       }
-    };
 
-    const tree = await scanDirectory(workingDir, 1);
+      level = nextLevel;
+    }
+
+    if (rootError) {
+      return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, rootError);
+    }
 
     return {
       success: true,
       data: {
         root: workingDir,
+        path: startRelative,
+        depth: maxDepth,
+        remainingChildren: rootRemaining,
         tree,
         totalFiles,
         totalDirectories,
+        // Kept for compatibility. Per-node `childrenLoaded` is the load-bearing signal now:
+        // this flag is true merely by reaching the depth frontier.
         truncated,
       },
     };

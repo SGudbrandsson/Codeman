@@ -20110,6 +20110,188 @@ class CodemanApp {
   fileBrowserFilter = '';
   fileBrowserAllExpanded = false;
   fileBrowserDragListeners = null;
+  // Lazy subtree loading (server is breadth-first + per-directory childrenLoaded).
+  fileBrowserSubtreeCache = new Map();
+  fileBrowserSubtreeInflight = new Map();
+  fileBrowserLoadingPaths = new Set();
+  // Bounded fan-out: a bulk expand (expand-all button, clearing the filter box)
+  // can flag hundreds of directories as needing children at once. Requests are
+  // queued and only a few run concurrently, and re-renders are coalesced into a
+  // single frame so N completions do not mean N full innerHTML rebuilds.
+  _fileSubtreeQueue = [];
+  _fileSubtreeActive = 0;
+  _fileSubtreeMaxConcurrent = 3;
+  _fileSubtreeTimeoutMs = 20000;
+  _fileBrowserRenderQueued = false;
+  _filesRenderQueued = false;
+  // Bumped whenever a subtree cache is invalidated: a fetch started before the
+  // reset must not write its now-stale result into the fresh cache.
+  _fileSubtreeGeneration = 0;
+  // Bumped when a surface starts a full (re)load: a coalesced render scheduled by
+  // a task from the previous load must not repaint the old tree over the
+  // "Loading…" placeholder (and must not re-kick ensures for stale nodes).
+  _fileBrowserLoadSeq = 0;
+  _filesLoadSeq = 0;
+  _fileBrowserRenderSeq = 0;
+  _filesRenderSeq = 0;
+
+  /**
+   * Queue a subtree fetch task, respecting the concurrency cap.
+   * `onDrop` MUST release whatever the caller latched synchronously at enqueue
+   * time (its surface's loading path). The queue is shared by the desktop panel
+   * and the mobile sheet but each surface owns a separate latch set, so a task
+   * discarded by _clearFileSubtreeQueue() never reaches its own `finally` - the
+   * drop handler is the only thing that can free that latch, and without it the
+   * other surface is left with a permanent "Loading…" row.
+   */
+  _queueFileSubtreeTask(task, onDrop) {
+    this._fileSubtreeQueue.push({ task, onDrop });
+    this._pumpFileSubtreeQueue();
+  }
+
+  _pumpFileSubtreeQueue() {
+    while (this._fileSubtreeActive < this._fileSubtreeMaxConcurrent && this._fileSubtreeQueue.length > 0) {
+      const entry = this._fileSubtreeQueue.shift();
+      this._fileSubtreeActive++;
+      Promise.resolve()
+        .then(entry.task)
+        .catch(() => {})
+        .then(() => {
+          this._fileSubtreeActive--;
+          this._pumpFileSubtreeQueue();
+        });
+    }
+  }
+
+  /**
+   * Drop queued (not yet started) subtree fetches - used when a tree reloads.
+   * Every dropped entry's `onDrop` runs, so no latch survives the drop, and the
+   * cache generation is bumped so a still-in-flight fetch from before the reset
+   * cannot repopulate the cache it just invalidated.
+   */
+  _clearFileSubtreeQueue() {
+    this._fileSubtreeGeneration++;
+    const dropped = this._fileSubtreeQueue.splice(0, this._fileSubtreeQueue.length);
+    for (const entry of dropped) {
+      try {
+        if (entry && typeof entry.onDrop === 'function') entry.onDrop();
+      } catch (err) {
+        // One bad drop handler must never strand the remaining entries.
+        console.error('Subtree drop handler failed:', err);
+      }
+    }
+  }
+
+  /** Coalesce desktop tree re-renders into one animation frame. */
+  _scheduleFileBrowserRender() {
+    // The seq lives in a field, not the closure, so a schedule arriving while a
+    // now-stale render is still pending re-arms it instead of being swallowed.
+    this._fileBrowserRenderSeq = this._fileBrowserLoadSeq;
+    if (this._fileBrowserRenderQueued) return;
+    this._fileBrowserRenderQueued = true;
+    const run = () => {
+      this._fileBrowserRenderQueued = false;
+      // Superseded by a full reload started after this render was scheduled.
+      if (this._fileBrowserRenderSeq !== this._fileBrowserLoadSeq) return;
+      this.renderFileBrowserTree();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
+  /** Coalesce mobile Files sheet re-renders into one animation frame. */
+  _scheduleFilesRender() {
+    // The seq lives in a field, not the closure, so a schedule arriving while a
+    // now-stale render is still pending re-arms it instead of being swallowed.
+    this._filesRenderSeq = this._filesLoadSeq;
+    if (this._filesRenderQueued) return;
+    this._filesRenderQueued = true;
+    const run = () => {
+      this._filesRenderQueued = false;
+      // Superseded by a full reload started after this render was scheduled.
+      if (this._filesRenderSeq !== this._filesLoadSeq) return;
+      this.filesRenderTree();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
+  /**
+   * Fetch one directory's children from the breadth-first files API.
+   * depth=2 so the *next* expand below it is usually already in hand.
+   * Caches per `${showHidden}:${path}` and dedupes concurrent requests for the
+   * same key, so repeated expand/collapse never re-hits the server.
+   */
+  _fetchFileSubtree(sessionId, path, showHidden, cache, inflight, force = false) {
+    const key = `${showHidden ? 1 : 0}:${path}`;
+    if (force) cache.delete(key);
+    if (cache.has(key)) return Promise.resolve(cache.get(key));
+    if (inflight.has(key)) return inflight.get(key);
+    // A reset (Refresh, Hidden toggle, reload) bumps the generation. This request
+    // belongs to the generation it started in; if that has been superseded by the
+    // time it lands, the result is still returned to the caller but must NOT be
+    // written into the freshly invalidated cache.
+    const generation = this._fileSubtreeGeneration;
+    const req = (async () => {
+      const qs = new URLSearchParams({
+        depth: '2',
+        showHidden: showHidden ? 'true' : 'false',
+        path,
+      });
+      // Same reason filesLoadTree() aborts: a subtree fetch runs the same
+      // server-side walk and can hang. Without this the loading latch would
+      // never clear and the spinner row would permanently pre-empt the retry
+      // row, leaving the user with no way to recover.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this._fileSubtreeTimeoutMs);
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/files?${qs.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('Failed to load folder');
+        const result = await res.json();
+        if (!result.success) throw new Error(result.error || 'Failed to load folder');
+        if (generation === this._fileSubtreeGeneration) cache.set(key, result.data);
+        return result.data;
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw new Error('Timed out loading folder');
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    inflight.set(key, req);
+    req.catch(() => {}).then(() => { if (inflight.get(key) === req) inflight.delete(key); });
+    return req;
+  }
+
+  /** Locate a node by its relative path inside an already-loaded tree. */
+  _findFileTreeNode(nodes, path) {
+    if (!nodes) return null;
+    for (const n of nodes) {
+      if (n.path === path) return n;
+      if (n.type === 'directory' && n.children && n.children.length && path.startsWith(`${n.path}/`)) {
+        const hit = this._findFileTreeNode(n.children, path);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Splice a lazily fetched subtree into a node. `childrenLoaded` is set true on
+   * any successful fetch (so a re-render never re-kicks the same request); a
+   * remaining count is kept so the UI can offer "N more - tap to load".
+   */
+  _applyFileSubtree(node, data) {
+    node.children = data.tree || [];
+    node.childrenLoaded = true;
+    node.remainingChildren = data.remainingChildren || 0;
+    node.hasChildren = node.children.length > 0 || node.remainingChildren > 0;
+    node._loadFailed = false;
+    node._loadError = null;
+    node.error = null;
+  }
 
   async loadFileBrowser(sessionId) {
     FeatureTracker.track('file-browser-open');
@@ -20121,21 +20303,32 @@ class CodemanApp {
 
     // Show loading state
     treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
+    // Supersede any render coalesced by a task from the previous load, so it
+    // cannot repaint the old tree over this placeholder.
+    this._fileBrowserLoadSeq++;
 
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=false`);
+      // depth=2: the server walk is breadth-first, so the top of the tree always
+      // arrives complete; anything deeper is fetched on expand.
+      const res = await fetch(`/api/sessions/${sessionId}/files?depth=2&showHidden=false`);
       if (!res.ok) throw new Error('Failed to load files');
 
       const result = await res.json();
       if (!result.success) throw new Error(result.error || 'Failed to load files');
 
+      // A fresh root load invalidates every cached subtree.
+      this.fileBrowserSubtreeCache.clear();
+      this.fileBrowserSubtreeInflight.clear();
+      this.fileBrowserLoadingPaths.clear();
+      this._clearFileSubtreeQueue();
       this.fileBrowserData = result.data;
       this.renderFileBrowserTree();
 
       // Update status
       if (statusEl) {
-        const { totalFiles, totalDirectories, truncated } = result.data;
-        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}`;
+        const { totalFiles, totalDirectories, truncated, remainingChildren } = result.data;
+        const more = remainingChildren ? ` (+${remainingChildren} more at root)` : '';
+        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (partial \u2014 expand to load more)' : ''}${more}`;
       }
     } catch (err) {
       console.error('Failed to load file browser:', err);
@@ -20174,7 +20367,10 @@ class CodemanApp {
         ? (isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1')
         : this.getFileIcon(node.extension);
 
-      const expandIcon = isDir
+      // Chevron comes from hasChildren so a directory whose children were never
+      // fetched still looks expandable (and a known-empty one does not).
+      const showChevron = isDir && node.hasChildren !== false;
+      const expandIcon = showChevron
         ? `<span class="file-tree-expand${isExpanded ? ' expanded' : ''}">\u25B6</span>`
         : '<span class="file-tree-expand"></span>';
 
@@ -20194,15 +20390,38 @@ class CodemanApp {
       `);
 
       // Render children if directory is expanded
-      if (isDir && isExpanded && node.children) {
-        for (const child of node.children) {
-          renderNode(child, depth + 1);
+      if (isDir && isExpanded) {
+        // Children were never fetched (depth frontier or budget cut): fetch now.
+        // A bulk expand (filter box, expand-all button) can flag many directories
+        // at once; the fetches are queued behind a concurrency cap and the
+        // resulting re-renders are coalesced, so this cannot fan out unboundedly.
+        // `node.error` = the server could not read it (EACCES): show it, never retry
+        // automatically.
+        if (!node.childrenLoaded && !node._loadFailed && !node.error) this._fileBrowserEnsureChildren(node);
+        const pad = `padding-left:${0.5 + (depth + 1) * 0.75}rem`;
+        if (this.fileBrowserLoadingPaths.has(node.path)) {
+          html.push(`<div class="file-tree-item file-tree-aux" style="${pad};opacity:0.6">Loading\u2026</div>`);
+        } else if (node._loadFailed || node.error) {
+          html.push(`<div class="file-tree-item file-tree-aux" data-retry="${escapeHtml(node.path)}" style="${pad};opacity:0.8">${escapeHtml(node._loadError || node.error || 'Failed to load')} \u2014 click to retry</div>`);
+        }
+        if (node.children) {
+          for (const child of node.children) {
+            renderNode(child, depth + 1);
+          }
+        }
+        if (node.remainingChildren > 0) {
+          html.push(`<div class="file-tree-item file-tree-aux" data-loadmore="${escapeHtml(node.path)}" style="${pad};opacity:0.8">${node.remainingChildren} more \u2014 click to load</div>`);
         }
       }
     };
 
     for (const node of tree) {
       renderNode(node, 0);
+    }
+
+    // Root-level entries dropped by the entry budget: never silently swallowed.
+    if (this.fileBrowserData.remainingChildren > 0) {
+      html.push(`<div class="file-tree-item file-tree-aux" data-refresh="1" style="padding-left:0.5rem;opacity:0.8">${this.fileBrowserData.remainingChildren} more at root \u2014 click to refresh</div>`);
     }
 
     treeEl.innerHTML = html.join('');
@@ -20212,6 +20431,19 @@ class CodemanApp {
       item.addEventListener('click', () => {
         const path = item.dataset.path;
         const type = item.dataset.type;
+
+        if (item.dataset.refresh) { this.refreshFileBrowser(); return; }
+        if (item.dataset.loadmore || item.dataset.retry) {
+          const target = this._findFileTreeNode(this.fileBrowserData?.tree || [], item.dataset.loadmore || item.dataset.retry);
+          if (target) {
+            target._loadFailed = false;
+            target.error = null;
+            this._fileBrowserEnsureChildren(target, true);
+            this._scheduleFileBrowserRender();
+          }
+          return;
+        }
+        if (item.classList.contains('file-tree-aux')) return;
 
         if (type === 'directory') {
           this.toggleFileBrowserFolder(path);
@@ -20230,6 +20462,44 @@ class CodemanApp {
       if (child.type === 'directory' && this.hasMatchingChild(child, filter)) return true;
     }
     return false;
+  }
+
+  /**
+   * Kick a lazy load for a directory whose children were never fetched.
+   * Never renders synchronously (it is called from inside the renderer); the
+   * loading flag is set before returning so the current render can draw a
+   * spinner row, and a re-render happens when the request settles.
+   */
+  _fileBrowserEnsureChildren(node, force = false) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId || !node || node.type !== 'directory') return;
+    if (this.fileBrowserLoadingPaths.has(node.path)) return;
+    this.fileBrowserLoadingPaths.add(node.path);
+    this._queueFileSubtreeTask(async () => {
+      try {
+        const data = await this._fetchFileSubtree(
+          sessionId, node.path, false,
+          this.fileBrowserSubtreeCache, this.fileBrowserSubtreeInflight, force
+        );
+        // The tree may have been reloaded while the request was in flight.
+        const target = this._findFileTreeNode(this.fileBrowserData?.tree || [], node.path) || node;
+        this._applyFileSubtree(target, data);
+      } catch (err) {
+        node._loadFailed = true;
+        node._loadError = err.message || 'Failed to load folder';
+      } finally {
+        // Always clear the latch, whatever happened, so the retry row (which the
+        // spinner row would otherwise pre-empt forever) becomes reachable.
+        this.fileBrowserLoadingPaths.delete(node.path);
+        this._scheduleFileBrowserRender();
+      }
+    }, () => {
+      // Dropped before it ever ran (the shared queue was cleared, possibly by the
+      // mobile sheet): the task body's `finally` will never run, so release the
+      // latch here or this directory keeps a permanent spinner row.
+      this.fileBrowserLoadingPaths.delete(node.path);
+      this._scheduleFileBrowserRender();
+    });
   }
 
   toggleFileBrowserFolder(path) {
@@ -20337,7 +20607,7 @@ class CodemanApp {
   // still producing the same files-sheet → files-file back stack.
   _filesOpenSheetShell() {
     if (!this.activeSessionId) { this.showToast('No active session', 'error'); return false; }
-    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null };
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set() };
     const sheet = this.$('filesSheet');
     const backdrop = this.$('filesSheetBackdrop');
     // Inline display first (Android-Chrome black-screen compositing fix), then .open.
@@ -20509,19 +20779,79 @@ class CodemanApp {
     this.filesLoadTree();
   }
 
+  /** Drop every cached/in-flight subtree (called on any full tree reload). */
+  _filesResetSubtreeCache() {
+    const st = this.filesState;
+    if (!st) return;
+    if (!st.subtreeCache) st.subtreeCache = new Map();
+    if (!st.subtreeInflight) st.subtreeInflight = new Map();
+    if (!st.loadingPaths) st.loadingPaths = new Set();
+    st.subtreeCache.clear();
+    st.subtreeInflight.clear();
+    st.loadingPaths.clear();
+    this._clearFileSubtreeQueue();
+  }
+
+  /**
+   * Kick a lazy load for a directory in the mobile sheet whose children were
+   * never fetched. Called from inside filesRenderTree(), so it must not render
+   * synchronously - it flags the path as loading (the current render draws the
+   * spinner row) and re-renders once the request settles.
+   */
+  _filesEnsureChildren(node, force = false) {
+    const sessionId = this.activeSessionId;
+    const st = this.filesState;
+    if (!sessionId || !st || !node || node.type !== 'directory') return;
+    if (!st.loadingPaths) st.loadingPaths = new Set();
+    if (st.loadingPaths.has(node.path)) return;
+    st.loadingPaths.add(node.path);
+    this._queueFileSubtreeTask(async () => {
+      try {
+        const data = await this._fetchFileSubtree(
+          sessionId, node.path, st.showHidden,
+          st.subtreeCache, st.subtreeInflight, force
+        );
+        const target = this._findFileTreeNode(st.data?.tree || [], node.path) || node;
+        this._applyFileSubtree(target, data);
+      } catch (err) {
+        node._loadFailed = true;
+        node._loadError = err.message || 'Failed to load folder';
+      } finally {
+        // Always clear the latch so the spinner row can never outlive the request.
+        st.loadingPaths.delete(node.path);
+        this._scheduleFilesRender();
+      }
+    }, () => {
+      // Dropped before it ever ran (the shared queue was cleared, possibly by the
+      // desktop panel): release this surface's latch, since the task body's
+      // `finally` will never run for it.
+      if (st.loadingPaths) st.loadingPaths.delete(node.path);
+      this._scheduleFilesRender();
+    });
+  }
+
   async filesLoadTree() {
     const sessionId = this.activeSessionId;
     const body = this.$('filesSheetTreeBody');
     if (!sessionId || !body || !this.filesState) return;
     body.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
+    // Supersede any render coalesced by a task from the previous load, so it
+    // cannot repaint the old tree over this placeholder.
+    this._filesLoadSeq++;
+    // A full (re)load invalidates every lazily fetched subtree. Every caller that
+    // reloads the tree - refresh, Hidden toggle, create/delete/rename - goes
+    // through here, so this is the single invalidation point.
+    this._filesResetSubtreeCache();
     // Abort if the tree scan takes too long (e.g. very large repo or a busy
     // server) so the sheet shows an actionable error instead of spinning forever.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
       const showHidden = this.filesState.showHidden ? 'true' : 'false';
+      // depth=2: the server walk is breadth-first, so the shallow levels always
+      // arrive complete; deeper levels are fetched lazily on expand.
       const res = await fetch(
-        `/api/sessions/${sessionId}/files?depth=5&showHidden=${showHidden}`,
+        `/api/sessions/${sessionId}/files?depth=2&showHidden=${showHidden}`,
         { signal: controller.signal }
       );
       if (!res.ok) throw new Error('Failed to load files');
@@ -20550,7 +20880,9 @@ class CodemanApp {
       const isDir = node.type === 'directory';
       const isExpanded = this.filesState.expanded.has(node.path);
       const icon = isDir ? (isExpanded ? '📂' : '📁') : this.getFileIcon(node.extension);
-      const chev = isDir
+      // Chevron from hasChildren: a directory whose children were not fetched yet
+      // still reads as expandable, a known-empty one does not.
+      const chev = (isDir && node.hasChildren !== false)
         ? `<span class="files-tree-chev${isExpanded ? ' expanded' : ''}">▶</span>`
         : `<span class="files-tree-chev" style="visibility:hidden">▶</span>`;
       const size = (!isDir && node.size !== undefined)
@@ -20567,15 +20899,46 @@ class CodemanApp {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         </button>
       </div>`);
-      if (isDir && isExpanded && node.children) {
-        for (const c of node.children) renderNode(c, depth + 1);
+      if (isDir && isExpanded) {
+        // Not fetched yet (depth frontier or entry-budget cut): fetch on expand.
+        // Queued behind the shared concurrency cap; `node.error` (unreadable on the
+        // server) is displayed rather than retried automatically.
+        if (!node.childrenLoaded && !node._loadFailed && !node.error) this._filesEnsureChildren(node);
+        const pad = `padding-left:${8 + (depth + 1) * 14}px`;
+        if (this.filesState.loadingPaths && this.filesState.loadingPaths.has(node.path)) {
+          html.push(`<div class="files-tree-item files-tree-aux" style="${pad};opacity:0.6">Loading…</div>`);
+        } else if (node._loadFailed || node.error) {
+          html.push(`<div class="files-tree-item files-tree-aux" data-loadmore="${escapeHtml(node.path)}" style="${pad};opacity:0.8">${escapeHtml(node._loadError || node.error || 'Failed to load')} — tap to retry</div>`);
+        }
+        if (node.children) {
+          for (const c of node.children) renderNode(c, depth + 1);
+        }
+        if (node.remainingChildren > 0) {
+          html.push(`<div class="files-tree-item files-tree-aux" data-loadmore="${escapeHtml(node.path)}" style="${pad};opacity:0.8">${node.remainingChildren} more — tap to load</div>`);
+        }
       }
     };
     for (const n of tree) renderNode(n, 0);
+    // Root-level entries the server had to cut: surfaced, never silently dropped.
+    if (this.filesState.data.remainingChildren > 0) {
+      html.push(`<div class="files-tree-item files-tree-aux" data-reload="1" style="padding-left:8px;opacity:0.8">${this.filesState.data.remainingChildren} more — tap to reload</div>`);
+    }
     body.innerHTML = html.join('');
     body.onclick = (e) => {
       const item = e.target.closest('.files-tree-item');
       if (!item) return;
+      if (item.dataset.reload) { this.filesLoadTree(); return; }
+      if (item.dataset.loadmore) {
+        const target = this._findFileTreeNode(this.filesState.data?.tree || [], item.dataset.loadmore);
+        if (target) {
+          target._loadFailed = false;
+          target.error = null;
+          this._filesEnsureChildren(target, true);
+          this._scheduleFilesRender();
+        }
+        return;
+      }
+      if (item.classList.contains('files-tree-aux')) return;
       const path = item.dataset.path;
       const type = item.dataset.type;
       if (e.target.closest('[data-del]')) { this.filesDelete(path, type === 'directory'); return; }
@@ -21873,7 +22236,7 @@ class CodemanApp {
   async _filesRestoreState() {
     const saved = this._filesReadState();
     if (!saved || !saved.open) return;
-    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null };
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set() };
     if (Array.isArray(saved.expanded)) this.filesState.expanded = new Set(saved.expanded);
     if (saved.activeDir) this.filesState.activeDir = saved.activeDir;
     if (saved.path) await this.openFileInEditor(saved.path, { scrollTop: saved.scrollTop });
