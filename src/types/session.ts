@@ -232,6 +232,11 @@ export interface SessionState {
   paused?: boolean;
   /** Epoch ms when the session was paused. */
   pausedAt?: number;
+  /**
+   * True when the last pause could not prove the process died (tmux pane or PTY survived).
+   * The session stays parked, but nothing was actually freed and a retry is warranted.
+   */
+  pauseFailed?: boolean;
   /** Auto-compact-and-continue enabled: detects compaction request and sends /compact then continue */
   autoCompactAndContinue?: boolean;
   /** ID of the session that was cleared to create this one (archive chain) */

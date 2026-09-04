@@ -9412,6 +9412,12 @@ class CodemanApp {
       // the flag is re-read here because an earlier queued keystroke may already have
       // resumed the session (resumeSessionProcess clears `paused` optimistically).
       if (this.sessions.get(sessionId)?.paused) {
+        // Back off after a refused resume: without this every flushed keystroke chunk fires
+        // its own /resume POST and its own error toast.
+        if (this._isResumeBackedOff(sessionId)) {
+          this._enqueueInput(sessionId, input);
+          return;
+        }
         const resumed = await this.resumeSessionProcess(sessionId);
         if (!resumed) {
           this._enqueueInput(sessionId, input);
@@ -9467,8 +9473,7 @@ class CodemanApp {
       // `resp.ok` alone would silently discard the queued keystrokes. Un-park first (typing
       // at a session is intent to resume it), then verify the body, not just the status.
       if (this.sessions.get(sessionId)?.paused) {
-        const resumed = await this.resumeSessionProcess(sessionId);
-        if (!resumed) {
+        if (this._isResumeBackedOff(sessionId) || !(await this.resumeSessionProcess(sessionId))) {
           this._enqueueInput(sessionId, input);
           continue;
         }
@@ -9986,9 +9991,11 @@ class CodemanApp {
         if (paused && !existingPausedBadge) {
           const badge = document.createElement('span');
           badge.className = 'tab-paused-badge';
-          badge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+          badge.title = this._pausedBadgeTitle(session);
           badge.textContent = '\u23F8';
           tab.insertBefore(badge, tab.querySelector('.tab-gear'));
+        } else if (paused && existingPausedBadge) {
+          existingPausedBadge.title = this._pausedBadgeTitle(session);
         } else if (!paused && existingPausedBadge) {
           existingPausedBadge.remove();
         }
@@ -10118,7 +10125,9 @@ class CodemanApp {
         ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">${BRANCH_SVG} ${escapeHtml(session.worktreeBranch)}</span>`
         : '';
       const safeModeBadge = session.safeMode ? '<span class="tab-safe-mode-badge" title="Safe mode: stripped CLI args">SAFE</span>' : '';
-      const pausedBadge = paused ? '<span class="tab-paused-badge" title="Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.">\u23F8</span>' : '';
+      const pausedBadge = paused
+        ? `<span class="tab-paused-badge" title="${escapeHtml(this._pausedBadgeTitle(session))}">\u23F8</span>`
+        : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
       const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
@@ -12753,6 +12762,16 @@ class CodemanApp {
   }
 
   /**
+   * Tooltip for the paused badge. A pause whose kill could not be verified is still parked,
+   * but nothing was freed — say so instead of implying the session is idle.
+   */
+  _pausedBadgeTitle(session) {
+    return session && session.pauseFailed
+      ? 'Paused, but the process could NOT be confirmed stopped \u2014 nothing was freed. Pause again from the session menu to retry.'
+      : 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+  }
+
+  /**
    * Parks a session: the server kills Claude + tmux but keeps the session entry and
    * its claudeResumeId so it can be resumed later. Confirms first when Claude is
    * still mid-turn (the server answers SESSION_BUSY in that case).
@@ -12771,6 +12790,11 @@ class CodemanApp {
       });
       const data = await res.json();
       if (data.success) {
+        // The parked session can no longer answer a permission prompt, so its attention
+        // entry and tab alert would sit there asking for input that cannot arrive.
+        this.pendingHooks.delete(sessionId);
+        this.tabAlerts.delete(sessionId);
+        this.removeAttentionItemsForSession(sessionId);
         this.showToast(`Paused session "${this.getSessionName(session)}"`, 'info');
         return true;
       }
@@ -12790,15 +12814,44 @@ class CodemanApp {
     }
   }
 
-  /** Relaunches a parked session with --resume so the conversation continues. */
-  async resumeSessionProcess(sessionId) {
+  /**
+   * True while a recent resume failure for this session is still being backed off.
+   * Automatic resumes (typing into a parked session) must not re-POST /resume and
+   * re-toast the same error once per flushed keystroke chunk.
+   */
+  _isResumeBackedOff(sessionId) {
+    const until = this._resumeBackoffUntil?.get(sessionId);
+    return !!until && Date.now() < until;
+  }
+
+  _noteResumeFailure(sessionId) {
+    if (!this._resumeBackoffUntil) this._resumeBackoffUntil = new Map();
+    this._resumeBackoffUntil.set(sessionId, Date.now() + 30000);
+  }
+
+  _clearResumeBackoff(sessionId) {
+    this._resumeBackoffUntil?.delete(sessionId);
+  }
+
+  /**
+   * Relaunches a parked session with --resume so the conversation continues.
+   *
+   * `force` re-sends the request with `{ force: true }`, which is the only way past the
+   * server's transcript preflight — without this ladder a session whose transcript the
+   * server cannot find is permanently parked with no UI route out.
+   */
+  async resumeSessionProcess(sessionId, force = false) {
     if (this._pausingSessionId === sessionId) return false;
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
     this._pausingSessionId = sessionId;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/resume`, { method: 'POST' });
+      const res = await fetch(`/api/sessions/${sessionId}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(force ? { force: true } : {}),
+      });
       const data = await res.json();
       if (data.success) {
         // Clear the flag optimistically: the authoritative SSE `session:updated` may be
@@ -12806,12 +12859,27 @@ class CodemanApp {
         // `_sendInputAsync`) would otherwise loop, re-POSTing /resume each pass.
         session.paused = false;
         session.pausedAt = undefined;
+        this._clearResumeBackoff(sessionId);
         this.showToast(`Resumed session "${this.getSessionName(session)}"`, 'info');
         return true;
       }
+      if (data.errorCode === 'TRANSCRIPT_UNAVAILABLE' && !force) {
+        this._pausingSessionId = null;
+        const ok = confirm(
+          'Claude cannot find this conversation\u2019s local transcript, so resuming will start a NEW ' +
+          'conversation in this session and the parked history will be lost.\n\nResume anyway?'
+        );
+        if (!ok) {
+          this._noteResumeFailure(sessionId);
+          return false;
+        }
+        return await this.resumeSessionProcess(sessionId, true);
+      }
+      this._noteResumeFailure(sessionId);
       this.showToast(`Resume failed: ${data.error || 'Unknown error'}`, 'error');
       return false;
     } catch (err) {
+      this._noteResumeFailure(sessionId);
       this.showToast(`Resume failed: ${err.message}`, 'error');
       return false;
     } finally {
@@ -25497,7 +25565,7 @@ const SessionDrawer = {
     if (isPaused) {
       const pausedBadge = document.createElement('span');
       pausedBadge.className = 'session-paused-badge';
-      pausedBadge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+      pausedBadge.title = app._pausedBadgeTitle(s);
       pausedBadge.textContent = '\u23F8';
       row.appendChild(pausedBadge);
     }
@@ -25852,9 +25920,11 @@ const SessionDrawer = {
       if (isPaused && !existingPausedBadge) {
         const pausedBadge = document.createElement('span');
         pausedBadge.className = 'session-paused-badge';
-        pausedBadge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+        pausedBadge.title = app._pausedBadgeTitle(s);
         pausedBadge.textContent = '\u23F8';
         row.insertBefore(pausedBadge, row.querySelector('.drawer-session-gear'));
+      } else if (isPaused && existingPausedBadge) {
+        existingPausedBadge.title = app._pausedBadgeTitle(s);
       } else if (!isPaused && existingPausedBadge) {
         existingPausedBadge.remove();
       }
@@ -28392,6 +28462,14 @@ const ActionDashboard = {
 
   // Quick action: restart session
   async restartSession(sessionId) {
+    // A parked session reports status 'stopped', so it lands here — un-park it through the
+    // real resume path (transcript preflight + respawn restore + toast) instead of starting
+    // a fresh conversation over the top of it.
+    if (typeof app !== 'undefined' && app.sessions?.get(sessionId)?.paused) {
+      const resumed = await app.resumeSessionProcess(sessionId);
+      if (resumed) this.refresh();
+      return;
+    }
     try {
       const res = await fetch('/api/sessions/' + sessionId + '/interactive', { method: 'POST' });
       if (res.ok) {
@@ -28502,7 +28580,14 @@ const ActionDashboard = {
     try {
       // First restart the session if it's stopped
       const session = this._sessions.find(s => s.id === sessionId);
-      if (session && (session.status === 'stopped' || session.status === 'idle')) {
+      if (session?.paused || (typeof app !== 'undefined' && app.sessions?.get(sessionId)?.paused)) {
+        // Parked sessions report 'stopped' — resume properly rather than starting fresh.
+        const resumed = typeof app !== 'undefined' ? await app.resumeSessionProcess(sessionId) : false;
+        if (!resumed) {
+          if (typeof app !== 'undefined') app.showToast('Session is paused — resume it first', 'error');
+          return;
+        }
+      } else if (session && (session.status === 'stopped' || session.status === 'idle')) {
         await fetch('/api/sessions/' + sessionId + '/interactive', { method: 'POST' });
       }
       // Retry sending input — session may need time to start after /interactive

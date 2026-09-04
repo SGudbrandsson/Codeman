@@ -89,6 +89,11 @@ export class RalphStallDetector extends EventEmitter {
     this._loopActive = active;
   }
 
+  /** Whether stall detection is currently armed (see {@link setLoopActive}). */
+  get loopActive(): boolean {
+    return this._loopActive;
+  }
+
   /**
    * Check for iteration stall and emit appropriate events.
    */

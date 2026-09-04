@@ -150,6 +150,7 @@ const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Base poll interval (lightweight checks)
 const FULL_SCAN_EVERY_N_POLLS = 5; // Full directory traversal every 5th poll (5s)
+const SUBAGENT_SIGTERM_GRACE_MS = 500; // Wait after SIGTERM before escalating to SIGKILL
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
 const FILE_ALIVE_THRESHOLD_MS = 30000; // File mtime within 30s = agent alive (primary check)
 const STALE_COMPLETED_MAX_AGE_MS = STALE_DATA_MAX_AGE_MS; // Remove completed agents older than 1 hour
@@ -670,23 +671,46 @@ export class SubagentWatcher extends EventEmitter {
     // Already completed, nothing to kill
     if (info.status === 'completed') return false;
 
+    let gone = false;
     try {
       // Always use findSubagentProcess for kill — it verifies environ/cmdline,
       // preventing PID reuse attacks (cached PID may have been recycled by OS)
       const pid = await this.findSubagentProcess(info.sessionId);
       if (pid) {
         process.kill(pid, 'SIGTERM');
-        info.pid = undefined;
-        info.status = 'completed';
-        this.pendingToolCalls.delete(info.agentId);
-        this.emit('subagent:completed', info);
-        return true;
+        // Escalate: a subagent that ignores SIGTERM would otherwise keep burning RAM/CPU
+        // while the UI shows it gone — a false success exactly like reporting a session
+        // parked over a live pane. Re-resolve the pid so we never signal a recycled one.
+        await new Promise((resolve) => setTimeout(resolve, SUBAGENT_SIGTERM_GRACE_MS));
+        const survivor = await this.findSubagentProcess(info.sessionId);
+        if (survivor) {
+          process.kill(survivor, 'SIGKILL');
+          await new Promise((resolve) => setTimeout(resolve, SUBAGENT_SIGTERM_GRACE_MS));
+          gone = !(await this.findSubagentProcess(info.sessionId));
+        } else {
+          gone = true;
+        }
+      } else {
+        // No live process for this agent — nothing left to kill, so it really is finished.
+        gone = true;
       }
     } catch {
-      // Process may have already exited
+      // Signalling threw (ESRCH means it exited between lookup and kill; anything else,
+      // e.g. EPERM, means it is still out there). Re-check rather than assume.
+      try {
+        gone = !(await this.findSubagentProcess(info.sessionId));
+      } catch {
+        gone = false;
+      }
     }
 
-    // Mark as completed even if we couldn't find the process
+    if (!gone) {
+      // Do NOT mark it completed: the process is still running, and claiming otherwise
+      // hides live memory/CPU usage from the caller and the UI.
+      console.error(`[SubagentWatcher] Failed to kill subagent ${agentId} — process still alive`);
+      return false;
+    }
+
     info.pid = undefined;
     info.status = 'completed';
     this.pendingToolCalls.delete(info.agentId);
@@ -702,12 +726,18 @@ export class SubagentWatcher extends EventEmitter {
    */
   async killSubagentsForSession(workingDir: string, sessionId?: string): Promise<void> {
     const subagents = this.getSubagentsForSession(workingDir);
+    const survivors: string[] = [];
     for (const agent of subagents) {
       if (agent.status === 'active' || agent.status === 'idle') {
         // Only kill subagents belonging to this specific session
         if (sessionId && agent.sessionId !== sessionId) continue;
-        await this.killSubagent(agent.agentId);
+        if (!(await this.killSubagent(agent.agentId))) survivors.push(agent.agentId);
       }
+    }
+    if (survivors.length > 0) {
+      // Surfaced, not swallowed: callers that park a session to free memory must not report
+      // success while these are still resident.
+      throw new Error(`Failed to kill ${survivors.length} subagent(s): ${survivors.join(', ')}`);
     }
   }
 

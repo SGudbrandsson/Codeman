@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { resolveTranscriptPath } from '../src/web/transcript-path-resolver.js';
+import { resolveTranscriptPath, encodeProjectDirCandidates } from '../src/web/transcript-path-resolver.js';
 import type { TranscriptWatcher } from '../src/transcript-watcher.js';
 
 function makeWatcher(transcriptPath: string | null): TranscriptWatcher {
@@ -114,5 +114,42 @@ describe('resolveTranscriptPath', () => {
 
     fs.unlinkSync(fileA);
     fs.unlinkSync(fileB);
+  });
+
+  // ── Project-dir encoding: Claude collapses more than just slashes ──────────
+  // A working dir with a '.' or '_' used to resolve to a path that does not exist. That
+  // cost an empty transcript pane before the resume preflight existed; now it would refuse
+  // to resume a perfectly resumable session.
+
+  it('resolves a working dir whose name Claude escapes beyond the slashes', () => {
+    const dottedDir = '/home/user/my.project_v2';
+    const escaped = path.join(tmpHome, '.claude', 'projects', '-home-user-my-project-v2');
+    fs.mkdirSync(escaped, { recursive: true });
+    const file = path.join(escaped, `${SESSION_A}.jsonl`);
+    fs.writeFileSync(file, '');
+
+    expect(resolveTranscriptPath(dottedDir, undefined, SESSION_A, tmpHome)).toBe(file);
+
+    fs.rmSync(escaped, { recursive: true, force: true });
+  });
+
+  it('still prefers the slash-only encoding when that directory is the one on disk', () => {
+    const dottedDir = '/home/user/my.project';
+    const slashOnly = path.join(tmpHome, '.claude', 'projects', '-home-user-my.project');
+    fs.mkdirSync(slashOnly, { recursive: true });
+    const file = path.join(slashOnly, `${SESSION_A}.jsonl`);
+    fs.writeFileSync(file, '');
+
+    expect(resolveTranscriptPath(dottedDir, undefined, SESSION_A, tmpHome)).toBe(file);
+
+    fs.rmSync(slashOnly, { recursive: true, force: true });
+  });
+
+  it('emits one candidate when both encodings agree', () => {
+    expect(encodeProjectDirCandidates('/home/user/my-project')).toEqual(['-home-user-my-project']);
+    expect(encodeProjectDirCandidates('/home/user/my.project')).toEqual([
+      '-home-user-my.project',
+      '-home-user-my-project',
+    ]);
   });
 });

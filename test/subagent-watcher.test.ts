@@ -100,11 +100,7 @@ function createAssistantTextEntry(text: string, timestamp?: string): string {
   });
 }
 
-function createToolUseEntry(
-  toolName: string,
-  input: Record<string, unknown>,
-  timestamp?: string
-): string {
+function createToolUseEntry(toolName: string, input: Record<string, unknown>, timestamp?: string): string {
   return JSON.stringify({
     type: 'assistant',
     timestamp: timestamp || new Date().toISOString(),
@@ -281,12 +277,7 @@ describe('SubagentWatcher', () => {
 
     it('should skip malformed JSON lines', async () => {
       const validEntry = createUserEntry('Valid entry');
-      const malformedLines = [
-        'not json at all',
-        '{"incomplete": true',
-        validEntry,
-        '}{bad json}{',
-      ];
+      const malformedLines = ['not json at all', '{"incomplete": true', validEntry, '}{bad json}{'];
 
       const mockRl = new EventEmitter();
       mockCreateInterface.mockReturnValue(mockRl);
@@ -514,9 +505,7 @@ describe('SubagentWatcher', () => {
       expect(watcher.getSubagents()[0].status).toBe('idle');
 
       // Simulate file change event - get the callback from mockWatch
-      const watchCallback = mockWatch.mock.calls.find(
-        (call: unknown[]) => typeof call[1] === 'function'
-      )?.[1];
+      const watchCallback = mockWatch.mock.calls.find((call: unknown[]) => typeof call[1] === 'function')?.[1];
 
       if (watchCallback) {
         // Need to reset the readline mock for the new read
@@ -979,9 +968,7 @@ describe('SubagentWatcher', () => {
     });
 
     it('should limit transcript entries when limit is specified', async () => {
-      const entries = Array.from({ length: 10 }, (_, i) =>
-        createUserEntry(`Message ${i}`)
-      );
+      const entries = Array.from({ length: 10 }, (_, i) => createUserEntry(`Message ${i}`));
 
       const mockRl = new EventEmitter();
       mockCreateInterface.mockReturnValue(mockRl);
@@ -1037,9 +1024,7 @@ describe('SubagentWatcher', () => {
           sessionId: 'sess1',
           message: {
             role: 'assistant',
-            content: [
-              { type: 'tool_use', name: 'WebSearch', input: { query: 'test query' } },
-            ],
+            content: [{ type: 'tool_use', name: 'WebSearch', input: { query: 'test query' } }],
           },
         },
       ];
@@ -1467,6 +1452,100 @@ describe('SubagentWatcher', () => {
     });
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Pausing a session must actually free what the subagents are holding. A
+  // SIGTERM the process ignores, reported as a completed agent, is the same
+  // false success as a parked badge over a live tmux pane.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('killSubagent escalation (pause must not report a false kill)', () => {
+    /** Seed an active agent directly — the scan machinery is covered elsewhere. */
+    function seedAgent(agentId: string, workingDir = '/home/user/project', sessionId = 'sub-session-1') {
+      const info: SubagentInfo = {
+        agentId,
+        sessionId,
+        projectHash: watcher.getProjectHashForDir(workingDir),
+        filePath: `/tmp/${agentId}.jsonl`,
+        startedAt: new Date().toISOString(),
+        lastActivityAt: Date.now(),
+        status: 'active',
+        toolCallCount: 0,
+        entryCount: 1,
+        fileSize: 10,
+      };
+      (watcher as unknown as { agentInfo: Map<string, SubagentInfo> }).agentInfo.set(agentId, info);
+      return info;
+    }
+
+    /** Make findSubagentProcess() return `pid` for as many calls as `alive` says. */
+    function mockProcessLookups(pids: (number | null)[]) {
+      const find = vi.fn(async () => pids.shift() ?? null);
+      (watcher as unknown as { findSubagentProcess: unknown }).findSubagentProcess = find;
+      return find;
+    }
+
+    async function runKill(agentId: string): Promise<boolean> {
+      const pending = watcher.killSubagent(agentId);
+      await vi.advanceTimersByTimeAsync(5000);
+      return pending;
+    }
+
+    it('escalates to SIGKILL when the subagent ignores SIGTERM', async () => {
+      seedAgent('esc1');
+      mockProcessLookups([4242, 4242, null]);
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      const result = await runKill('esc1');
+
+      expect(result).toBe(true);
+      expect(killSpy).toHaveBeenCalledWith(4242, 'SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith(4242, 'SIGKILL');
+      killSpy.mockRestore();
+    });
+
+    it('does NOT mark the agent completed when the process survives SIGKILL', async () => {
+      seedAgent('esc2');
+      mockProcessLookups([4243, 4243, 4243]);
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const completed = vi.fn();
+      watcher.on('subagent:completed', completed);
+
+      const result = await runKill('esc2');
+
+      expect(result).toBe(false);
+      expect(completed).not.toHaveBeenCalled();
+      expect(watcher.getSubagent('esc2')?.status).toBe('active');
+      killSpy.mockRestore();
+    });
+
+    it('reports the survivors instead of pretending the session was freed', async () => {
+      seedAgent('esc3');
+      mockProcessLookups([4244, 4244, 4244]);
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      const pending = watcher.killSubagentsForSession('/home/user/project', 'sub-session-1');
+      // Attach the rejection handler before advancing timers: the promise settles
+      // during the advance, and an unhandled rejection there poisons the whole file.
+      const settled = expect(pending).rejects.toThrow(/esc3/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await settled;
+
+      killSpy.mockRestore();
+    });
+
+    it('still completes an agent whose process is already gone', async () => {
+      seedAgent('esc4');
+      mockProcessLookups([null]);
+      const completed = vi.fn();
+      watcher.on('subagent:completed', completed);
+
+      const result = await runKill('esc4');
+
+      expect(result).toBe(true);
+      expect(completed).toHaveBeenCalled();
+      expect(watcher.getSubagent('esc4')?.status).toBe('completed');
+    });
+  });
+
   describe('Error Handling', () => {
     it('should emit error on directory scan failure', async () => {
       mockExistsSync.mockReturnValue(true);
@@ -1640,9 +1719,7 @@ describe('SubagentWatcher', () => {
           sessionId: 'sess1',
           message: {
             role: 'assistant',
-            content: [
-              { type: 'tool_use', name: 'WebSearch', input: { query: 'nodejs best practices' } },
-            ],
+            content: [{ type: 'tool_use', name: 'WebSearch', input: { query: 'nodejs best practices' } }],
           },
         },
       ];
@@ -1661,9 +1738,7 @@ describe('SubagentWatcher', () => {
           sessionId: 'sess1',
           message: {
             role: 'assistant',
-            content: [
-              { type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } },
-            ],
+            content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } }],
           },
         },
       ];
@@ -1682,9 +1757,7 @@ describe('SubagentWatcher', () => {
           sessionId: 'sess1',
           message: {
             role: 'assistant',
-            content: [
-              { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } },
-            ],
+            content: [{ type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }],
           },
         },
       ];
@@ -1704,9 +1777,7 @@ describe('SubagentWatcher', () => {
           sessionId: 'sess1',
           message: {
             role: 'assistant',
-            content: [
-              { type: 'tool_use', name: 'Bash', input: { command: longCommand } },
-            ],
+            content: [{ type: 'tool_use', name: 'Bash', input: { command: longCommand } }],
           },
         },
       ];
@@ -1820,9 +1891,7 @@ describe('SubagentWatcher', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       // Long user messages are filtered out
-      const userMessages = messageHandler.mock.calls.filter(
-        (call) => (call[0] as SubagentMessage).role === 'user'
-      );
+      const userMessages = messageHandler.mock.calls.filter((call) => (call[0] as SubagentMessage).role === 'user');
       expect(userMessages.length).toBe(0);
     });
   });

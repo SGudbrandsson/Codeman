@@ -29,6 +29,8 @@ export enum ApiErrorCode {
   SESSION_BUSY = 'SESSION_BUSY',
   /** Operation failed */
   OPERATION_FAILED = 'OPERATION_FAILED',
+  /** The conversation transcript needed for --resume is not on disk */
+  TRANSCRIPT_UNAVAILABLE = 'TRANSCRIPT_UNAVAILABLE',
   /** Resource already exists */
   ALREADY_EXISTS = 'ALREADY_EXISTS',
   /** Resource state conflict (e.g. stale write / concurrent modification) */
@@ -45,6 +47,7 @@ const ErrorMessages: Record<ApiErrorCode, string> = {
   [ApiErrorCode.INVALID_INPUT]: 'Invalid input provided',
   [ApiErrorCode.SESSION_BUSY]: 'Session is currently busy',
   [ApiErrorCode.OPERATION_FAILED]: 'The operation failed',
+  [ApiErrorCode.TRANSCRIPT_UNAVAILABLE]: 'The local conversation transcript is no longer available',
   [ApiErrorCode.ALREADY_EXISTS]: 'Resource already exists',
   [ApiErrorCode.CONFLICT]: 'The resource was modified by another process',
   [ApiErrorCode.INTERNAL_ERROR]: 'An internal error occurred',

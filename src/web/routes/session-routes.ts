@@ -563,6 +563,13 @@ ${contextLines.join('\n')}`;
 
   app.post('/api/sessions/:id/interactive', async (req): Promise<ApiResponse> => {
     const { id } = req.params as { id: string };
+    const parsedInteractive = SessionResumeSchema.safeParse(req.body ?? {});
+    if (!parsedInteractive.success) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        parsedInteractive.error.issues[0]?.message ?? 'Validation failed'
+      );
+    }
     const session = ctx.sessions.get(id);
 
     if (!session) {
@@ -577,7 +584,14 @@ ${contextLines.join('\n')}`;
     // its listeners, and `_isStopped` would otherwise swallow all output.
     const wasPaused = session.paused;
     const previousPausedAt = session.pausedAt ?? undefined;
+    const previousPauseFailed = session.pauseFailed;
     if (wasPaused) {
+      // Un-parking here must obey exactly the same rules as /resume: a parked session
+      // reports `status: 'stopped'`, so generic "restart the stopped session" callers land
+      // on this route and would otherwise start a FRESH conversation over a pruned
+      // transcript, and come back with respawn silently dead.
+      const preflight = transcriptPreflight(session, parsedInteractive.data.force === true);
+      if (preflight.error) return preflight.error;
       session.clearPaused();
       ctx.persistSessionState(session);
       await ctx.ensureSessionListeners(session);
@@ -607,8 +621,13 @@ ${contextLines.join('\n')}`;
       }
 
       await session.startInteractive();
+      if (wasPaused) {
+        // Same restore as /resume — without it the respawn controller pause tore down stays
+        // dead until the whole server restarts.
+        await ctx.resumeSessionSideEffects(id);
+      }
       getLifecycleLog().log({
-        event: 'started',
+        event: wasPaused ? 'resumed' : 'started',
         sessionId: id,
         name: session.name,
         mode: session.mode,
@@ -620,7 +639,7 @@ ${contextLines.join('\n')}`;
     } catch (err) {
       // Never leave an un-parked session in limbo — restore the parked state on failure
       if (wasPaused) {
-        session.markPaused(previousPausedAt);
+        session.markPaused(previousPausedAt, previousPauseFailed);
         ctx.persistSessionState(session);
         ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
       }
@@ -663,6 +682,36 @@ ${contextLines.join('\n')}`;
     }
   });
 
+  /**
+   * Preflight for every path that relaunches a parked conversation.
+   *
+   * `--resume <id>` only works while the local transcript still exists. Claude Code prunes
+   * transcripts after ~30 days by default, and deleting/moving the worktree breaks the
+   * lookup too — so a non-null claudeResumeId is NOT proof of resumability. Sessions get
+   * parked for a long time, which is exactly when this bites, and relaunching regardless
+   * would silently start a FRESH conversation and lose the history the user parked the
+   * session to keep.
+   *
+   * Returns the resolved transcript path, or an error response the caller must return.
+   * The dedicated `TRANSCRIPT_UNAVAILABLE` code is what lets the UI offer the `force`
+   * escape hatch instead of leaving the session parked with no way out.
+   */
+  function transcriptPreflight(
+    session: Session,
+    force: boolean
+  ): { error: ApiResponse } | { error: null; transcriptPath: string | null } {
+    const transcriptPath = ctx.resolveSessionTranscript(session.workingDir, session.claudeResumeId ?? undefined);
+    if (transcriptPath || force) return { error: null, transcriptPath };
+    return {
+      error: createErrorResponse(
+        ApiErrorCode.TRANSCRIPT_UNAVAILABLE,
+        'Cannot resume: this conversation’s local transcript is gone (Claude prunes transcripts after ~30 days, ' +
+          'and moving or deleting the working directory also breaks resume). Resuming with force will start a ' +
+          'NEW conversation in this session and lose the parked history.'
+      ),
+    };
+  }
+
   // ========== Pause Session (park: kill process + mux, preserve state) ==========
 
   app.post('/api/sessions/:id/pause', async (req): Promise<ApiResponse> => {
@@ -682,8 +731,11 @@ ${contextLines.join('\n')}`;
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Only Claude sessions can be paused');
     }
 
-    // Idempotent: pausing an already-paused session is a no-op
-    if (session.paused) {
+    // Idempotent: pausing an already-paused session is a no-op — UNLESS the previous
+    // attempt could not prove the process died. That session is parked over a live pane,
+    // and this call is the retry its error message asked the user to make, so it must run
+    // the kill + verification again instead of reporting a second false success.
+    if (session.paused && !session.pauseFailed) {
       return { success: true };
     }
 
@@ -706,6 +758,12 @@ ${contextLines.join('\n')}`;
       await ctx.pauseSessionSideEffects(id);
 
       await session.pause();
+
+      // Kill subagents only once the main Claude is dead: it is not their parent (they are
+      // found by scanning /proc, not by process group), so killing them first leaves a
+      // window in which the still-live main process spawns a fresh one — most likely on a
+      // force-pause, which is exactly when the session is mid-turn.
+      await ctx.killSessionSubagents(id);
 
       getLifecycleLog().log({
         event: 'paused',
@@ -762,25 +820,11 @@ ${contextLines.join('\n')}`;
       return { success: true };
     }
 
-    // Preflight: `--resume <id>` only works while the local transcript still exists. Claude
-    // Code prunes transcripts after ~30 days by default, and deleting/moving the worktree
-    // breaks the lookup too — so a non-null claudeResumeId is NOT proof of resumability.
-    // Sessions get parked for a long time, which is exactly when this bites, and relaunching
-    // regardless would silently start a FRESH conversation and lose the history the user
-    // parked the session to keep. Fail loudly, with `force` as the explicit escape hatch.
-    if (!forceResume) {
-      const transcript = ctx.resolveSessionTranscript(session.workingDir, session.claudeResumeId ?? undefined);
-      if (!transcript) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'Cannot resume: this conversation’s local transcript is gone (Claude prunes transcripts after ~30 days, ' +
-            'and moving or deleting the working directory also breaks resume). Resuming with force will start a ' +
-            'NEW conversation in this session and lose the parked history.'
-        );
-      }
-    }
+    const preflight = transcriptPreflight(session, forceResume);
+    if (preflight.error) return preflight.error;
 
     const pausedAt = session.pausedAt ?? undefined;
+    const pauseFailed = session.pauseFailed;
     session.clearPaused();
 
     try {
@@ -790,10 +834,14 @@ ${contextLines.join('\n')}`;
 
       await session.startInteractive();
 
-      // Re-arm the transcript watcher (the exit handler stopped it)
+      // Re-arm the transcript watcher (the exit handler stopped it). Prefer the path the
+      // preflight actually resolved — hand-encoding the project dir here would miss the
+      // working directories whose name Claude escapes differently.
       if (session.claudeResumeId && session.workingDir) {
         const escapedDir = session.workingDir.replace(/\//g, '-');
-        const transcriptPath = join(homedir(), '.claude', 'projects', escapedDir, `${session.claudeResumeId}.jsonl`);
+        const transcriptPath =
+          preflight.transcriptPath ??
+          join(homedir(), '.claude', 'projects', escapedDir, `${session.claudeResumeId}.jsonl`);
         ctx.startTranscriptWatcher(id, transcriptPath);
       }
 
@@ -814,7 +862,9 @@ ${contextLines.join('\n')}`;
       return { success: true };
     } catch (err) {
       // Never leave the session in limbo — restore the parked state so the UI stays truthful
-      session.markPaused(pausedAt);
+      // (including the "the pause never actually killed anything" marker, so a later /pause
+      // still retries instead of treating the session as cleanly parked).
+      session.markPaused(pausedAt, pauseFailed);
       ctx.persistSessionState(session);
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Resume failed: ' + getErrorMessage(err));

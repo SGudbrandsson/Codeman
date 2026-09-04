@@ -19,6 +19,11 @@ export interface SessionPort {
   ensureSessionListeners(session: Session): Promise<void>;
   /** Tears down respawn controller/timers, ralph watchers and the image watcher before parking a session. */
   pauseSessionSideEffects(sessionId: string): Promise<void>;
+  /**
+   * Kills the subagents this session spawned. Called AFTER the main process is dead, since
+   * a live Claude can spawn a replacement subagent during the kill.
+   */
+  killSessionSubagents(sessionId: string): Promise<void>;
   resumeSessionSideEffects(sessionId: string): Promise<void>;
   persistSessionState(session: Session): void;
   persistSessionStateNow(session: Session): void;

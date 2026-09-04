@@ -29,6 +29,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import {
@@ -346,6 +347,13 @@ export class Session extends EventEmitter {
   // User parked this session: process + mux killed, session entry preserved
   private _paused: boolean = false;
   private _pausedAt: number | null = null;
+  /**
+   * True when the last `pause()` could not prove the process really died (the mux pane
+   * or the PTY survived). The session stays parked so the UI has something to act on,
+   * but the flag says "memory was NOT freed" and makes `POST /pause` retry instead of
+   * treating the session as already parked.
+   */
+  private _pauseFailed: boolean = false;
   /**
    * Incremented every time a new interactive PTY is spawned. Every PTY callback captures
    * the generation it was bound to and returns early if it no longer matches, so a late
@@ -876,19 +884,77 @@ export class Session extends EventEmitter {
     return this._pausedAt;
   }
 
+  /** True when the last pause could not prove the process died (memory was NOT freed). */
+  get pauseFailed(): boolean {
+    return this._pauseFailed;
+  }
+
+  /**
+   * Best-effort snapshot of the mux binding to verify against after `stop()`.
+   *
+   * `stop()` nulls `_muxSession`, so a pause that fails verification (and any retry of it)
+   * would otherwise have nothing left to check and would report success over a live pane.
+   * When the binding is already gone we fall back to the deterministic name TmuxManager
+   * derives from the session id, so the check still happens.
+   */
+  private muxSnapshotForPause(): MuxSession | null {
+    if (!this._mux) return null;
+    if (this._muxSession) return this._muxSession;
+    const deterministicName = `codeman-${this.id.slice(0, 8)}`;
+    if (!this._mux.muxSessionExists(deterministicName)) return null;
+    return {
+      sessionId: this.id,
+      muxName: deterministicName,
+      pid: 0,
+      createdAt: Date.now(),
+      workingDir: this.workingDir,
+      mode: this.mode,
+      attached: false,
+      name: this._name || undefined,
+    };
+  }
+
+  /**
+   * True when `pid` still names a running (non-zombie) process.
+   *
+   * `process.kill(pid, 0)` alone also succeeds for a zombie that has exited but has not
+   * been reaped yet, which would turn every non-mux pause into a false failure. On Linux
+   * we disambiguate via /proc; anywhere else (or when /proc is unreadable) we deliberately
+   * report "not live" rather than block the pause on an unprovable claim.
+   */
+  private static isProcessLive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+      // "pid (comm) STATE ..." — comm may contain spaces/parens, so scan from the last ')'
+      const state = stat.slice(stat.lastIndexOf(')') + 1).trim()[0];
+      return state !== 'Z';
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Parks the session: marks it paused (so the persisted state written by the exit
    * handler already carries the flag) and then kills the PTY and its mux session.
    * The terminal buffer, name, working dir and claudeResumeId are all preserved.
+   *
+   * Throws when the process cannot be proven dead. In that case the session stays
+   * PARKED with {@link pauseFailed} raised and, for a surviving mux pane, re-bound to
+   * that pane — so `/resume` re-attaches to the live session instead of trying to create
+   * a duplicate tmux name, and a second `/pause` is a real retry rather than a no-op.
    */
   async pause(): Promise<void> {
-    // Capture the mux name before `stop()` nulls `_muxSession` — we need it afterwards to
-    // verify the pane really died. `stop()` swallows kill failures, so without this check
-    // pause would report success (and persist `paused: true`) while Claude kept running,
-    // which is the exact opposite of what pausing is for.
-    const muxName = this._muxSession?.muxName;
+    // Capture what we will verify against BEFORE `stop()` clears it.
+    const muxSnapshot = this.muxSnapshotForPause();
+    const ptyPid = this.ptyProcess?.pid ?? this._pid ?? null;
     this._paused = true;
     this._pausedAt = Date.now();
+    this._pauseFailed = false;
     // A force-pause interrupts a turn: drop the mid-turn flag so the session does not
     // keep reporting `isWorking: true` over SSE / `/api/sessions` while parked.
     this._isWorking = false;
@@ -901,25 +967,40 @@ export class Session extends EventEmitter {
     this._status = 'stopped';
 
     // Verify the mux session actually died. If it survived, the Claude process is still
-    // resident and nothing was freed — fail loudly rather than showing a parked badge over
-    // a live session, and clear the flag so `paused: true` is never persisted.
-    if (muxName && this._mux?.muxSessionExists(muxName)) {
-      this._paused = false;
-      this._pausedAt = null;
+    // resident and nothing was freed — say so instead of showing a parked badge over a
+    // live session.
+    if (muxSnapshot && this._mux?.muxSessionExists(muxSnapshot.muxName)) {
+      // Re-adopt the surviving pane: `stop()` dropped both our binding and the mux
+      // manager's record of it, and without them `/resume` would try to create a second
+      // tmux session under the same name and a retried `/pause` would kill nothing.
+      this._muxSession = muxSnapshot;
+      this._mux.registerSession(muxSnapshot);
+      this._pauseFailed = true;
       throw new Error(
-        `Failed to pause: the mux session "${muxName}" is still alive, so the Claude process was not stopped. ` +
+        `Failed to pause: the mux session "${muxSnapshot.muxName}" is still alive, so the Claude process was not stopped. ` +
           `Check that tmux is responding, then try again.`
+      );
+    }
+
+    // Non-mux sessions have no pane to check — verify the PTY process itself is gone,
+    // otherwise pause would report success no matter what the kills in `stop()` did.
+    if (!muxSnapshot && ptyPid && Session.isProcessLive(ptyPid)) {
+      this._pauseFailed = true;
+      throw new Error(
+        `Failed to pause: process ${ptyPid} is still running, so nothing was freed. Try again, ` +
+          `or stop the session if the process is wedged.`
       );
     }
   }
 
   /**
    * Restore-time setter: re-applies the paused flag to a session rebuilt from state.json
-   * without touching any process.
+   * (or rolls a failed un-park back) without touching any process.
    */
-  markPaused(pausedAt?: number): void {
+  markPaused(pausedAt?: number, pauseFailed: boolean = false): void {
     this._paused = true;
     this._pausedAt = pausedAt ?? Date.now();
+    this._pauseFailed = pauseFailed;
     this._status = 'stopped';
   }
 
@@ -930,6 +1011,7 @@ export class Session extends EventEmitter {
   clearPaused(): void {
     this._paused = false;
     this._pausedAt = null;
+    this._pauseFailed = false;
     this._isStopped = false;
     this._status = 'idle';
     // Belt and braces: `pause()` preserves the tracker wiring, but any path that reached
@@ -994,7 +1076,11 @@ export class Session extends EventEmitter {
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
       safeMode: this._safeMode || undefined,
-      ...(this._paused && { paused: true, pausedAt: this._pausedAt ?? undefined }),
+      ...(this._paused && {
+        paused: true,
+        pausedAt: this._pausedAt ?? undefined,
+        ...(this._pauseFailed && { pauseFailed: true }),
+      }),
       autoCompactAndContinue: this._compactContinue.enabled || undefined,
     };
   }
@@ -1698,7 +1784,12 @@ export class Session extends EventEmitter {
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Shell PTY spawned with PID:', this._pid);
 
+    // Same stale-callback guard as the interactive path: a late callback from the PTY this
+    // one replaced (interactive -> shell, or shell -> shell) must not touch the new one.
+    const ptyGeneration = ++this._ptyGeneration;
+
     this.ptyProcess.onData((rawData: string) => {
+      if (ptyGeneration !== this._ptyGeneration) return;
       // Filter out focus escape sequences
       const data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
       if (!data) return; // Skip if only focus sequences
@@ -1712,6 +1803,10 @@ export class Session extends EventEmitter {
     });
 
     this.ptyProcess.onExit(({ exitCode }) => {
+      if (ptyGeneration !== this._ptyGeneration) {
+        console.log('[Session] Ignoring shell exit from superseded PTY generation', ptyGeneration);
+        return;
+      }
       console.log('[Session] Shell PTY exited with code:', exitCode);
       this.ptyProcess = null;
       this._pid = null;
@@ -1816,8 +1911,14 @@ export class Session extends EventEmitter {
         this._pid = this.ptyProcess.pid;
         console.log('[Session] PTY spawned with PID:', this._pid);
 
+        // Stale-callback guard (see _ptyGeneration): a late callback from the PTY this one
+        // replaced must not null out the current PTY or rewrite its status. The promise is
+        // still settled below either way, so a superseded run never hangs its caller.
+        const ptyGeneration = ++this._ptyGeneration;
+
         // Handle terminal data
         this.ptyProcess.onData((rawData: string) => {
+          if (ptyGeneration !== this._ptyGeneration) return;
           // Filter out focus escape sequences
           const data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
           if (!data) return; // Skip if only focus sequences
@@ -1836,8 +1937,11 @@ export class Session extends EventEmitter {
         // Handle exit
         this.ptyProcess.onExit(({ exitCode }) => {
           console.log('[Session] PTY exited with code:', exitCode);
-          this.ptyProcess = null;
-          this._pid = null;
+          const isCurrentPty = ptyGeneration === this._ptyGeneration;
+          if (isCurrentPty) {
+            this.ptyProcess = null;
+            this._pid = null;
+          }
 
           // Guard against race conditions: only process once per runPrompt call
           if (this._promptResolved) {
@@ -1856,7 +1960,7 @@ export class Session extends EventEmitter {
           const resultMsg = this._messages.find((m) => m.type === 'result');
 
           if (resultMsg && !resultMsg.is_error) {
-            this._status = 'idle';
+            if (isCurrentPty) this._status = 'idle';
             const cost = resultMsg.total_cost_usd || 0;
             this._totalCost += cost;
             this.emit('completion', resultMsg.result || '', cost);
@@ -1864,12 +1968,12 @@ export class Session extends EventEmitter {
               resolve({ result: resultMsg.result || '', cost });
             }
           } else if (exitCode !== 0 || (resultMsg && resultMsg.is_error)) {
-            this._status = 'error';
+            if (isCurrentPty) this._status = 'error';
             if (reject) {
               reject(new Error(this._errorBuffer || this._textOutput.value || 'Process exited with error'));
             }
           } else {
-            this._status = 'idle';
+            if (isCurrentPty) this._status = 'idle';
             if (resolve) {
               resolve({
                 result: this._textOutput.value || this._terminalBuffer.value,
@@ -2915,8 +3019,13 @@ export class Session extends EventEmitter {
     this._isWorking = false;
     console.log('[Session] Rebind PTY spawned with PID:', this._pid);
 
+    // Stale-callback guard (see _ptyGeneration) — the PTY killed in step 1 delivers its
+    // onExit asynchronously and must not null out this one.
+    const ptyGeneration = ++this._ptyGeneration;
+
     // Re-hook PTY data handler (same as startInteractive)
     this.ptyProcess.onData((rawData: string) => {
+      if (ptyGeneration !== this._ptyGeneration) return;
       const data = rawData.replace(FOCUS_ESCAPE_FILTER, '').replace(CTRL_L_PATTERN, '');
       if (!data) return;
 
@@ -2992,6 +3101,10 @@ export class Session extends EventEmitter {
     });
 
     this.ptyProcess.onExit(({ exitCode }) => {
+      if (ptyGeneration !== this._ptyGeneration) {
+        console.log('[Session] Ignoring rebind exit from superseded PTY generation', ptyGeneration);
+        return;
+      }
       console.log('[Session] Rebind PTY exited with code:', exitCode);
       this.ptyProcess = null;
       this._pid = null;

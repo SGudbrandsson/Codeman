@@ -305,6 +305,8 @@ export class WebServer extends EventEmitter {
   private readonly serverStartTime: number = Date.now();
   // Pending respawn start timers (for cleanup on shutdown)
   private pendingRespawnStarts: Map<string, NodeJS.Timeout> = new Map();
+  // Ralph stall-detection armed state at pause time, so resume can restore it exactly
+  private pausedRalphLoopActive: Map<string, boolean> = new Map();
   // Active plan orchestrators (for cancellation via API)
   private activePlanOrchestrators: Map<string, PlanOrchestrator> = new Map();
   private persistDeb = new KeyedDebouncer(100);
@@ -561,6 +563,7 @@ export class WebServer extends EventEmitter {
       setupSessionListeners: this.setupSessionListeners.bind(this),
       ensureSessionListeners: this.ensureSessionListeners.bind(this),
       pauseSessionSideEffects: this.pauseSessionSideEffects.bind(this),
+      killSessionSubagents: this.killSessionSubagents.bind(this),
       resumeSessionSideEffects: this.resumeSessionSideEffects.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
@@ -1132,6 +1135,9 @@ export class WebServer extends EventEmitter {
       this.respawnTimers.delete(sessionId);
     }
 
+    // Drop the remembered ralph loop-active state (only meaningful for a parked session)
+    this.pausedRalphLoopActive.delete(sessionId);
+
     // Clear pending respawn start timer (from restoration grace period)
     const pendingStart = this.pendingRespawnStarts.get(sessionId);
     if (pendingStart) {
@@ -1471,22 +1477,13 @@ export class WebServer extends EventEmitter {
   private async pauseSessionSideEffects(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
 
-    // Stop Ralph file watching + stall accrual for the parked session
+    // Stop Ralph file watching + stall accrual for the parked session. The armed/disarmed
+    // state is remembered so resume can put it back rather than relying on the next parsed
+    // iteration line to re-arm it by luck.
     if (session) {
       session.ralphTracker.stopWatchingFixPlan();
+      this.pausedRalphLoopActive.set(sessionId, session.ralphTracker.stallDetector.loopActive);
       session.ralphTracker.stallDetector.setLoopActive(false);
-    }
-
-    // Kill subagents spawned by this session. They are NOT in the session's PTY process
-    // group — subagentWatcher finds them by scanning /proc — so `stop()`'s process-group
-    // SIGKILL never reaches them. Without this, a "paused" session leaves subagents burning
-    // memory and CPU and still writing into the worktree, which defeats the whole feature.
-    if (session) {
-      try {
-        await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
-      } catch (err) {
-        console.error(`[Server] Failed to kill subagents while pausing session ${sessionId}:`, err);
-      }
     }
 
     // Stop and remove respawn controller — but save config first so it can be restored
@@ -1494,7 +1491,9 @@ export class WebServer extends EventEmitter {
     if (controller) {
       const config = controller.getConfig();
       const timerInfo = this.respawnTimers.get(sessionId);
-      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
+      // REMAINING time, not the original duration: a timed respawn with 5 minutes left must
+      // resume with 5 minutes left, not a full fresh timer.
+      const durationMinutes = timerInfo ? Math.max(1, Math.ceil((timerInfo.endAt - Date.now()) / 60000)) : undefined;
       this.saveRespawnConfig(sessionId, config, durationMinutes);
 
       controller.cancelOpenCycle('Session paused');
@@ -1527,6 +1526,25 @@ export class WebServer extends EventEmitter {
   }
 
   /**
+   * Kills the subagents spawned by a session that is being parked.
+   *
+   * They are NOT in the session's PTY process group — subagentWatcher finds them by
+   * scanning /proc — so `stop()`'s process-group SIGKILL never reaches them. Without this,
+   * a "paused" session leaves subagents burning memory and CPU and still writing into the
+   * worktree, which defeats the whole feature.
+   *
+   * Call this AFTER the main Claude process is dead: it is the only thing that can spawn a
+   * replacement subagent, and it would do so inside the kill + graceful-shutdown window
+   * otherwise. Failures are surfaced to the caller — they mean memory was NOT freed, so the
+   * pause must not be reported as a clean success.
+   */
+  private async killSessionSubagents(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
+  }
+
+  /**
    * Undo {@link pauseSessionSideEffects} when a parked session is resumed.
    *
    * Pause saves the respawn config and tears the controller down; before this existed the
@@ -1540,6 +1558,14 @@ export class WebServer extends EventEmitter {
     // Re-arm Ralph's fix-plan watcher and stall accrual if the loop is still enabled
     if (session.mode !== 'opencode') {
       session.ralphTracker.setWorkingDir(session.workingDir);
+    }
+    const wasLoopActive = this.pausedRalphLoopActive.get(sessionId);
+    this.pausedRalphLoopActive.delete(sessionId);
+    if (wasLoopActive) {
+      // Restart the stall clock before re-arming: the parked time is not stall time, and
+      // an un-reset clock would fire `iterationStallCritical` the moment the loop is armed.
+      session.ralphTracker.stallDetector.notifyIterationChanged(session.ralphTracker.loopState.cycleCount);
+      session.ralphTracker.stallDetector.setLoopActive(true);
     }
 
     // Rebuild the respawn controller from the config pause persisted
@@ -2241,6 +2267,9 @@ export class WebServer extends EventEmitter {
     } else {
       // Grace period has passed, start immediately
       controller.start();
+      // Clients key the respawn indicator off these events — without the broadcast the UI
+      // shows respawn as off while it is actually running.
+      this.broadcast(SseEvent.RespawnStarted, { sessionId: session.id });
       console.log(
         `[Server] Restored respawn controller for session ${session.id} from ${source} (started immediately)`
       );
@@ -3319,7 +3348,7 @@ export class WebServer extends EventEmitter {
   private _restoreSessionConfig(session: Session, savedState: SessionState): void {
     // Paused (parked by the user) — restore the flag so the session stays parked across restarts
     if (savedState.paused) {
-      session.markPaused(savedState.pausedAt);
+      session.markPaused(savedState.pausedAt, savedState.pauseFailed === true);
     }
     // Auto-compact
     if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
@@ -3833,7 +3862,7 @@ export class WebServer extends EventEmitter {
             // writes the correct status back to state.json instead of defaulting to idle.
             if (savedState.paused) {
               // _restoreSessionConfig already applied markPaused(); keep it parked
-              session.markPaused(savedState.pausedAt);
+              session.markPaused(savedState.pausedAt, savedState.pauseFailed === true);
             } else if (savedState.status === 'stopped') {
               session.markStopped();
             }

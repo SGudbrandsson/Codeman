@@ -59,19 +59,36 @@ export function resolveTranscriptPath(
   // conversations would incorrectly display stale history.
   if (!claudeResumeId) return null;
 
-  const escapedDir = workingDir.replace(/\//g, '-');
-  const projectDir = join(_homeDir, '.claude', 'projects', escapedDir);
-
   // 3. Direct lookup: claudeResumeId is the authoritative identifier for this session's
   //    conversation. Return the corresponding JSONL file if it exists on disk.
   //    Do NOT scan for newer files — that would cross-contaminate sessions sharing the
   //    same projectDir (same workingDir).
-  const resumeFile = join(projectDir, `${claudeResumeId}.jsonl`);
-  try {
-    statSync(resumeFile);
-    return resumeFile;
-  } catch {
-    /* file not on disk yet */
-    return null;
+  for (const escapedDir of encodeProjectDirCandidates(workingDir)) {
+    const resumeFile = join(_homeDir, '.claude', 'projects', escapedDir, `${claudeResumeId}.jsonl`);
+    try {
+      statSync(resumeFile);
+      return resumeFile;
+    } catch {
+      /* not under this encoding — try the next candidate */
+    }
   }
+  /* file not on disk yet */
+  return null;
+}
+
+/**
+ * The candidate `~/.claude/projects` directory names for a working directory.
+ *
+ * Claude Code does not only swap slashes for dashes: it collapses every character that is
+ * not alphanumeric (dots and underscores included), which is why no directory on a typical
+ * host contains either. Checking the slash-only encoding first keeps the historical
+ * behaviour byte-identical wherever it already resolved, and the collapsed encoding rescues
+ * working directories with a `.` or `_` in the path — those used to resolve to a path that
+ * simply does not exist, which now costs a session its resume rather than just an empty
+ * transcript pane.
+ */
+export function encodeProjectDirCandidates(workingDir: string): string[] {
+  const slashOnly = workingDir.replace(/\//g, '-');
+  const collapsed = workingDir.replace(/[^a-zA-Z0-9]/g, '-');
+  return slashOnly === collapsed ? [slashOnly] : [slashOnly, collapsed];
 }

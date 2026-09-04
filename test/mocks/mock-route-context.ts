@@ -45,6 +45,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     setupSessionListeners: vi.fn(async () => {}),
     ensureSessionListeners: vi.fn(async () => {}),
     pauseSessionSideEffects: vi.fn(async () => {}),
+    killSessionSubagents: vi.fn(async () => {}),
     resumeSessionSideEffects: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
     persistSessionStateNow: vi.fn(),

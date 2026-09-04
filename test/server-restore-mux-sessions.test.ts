@@ -1275,7 +1275,19 @@ describe('WebServer._restoreSessionConfig()', () => {
   it('restores the paused flag and pausedAt from savedState', () => {
     const session = makeSession();
     (server as any)._restoreSessionConfig(session, { paused: true, pausedAt: 1_700_000_000_000 });
-    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000, false);
+  });
+
+  it('round-trips the pauseFailed marker so a restarted server still retries the kill', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, {
+      paused: true,
+      pausedAt: 1_700_000_000_000,
+      pauseFailed: true,
+    });
+    // A session parked over a pane that survived must not come back looking cleanly parked,
+    // or the next /pause treats it as a no-op and the pane lives on.
+    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000, true);
   });
 
   it('does not mark an unpaused savedState as paused', () => {
@@ -1292,6 +1304,106 @@ describe('WebServer._restoreSessionConfig()', () => {
       respawnConfig: { enabled: true, intervalMs: 5000 },
     });
     expect(restoreRespawnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pause/resume side effects — resume must be the exact inverse of pause (R4)
+// ---------------------------------------------------------------------------
+
+describe('WebServer pause/resume side effects', () => {
+  let server: WebServer;
+
+  function fakeSession() {
+    const stallDetector = {
+      _loopActive: true,
+      get loopActive() {
+        return this._loopActive;
+      },
+      setLoopActive: vi.fn(function (this: { _loopActive: boolean }, v: boolean) {
+        this._loopActive = v;
+      }),
+      notifyIterationChanged: vi.fn(),
+    };
+    return {
+      id: 'sess-park',
+      workingDir: '/tmp',
+      mode: 'claude',
+      imageWatcherEnabled: false,
+      ralphTracker: {
+        stopWatchingFixPlan: vi.fn(),
+        setWorkingDir: vi.fn(),
+        loopState: { cycleCount: 7 },
+        stallDetector,
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+    server = new WebServer(0, false, true);
+    (server as any).saveRespawnConfig = vi.fn();
+    (server as any).broadcast = vi.fn();
+    (server as any).isImageWatcherEnabled = vi.fn().mockResolvedValue(false);
+    (server as any).restoreRespawnController = vi.fn();
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('saves the REMAINING respawn duration, not the original one', async () => {
+    const session = fakeSession();
+    (server as any).sessions.set(session.id, session);
+    const controller = {
+      getConfig: vi.fn(() => ({ enabled: true, intervalMs: 1000 })),
+      cancelOpenCycle: vi.fn(),
+      stop: vi.fn(),
+      removeAllListeners: vi.fn(),
+    };
+    (server as any).respawnControllers.set(session.id, controller);
+    // A 60-minute timer with 5 minutes left.
+    (server as any).respawnTimers.set(session.id, {
+      timer: setTimeout(() => {}, 1),
+      startedAt: Date.now() - 55 * 60_000,
+      endAt: Date.now() + 5 * 60_000,
+    });
+
+    await (server as any).pauseSessionSideEffects(session.id);
+
+    const [, , durationMinutes] = (server as any).saveRespawnConfig.mock.calls[0];
+    expect(durationMinutes).toBe(5);
+  });
+
+  it('restores ralph stall detection exactly as it was, with a fresh stall clock', async () => {
+    const session = fakeSession();
+    (server as any).sessions.set(session.id, session);
+
+    await (server as any).pauseSessionSideEffects(session.id);
+    expect(session.ralphTracker.stallDetector.setLoopActive).toHaveBeenLastCalledWith(false);
+
+    await (server as any).resumeSessionSideEffects(session.id);
+    expect(session.ralphTracker.stallDetector.setLoopActive).toHaveBeenLastCalledWith(true);
+    // Parked time is not stall time — without this the loop trips iterationStallCritical
+    // the instant it is re-armed.
+    expect(session.ralphTracker.stallDetector.notifyIterationChanged).toHaveBeenCalledWith(7);
+  });
+
+  it('does not arm stall detection for a session whose loop was not running', async () => {
+    const session = fakeSession();
+    session.ralphTracker.stallDetector._loopActive = false;
+    (server as any).sessions.set(session.id, session);
+
+    await (server as any).pauseSessionSideEffects(session.id);
+    await (server as any).resumeSessionSideEffects(session.id);
+
+    expect(session.ralphTracker.stallDetector.setLoopActive).not.toHaveBeenCalledWith(true);
   });
 });
 
@@ -1958,7 +2070,7 @@ describe('WebServer.restoreMuxSessions() — paused sessions stay parked', () =>
     const sessions: Map<string, any> = (server as any).sessions;
     const session = sessions.get('sess-parked');
     expect(session).toBeDefined();
-    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000, false);
     expect(session.paused).toBe(true);
   });
 

@@ -248,6 +248,7 @@ describe('pause() verifies the mux session really died', () => {
       killSession: vi.fn(async () => true),
       muxSessionExists: vi.fn(() => muxSessionExists),
       setAttached: vi.fn(),
+      registerSession: vi.fn(),
     };
     // White-box: the mux plumbing is established by startInteractive()'s real mux path,
     // which is out of scope here — we only care about pause()'s post-kill verification.
@@ -256,7 +257,7 @@ describe('pause() verifies the mux session really died', () => {
     return mux;
   }
 
-  it('throws and does not leave the session flagged paused when the pane survives', async () => {
+  it('throws and marks the pause as failed when the pane survives', async () => {
     const session = makeSession();
     await session.startInteractive();
     const mux = withFakeMux(session, true);
@@ -264,11 +265,56 @@ describe('pause() verifies the mux session really died', () => {
     await expect(session.pause()).rejects.toThrow(/still alive/i);
 
     expect(mux.muxSessionExists).toHaveBeenCalledWith('codeman-test');
-    // Crucially: `paused` must be false so the route never persists a parked badge
-    // over a session whose Claude process is still resident.
-    expect(session.paused).toBe(false);
-    expect(session.pausedAt).toBeNull();
-    expect(session.toState().paused).toBeUndefined();
+    // The session stays PARKED (so /resume and a retried /pause both have something to act
+    // on) but flags that nothing was actually freed.
+    expect(session.paused).toBe(true);
+    expect(session.pauseFailed).toBe(true);
+    expect(session.toState().paused).toBe(true);
+    expect(session.toState().pauseFailed).toBe(true);
+  });
+
+  it('re-adopts the surviving pane so resume attaches instead of creating a duplicate', async () => {
+    const session = makeSession();
+    await session.startInteractive();
+    const mux = withFakeMux(session, true);
+
+    await expect(session.pause()).rejects.toThrow(/still alive/i);
+
+    // stop() nulled the binding and the mux manager's record of it; both must come back,
+    // otherwise startInteractive() would try `tmux new-session` on a name that still exists
+    // and a retried pause would have nothing left to kill.
+    expect((session as unknown as { _muxSession: { muxName: string } | null })._muxSession?.muxName).toBe(
+      'codeman-test'
+    );
+    expect(mux.registerSession).toHaveBeenCalledWith(expect.objectContaining({ muxName: 'codeman-test' }));
+  });
+
+  it('retries the kill on a second pause instead of reporting a false success', async () => {
+    const session = makeSession();
+    await session.startInteractive();
+    const mux = withFakeMux(session, true);
+    await expect(session.pause()).rejects.toThrow(/still alive/i);
+    mux.killSession.mockClear();
+
+    // Second attempt: the pane is gone this time.
+    mux.muxSessionExists.mockReturnValue(false);
+    await expect(session.pause()).resolves.toBeUndefined();
+
+    expect(mux.killSession).toHaveBeenCalledTimes(1);
+    expect(session.paused).toBe(true);
+    expect(session.pauseFailed).toBe(false);
+    expect(session.toState().pauseFailed).toBeUndefined();
+  });
+
+  it('verifies by the deterministic mux name when the binding is already gone', async () => {
+    const session = makeSession();
+    await session.startInteractive();
+    const mux = withFakeMux(session, true);
+    // Simulate the state an older failed pause left behind: flag cleared, binding nulled.
+    (session as unknown as { _muxSession: unknown })._muxSession = null;
+
+    await expect(session.pause()).rejects.toThrow(/still alive/i);
+    expect(mux.muxSessionExists).toHaveBeenCalledWith(`codeman-${session.id.slice(0, 8)}`);
   });
 
   it('succeeds and parks the session when the pane is gone', async () => {
@@ -279,6 +325,36 @@ describe('pause() verifies the mux session really died', () => {
     await expect(session.pause()).resolves.toBeUndefined();
 
     expect(session.paused).toBe(true);
+    expect(session.pauseFailed).toBe(false);
     expect(session.status).toBe('stopped');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-mux sessions have no pane to check — the PTY process itself is the proof.
+// ---------------------------------------------------------------------------
+
+describe('pause() verifies the PTY died for a non-mux session', () => {
+  it('throws and flags the failure when the process is still live', async () => {
+    const session = makeSession();
+    await session.startInteractive();
+    const isLive = vi
+      .spyOn(Session as unknown as { isProcessLive: (pid: number) => boolean }, 'isProcessLive')
+      .mockReturnValue(true);
+
+    await expect(session.pause()).rejects.toThrow(/still running/i);
+
+    expect(isLive).toHaveBeenCalledWith(2_147_483_600);
+    expect(session.paused).toBe(true);
+    expect(session.pauseFailed).toBe(true);
+    isLive.mockRestore();
+  });
+
+  it('parks cleanly when the process is gone', async () => {
+    const session = makeSession();
+    await session.startInteractive();
+
+    await expect(session.pause()).resolves.toBeUndefined();
+    expect(session.pauseFailed).toBe(false);
   });
 });

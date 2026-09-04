@@ -982,6 +982,44 @@ describe('session-routes', () => {
       expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
       expect(harness.ctx.broadcast).not.toHaveBeenCalledWith('session:updated', expect.anything());
     });
+
+    // ── R1: a pause that could not prove the kill leaves a RETRYABLE state ──
+    it('retries the kill when the previous attempt could not prove the process died', async () => {
+      const session = makeParkable();
+      session.paused = true;
+      session.pauseFailed = true;
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(true);
+      // Not the idempotent no-op path: this session is parked over a live pane, and this
+      // call is the retry the failure message asked the user to make.
+      expect(session.pause).toHaveBeenCalledTimes(1);
+      expect(harness.ctx.pauseSessionSideEffects).toHaveBeenCalledWith(harness.ctx._sessionId);
+    });
+
+    it('reports failure (not success) when the subagent sweep cannot kill them', async () => {
+      const session = makeParkable();
+      harness.ctx.killSessionSubagents.mockRejectedValueOnce(new Error('subagent 123 still alive'));
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.error).toMatch(/still alive/i);
+      // The session really is parked (the main process died), so the state must say so.
+      expect(session.paused).toBe(true);
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+    });
+
+    it('kills subagents only after the main process is dead', async () => {
+      const session = makeParkable();
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(true);
+      expect(harness.ctx.killSessionSubagents).toHaveBeenCalledWith(harness.ctx._sessionId);
+      // A live Claude can spawn a replacement subagent, so the sweep must come last.
+      expect(session.pause.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.ctx.killSessionSubagents.mock.invocationCallOrder[0]
+      );
+    });
   });
 
   // ========== POST /api/sessions/:id/resume ==========
@@ -1061,7 +1099,7 @@ describe('session-routes', () => {
       expect(body.errorCode).toBe('OPERATION_FAILED');
 
       // Not limbo: the session goes back to being parked, with its original pausedAt.
-      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000, false);
       expect(session.paused).toBe(true);
       expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', { session: expect.anything() });
@@ -1093,7 +1131,9 @@ describe('session-routes', () => {
 
         const body = JSON.parse((await resume()).body);
         expect(body.success).toBe(false);
-        expect(body.errorCode).toBe('OPERATION_FAILED');
+        // A dedicated code (not the catch-all OPERATION_FAILED) is what lets the UI offer
+        // the force ladder instead of leaving the session parked with no way out.
+        expect(body.errorCode).toBe('TRANSCRIPT_UNAVAILABLE');
         expect(body.error).toMatch(/transcript is gone/i);
 
         // The session must stay parked and untouched — no fresh conversation started.
@@ -1210,7 +1250,7 @@ describe('session-routes', () => {
       const body = JSON.parse((await startInteractive()).body);
       expect(body.success).toBe(false);
       expect(body.errorCode).toBe('OPERATION_FAILED');
-      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000, false);
       expect(session.paused).toBe(true);
     });
 
@@ -1222,6 +1262,46 @@ describe('session-routes', () => {
       expect(body.success).toBe(true);
       expect(session.clearPaused).not.toHaveBeenCalled();
       expect(harness.ctx.ensureSessionListeners).not.toHaveBeenCalled();
+      expect(harness.ctx.resumeSessionSideEffects).not.toHaveBeenCalled();
+    });
+
+    // ── R3: un-parking here must obey the same rules as /resume ──
+    it('refuses to un-park when the local transcript is gone', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+      harness.ctx.resolveSessionTranscript.mockReturnValueOnce(null);
+
+      const body = JSON.parse((await startInteractive()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('TRANSCRIPT_UNAVAILABLE');
+      expect(session.clearPaused).not.toHaveBeenCalled();
+      expect(session.startInteractive).not.toHaveBeenCalled();
+      expect(session.paused).toBe(true);
+    });
+
+    it('un-parks with force even when the transcript is gone', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+      harness.ctx.resolveSessionTranscript.mockReturnValueOnce(null);
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+        payload: { force: true },
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(session.startInteractive).toHaveBeenCalledTimes(1);
+    });
+
+    it('restores the paused side effects after a successful un-park', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+
+      const body = JSON.parse((await startInteractive()).body);
+      expect(body.success).toBe(true);
+      // Without this the respawn controller pause tore down stays dead until a server restart.
+      expect(harness.ctx.resumeSessionSideEffects).toHaveBeenCalledWith(harness.ctx._sessionId);
     });
   });
 
