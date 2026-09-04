@@ -833,4 +833,420 @@ describe('session-routes', () => {
       expect(harness.ctx.broadcast).not.toHaveBeenCalledWith('session:clearTerminal', expect.anything());
     });
   });
+  // ========== POST /api/sessions/:id/pause ==========
+
+  describe('POST /api/sessions/:id/pause', () => {
+    /** A session that satisfies every pause precondition. */
+    function makeParkable() {
+      const session = harness.ctx._session;
+      session.mode = 'claude';
+      session.claudeResumeId = 'conv-abc-123';
+      session.safeMode = false;
+      session.isWorking = false;
+      session.paused = false;
+      return session;
+    }
+
+    async function pause(payload: Record<string, unknown> = {}) {
+      return harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/pause`,
+        payload,
+      });
+    }
+
+    it('returns NOT_FOUND for an unknown session', async () => {
+      const res = await harness.app.inject({ method: 'POST', url: '/api/sessions/nonexistent/pause', payload: {} });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('NOT_FOUND');
+    });
+
+    it('rejects shell sessions', async () => {
+      const session = makeParkable();
+      session.mode = 'shell';
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(body.error).toContain('Only Claude sessions can be paused');
+      expect(session.pause).not.toHaveBeenCalled();
+    });
+
+    it('rejects opencode sessions', async () => {
+      const session = makeParkable();
+      session.mode = 'opencode';
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(session.pause).not.toHaveBeenCalled();
+    });
+
+    it('refuses to park a session with no claudeResumeId, even with force', async () => {
+      const session = makeParkable();
+      session.claudeResumeId = null;
+
+      const body = JSON.parse((await pause({ force: true })).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(body.error).toContain('No resumable conversation ID');
+      expect(session.pause).not.toHaveBeenCalled();
+    });
+
+    it('refuses to park a safe-mode session, even with force', async () => {
+      const session = makeParkable();
+      session.safeMode = true;
+
+      const body = JSON.parse((await pause({ force: true })).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(body.error).toContain('No resumable conversation ID');
+      expect(session.pause).not.toHaveBeenCalled();
+    });
+
+    it('returns SESSION_BUSY when Claude is mid-turn and force is not set', async () => {
+      const session = makeParkable();
+      session.isWorking = true;
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('SESSION_BUSY');
+      expect(session.pause).not.toHaveBeenCalled();
+    });
+
+    it('pauses a mid-turn session when force is true', async () => {
+      const session = makeParkable();
+      session.isWorking = true;
+
+      const body = JSON.parse((await pause({ force: true })).body);
+      expect(body.success).toBe(true);
+      expect(session.pause).toHaveBeenCalledTimes(1);
+    });
+
+    it('is idempotent for an already-paused session and runs no side effects', async () => {
+      const session = makeParkable();
+      session.paused = true;
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(true);
+      expect(session.pause).not.toHaveBeenCalled();
+      expect(harness.ctx.pauseSessionSideEffects).not.toHaveBeenCalled();
+      expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+    });
+
+    it('tears down side effects BEFORE killing the process, then persists and broadcasts', async () => {
+      const session = makeParkable();
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(true);
+
+      expect(harness.ctx.pauseSessionSideEffects).toHaveBeenCalledWith(harness.ctx._sessionId);
+      expect(session.pause).toHaveBeenCalledTimes(1);
+      // Side effects (respawn controller config save, watchers) must be torn down while the
+      // process is still alive — otherwise the exit handler has already discarded them.
+      expect(harness.ctx.pauseSessionSideEffects.mock.invocationCallOrder[0]).toBeLessThan(
+        session.pause.mock.invocationCallOrder[0]
+      );
+
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', { session: expect.anything() });
+    });
+
+    it('persists and broadcasts the parked state when pause() throws after raising the flag', async () => {
+      const session = makeParkable();
+      session.pause.mockImplementationOnce(async () => {
+        session.paused = true;
+        throw new Error('tmux kill failed');
+      });
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      // The session really is parked in memory, so the persisted/broadcast state must say so.
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', { session: expect.anything() });
+    });
+
+    it('does not persist or broadcast when pauseSessionSideEffects throws before the flag is raised', async () => {
+      const session = makeParkable();
+      harness.ctx.pauseSessionSideEffects.mockImplementationOnce(() => {
+        throw new Error('respawn teardown failed');
+      });
+
+      const body = JSON.parse((await pause()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(session.pause).not.toHaveBeenCalled();
+      expect(session.paused).toBe(false);
+      expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+      expect(harness.ctx.broadcast).not.toHaveBeenCalledWith('session:updated', expect.anything());
+    });
+  });
+
+  // ========== POST /api/sessions/:id/resume ==========
+
+  describe('POST /api/sessions/:id/resume', () => {
+    function makeParked(pausedAt = 1_700_000_000_000) {
+      const session = harness.ctx._session;
+      session.mode = 'claude';
+      session.claudeResumeId = 'conv-abc-123';
+      session.workingDir = '/home/user/proj';
+      session.paused = true;
+      session.pausedAt = pausedAt;
+      return session;
+    }
+
+    async function resume() {
+      return harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/resume`,
+      });
+    }
+
+    it('returns NOT_FOUND for an unknown session', async () => {
+      const res = await harness.app.inject({ method: 'POST', url: '/api/sessions/nonexistent/resume' });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('NOT_FOUND');
+    });
+
+    it('is idempotent for a live (unpaused) session', async () => {
+      const session = harness.ctx._session;
+      session.paused = false;
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(true);
+      expect(session.startInteractive).not.toHaveBeenCalled();
+      expect(harness.ctx.ensureSessionListeners).not.toHaveBeenCalled();
+    });
+
+    it('re-registers server-side listeners BEFORE relaunching Claude', async () => {
+      const session = makeParked();
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(true);
+
+      expect(harness.ctx.ensureSessionListeners).toHaveBeenCalledWith(session);
+      expect(session.startInteractive).toHaveBeenCalledTimes(1);
+      // The exit handler stripped every listener when the PTY died; re-arming them after
+      // startInteractive() would lose the first frames and freeze the terminal.
+      expect(harness.ctx.ensureSessionListeners.mock.invocationCallOrder[0]).toBeLessThan(
+        session.startInteractive.mock.invocationCallOrder[0]
+      );
+      expect(session.clearPaused).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-arms the transcript watcher and broadcasts interactive + updated', async () => {
+      const session = makeParked();
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(true);
+
+      expect(harness.ctx.startTranscriptWatcher).toHaveBeenCalledWith(
+        harness.ctx._sessionId,
+        expect.stringContaining('-home-user-proj/conv-abc-123.jsonl')
+      );
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:interactive', { id: harness.ctx._sessionId });
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', { session: expect.anything() });
+      expect(session.paused).toBe(false);
+    });
+
+    it('rolls back to the parked state when startInteractive() rejects', async () => {
+      const session = makeParked(1_700_000_000_000);
+      session.startInteractive.mockRejectedValueOnce(new Error('spawn failed'));
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+
+      // Not limbo: the session goes back to being parked, with its original pausedAt.
+      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+      expect(session.paused).toBe(true);
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', { session: expect.anything() });
+    });
+
+    // ── C5: pause tears the respawn controller down; resume must rebuild it ──
+    it('restores the paused side effects (respawn controller) on a successful resume', async () => {
+      makeParked();
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(true);
+      expect(harness.ctx.resumeSessionSideEffects).toHaveBeenCalledWith(harness.ctx._sessionId);
+    });
+
+    it('does not restore side effects when the relaunch fails', async () => {
+      const session = makeParked();
+      session.startInteractive.mockRejectedValueOnce(new Error('spawn failed'));
+
+      const body = JSON.parse((await resume()).body);
+      expect(body.success).toBe(false);
+      expect(harness.ctx.resumeSessionSideEffects).not.toHaveBeenCalled();
+    });
+
+    // ── C7: --resume only works while the local transcript still exists ──
+    describe('transcript preflight', () => {
+      it('refuses to resume when the local transcript is gone', async () => {
+        const session = makeParked();
+        harness.ctx.resolveSessionTranscript.mockReturnValueOnce(null);
+
+        const body = JSON.parse((await resume()).body);
+        expect(body.success).toBe(false);
+        expect(body.errorCode).toBe('OPERATION_FAILED');
+        expect(body.error).toMatch(/transcript is gone/i);
+
+        // The session must stay parked and untouched — no fresh conversation started.
+        expect(session.startInteractive).not.toHaveBeenCalled();
+        expect(session.clearPaused).not.toHaveBeenCalled();
+        expect(session.paused).toBe(true);
+      });
+
+      it('resumes anyway when force is passed, accepting the loss of history', async () => {
+        const session = makeParked();
+        harness.ctx.resolveSessionTranscript.mockReturnValueOnce(null);
+
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/resume`,
+          payload: { force: true },
+        });
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        expect(session.startInteractive).toHaveBeenCalledTimes(1);
+      });
+
+      it('checks the transcript for the session own resume id and working dir', async () => {
+        const session = makeParked();
+
+        await resume();
+        expect(harness.ctx.resolveSessionTranscript).toHaveBeenCalledWith(session.workingDir, session.claudeResumeId);
+      });
+    });
+  });
+
+  // ========== Paused sessions must not be woken by other execution routes ==========
+
+  describe('execution routes reject a paused session', () => {
+    function park() {
+      const session = harness.ctx._session;
+      session.mode = 'claude';
+      session.paused = true;
+      return session;
+    }
+
+    it('POST /run does not start a prompt in a paused session', async () => {
+      const session = park();
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/run`,
+        payload: { prompt: 'hello' },
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toMatch(/paused/i);
+      expect(session.runPrompt).not.toHaveBeenCalled();
+    });
+
+    it('POST /restart does not relaunch a paused session', async () => {
+      const session = park();
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/restart`,
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toMatch(/paused/i);
+      expect(session.startInteractive).not.toHaveBeenCalled();
+      expect(session.prepareForRestart).not.toHaveBeenCalled();
+    });
+
+    it('POST /shell does not open a shell in a paused session', async () => {
+      const session = park();
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/shell`,
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toMatch(/paused/i);
+      expect(session.startShell).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/interactive — un-parking ==========
+
+  describe('POST /api/sessions/:id/interactive un-parks a paused session', () => {
+    async function startInteractive() {
+      return harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/interactive`,
+      });
+    }
+
+    it('clears the paused flag, persists and re-registers listeners before starting', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+      session.pausedAt = 1_700_000_000_000;
+
+      const body = JSON.parse((await startInteractive()).body);
+      expect(body.success).toBe(true);
+
+      expect(session.clearPaused).toHaveBeenCalledTimes(1);
+      expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+      expect(harness.ctx.ensureSessionListeners).toHaveBeenCalledWith(session);
+      expect(harness.ctx.ensureSessionListeners.mock.invocationCallOrder[0]).toBeLessThan(
+        session.startInteractive.mock.invocationCallOrder[0]
+      );
+      expect(session.paused).toBe(false);
+    });
+
+    it('restores the parked state when startInteractive() rejects', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+      session.pausedAt = 1_700_000_000_000;
+      session.startInteractive.mockRejectedValueOnce(new Error('spawn failed'));
+
+      const body = JSON.parse((await startInteractive()).body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+      expect(session.paused).toBe(true);
+    });
+
+    it('does not touch the paused bookkeeping for a live session', async () => {
+      const session = harness.ctx._session;
+      session.paused = false;
+
+      const body = JSON.parse((await startInteractive()).body);
+      expect(body.success).toBe(true);
+      expect(session.clearPaused).not.toHaveBeenCalled();
+      expect(harness.ctx.ensureSessionListeners).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========== POST /api/sessions/:id/input — paused rejection ==========
+
+  describe('POST /api/sessions/:id/input on a paused session', () => {
+    it('rejects the input instead of silently swallowing it', async () => {
+      const session = harness.ctx._session;
+      session.paused = true;
+      const writeSpy = vi.spyOn(session, 'write');
+      const writeViaMuxSpy = vi.spyOn(session, 'writeViaMux');
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/input`,
+        payload: { input: 'hello', useMux: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(body.error).toBe('Session is paused — resume it before sending input');
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(writeViaMuxSpy).not.toHaveBeenCalled();
+    });
+  });
 });

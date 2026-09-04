@@ -935,6 +935,11 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
         continue;
       }
 
+      // Parked by the user — skip entirely rather than blocking the work item
+      if (sessionState.paused) {
+        continue;
+      }
+
       // Check session status
       if (sessionState.status === 'stopped' || sessionState.status === 'error') {
         updateWorkItem(item.id, { status: 'blocked' });
@@ -979,7 +984,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       } else if (idleMs > config.stallThresholdMs) {
         // Send nudge
         const session = this.deps.sessions.get(sessionState.id);
-        if (session) {
+        if (session && !session.paused) {
           session.sendInput(`What's your status on "${item.title}"? Please provide an update or continue working.`);
           this.nudgedItems.add(item.id);
           this.deps.broadcast(SseEvent.OrchestratorStall, {

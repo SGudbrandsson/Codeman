@@ -242,6 +242,10 @@ export function registerRespawnRoutes(
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }
 
+    if (session.paused) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first');
+    }
+
     // Respawn is not supported for opencode sessions
     if (session.mode === 'opencode') {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');

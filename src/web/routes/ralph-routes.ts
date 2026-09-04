@@ -529,7 +529,7 @@ export function registerRalphRoutes(
         // Small extra delay for CLI to settle
         await new Promise((r) => setTimeout(r, 2000));
         const s = ctx.sessions.get(sessionId);
-        if (!s) return;
+        if (!s || s.paused) return;
         try {
           await s.writeViaMux('Read @ralph_prompt.md and follow the instructions. Start working immediately.\r');
         } catch (err) {

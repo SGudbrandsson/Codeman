@@ -36,6 +36,8 @@ import {
   SafeModeSchema,
   MuxOverrideSchema,
   MuxRebindSchema,
+  SessionPauseSchema,
+  SessionResumeSchema,
 } from '../schemas.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { type LinkedCasesMap, resolveLinkedCasePath } from '../utils/linked-cases.js';
@@ -540,6 +542,10 @@ ${contextLines.join('\n')}`;
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
+    if (session.paused) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first');
+    }
+
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
     }
@@ -565,6 +571,16 @@ ${contextLines.join('\n')}`;
 
     if (session.isBusy()) {
       return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
+    }
+
+    // A parked session is un-parked rather than started fresh — the exit handler stripped
+    // its listeners, and `_isStopped` would otherwise swallow all output.
+    const wasPaused = session.paused;
+    const previousPausedAt = session.pausedAt ?? undefined;
+    if (wasPaused) {
+      session.clearPaused();
+      ctx.persistSessionState(session);
+      await ctx.ensureSessionListeners(session);
     }
 
     try {
@@ -602,6 +618,12 @@ ${contextLines.join('\n')}`;
 
       return { success: true };
     } catch (err) {
+      // Never leave an un-parked session in limbo — restore the parked state on failure
+      if (wasPaused) {
+        session.markPaused(previousPausedAt);
+        ctx.persistSessionState(session);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      }
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
   });
@@ -618,6 +640,10 @@ ${contextLines.join('\n')}`;
 
     if (session.mode === 'shell') {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Shell sessions cannot be restarted this way');
+    }
+
+    if (session.paused) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first');
     }
 
     try {
@@ -637,6 +663,164 @@ ${contextLines.join('\n')}`;
     }
   });
 
+  // ========== Pause Session (park: kill process + mux, preserve state) ==========
+
+  app.post('/api/sessions/:id/pause', async (req): Promise<ApiResponse> => {
+    const { id } = req.params as { id: string };
+    const parsed = SessionPauseSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Validation failed');
+    }
+    const force = parsed.data.force === true;
+    const session = ctx.sessions.get(id);
+
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    if (session.mode === 'shell' || session.mode === 'opencode') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Only Claude sessions can be paused');
+    }
+
+    // Idempotent: pausing an already-paused session is a no-op
+    if (session.paused) {
+      return { success: true };
+    }
+
+    // Never park a conversation that cannot be resumed — safe mode strips --resume entirely
+    if (!session.claudeResumeId || session.safeMode) {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        'No resumable conversation ID yet — pausing would lose the conversation'
+      );
+    }
+
+    if (session.isWorking && !force) {
+      return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Claude is still working — pass force to pause anyway');
+    }
+
+    try {
+      // Tear down subagents, respawn controller, timers, ralph watchers and image watcher
+      // first. Awaited: killing subagents is async, and they must be gone before we report
+      // the session parked.
+      await ctx.pauseSessionSideEffects(id);
+
+      await session.pause();
+
+      getLifecycleLog().log({
+        event: 'paused',
+        sessionId: id,
+        name: session.name,
+        mode: session.mode,
+        reason: force ? 'forced' : 'user',
+      });
+
+      ctx.persistSessionState(session);
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      return { success: true };
+    } catch (err) {
+      // `session.pause()` raises the paused flag *before* killing the PTY (R2), so a throw
+      // out of stop() leaves the session parked in memory with a half-killed process. Make
+      // the observable state match: persist and broadcast the parked state instead of
+      // reporting a failure while every UI still shows the session live. The error is still
+      // returned so the client can surface it; the user can Resume to relaunch.
+      if (session.paused) {
+        getLifecycleLog().log({
+          event: 'paused',
+          sessionId: id,
+          name: session.name,
+          mode: session.mode,
+          reason: 'error',
+        });
+        ctx.persistSessionState(session);
+        ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      }
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Pause failed: ' + getErrorMessage(err));
+    }
+  });
+
+  // ========== Resume Session (relaunch with --resume) ==========
+
+  app.post('/api/sessions/:id/resume', async (req): Promise<ApiResponse> => {
+    const { id } = req.params as { id: string };
+    const parsedResume = SessionResumeSchema.safeParse(req.body ?? {});
+    if (!parsedResume.success) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        parsedResume.error.issues[0]?.message ?? 'Validation failed'
+      );
+    }
+    const forceResume = parsedResume.data.force === true;
+    const session = ctx.sessions.get(id);
+
+    if (!session) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    // Idempotent: resuming a live session is a no-op
+    if (!session.paused) {
+      return { success: true };
+    }
+
+    // Preflight: `--resume <id>` only works while the local transcript still exists. Claude
+    // Code prunes transcripts after ~30 days by default, and deleting/moving the worktree
+    // breaks the lookup too — so a non-null claudeResumeId is NOT proof of resumability.
+    // Sessions get parked for a long time, which is exactly when this bites, and relaunching
+    // regardless would silently start a FRESH conversation and lose the history the user
+    // parked the session to keep. Fail loudly, with `force` as the explicit escape hatch.
+    if (!forceResume) {
+      const transcript = ctx.resolveSessionTranscript(session.workingDir, session.claudeResumeId ?? undefined);
+      if (!transcript) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'Cannot resume: this conversation’s local transcript is gone (Claude prunes transcripts after ~30 days, ' +
+            'and moving or deleting the working directory also breaks resume). Resuming with force will start a ' +
+            'NEW conversation in this session and lose the parked history.'
+        );
+      }
+    }
+
+    const pausedAt = session.pausedAt ?? undefined;
+    session.clearPaused();
+
+    try {
+      // CRITICAL: the exit handler stripped every server-side listener when the PTY died.
+      // Without re-registering them the resumed terminal never repaints.
+      await ctx.ensureSessionListeners(session);
+
+      await session.startInteractive();
+
+      // Re-arm the transcript watcher (the exit handler stopped it)
+      if (session.claudeResumeId && session.workingDir) {
+        const escapedDir = session.workingDir.replace(/\//g, '-');
+        const transcriptPath = join(homedir(), '.claude', 'projects', escapedDir, `${session.claudeResumeId}.jsonl`);
+        ctx.startTranscriptWatcher(id, transcriptPath);
+      }
+
+      // Undo the pause-time teardown (respawn controller, ralph watcher, image watcher).
+      // Without this, respawn stays silently disabled until the whole server restarts.
+      await ctx.resumeSessionSideEffects(id);
+
+      getLifecycleLog().log({
+        event: 'resumed',
+        sessionId: id,
+        name: session.name,
+        mode: session.mode,
+      });
+
+      ctx.persistSessionState(session);
+      ctx.broadcast(SseEvent.SessionInteractive, { id });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      return { success: true };
+    } catch (err) {
+      // Never leave the session in limbo — restore the parked state so the UI stays truthful
+      session.markPaused(pausedAt);
+      ctx.persistSessionState(session);
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Resume failed: ' + getErrorMessage(err));
+    }
+  });
+
   // ========== Start Shell Mode ==========
 
   app.post('/api/sessions/:id/shell', async (req): Promise<ApiResponse> => {
@@ -645,6 +829,12 @@ ${contextLines.join('\n')}`;
 
     if (!session) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    // A parked session must not be woken into a shell — that would leave `paused: true`
+    // set over a live process. Resume it explicitly first.
+    if (session.paused) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first');
     }
 
     if (session.isBusy()) {
@@ -684,6 +874,10 @@ ${contextLines.join('\n')}`;
 
     if (!session) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+    }
+
+    if (session.paused) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it before sending input');
     }
 
     let inputStr = String(input);

@@ -1207,6 +1207,11 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
+    if (this.session.paused) {
+      this.log('Session is paused - not starting respawn controller');
+      return;
+    }
+
     if (this._state !== 'stopped') {
       this.log('Already running');
       return;
@@ -2745,6 +2750,14 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
+    if (this.session.paused) {
+      this.log('Skipping respawn cycle - session is paused');
+      this.logAction('health', 'Respawn skipped: Session paused');
+      this.emit('respawnBlocked', { reason: 'session_paused', details: 'Session is paused' });
+      this.setState('watching');
+      return;
+    }
+
     if (this.session.status === 'stopped') {
       this.log('Skipping respawn cycle - session is stopped');
       this.logAction('health', 'Respawn skipped: Session stopped');
@@ -3123,6 +3136,15 @@ export class RespawnController extends EventEmitter {
         `Cycle #${metrics.cycleNumber} metrics: ${outcome}, duration=${metrics.durationMs}ms, idle_detection=${metrics.idleDetectionMs}ms`
       );
     }
+  }
+
+  /**
+   * Closes any respawn cycle that is still open, recording it as cancelled.
+   * Called when a session is parked mid-cycle so metrics do not accumulate an
+   * unterminated cycle.
+   */
+  cancelOpenCycle(reason: string = 'Controller stopped'): void {
+    this.completeCycleMetrics('cancelled', reason);
   }
 
   /**

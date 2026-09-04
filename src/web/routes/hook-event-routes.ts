@@ -26,6 +26,11 @@ export function registerHookEventRoutes(
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
+    // A parked session must not have in-flight hook events drive its respawn controller
+    if (ctx.sessions.get(sessionId)?.paused) {
+      return { success: true };
+    }
+
     // Signal the respawn controller based on hook event type
     const controller = ctx.respawnControllers.get(sessionId);
     if (controller) {

@@ -3075,3 +3075,61 @@ describe('RespawnController onClear callback', () => {
     expect(config.onClear).toBe(onClear);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Paused sessions must never be respawned
+// ---------------------------------------------------------------------------
+
+describe('RespawnController paused-session guard', () => {
+  let session: MockSession;
+  let controller: RespawnController;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    session = new MockSession();
+    controller = new RespawnController(session as unknown as Session, {
+      idleTimeoutMs: 100,
+      interStepDelayMs: 50,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 500,
+      aiIdleCheckEnabled: false,
+      sendClear: false,
+      sendInit: false,
+    });
+  });
+
+  afterEach(() => {
+    controller.stop();
+    vi.useRealTimers();
+  });
+
+  it('should not start when the session is paused', () => {
+    session.paused = true;
+
+    controller.start();
+
+    expect(controller.state).toBe('stopped');
+    expect(controller.isRunning).toBe(false);
+  });
+
+  it('should block the respawn cycle and stay watching when the session is paused', async () => {
+    const cycleStarted = vi.fn();
+    const respawnBlocked = vi.fn();
+    controller.on('respawnCycleStarted', cycleStarted);
+    controller.on('respawnBlocked', respawnBlocked);
+
+    controller.start();
+    // Parked after the controller was already watching (the realistic race)
+    session.paused = true;
+
+    session.simulateCompletionMessage();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(cycleStarted).not.toHaveBeenCalled();
+    expect(respawnBlocked).toHaveBeenCalledWith({
+      reason: 'session_paused',
+      details: 'Session is paused',
+    });
+    expect(controller.state).toBe('watching');
+  });
+});

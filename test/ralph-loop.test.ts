@@ -296,11 +296,7 @@ describe('RalphLoop', () => {
   describe('getStats', () => {
     it('should return complete stats object', async () => {
       const mockRunningTask = { id: '2', status: 'running', isTimedOut: () => false };
-      mockState.taskQueue.tasks = [
-        { id: '1', status: 'pending' },
-        mockRunningTask,
-        { id: '3', status: 'completed' },
-      ];
+      mockState.taskQueue.tasks = [{ id: '1', status: 'pending' }, mockRunningTask, { id: '3', status: 'completed' }];
       mockState.taskQueue.getRunningTasks.mockReturnValue([mockRunningTask]);
 
       await loop.start();
@@ -372,6 +368,54 @@ describe('RalphLoop', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(loop.status).toBe('running');
+    });
+  });
+
+  describe('paused sessions', () => {
+    it('should preserve the running task when a paused session emits sessionStopped', () => {
+      const task = { id: 'task-paused', status: 'running', fail: vi.fn(), prompt: 'do work' };
+      mockState.taskQueue.getRunningTaskForSession.mockReturnValue(task);
+      mockState.sessionManager.sessions.set('sess-paused', { id: 'sess-paused', paused: true });
+
+      const taskFailed = vi.fn();
+      loop.on('taskFailed', taskFailed);
+
+      // Pausing kills the PTY, which emits sessionStopped — the task must survive for resume.
+      mockState.sessionManager.emit('sessionStopped', 'sess-paused');
+
+      expect(task.fail).not.toHaveBeenCalled();
+      expect(mockState.taskQueue.updateTask).not.toHaveBeenCalled();
+      expect(taskFailed).not.toHaveBeenCalled();
+    });
+
+    it('should still fail the running task when a non-paused session stops', () => {
+      const task = { id: 'task-crashed', status: 'running', fail: vi.fn(), prompt: 'do work' };
+      mockState.taskQueue.getRunningTaskForSession.mockReturnValue(task);
+      mockState.sessionManager.sessions.set('sess-crashed', { id: 'sess-crashed', paused: false });
+
+      const taskFailed = vi.fn();
+      loop.on('taskFailed', taskFailed);
+
+      mockState.sessionManager.emit('sessionStopped', 'sess-crashed');
+
+      expect(task.fail).toHaveBeenCalledWith('Session stopped unexpectedly');
+      expect(taskFailed).toHaveBeenCalledWith('task-crashed', 'Session stopped unexpectedly');
+    });
+
+    it('should not dispatch a task into a paused session', async () => {
+      const task = { id: 'task-dispatch', status: 'pending', prompt: 'do work', assign: vi.fn() };
+      const session = {
+        id: 'sess-paused',
+        paused: true,
+        assignTask: vi.fn(),
+        sendInput: vi.fn(),
+        clearTask: vi.fn(),
+      };
+
+      await (loop as any).assignTaskToSession(task, session);
+
+      expect(session.sendInput).not.toHaveBeenCalled();
+      expect(task.assign).not.toHaveBeenCalled();
     });
   });
 });

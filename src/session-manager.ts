@@ -90,6 +90,8 @@ export class SessionManager extends EventEmitter {
     // Note: We don't restore actual processes, just the state
     // Dead sessions are marked as stopped
     for (const [id, state] of Object.entries(storedSessions)) {
+      // Paused sessions were parked deliberately — leave their persisted state untouched
+      if (state.paused) continue;
       if (state.status !== 'stopped') {
         state.status = 'stopped';
         state.pid = null;

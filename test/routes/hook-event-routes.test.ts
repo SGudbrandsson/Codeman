@@ -124,6 +124,31 @@ describe('hook-event-routes', () => {
       expect(mockController.signalStopHook).toHaveBeenCalled();
     });
 
+    it('does NOT signal the respawn controller when the session is paused', async () => {
+      const mockController = {
+        signalStopHook: vi.fn(),
+        signalElicitation: vi.fn(),
+        signalIdlePrompt: vi.fn(),
+      };
+      harness.ctx.respawnControllers.set(harness.ctx._sessionId, mockController as never);
+      harness.ctx._session.paused = true;
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: {
+          event: 'stop',
+          sessionId: harness.ctx._sessionId,
+          data: null,
+        },
+      });
+
+      // Accepted (the hook fired before the pause landed) but inert.
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      expect(mockController.signalStopHook).not.toHaveBeenCalled();
+    });
+
     it('signals respawn controller on elicitation_dialog event', async () => {
       const mockController = {
         signalStopHook: vi.fn(),

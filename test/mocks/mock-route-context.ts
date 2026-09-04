@@ -43,6 +43,9 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       return { archivedSession: archivedState, newSession, newSessionState };
     }),
     setupSessionListeners: vi.fn(async () => {}),
+    ensureSessionListeners: vi.fn(async () => {}),
+    pauseSessionSideEffects: vi.fn(async () => {}),
+    resumeSessionSideEffects: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
     persistSessionStateNow: vi.fn(),
     getSessionStateWithRespawn: vi.fn((s: MockSession) => s.toState()),
@@ -123,6 +126,9 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
       return result;
     }),
     startTranscriptWatcher: vi.fn(),
+    // Default: the transcript still exists. Tests that exercise the "transcript pruned"
+    // path override this with a null-returning stub.
+    resolveSessionTranscript: vi.fn(() => '/home/user/.claude/projects/-home-user-proj/conv-abc-123.jsonl'),
     stopTranscriptWatcher: vi.fn(),
     getTranscriptPath: vi.fn((_id: string) => null),
 

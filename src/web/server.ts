@@ -559,6 +559,9 @@ export class WebServer extends EventEmitter {
       cleanupSession: this.cleanupSession.bind(this),
       clearSession: this.clearSession.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
+      ensureSessionListeners: this.ensureSessionListeners.bind(this),
+      pauseSessionSideEffects: this.pauseSessionSideEffects.bind(this),
+      resumeSessionSideEffects: this.resumeSessionSideEffects.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
       getSessionStateWithRespawn: this.getSessionStateWithRespawn.bind(this),
@@ -589,6 +592,8 @@ export class WebServer extends EventEmitter {
       getLightState: this.getLightState.bind(this),
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
+      resolveSessionTranscript: (workingDir: string, claudeResumeId: string | undefined) =>
+        resolveTranscriptPath(workingDir, undefined, claudeResumeId),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
       getTranscriptPath: this.getTranscriptPath.bind(this),
       getTranscriptState: this.getTranscriptState.bind(this),
@@ -1447,6 +1452,117 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /**
+   * Re-registers session listeners only when they are absent.
+   * The `session:exit` handler strips every listener and deletes `sessionListenerRefs`,
+   * so a paused session has none left; without this a resumed session would produce a
+   * permanently frozen terminal (no terminal/idle/working/token events).
+   */
+  private async ensureSessionListeners(session: Session): Promise<void> {
+    if (this.sessionListenerRefs.has(session.id)) return;
+    await this.setupSessionListeners(session);
+  }
+
+  /**
+   * Tears down the per-session background machinery that the `session:exit` handler does
+   * NOT cover, ahead of parking a session. Mirrors the respawn-controller block in
+   * `cleanupSession()` so the controller's config survives for a later restore.
+   */
+  private async pauseSessionSideEffects(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+
+    // Stop Ralph file watching + stall accrual for the parked session
+    if (session) {
+      session.ralphTracker.stopWatchingFixPlan();
+      session.ralphTracker.stallDetector.setLoopActive(false);
+    }
+
+    // Kill subagents spawned by this session. They are NOT in the session's PTY process
+    // group — subagentWatcher finds them by scanning /proc — so `stop()`'s process-group
+    // SIGKILL never reaches them. Without this, a "paused" session leaves subagents burning
+    // memory and CPU and still writing into the worktree, which defeats the whole feature.
+    if (session) {
+      try {
+        await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
+      } catch (err) {
+        console.error(`[Server] Failed to kill subagents while pausing session ${sessionId}:`, err);
+      }
+    }
+
+    // Stop and remove respawn controller — but save config first so it can be restored
+    const controller = this.respawnControllers.get(sessionId);
+    if (controller) {
+      const config = controller.getConfig();
+      const timerInfo = this.respawnTimers.get(sessionId);
+      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
+      this.saveRespawnConfig(sessionId, config, durationMinutes);
+
+      controller.cancelOpenCycle('Session paused');
+      controller.stop();
+      controller.removeAllListeners();
+      this.respawnControllers.delete(sessionId);
+      this.broadcast(SseEvent.RespawnStopped, { sessionId, reason: 'session_paused' });
+    }
+
+    // Clear respawn timer
+    const timerInfo = this.respawnTimers.get(sessionId);
+    if (timerInfo) {
+      clearTimeout(timerInfo.timer);
+      this.respawnTimers.delete(sessionId);
+    }
+
+    // Clear pending respawn start timer (from restoration grace period)
+    const pendingStart = this.pendingRespawnStarts.get(sessionId);
+    if (pendingStart) {
+      clearTimeout(pendingStart);
+      this.pendingRespawnStarts.delete(sessionId);
+    }
+
+    // Release the image watcher — the exit handler does not unwatch (only cleanupSession does)
+    try {
+      imageWatcher.unwatchSession(sessionId);
+    } catch {
+      /* watcher already gone */
+    }
+  }
+
+  /**
+   * Undo {@link pauseSessionSideEffects} when a parked session is resumed.
+   *
+   * Pause saves the respawn config and tears the controller down; before this existed the
+   * only code that rebuilt it was the server-boot restore path, so resuming without
+   * restarting Codeman silently lost respawn for the rest of the process lifetime.
+   */
+  private async resumeSessionSideEffects(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // Re-arm Ralph's fix-plan watcher and stall accrual if the loop is still enabled
+    if (session.mode !== 'opencode') {
+      session.ralphTracker.setWorkingDir(session.workingDir);
+    }
+
+    // Rebuild the respawn controller from the config pause persisted
+    if (this.respawnControllers.has(sessionId)) return;
+    const savedState = this.store.getSession(sessionId);
+    if (session.mode !== 'opencode' && savedState?.respawnEnabled && savedState.respawnConfig) {
+      try {
+        this.restoreRespawnController(session, savedState.respawnConfig, 'resume');
+      } catch (err) {
+        console.error(`[Server] Failed to restore respawn on resume for session ${sessionId}:`, err);
+      }
+    }
+
+    // Re-attach the image watcher that pause released
+    try {
+      if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled) {
+        imageWatcher.watchSession(sessionId, session.workingDir);
+      }
+    } catch (err) {
+      console.error(`[Server] Failed to re-attach image watcher on resume for ${sessionId}:`, err);
+    }
+  }
+
   private async setupSessionListeners(session: Session): Promise<void> {
     // Create run summary tracker for this session
     const summaryTracker = new RunSummaryTracker(session.id, session.name);
@@ -2108,6 +2224,11 @@ export class WebServer extends EventEmitter {
           console.log(`[Server] Skipping restored respawn start - session ${session.id} no longer exists`);
           return;
         }
+        // A session parked during the grace window must not have respawn started under it
+        if (this.sessions.get(session.id)?.paused) {
+          console.log(`[Server] Skipping restored respawn start - session ${session.id} is paused`);
+          return;
+        }
         // Double-check controller still exists and is stopped
         const ctrl = this.respawnControllers.get(session.id);
         if (ctrl && ctrl.state === 'stopped') {
@@ -2402,6 +2523,8 @@ export class WebServer extends EventEmitter {
     const candidates: Session[] = [];
 
     for (const session of this.sessions.values()) {
+      // Never touch a parked session — prepareForRestart() would wipe its preserved buffer
+      if (session.paused) continue;
       // Only recover busy sessions (idle/stopped need no recovery)
       if (!session.isBusy()) continue;
 
@@ -3194,6 +3317,10 @@ export class WebServer extends EventEmitter {
    * so both share identical restoration logic.
    */
   private _restoreSessionConfig(session: Session, savedState: SessionState): void {
+    // Paused (parked by the user) — restore the flag so the session stays parked across restarts
+    if (savedState.paused) {
+      session.markPaused(savedState.pausedAt);
+    }
     // Auto-compact
     if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
       session.setAutoCompact(
@@ -3571,7 +3698,9 @@ export class WebServer extends EventEmitter {
 
             // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
             // failure does not abort the entire startup loop.
-            if (!(await this.mux.isPaneDead(muxSession.muxName))) {
+            if (savedState?.paused) {
+              console.log(`[Server] Session ${session.id} is paused — leaving it parked`);
+            } else if (!(await this.mux.isPaneDead(muxSession.muxName))) {
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
               });
@@ -3702,7 +3831,10 @@ export class WebServer extends EventEmitter {
 
             // If the session was stopped before the crash, mark it stopped so persistSessionState()
             // writes the correct status back to state.json instead of defaulting to idle.
-            if (savedState.status === 'stopped') {
+            if (savedState.paused) {
+              // _restoreSessionConfig already applied markPaused(); keep it parked
+              session.markPaused(savedState.pausedAt);
+            } else if (savedState.status === 'stopped') {
               session.markStopped();
             }
 
@@ -3722,7 +3854,7 @@ export class WebServer extends EventEmitter {
               this.startTranscriptWatcher(session.id, transcriptPath);
             }
 
-            if (wasRunning && session.claudeResumeId && session.mode !== 'opencode') {
+            if (wasRunning && !savedState.paused && session.claudeResumeId && session.mode !== 'opencode') {
               // Auto-resume: restart Claude with --resume so the user sees a live session
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);

@@ -236,6 +236,37 @@ export class MockSession extends EventEmitter {
   /** Claude resume ID (preserved across restarts) */
   claudeResumeId: string | null = null;
 
+  /** Safe mode strips --resume from the CLI args, so a safe-mode session is not parkable */
+  safeMode: boolean = false;
+
+  // ========== Pause / resume (parked sessions) ==========
+
+  /** True when the user parked this session */
+  paused: boolean = false;
+
+  /** Epoch ms when the session was paused, or null when not paused */
+  pausedAt: number | null = null;
+
+  /** Park the session: raise the flag first (mirrors Session.pause()), then "kill" the process */
+  pause = vi.fn(async () => {
+    this.paused = true;
+    this.pausedAt = Date.now();
+    this.isWorking = false;
+    this.status = 'idle';
+  });
+
+  /** Restore-time setter used by the resume rollback path */
+  markPaused = vi.fn((pausedAt?: number) => {
+    this.paused = true;
+    this.pausedAt = pausedAt ?? Date.now();
+  });
+
+  /** Un-park the session so startInteractive() can run again */
+  clearPaused = vi.fn(() => {
+    this.paused = false;
+    this.pausedAt = null;
+  });
+
   /** Stub for prepareForRestart */
   prepareForRestart = vi.fn(async () => {});
 

@@ -343,6 +343,19 @@ export class Session extends EventEmitter {
   private _useMux: boolean = false;
   // Flag to prevent new timers after session is stopped
   private _isStopped: boolean = false;
+  // User parked this session: process + mux killed, session entry preserved
+  private _paused: boolean = false;
+  private _pausedAt: number | null = null;
+  /**
+   * Incremented every time a new interactive PTY is spawned. Every PTY callback captures
+   * the generation it was bound to and returns early if it no longer matches, so a late
+   * `onExit`/`onData` from a killed PTY cannot clobber the PTY that replaced it.
+   *
+   * This matters on the pause -> resume path: `pause()` kills the PTY but node-pty delivers
+   * `onExit` asynchronously, so without this guard a stale exit can null out the freshly
+   * resumed `ptyProcess` and emit `exit`, whose handler strips the new terminal/SSE listeners.
+   */
+  private _ptyGeneration: number = 0;
 
   // Background /context refresh state
   private _awaitingContext = false;
@@ -509,46 +522,12 @@ export class Session extends EventEmitter {
       this._safeMode = config.safeMode;
     }
 
-    // Initialize task tracker and forward events (store handlers for cleanup)
+    // Initialize the trackers; their event forwarding is wired by setupTrackerListeners()
+    // so that a resumed session can re-establish it (see clearPaused()).
     this._taskTracker = new TaskTracker();
-    this._taskTrackerHandlers = {
-      taskCreated: (task) => this.emit('taskCreated', task),
-      taskUpdated: (task) => this.emit('taskUpdated', task),
-      taskCompleted: (task) => this.emit('taskCompleted', task),
-      taskFailed: (task, error) => this.emit('taskFailed', task, error),
-    };
-    this._taskTracker.on('taskCreated', this._taskTrackerHandlers.taskCreated);
-    this._taskTracker.on('taskUpdated', this._taskTrackerHandlers.taskUpdated);
-    this._taskTracker.on('taskCompleted', this._taskTrackerHandlers.taskCompleted);
-    this._taskTracker.on('taskFailed', this._taskTrackerHandlers.taskFailed);
-
-    // Initialize Ralph tracker and forward events (store handlers for cleanup)
     this._ralphTracker = new RalphTracker();
-    this._ralphHandlers = {
-      loopUpdate: (state) => this.emit('ralphLoopUpdate', state),
-      todoUpdate: (todos) => this.emit('ralphTodoUpdate', todos),
-      completionDetected: (phrase) => this.emit('ralphCompletionDetected', phrase),
-      statusBlockDetected: (block) => this.emit('ralphStatusBlockDetected', block),
-      circuitBreakerUpdate: (status) => this.emit('ralphCircuitBreakerUpdate', status),
-      exitGateMet: (data) => this.emit('ralphExitGateMet', data),
-    };
-    this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
-    this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
-    this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
-    this._ralphTracker.on('statusBlockDetected', this._ralphHandlers.statusBlockDetected);
-    this._ralphTracker.on('circuitBreakerUpdate', this._ralphHandlers.circuitBreakerUpdate);
-    this._ralphTracker.on('exitGateMet', this._ralphHandlers.exitGateMet);
-
-    // Initialize Bash tool parser and forward events (store handlers for cleanup)
     this._bashToolParser = new BashToolParser({ sessionId: this.id, workingDir: this.workingDir });
-    this._bashToolHandlers = {
-      toolStart: (tool) => this.emit('bashToolStart', tool),
-      toolEnd: (tool) => this.emit('bashToolEnd', tool),
-      toolsUpdate: (tools) => this.emit('bashToolsUpdate', tools),
-    };
-    this._bashToolParser.on('toolStart', this._bashToolHandlers.toolStart);
-    this._bashToolParser.on('toolEnd', this._bashToolHandlers.toolEnd);
-    this._bashToolParser.on('toolsUpdate', this._bashToolHandlers.toolsUpdate);
+    this.setupTrackerListeners();
 
     // Initialize auto-compact/auto-clear automation and forward events
     this._autoOps = new SessionAutoOps({
@@ -887,6 +866,78 @@ export class Session extends EventEmitter {
     return this._status === 'idle' || this._status === 'busy';
   }
 
+  /** True when the user parked this session (process killed, state preserved for --resume). */
+  get paused(): boolean {
+    return this._paused;
+  }
+
+  /** Epoch ms when the session was paused, or null when not paused. */
+  get pausedAt(): number | null {
+    return this._pausedAt;
+  }
+
+  /**
+   * Parks the session: marks it paused (so the persisted state written by the exit
+   * handler already carries the flag) and then kills the PTY and its mux session.
+   * The terminal buffer, name, working dir and claudeResumeId are all preserved.
+   */
+  async pause(): Promise<void> {
+    // Capture the mux name before `stop()` nulls `_muxSession` — we need it afterwards to
+    // verify the pane really died. `stop()` swallows kill failures, so without this check
+    // pause would report success (and persist `paused: true`) while Claude kept running,
+    // which is the exact opposite of what pausing is for.
+    const muxName = this._muxSession?.muxName;
+    this._paused = true;
+    this._pausedAt = Date.now();
+    // A force-pause interrupts a turn: drop the mid-turn flag so the session does not
+    // keep reporting `isWorking: true` over SSE / `/api/sessions` while parked.
+    this._isWorking = false;
+    // preserveTrackers: stop() would otherwise destroy the trackers, which permanently
+    // kills ralph/task/bash telemetry for the resumed session (see stop()'s docs).
+    await this.stop(true, { preserveTrackers: true });
+    // Pin the status: `stop(true)` sets 'stopped', but the PTY `onExit` callback is not
+    // awaited and could otherwise land afterwards. Every "dead session" guard keys off
+    // `status === 'stopped'`, so this must not drift back to 'idle'.
+    this._status = 'stopped';
+
+    // Verify the mux session actually died. If it survived, the Claude process is still
+    // resident and nothing was freed — fail loudly rather than showing a parked badge over
+    // a live session, and clear the flag so `paused: true` is never persisted.
+    if (muxName && this._mux?.muxSessionExists(muxName)) {
+      this._paused = false;
+      this._pausedAt = null;
+      throw new Error(
+        `Failed to pause: the mux session "${muxName}" is still alive, so the Claude process was not stopped. ` +
+          `Check that tmux is responding, then try again.`
+      );
+    }
+  }
+
+  /**
+   * Restore-time setter: re-applies the paused flag to a session rebuilt from state.json
+   * without touching any process.
+   */
+  markPaused(pausedAt?: number): void {
+    this._paused = true;
+    this._pausedAt = pausedAt ?? Date.now();
+    this._status = 'stopped';
+  }
+
+  /**
+   * Clears the paused flag and resets the stopped latch so `startInteractive()` can run.
+   * Mirrors the reset performed by `rebindMux()`.
+   */
+  clearPaused(): void {
+    this._paused = false;
+    this._pausedAt = null;
+    this._isStopped = false;
+    this._status = 'idle';
+    // Belt and braces: `pause()` preserves the tracker wiring, but any path that reached
+    // a paused session through a plain `stop()` would have severed it. Idempotent, so
+    // this is a no-op on the normal pause -> resume path.
+    this.setupTrackerListeners();
+  }
+
   /**
    * Marks a recovered session as stopped without starting a process.
    * Used during crash-recovery to restore the persisted stopped status.
@@ -943,6 +994,7 @@ export class Session extends EventEmitter {
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
       safeMode: this._safeMode || undefined,
+      ...(this._paused && { paused: true, pausedAt: this._pausedAt ?? undefined }),
       autoCompactAndContinue: this._compactContinue.enabled || undefined,
     };
   }
@@ -1268,7 +1320,12 @@ export class Session extends EventEmitter {
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Interactive PTY spawned with PID:', this._pid);
 
+    // Bind every callback below to THIS pty. A stale callback from a previously killed pty
+    // (pause -> resume in quick succession) must not touch the current one.
+    const ptyGeneration = ++this._ptyGeneration;
+
     this.ptyProcess.onData((rawData: string) => {
+      if (ptyGeneration !== this._ptyGeneration) return;
       // Filter out focus escape sequences and Ctrl+L (form feed)
       const data = rawData.replace(FOCUS_ESCAPE_FILTER, '').replace(CTRL_L_PATTERN, ''); // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
@@ -1369,10 +1426,20 @@ export class Session extends EventEmitter {
     });
 
     this.ptyProcess.onExit(({ exitCode }) => {
+      // A late exit from a superseded pty must not null out its replacement, nor emit
+      // 'exit' (whose server handler tears down the new terminal/SSE listeners).
+      if (ptyGeneration !== this._ptyGeneration) {
+        console.log('[Session] Ignoring exit from superseded PTY generation', ptyGeneration);
+        return;
+      }
       console.log('[Session] Interactive PTY exited with code:', exitCode);
       this.ptyProcess = null;
       this._pid = null;
-      this._status = 'idle';
+      // A parked session must stay 'stopped' — this callback can land after `pause()`
+      // has already set it, and every dead-session guard keys off `status === 'stopped'`.
+      if (!this._paused) {
+        this._status = 'idle';
+      }
       this._awaitingIdleConfirmation = false;
       // Clear all timers to prevent memory leaks
       if (this.activityTimeout) {
@@ -2431,6 +2498,61 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * Wire the TaskTracker / RalphTracker / BashToolParser event forwarding onto this
+   * Session. Called from the constructor and again from `clearPaused()` so a resumed
+   * session re-establishes any forwarding that was torn down while it was parked.
+   *
+   * Idempotent: each block is skipped while its handler bundle is still registered, so
+   * calling this twice can never double-register a listener (which would double-emit
+   * every ralph/task/bash event).
+   */
+  private setupTrackerListeners(): void {
+    // Forward TaskTracker events (store handlers for cleanup)
+    if (!this._taskTrackerHandlers) {
+      this._taskTrackerHandlers = {
+        taskCreated: (task) => this.emit('taskCreated', task),
+        taskUpdated: (task) => this.emit('taskUpdated', task),
+        taskCompleted: (task) => this.emit('taskCompleted', task),
+        taskFailed: (task, error) => this.emit('taskFailed', task, error),
+      };
+      this._taskTracker.on('taskCreated', this._taskTrackerHandlers.taskCreated);
+      this._taskTracker.on('taskUpdated', this._taskTrackerHandlers.taskUpdated);
+      this._taskTracker.on('taskCompleted', this._taskTrackerHandlers.taskCompleted);
+      this._taskTracker.on('taskFailed', this._taskTrackerHandlers.taskFailed);
+    }
+
+    // Forward RalphTracker events (store handlers for cleanup)
+    if (!this._ralphHandlers) {
+      this._ralphHandlers = {
+        loopUpdate: (state) => this.emit('ralphLoopUpdate', state),
+        todoUpdate: (todos) => this.emit('ralphTodoUpdate', todos),
+        completionDetected: (phrase) => this.emit('ralphCompletionDetected', phrase),
+        statusBlockDetected: (block) => this.emit('ralphStatusBlockDetected', block),
+        circuitBreakerUpdate: (status) => this.emit('ralphCircuitBreakerUpdate', status),
+        exitGateMet: (data) => this.emit('ralphExitGateMet', data),
+      };
+      this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
+      this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
+      this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
+      this._ralphTracker.on('statusBlockDetected', this._ralphHandlers.statusBlockDetected);
+      this._ralphTracker.on('circuitBreakerUpdate', this._ralphHandlers.circuitBreakerUpdate);
+      this._ralphTracker.on('exitGateMet', this._ralphHandlers.exitGateMet);
+    }
+
+    // Forward BashToolParser events (store handlers for cleanup)
+    if (!this._bashToolHandlers) {
+      this._bashToolHandlers = {
+        toolStart: (tool) => this.emit('bashToolStart', tool),
+        toolEnd: (tool) => this.emit('bashToolEnd', tool),
+        toolsUpdate: (tools) => this.emit('bashToolsUpdate', tools),
+      };
+      this._bashToolParser.on('toolStart', this._bashToolHandlers.toolStart);
+      this._bashToolParser.on('toolEnd', this._bashToolHandlers.toolEnd);
+      this._bashToolParser.on('toolsUpdate', this._bashToolHandlers.toolsUpdate);
+    }
+  }
+
+  /**
    * Remove event listeners from TaskTracker and RalphTracker.
    * Prevents memory leaks by ensuring handlers don't persist after session stop.
    */
@@ -2476,6 +2598,11 @@ export class Session extends EventEmitter {
    * All buffers are cleared and the session is marked as stopped.
    *
    * @param killMux - Whether to also kill the mux session (default: true)
+   * @param options.preserveTrackers - Keep the TaskTracker / RalphTracker / BashToolParser
+   *   alive instead of destroying them. Used by `pause()`, which stops the process but
+   *   intends to reuse this same Session object on resume: `destroy()` disposes the
+   *   trackers' cleanup managers, severs their *internal* sub-component wiring and latches
+   *   `BashToolParser._destroyed`, none of which re-registering listeners can undo.
    *
    * @example
    * ```typescript
@@ -2486,7 +2613,7 @@ export class Session extends EventEmitter {
    * await session.stop(false);
    * ```
    */
-  async stop(killMux: boolean = true): Promise<void> {
+  async stop(killMux: boolean = true, options: { preserveTrackers?: boolean } = {}): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
 
@@ -2564,8 +2691,13 @@ export class Session extends EventEmitter {
     this.resolvePromise = null;
     this.rejectPromise = null;
 
-    // Remove event listeners from trackers to prevent memory leaks
-    this.cleanupTrackerListeners();
+    // Remove event listeners from trackers to prevent memory leaks.
+    // A pause skips this: the trackers must survive so the same Session can be resumed.
+    // (A paused session that is later deleted still goes through cleanupSession() ->
+    // stop() without the flag, so nothing leaks.)
+    if (!options.preserveTrackers) {
+      this.cleanupTrackerListeners();
+    }
 
     if (this.ptyProcess) {
       if (killMux) {

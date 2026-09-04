@@ -172,6 +172,23 @@ export const ResizeSchema = z.object({
   rows: z.number().int().min(1).max(200),
 });
 
+/**
+ * Schema for POST /api/sessions/:id/pause
+ * Parks a session. `force` pauses even while Claude is mid-turn.
+ */
+export const SessionPauseSchema = z.object({
+  force: z.boolean().optional(),
+});
+
+/**
+ * Schema for POST /api/sessions/:id/resume
+ * Un-parks a session. `force` relaunches even when the local transcript is gone, which
+ * starts a NEW conversation and loses the parked history.
+ */
+export const SessionResumeSchema = z.object({
+  force: z.boolean().optional(),
+});
+
 // ========== Case Routes ==========
 
 /**

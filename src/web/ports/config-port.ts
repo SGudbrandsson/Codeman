@@ -19,6 +19,8 @@ export interface ConfigPort {
   getLightState(): unknown;
   getLightSessionsState(): unknown[];
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
+  /** Resolves the on-disk transcript for a conversation, or null when it no longer exists. */
+  resolveSessionTranscript(workingDir: string, claudeResumeId: string | undefined): string | null;
   stopTranscriptWatcher(sessionId: string): void;
   getTranscriptPath(sessionId: string): string | null;
   /** Lite transcript state for the Hermes digest; null when no watcher is attached. */

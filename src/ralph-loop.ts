@@ -332,6 +332,8 @@ export class RalphLoop extends EventEmitter {
   }
 
   private async assignTaskToSession(task: Task, session: Session): Promise<void> {
+    // Never dispatch work into a parked session
+    if (session.paused) return;
     try {
       task.assign(session.id);
       session.assignTask(task.id);
@@ -415,6 +417,10 @@ export class RalphLoop extends EventEmitter {
   }
 
   private handleSessionStopped(sessionId: string): void {
+    // A user-initiated pause also emits sessionStopped — preserve the task for resume
+    if (this.sessionManager.getSession(sessionId)?.paused) {
+      return;
+    }
     const task = this.taskQueue.getRunningTaskForSession(sessionId);
     if (task) {
       task.fail('Session stopped unexpectedly');

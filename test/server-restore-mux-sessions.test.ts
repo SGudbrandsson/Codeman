@@ -213,6 +213,13 @@ vi.mock('../src/session.js', async () => {
     markStopped = vi.fn(function (this: MockSession) {
       this.status = 'stopped';
     });
+    paused: boolean = false;
+    pausedAt: number | null = null;
+    markPaused = vi.fn(function (this: MockSession, pausedAt?: number) {
+      this.paused = true;
+      this.pausedAt = pausedAt ?? Date.now();
+      this.status = 'stopped';
+    });
     startInteractive = mocks.startInteractiveImpl;
     setAutoCompact = vi.fn();
     setAutoClear = vi.fn();
@@ -1183,6 +1190,7 @@ describe('WebServer._restoreSessionConfig()', () => {
     setColor: ReturnType<typeof vi.fn>;
     restoreTokens: ReturnType<typeof vi.fn>;
     restoreContextWindow: ReturnType<typeof vi.fn>;
+    markPaused: ReturnType<typeof vi.fn>;
     ralphTracker: {
       enabled: boolean;
       autoEnableDisabled: boolean;
@@ -1211,6 +1219,7 @@ describe('WebServer._restoreSessionConfig()', () => {
       setColor: vi.fn(),
       restoreTokens: vi.fn(),
       restoreContextWindow: vi.fn(),
+      markPaused: vi.fn(),
       ralphTracker: {
         enabled: false,
         autoEnableDisabled: false,
@@ -1261,6 +1270,18 @@ describe('WebServer._restoreSessionConfig()', () => {
     });
     expect(session.ralphTracker.enable).not.toHaveBeenCalled();
     expect(session.ralphTracker.startLoop).not.toHaveBeenCalled();
+  });
+
+  it('restores the paused flag and pausedAt from savedState', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, { paused: true, pausedAt: 1_700_000_000_000 });
+    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+  });
+
+  it('does not mark an unpaused savedState as paused', () => {
+    const session = makeSession();
+    (server as any)._restoreSessionConfig(session, { status: 'stopped' });
+    expect(session.markPaused).not.toHaveBeenCalled();
   });
 
   it('skips respawn restore when session.mode is opencode', () => {
@@ -1873,5 +1894,133 @@ describe('WebServer.restoreMuxSessions() — non-mux workingDir dedup', () => {
     // Both should exist — different workingDirs
     expect(sessions.has(muxSessionId)).toBe(true);
     expect(sessions.has(uniqueId)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paused sessions survive a server restart and are never auto-started
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — paused sessions stay parked', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).getSessions.mockReturnValue({});
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+
+    mocks.existsSync.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('restores a paused state.json entry and re-applies markPaused()', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-parked': {
+        id: 'sess-parked',
+        workingDir: '/tmp/parked',
+        mode: 'claude',
+        name: 'Parked',
+        status: 'stopped',
+        createdAt: 1000,
+        claudeResumeId: 'parked-resume-id',
+        paused: true,
+        pausedAt: 1_700_000_000_000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const sessions: Map<string, any> = (server as any).sessions;
+    const session = sessions.get('sess-parked');
+    expect(session).toBeDefined();
+    expect(session.markPaused).toHaveBeenCalledWith(1_700_000_000_000);
+    expect(session.paused).toBe(true);
+  });
+
+  it('does NOT auto-start a paused session that was idle with a claudeResumeId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-parked-idle': {
+        id: 'sess-parked-idle',
+        workingDir: '/tmp/parked-idle',
+        mode: 'claude',
+        name: 'Parked While Idle',
+        // 'idle' + claudeResumeId is exactly the shape that normally triggers auto-resume
+        status: 'idle',
+        createdAt: 1000,
+        claudeResumeId: 'parked-idle-resume-id',
+        paused: true,
+        pausedAt: 1_700_000_000_000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+    expect((server as any).sessions.has('sess-parked-idle')).toBe(true);
+  });
+
+  it('does NOT auto-start a paused session that was busy with a claudeResumeId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-parked-busy': {
+        id: 'sess-parked-busy',
+        workingDir: '/tmp/parked-busy',
+        mode: 'claude',
+        name: 'Parked While Busy',
+        status: 'busy',
+        createdAt: 1000,
+        claudeResumeId: 'parked-busy-resume-id',
+        paused: true,
+        pausedAt: 1_700_000_000_000,
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('leaves a paused session parked in the mux pass even when its pane is alive', async () => {
+    const muxSession = makeMuxSession({ sessionId: 'sess-parked-mux', muxName: 'codeman-parkedmx' });
+    mocks.muxSessions = [muxSession];
+    mocks.reconcileResult = { alive: ['sess-parked-mux'], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false); // stray pane is alive
+
+    (getStore() as any).getSession.mockReturnValue({
+      status: 'idle',
+      paused: true,
+      pausedAt: 1_700_000_000_000,
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
   });
 });

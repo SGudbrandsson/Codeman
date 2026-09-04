@@ -9406,7 +9406,19 @@ class CodemanApp {
     // for the server's response. The server handles writeViaMux as
     // fire-and-forget anyway, so the HTTP response carries no useful data
     // beyond success/failure for retry purposes.
-    this._inputSendChain = this._inputSendChain.then(() => {
+    this._inputSendChain = this._inputSendChain.then(async () => {
+      // Typing into a parked session auto-resumes it first. This lives *inside* the
+      // chain so the resume round-trip cannot let a later keystroke overtake this one;
+      // the flag is re-read here because an earlier queued keystroke may already have
+      // resumed the session (resumeSessionProcess clears `paused` optimistically).
+      if (this.sessions.get(sessionId)?.paused) {
+        const resumed = await this.resumeSessionProcess(sessionId);
+        if (!resumed) {
+          this._enqueueInput(sessionId, input);
+          return;
+        }
+      }
+
       const fetchPromise = fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -9426,6 +9438,8 @@ class CodemanApp {
       });
 
       // Return immediately after fetch is dispatched (don't await response)
+    }).catch(() => {
+      // Never let the chain settle rejected — every later keystroke would be skipped.
     });
   }
 
@@ -9449,8 +9463,27 @@ class CodemanApp {
     this._updateConnectionIndicator();
 
     for (const [sessionId, input] of queued) {
+      // A parked session rejects /input with HTTP 200 + {success:false}, so checking
+      // `resp.ok` alone would silently discard the queued keystrokes. Un-park first (typing
+      // at a session is intent to resume it), then verify the body, not just the status.
+      if (this.sessions.get(sessionId)?.paused) {
+        const resumed = await this.resumeSessionProcess(sessionId);
+        if (!resumed) {
+          this._enqueueInput(sessionId, input);
+          continue;
+        }
+      }
       const resp = await this._apiPost(`/api/sessions/${sessionId}/input`, { input });
-      if (!resp?.ok) {
+      let delivered = !!resp?.ok;
+      if (delivered) {
+        try {
+          const body = await resp.clone().json();
+          if (body && body.success === false) delivered = false;
+        } catch {
+          /* non-JSON body — fall back to the HTTP status */
+        }
+      }
+      if (!delivered) {
         this._enqueueInput(sessionId, input);
       }
     }
@@ -9921,6 +9954,7 @@ class CodemanApp {
 
         const isActive = id === this.activeSessionId;
         const status = session.displayStatus ?? session.status ?? 'idle';
+        const paused = !!session.paused;
         const name = this.getSessionName(session);
         const taskStats = session.taskStats || { running: 0, total: 0 };
         const hasRunningTasks = taskStats.running > 0;
@@ -9942,10 +9976,28 @@ class CodemanApp {
         else if (wantIdle && !hasIdle) { tab.classList.add('tab-alert-idle'); tab.classList.remove('tab-alert-action'); }
         else if (!alertType && (hasAction || hasIdle)) { tab.classList.remove('tab-alert-action', 'tab-alert-idle'); }
 
-        // Update status indicator
+        // Update paused class on the tab itself
+        if (paused !== tab.classList.contains('paused')) {
+          tab.classList.toggle('paused', paused);
+        }
+
+        // Add/remove the paused badge (sits just before the gear)
+        const existingPausedBadge = tab.querySelector('.tab-paused-badge');
+        if (paused && !existingPausedBadge) {
+          const badge = document.createElement('span');
+          badge.className = 'tab-paused-badge';
+          badge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+          badge.textContent = '\u23F8';
+          tab.insertBefore(badge, tab.querySelector('.tab-gear'));
+        } else if (!paused && existingPausedBadge) {
+          existingPausedBadge.remove();
+        }
+
+        // Update status indicator (paused overrides the live status colour)
         const statusEl = tab.querySelector('.tab-status');
-        if (statusEl && !statusEl.classList.contains(status)) {
-          statusEl.className = `tab-status ${status}`;
+        const statusClass = paused ? 'paused' : status;
+        if (statusEl && !statusEl.classList.contains(statusClass)) {
+          statusEl.className = `tab-status ${statusClass}`;
         }
 
         // Update name if changed
@@ -10049,6 +10101,7 @@ class CodemanApp {
 
       const isActive = id === this.activeSessionId;
       const status = session.displayStatus ?? session.status ?? 'idle';
+      const paused = !!session.paused;
       const name = this.getSessionName(session);
       const mode = session.mode || 'claude';
       const color = session.color || 'default';
@@ -10065,6 +10118,7 @@ class CodemanApp {
         ? `<span class="tab-worktree-badge" title="Worktree: ${escapeHtml(session.worktreeBranch)}">${BRANCH_SVG} ${escapeHtml(session.worktreeBranch)}</span>`
         : '';
       const safeModeBadge = session.safeMode ? '<span class="tab-safe-mode-badge" title="Safe mode: stripped CLI args">SAFE</span>' : '';
+      const pausedBadge = paused ? '<span class="tab-paused-badge" title="Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.">\u23F8</span>' : '';
 
       // Show folder name if session has a custom name AND tall tabs setting is enabled
       const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
@@ -10072,8 +10126,8 @@ class CodemanApp {
       const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
       const tooltip = this._getSessionTooltip(session);
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tooltip ? `title="${escapeHtml(tooltip)}"` : ''}>
-          <span class="tab-status ${status}" aria-hidden="true"></span>
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${paused ? ' paused' : ''}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tooltip ? `title="${escapeHtml(tooltip)}"` : ''}>
+          <span class="tab-status ${paused ? 'paused' : status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
@@ -10085,6 +10139,7 @@ class CodemanApp {
           ${subagentBadge}
           ${worktreeBadge}
           ${safeModeBadge}
+          ${pausedBadge}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionContextMenu(event, '${escapeHtml(id)}')" title="Session menu" aria-label="Session menu" tabindex="0">&#x2699;</span>
         </div>`);
     }
@@ -12361,6 +12416,11 @@ class CodemanApp {
   async sendInput(input, sessionId) {
     const sid = sessionId || this.activeSessionId;
     if (!sid) return;
+    // Typing into a parked session is a clear intent to un-park it
+    if (this.sessions.get(sid)?.paused) {
+      const resumed = await this.resumeSessionProcess(sid);
+      if (!resumed) return;
+    }
     const res = await fetch(`/api/sessions/${sid}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -12502,9 +12562,39 @@ class CodemanApp {
     menu.setAttribute('role', 'menu');
 
     const isShell = session.mode === 'shell';
+    const canPark = !isShell && session.mode !== 'opencode';
+    const isPaused = !!session.paused;
 
-    // Restart item (not for shell sessions)
-    if (!isShell) {
+    // Pause / Resume item (Claude sessions only)
+    if (canPark) {
+      const parkItem = document.createElement('div');
+      parkItem.className = 'session-ctx-item';
+      parkItem.setAttribute('role', 'menuitem');
+      parkItem.tabIndex = 0;
+      const parkIcon = document.createElement('span');
+      parkIcon.className = 'session-ctx-icon';
+      parkIcon.textContent = isPaused ? '\u25B6' : '\u23F8';
+      const parkLabel = document.createElement('span');
+      parkLabel.textContent = isPaused ? 'Resume' : 'Pause';
+      parkItem.appendChild(parkIcon);
+      parkItem.appendChild(parkLabel);
+      parkItem.addEventListener('click', () => {
+        this.closeSessionContextMenu();
+        if (isPaused) {
+          this.resumeSessionProcess(sessionId);
+        } else {
+          this.pauseSessionProcess(sessionId);
+        }
+      });
+      menu.appendChild(parkItem);
+
+      const parkSep = document.createElement('div');
+      parkSep.className = 'session-ctx-separator';
+      menu.appendChild(parkSep);
+    }
+
+    // Restart item (not for shell sessions; meaningless while paused)
+    if (!isShell && !isPaused) {
       const restartItem = document.createElement('div');
       restartItem.className = 'session-ctx-item';
       restartItem.setAttribute('role', 'menuitem');
@@ -12659,6 +12749,73 @@ class CodemanApp {
       this.showToast(`Restart failed: ${err.message}`, 'error');
     } finally {
       this._restartingSessionId = null;
+    }
+  }
+
+  /**
+   * Parks a session: the server kills Claude + tmux but keeps the session entry and
+   * its claudeResumeId so it can be resumed later. Confirms first when Claude is
+   * still mid-turn (the server answers SESSION_BUSY in that case).
+   */
+  async pauseSessionProcess(sessionId, force = false) {
+    if (this._pausingSessionId === sessionId) return false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    this._pausingSessionId = sessionId;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(force ? { force: true } : {}),
+      });
+      const data = await res.json();
+      if (data.success) {
+        this.showToast(`Paused session "${this.getSessionName(session)}"`, 'info');
+        return true;
+      }
+      if (data.errorCode === 'SESSION_BUSY' && !force) {
+        this._pausingSessionId = null;
+        const ok = confirm('Claude is still working in this session. Pause anyway? The current turn will be interrupted.');
+        if (!ok) return false;
+        return await this.pauseSessionProcess(sessionId, true);
+      }
+      this.showToast(`Pause failed: ${data.error || 'Unknown error'}`, 'error');
+      return false;
+    } catch (err) {
+      this.showToast(`Pause failed: ${err.message}`, 'error');
+      return false;
+    } finally {
+      if (this._pausingSessionId === sessionId) this._pausingSessionId = null;
+    }
+  }
+
+  /** Relaunches a parked session with --resume so the conversation continues. */
+  async resumeSessionProcess(sessionId) {
+    if (this._pausingSessionId === sessionId) return false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    this._pausingSessionId = sessionId;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/resume`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        // Clear the flag optimistically: the authoritative SSE `session:updated` may be
+        // several hundred ms away, and callers that retry on `paused` (the auto-resume in
+        // `_sendInputAsync`) would otherwise loop, re-POSTing /resume each pass.
+        session.paused = false;
+        session.pausedAt = undefined;
+        this.showToast(`Resumed session "${this.getSessionName(session)}"`, 'info');
+        return true;
+      }
+      this.showToast(`Resume failed: ${data.error || 'Unknown error'}`, 'error');
+      return false;
+    } catch (err) {
+      this.showToast(`Resume failed: ${err.message}`, 'error');
+      return false;
+    } finally {
+      if (this._pausingSessionId === sessionId) this._pausingSessionId = null;
     }
   }
 
@@ -25281,14 +25438,17 @@ const SessionDrawer = {
     const hasRalph  = app.ralphStates?.get(s.id)?.enabled;
     const modeLabel = s.cliMode || s.mode || 'claude';
 
+    const isPaused = !!s.paused;
+
     const row = document.createElement('div');
-    row.className = 'drawer-session-row' + (isActive ? ' active' : '');
+    row.className = 'drawer-session-row' + (isActive ? ' active' : '') + (isPaused ? ' paused' : '');
     row.dataset.sessionId = s.id;
 
     const dot = document.createElement('span');
     dot.className = 'drawer-session-dot'
       + (isRunning ? ' running' : ' idle')
-      + (hasRalph  ? ' ralph'   : '');
+      + (hasRalph  ? ' ralph'   : '')
+      + (isPaused  ? ' paused'  : '');
 
     const name = document.createElement('span');
     name.className = 'drawer-session-name';
@@ -25334,6 +25494,13 @@ const SessionDrawer = {
     row.appendChild(dot);
     row.appendChild(name);
     row.appendChild(badge);
+    if (isPaused) {
+      const pausedBadge = document.createElement('span');
+      pausedBadge.className = 'session-paused-badge';
+      pausedBadge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+      pausedBadge.textContent = '\u23F8';
+      row.appendChild(pausedBadge);
+    }
     row.appendChild(gearBtn);
     row.appendChild(closeBtn);
 
@@ -25665,16 +25832,31 @@ const SessionDrawer = {
       const isActive = sid === app.activeSessionId;
       const isRunning = s.status === 'running' || s.status === 'active' || s.status === 'busy';
       const hasRalph  = app.ralphStates?.get(sid)?.enabled;
+      const isPaused  = !!s.paused;
 
       // Update active class
       row.classList.toggle('active', isActive);
+      row.classList.toggle('paused', isPaused);
 
       // Update status dot
       const dot = row.querySelector('.drawer-session-dot');
       if (dot) {
         dot.className = 'drawer-session-dot'
           + (isRunning ? ' running' : ' idle')
-          + (hasRalph  ? ' ralph'   : '');
+          + (hasRalph  ? ' ralph'   : '')
+          + (isPaused  ? ' paused'  : '');
+      }
+
+      // Add/remove the paused badge
+      const existingPausedBadge = row.querySelector('.session-paused-badge');
+      if (isPaused && !existingPausedBadge) {
+        const pausedBadge = document.createElement('span');
+        pausedBadge.className = 'session-paused-badge';
+        pausedBadge.title = 'Paused \u2014 Claude and its tmux session are stopped. Resume from the session menu.';
+        pausedBadge.textContent = '\u23F8';
+        row.insertBefore(pausedBadge, row.querySelector('.drawer-session-gear'));
+      } else if (!isPaused && existingPausedBadge) {
+        existingPausedBadge.remove();
       }
 
       // Update name (may have been renamed)

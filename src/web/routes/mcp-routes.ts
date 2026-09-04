@@ -68,6 +68,12 @@ export async function registerMcpRoutes(app: FastifyInstance, ctx: SessionPort &
       ctx.persistSessionState(session);
     }
 
+    if (session.paused) {
+      return reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first'));
+    }
+
     const resumeId = session.claudeResumeId;
     try {
       await session.prepareForRestart();

@@ -228,6 +228,10 @@ export interface SessionState {
   claudeResumeId?: string;
   /** When true, session launches with stripped CLI args: no --resume, no MCP config */
   safeMode?: boolean;
+  /** True when the user parked this session: Claude + tmux killed, entry and claudeResumeId preserved. */
+  paused?: boolean;
+  /** Epoch ms when the session was paused. */
+  pausedAt?: number;
   /** Auto-compact-and-continue enabled: detects compaction request and sends /compact then continue */
   autoCompactAndContinue?: boolean;
   /** ID of the session that was cleared to create this one (archive chain) */

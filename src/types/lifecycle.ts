@@ -20,6 +20,8 @@ export type LifecycleEventType =
   | 'exit' // PTY process exited (with exit code)
   | 'deleted' // cleanupSession() called — session removed
   | 'detached' // Server shutdown — PTY left alive in tmux for recovery
+  | 'paused' // User parked the session — Claude + mux killed, state preserved
+  | 'resumed' // Paused session relaunched with --resume
   | 'recovered' // Session restored from tmux on server restart
   | 'stale_cleaned' // Removed from state.json by cleanupStaleSessions()
   | 'mux_died' // tmux session died (detected by reconciliation)

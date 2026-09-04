@@ -468,6 +468,38 @@ describe('Orchestrator.checkStalls', () => {
     expect(updated!.status).toBe('blocked');
   });
 
+  it('leaves the work item in_progress when the session is paused', async () => {
+    const deps = makeMockDeps();
+    const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };
+
+    const item = createWorkItem({ title: 'Parked session item' });
+    claimWorkItem(item.id, 'agent-1');
+    updateWorkItem(item.id, {
+      status: 'in_progress',
+      worktreePath: '/tmp/wt',
+    });
+
+    // A paused session is `status: 'stopped'` — without the explicit paused branch the
+    // stopped check below would silently block the work item the moment a user parks it.
+    depsExt._sessionsState['sess-1'] = {
+      id: 'sess-1',
+      currentWorkItemId: item.id,
+      status: 'stopped',
+      paused: true,
+      lastActivityAt: Date.now(),
+    } as unknown as SessionState;
+
+    const orch = new Orchestrator(deps);
+    await orch.checkStalls();
+
+    const updated = getWorkItem(item.id);
+    expect(updated!.status).toBe('in_progress');
+    expect(deps.broadcast).not.toHaveBeenCalledWith(
+      'orchestrator:stall',
+      expect.objectContaining({ workItemId: item.id })
+    );
+  });
+
   it('marks item blocked when session is in error state', async () => {
     const deps = makeMockDeps();
     const depsExt = deps as OrchestratorDeps & { _sessionsState: Record<string, Partial<SessionState>> };

@@ -346,6 +346,19 @@ body {
   will-change: opacity;
 }
 .session-tab .tab-status.error { background: var(--red); }
+/* Paused (parked) session — deliberately un-animated: the absence of the busy
+   pulse is the strongest at-a-glance "this session is not running" signal. */
+.session-tab .tab-status.paused {
+  background: var(--yellow);
+  opacity: 0.7;
+}
+.session-tab.paused {
+  opacity: 0.55;
+}
+.session-tab.paused:hover,
+.session-tab.paused.active {
+  opacity: 0.85;
+}
 
 /* Session color coding - left border indicator */
 .session-tab[data-color="red"] { border-left: 3px solid var(--session-red); }
@@ -1347,6 +1360,19 @@ body {
 .drawer-session-dot.ralph {
   background: #fbbf24;
   animation: dot-pulse-ralph 2.2s ease-in-out infinite;
+}
+/* Paused (parked) session — no animation, dimmed row */
+.drawer-session-dot.paused {
+  background: var(--yellow);
+  animation: none;
+  opacity: 0.7;
+}
+.drawer-session-row.paused {
+  opacity: 0.6;
+}
+.drawer-session-row.paused.active,
+.drawer-session-row.paused:hover {
+  opacity: 0.9;
 }
 
 /* Session name */
@@ -5975,6 +6001,22 @@ kbd {
   font-size: 10px;
   background: rgba(234, 179, 8, 0.12);
   color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  border-radius: 3px;
+  padding: 1px 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Paused badge — tab strip and session drawer */
+.tab-paused-badge,
+.session-paused-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  line-height: 1;
+  background: rgba(234, 179, 8, 0.12);
+  color: var(--yellow);
   border: 1px solid rgba(234, 179, 8, 0.4);
   border-radius: 3px;
   padding: 1px 4px;
