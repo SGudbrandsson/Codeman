@@ -42,6 +42,7 @@ Codeman's primary view manages up to 50 concurrent Claude Code (or OpenCode) ses
 - **Tab-based navigation** — each session gets a tab with live status indicators: token count, cost, agent count badge, and blink alerts for attention-required states
 - **Per-session token and cost tracking** — reads Claude Code's JSON message stream; tracks input tokens, output tokens, cache tokens, and cumulative USD cost
 - **tmux-backed persistence** — sessions survive server restarts, network drops, and machine sleep; auto-recovered on startup
+- **Pause / resume** — park a session from the gear menu: Claude and its tmux session are stopped (freeing the memory a long-lived session was holding) while the session entry, name, worktree and conversation id are kept. Resume relaunches with `--resume` and picks up where it left off. Paused sessions survive a server restart and are skipped by every background loop (respawn, Ralph, orchestrator, idle checks), so parking 20 sessions costs nothing until you come back to them
 - **Ghost session discovery** — finds orphaned tmux sessions from previous runs and reattaches them
 - **Managed session tagging** — `CODEMAN_MUX=1` environment variable prevents the agent from killing its own tmux session
 - **Quick-start** — `Ctrl+Enter` or the Start button creates a session from the last-used case
@@ -803,6 +804,8 @@ Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follo
 | `POST`   | `/api/sessions/:id/resize`  | Resize terminal (cols × rows) |
 | `GET`    | `/api/sessions/:id/buffer`  | Terminal buffer (last 128KB)  |
 | `POST`   | `/api/sessions/:id/restart` | Restart Claude process        |
+| `POST`   | `/api/sessions/:id/pause`   | Park session (frees memory)   |
+| `POST`   | `/api/sessions/:id/resume`  | Relaunch with `--resume`      |
 | `POST`   | `/api/sessions/:id/kill`    | SIGKILL Claude process        |
 
 ### Respawn (`/api/sessions/:id/respawn`)

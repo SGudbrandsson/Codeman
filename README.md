@@ -401,6 +401,8 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `DELETE` | `/api/sessions/:id` | Delete session |
 | `POST` | `/api/sessions/:id/input` | Send input |
 | `POST` | `/api/sessions/:id/restart` | Kill process and restart (preserves conversation history) |
+| `POST` | `/api/sessions/:id/pause` | Park a session: kill Claude + its tmux session to free memory, keeping the session entry and `claudeResumeId`. `{"force":true}` pauses mid-turn |
+| `POST` | `/api/sessions/:id/resume` | Relaunch a parked session with `--resume`. Refuses when the local transcript is gone; `{"force":true}` starts a fresh conversation instead |
 
 ### Respawn
 | Method | Endpoint | Description |
