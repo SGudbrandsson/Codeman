@@ -8,9 +8,13 @@ node_modules
 
 # Build output
 dist/
+# also match a QA convenience symlink named dist (trailing slash does not match symlinks)
+dist
 
 # Vendored frontend deps (generated from node_modules by postinstall/build)
 src/web/public/vendor/
+# also match a QA convenience symlink (trailing slash does not match symlinks)
+src/web/public/vendor
 
 # Test coverage
 coverage/
