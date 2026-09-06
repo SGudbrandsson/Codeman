@@ -11,6 +11,8 @@ window.FeatureRegistry = [
   { id: 'header-health-analyzer',   name: 'Health Analyzer',        category: 'header-nav',         description: 'Health Analyzer from overflow menu' },
   { id: 'header-notifications',     name: 'Notifications',          category: 'header-nav',         description: 'Notifications from overflow menu' },
   { id: 'header-lifecycle-log',     name: 'Lifecycle Log',          category: 'header-nav',         description: 'Lifecycle Log from overflow menu' },
+  { id: 'terminal-copy-open',       name: 'Copy Terminal Text',     category: 'header-nav',         description: 'Selectable terminal text view opened' },
+  { id: 'terminal-copy-copy-all',   name: 'Copy Terminal All',      category: 'header-nav',         description: 'Copy all button in terminal text view' },
   { id: 'header-font-increase',     name: 'Font Size +',            category: 'header-nav',         description: 'Increase font size button' },
   { id: 'header-font-decrease',     name: 'Font Size -',            category: 'header-nav',         description: 'Decrease font size button' },
   { id: 'header-model-picker',      name: 'Model Picker',           category: 'header-nav',         description: 'Model chip click — opens model switcher' },
@@ -51,6 +53,7 @@ window.FeatureRegistry = [
   { id: 'keyboard-shortcut-ctrl-shift-b', name: 'Shortcut: Ctrl+Shift+B',category: 'terminal-chat', description: 'Voice input keyboard shortcut' },
   { id: 'keyboard-shortcut-ctrl-shift-k', name: 'Shortcut: Ctrl+Shift+K',category: 'terminal-chat', description: 'Command panel keyboard shortcut' },
   { id: 'keyboard-shortcut-ctrl-shift-v', name: 'Shortcut: Ctrl+Shift+V',category: 'terminal-chat', description: 'Paste from clipboard keyboard shortcut' },
+  { id: 'keyboard-shortcut-ctrl-shift-x', name: 'Shortcut: Ctrl+Shift+X',category: 'terminal-chat', description: 'Open selectable terminal text view' },
   { id: 'terminal-search-open',        name: 'Terminal Search',          category: 'terminal-chat', description: 'Terminal search opened' },
 
   // voice-input

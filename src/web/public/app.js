@@ -2026,6 +2026,10 @@ const OverflowMenu = {
       this.close();
       if (window.app && app.openLifecycleLog) app.openLifecycleLog();
     });
+    document.getElementById('ovfCopyTextBtn')?.addEventListener('click', () => {
+      this.close();
+      if (typeof TerminalCopy !== 'undefined') TerminalCopy.open();
+    });
     document.getElementById('ovfCommandBtn')?.addEventListener('click', () => {
       this.close();
       CommandPanel.open();
@@ -7525,6 +7529,15 @@ class CodemanApp {
         e.preventDefault();
         FeatureTracker.track('keyboard-shortcut-ctrl-shift-f');
         SessionSwitcher.toggle();
+      }
+
+      // Ctrl/Cmd + Shift + X - open the selectable terminal text view.
+      // xterm selection needs a mouse drag (and loses to tmux mouse mode in
+      // split layouts), so this is the only copy path that works everywhere.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'X') {
+        e.preventDefault();
+        FeatureTracker.track('keyboard-shortcut-ctrl-shift-x');
+        if (typeof TerminalCopy !== 'undefined') TerminalCopy.toggle();
       }
 
       // Ctrl/Cmd + X - copy selected terminal text

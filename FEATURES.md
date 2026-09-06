@@ -573,12 +573,28 @@ The accessory bar's `commands` button opens a dynamic drawer showing GSD skills 
 | `Ctrl+K`       | Kill all sessions               |
 | `Ctrl+L`       | Clear terminal                  |
 | `Ctrl+Shift+R` | Restore terminal size           |
+| `Ctrl/Cmd+Shift+X` | Copy terminal text (selectable view) |
+| `Ctrl/Cmd+X`   | Copy the current xterm selection |
 | `Ctrl/Cmd +`   | Increase font size              |
 | `Ctrl/Cmd -`   | Decrease font size              |
 | `Escape`       | Close panels / dismiss overlays |
 | `Ctrl+?`       | Show keyboard shortcut help     |
 
 All shortcuts are active when the terminal has focus. `Escape` and `Ctrl+?` work globally.
+
+### Copying terminal text
+
+xterm.js selection needs a mouse drag, and it loses to tmux mouse mode in split
+layouts — on touch devices there is no way to select terminal text at all, which
+made shell sessions effectively copy-proof. **Copy Terminal Text** (overflow `⋮`
+menu, `Ctrl/Cmd+Shift+X`, or the mobile accessory bar's copy button when nothing
+is selected) renders the buffer into a plain textarea the OS knows how to select
+from:
+
+- **Screen / All** toggle — just the visible rows, or the whole scrollback
+- **Copy all** — one tap, with an `execCommand` fallback for the plain-HTTP
+  LAN/tailscale origins where the async clipboard API is disabled
+- Wrapped rows are rejoined so long commands and paths copy as one line
 
 ---
 

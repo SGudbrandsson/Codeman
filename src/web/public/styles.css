@@ -13567,3 +13567,64 @@ body.has-tts-bar { --tts-pill-lift: 60px; }
 @media (hover: none) and (pointer: coarse) {
   .files-note-pill { padding: 12px 20px; }
 }
+
+/* ========== Terminal Copy Overlay ========== */
+.tcopy-overlay {
+  position: fixed; inset: 0; z-index: 10300;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+}
+.tcopy-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(2px); }
+.tcopy-box {
+  position: relative; width: min(900px, 100%); height: min(80vh, 100%);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.tcopy-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.tcopy-title { font-size: 0.85rem; font-weight: 600; color: var(--text); flex: 1; min-width: 0; }
+.tcopy-scope { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tcopy-scope-btn {
+  background: transparent; border: none; color: var(--text-dim);
+  font-size: 0.72rem; padding: 4px 10px; cursor: pointer;
+}
+.tcopy-scope-btn.active { background: var(--bg-hover); color: var(--text); }
+.tcopy-close {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+}
+.tcopy-close:hover { color: var(--text); background: var(--bg-hover); }
+.tcopy-text {
+  flex: 1; min-height: 0; width: 100%; resize: none;
+  background: var(--bg-dark); color: var(--text);
+  border: none; outline: none; padding: 10px 12px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.78rem; line-height: 1.45;
+  white-space: pre; overflow: auto;
+  -webkit-user-select: text; user-select: text;
+  /* Keep iOS from zooming the page when the textarea takes focus. */
+  -webkit-text-size-adjust: 100%;
+}
+.tcopy-actions {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-top: 1px solid var(--border);
+}
+.tcopy-hint { flex: 1; min-width: 0; font-size: 0.72rem; color: var(--text-dim); }
+.tcopy-btn {
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; padding: 7px 14px; font-size: 0.78rem;
+  font-weight: 500; cursor: pointer;
+}
+.tcopy-btn:hover { filter: brightness(1.1); }
+.tcopy-btn.copied { background: var(--green); }
+
+@media (max-width: 767px) {
+  .tcopy-overlay { padding: max(8px, env(safe-area-inset-top)) 6px max(8px, env(safe-area-inset-bottom)); }
+  .tcopy-box { height: 100%; }
+  /* 16px keeps iOS Safari from zooming in when the textarea is focused. */
+  .tcopy-text { font-size: 16px; }
+  .tcopy-btn { padding: 10px 16px; }
+}

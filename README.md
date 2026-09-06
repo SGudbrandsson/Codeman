@@ -386,6 +386,7 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `Ctrl+K` | Kill all sessions |
 | `Ctrl+L` | Clear terminal |
 | `Ctrl+Shift+R` | Restore terminal size |
+| `Ctrl/Cmd+Shift+X` | Copy terminal text (selectable view) |
 | `Ctrl/Cmd +/-` | Font size |
 | `Escape` | Close panels |
 

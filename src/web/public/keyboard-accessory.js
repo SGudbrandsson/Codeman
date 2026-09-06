@@ -760,6 +760,10 @@ const KeyboardAccessoryBar = {
         .catch(() => {
           app.showToast('Copy failed', 'error');
         });
+    } else if (typeof TerminalCopy !== 'undefined') {
+      // Nothing selected — on touch devices there is no way to make an xterm
+      // selection at all, so fall back to the selectable text view.
+      TerminalCopy.open();
     } else {
       app.showToast('No text selected', 'warning');
     }
