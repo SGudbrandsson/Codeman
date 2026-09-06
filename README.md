@@ -386,7 +386,9 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `Ctrl+K` | Kill all sessions |
 | `Ctrl+L` | Clear terminal |
 | `Ctrl+Shift+R` | Restore terminal size |
-| `Ctrl/Cmd+Shift+X` | Copy terminal text (selectable view) |
+| `Ctrl/Cmd+C` | Copy terminal selection (SIGINT when nothing selected) |
+| `Shift`+drag | Select text when the app has mouse reporting on |
+| `Ctrl/Cmd+Shift+X` | Copy terminal text (whole-buffer panel) |
 | `Ctrl/Cmd +/-` | Font size |
 | `Escape` | Close panels |
 

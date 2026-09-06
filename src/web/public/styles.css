@@ -13568,6 +13568,62 @@ body.has-tts-bar { --tts-pill-lift: 60px; }
   .files-note-pill { padding: 12px 20px; }
 }
 
+/* ========== In-buffer selection copy ========== */
+
+/* Floating affordance shown while the terminal holds an xterm selection.
+   Top-right: terminal rows are usually ragged, so the right edge covers less
+   output than the left, and anything bottom-anchored would collide with the
+   mobile compose panel. */
+.tsel-chip {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  z-index: 40;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  opacity: 0.92;
+}
+.tsel-chip:hover { opacity: 1; background: var(--bg-hover); }
+.tsel-chip.copied { color: var(--green); border-color: var(--green); }
+
+/* Transient nudge shown when a plain drag is about to select nothing because
+   the foreground app has mouse reporting on. */
+.tsel-hint {
+  position: absolute;
+  z-index: 41;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.72rem;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+}
+
+/* Touch devices have no xterm drag-selection at all, but the DOM renderer puts
+   real text in .xterm-rows — re-enabling native selection there gives a
+   long-press the OS selection handles and its own Copy callout. Desktop is left
+   alone: xterm preventDefaults mousedown, so its own selection stays in charge. */
+body.touch-device .terminal-container .xterm,
+body.touch-device .terminal-container .xterm-screen,
+body.touch-device .terminal-container .xterm-rows,
+body.touch-device .terminal-container .xterm-rows * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+body.touch-device .terminal-container .xterm-rows {
+  pointer-events: auto;
+  -webkit-touch-callout: default;
+}
+
 /* ========== Terminal Copy Overlay ========== */
 .tcopy-overlay {
   position: fixed; inset: 0; z-index: 10300;

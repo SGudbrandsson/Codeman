@@ -573,7 +573,9 @@ The accessory bar's `commands` button opens a dynamic drawer showing GSD skills 
 | `Ctrl+K`       | Kill all sessions               |
 | `Ctrl+L`       | Clear terminal                  |
 | `Ctrl+Shift+R` | Restore terminal size           |
-| `Ctrl/Cmd+Shift+X` | Copy terminal text (selectable view) |
+| `Ctrl/Cmd+C`   | Copy terminal selection (falls through to SIGINT when nothing is selected) |
+| `Shift`+drag   | Select text when the app has mouse reporting on |
+| `Ctrl/Cmd+Shift+X` | Copy terminal text (whole-buffer panel) |
 | `Ctrl/Cmd+X`   | Copy the current xterm selection |
 | `Ctrl/Cmd +`   | Increase font size              |
 | `Ctrl/Cmd -`   | Decrease font size              |
@@ -584,12 +586,29 @@ All shortcuts are active when the terminal has focus. `Escape` and `Ctrl+?` work
 
 ### Copying terminal text
 
-xterm.js selection needs a mouse drag, and it loses to tmux mouse mode in split
-layouts — on touch devices there is no way to select terminal text at all, which
-made shell sessions effectively copy-proof. **Copy Terminal Text** (overflow `⋮`
-menu, `Ctrl/Cmd+Shift+X`, or the mobile accessory bar's copy button when nothing
-is selected) renders the buffer into a plain textarea the OS knows how to select
-from:
+Selecting straight out of the buffer is the primary path; the copy panel is the
+fallback for more scrollback than fits on one screen.
+
+**Desktop.** Drag to select, then `Ctrl/Cmd+C` — with nothing selected the key
+still falls through to the PTY as SIGINT, so `Ctrl+C` keeps interrupting. A
+**Copy selection** chip appears in the terminal's top-right while a selection is
+live, so the shortcut is discoverable.
+
+Claude Code's TUI turns on mouse reporting (`mouseTrackingMode: any`), which
+means a plain drag is forwarded to the app and selects nothing. xterm honours
+**`Shift`+drag** as a force-selection modifier; a plain drag that is about to
+come up empty raises a transient *"Hold ⇧ Shift to select text"* hint at the
+pointer (throttled to once per 30s). Shell sessions have mouse reporting off, so
+a plain drag selects normally.
+
+**Touch.** The DOM renderer puts real text in `.xterm-rows`, so `body.touch-device`
+CSS re-enables native selection there — a long-press gives the OS selection
+handles and its own Copy callout. The session-switch swipe is suppressed while a
+selection is live, since dragging the handles is horizontal too.
+
+**Copy panel** (overflow `⋮` menu → Copy Terminal Text, `Ctrl/Cmd+Shift+X`, or
+the mobile accessory copy button when nothing is selected). Native selection only
+reaches the rows xterm currently has in the DOM, so this is how you grab more:
 
 - **Screen / All** toggle — just the visible rows, or the whole scrollback
 - **Copy all** — one tap, with an `execCommand` fallback for the plain-HTTP

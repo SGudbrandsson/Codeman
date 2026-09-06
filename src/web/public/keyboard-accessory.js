@@ -747,23 +747,24 @@ const KeyboardAccessoryBar = {
     textarea.focus();
   },
 
-  /** Copy selected terminal text to clipboard */
+  /** Copy the terminal selection, or open the copy panel when there is none. */
   copySelection() {
     if (typeof app === 'undefined') return;
+    if (typeof TerminalCopy !== 'undefined') {
+      // Covers both an xterm selection and a native long-press selection.
+      if (TerminalCopy.hasSelection()) {
+        TerminalCopy.copySelection();
+      } else {
+        TerminalCopy.open();
+      }
+      return;
+    }
     const selection = app.terminal?.getSelection?.();
     if (selection) {
       navigator.clipboard
         .writeText(selection)
-        .then(() => {
-          app.showToast('Copied', 'success');
-        })
-        .catch(() => {
-          app.showToast('Copy failed', 'error');
-        });
-    } else if (typeof TerminalCopy !== 'undefined') {
-      // Nothing selected — on touch devices there is no way to make an xterm
-      // selection at all, so fall back to the selectable text view.
-      TerminalCopy.open();
+        .then(() => app.showToast('Copied', 'success'))
+        .catch(() => app.showToast('Copy failed', 'error'));
     } else {
       app.showToast('No text selected', 'warning');
     }

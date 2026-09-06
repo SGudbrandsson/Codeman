@@ -6416,6 +6416,12 @@ class CodemanApp {
     // onTitleChange fires on OSC 0/2 title-change sequences from the PTY.
     // registerOscHandler(133) captures shell integration marks (A/B/C/D) for reliable
     // prompt-shown / pre-execution signals if Claude Code emits them.
+    // In-buffer copy: Ctrl/Cmd+C on an xterm selection, plus the copy chip.
+    if (typeof TerminalCopy !== 'undefined') {
+      const selDisposable = TerminalCopy.attachSelection(this.terminal);
+      if (selDisposable) this._terminalDisposables.push(selDisposable);
+    }
+
     this._terminalDisposables.push(
       this.terminal.onTitleChange((title) => {
         if (window._oscTitleLog) window._oscTitleLog.push({ title, at: Date.now() });
@@ -7529,6 +7535,23 @@ class CodemanApp {
         e.preventDefault();
         FeatureTracker.track('keyboard-shortcut-ctrl-shift-f');
         SessionSwitcher.toggle();
+      }
+
+      // Ctrl/Cmd + C - copy the terminal selection. With nothing selected the
+      // key falls through to the PTY so Ctrl+C still interrupts, which is why
+      // this cannot simply be bound to a copy action.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+        const target = e.target;
+        const inField = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+                                   target.isContentEditable) &&
+                        !target.classList?.contains('xterm-helper-textarea');
+        if (!inField && typeof TerminalCopy !== 'undefined' && TerminalCopy.hasSelection()) {
+          e.preventDefault();
+          e.stopPropagation();
+          FeatureTracker.track('keyboard-shortcut-ctrl-c-copy');
+          TerminalCopy.copySelection();
+          return;
+        }
       }
 
       // Ctrl/Cmd + Shift + X - open the selectable terminal text view.

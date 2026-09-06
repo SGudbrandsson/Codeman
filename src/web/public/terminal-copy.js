@@ -1,21 +1,215 @@
 /**
- * Terminal Copy — a selectable plain-text view of the terminal buffer.
+ * Terminal Copy — copying text straight out of the terminal buffer.
  *
- * xterm.js selection only works with a mouse drag, and even on desktop it is
- * fighting tmux mouse mode in split layouts. On touch devices there is no way
- * to select terminal text at all, so shell sessions were effectively
- * copy-proof. This module renders the terminal buffer (scrollback + screen)
- * into a plain <textarea> the OS knows how to select from, plus one-tap
- * "copy everything" / "copy screen" buttons.
+ * Three layers, cheapest first:
  *
- * Entry points: overflow menu item, Ctrl/Cmd+Shift+X, and the mobile keyboard
- * accessory copy button when there is no xterm selection to copy.
+ *  1. `attachSelection()` — selecting in the buffer itself. On desktop that is
+ *     xterm's own drag selection: Ctrl/Cmd+C copies it (falling through to the
+ *     PTY as SIGINT when nothing is selected) and a floating chip appears so
+ *     the shortcut is discoverable. On touch, `body.touch-device` CSS re-enables
+ *     native selection over the DOM-rendered rows, so a long-press gives the OS
+ *     selection handles and its own Copy callout.
+ *  2. `getText()` / `copyText()` — buffer → plain text, with an execCommand
+ *     clipboard fallback for plain-HTTP origins.
+ *  3. `open()` — the overlay: the whole buffer in a plain <textarea>, for
+ *     grabbing more scrollback than fits on one screen (native selection only
+ *     reaches the rows xterm currently has in the DOM).
+ *
+ * Overlay entry points: overflow menu item, Ctrl/Cmd+Shift+X, and the mobile
+ * keyboard accessory copy button when there is no selection to copy.
  */
 const TerminalCopy = {
   _overlay: null,
   _textarea: null,
   _escHandler: null,
   _scope: 'all', // 'all' | 'screen'
+
+  _chip: null,
+  _chipHideTimer: null,
+  _hint: null,
+  _hintTimer: null,
+  _hintShownAt: 0,
+  _selectionRaf: 0,
+
+  /**
+   * Wire the in-buffer copy affordances onto the main terminal.
+   *
+   * Returns the xterm disposable for the selection listener so the caller can
+   * register it for teardown alongside its other terminal disposables.
+   */
+  attachSelection(terminal) {
+    if (!terminal || typeof terminal.onSelectionChange !== 'function') return null;
+    this._ensureChip();
+    this._installShiftHint(terminal);
+    // onSelectionChange fires per cell during a drag — coalesce to one frame.
+    return terminal.onSelectionChange(() => {
+      if (this._selectionRaf) return;
+      this._selectionRaf = requestAnimationFrame(() => {
+        this._selectionRaf = 0;
+        this._syncChip(terminal);
+      });
+    });
+  },
+
+  /**
+   * Claude Code's TUI turns on mouse reporting, so a plain drag is forwarded to
+   * the app and selects nothing — the user just sees the terminal ignore them.
+   * xterm honours Shift as a force-selection modifier; nobody knows that, so
+   * say it the moment a plain drag is about to come up empty.
+   */
+  _installShiftHint(terminal) {
+    const container = document.getElementById('terminalContainer');
+    if (!container || container._tselHintInstalled) return;
+    container._tselHintInstalled = true;
+
+    let downX = 0;
+    let downY = 0;
+    let armed = false;
+
+    container.addEventListener('mousedown', (e) => {
+      const tracking = terminal.modes?.mouseTrackingMode;
+      armed = e.button === 0 && !e.shiftKey && !!tracking && tracking !== 'none';
+      downX = e.clientX;
+      downY = e.clientY;
+    }, true);
+
+    container.addEventListener('mousemove', (e) => {
+      if (!armed || !(e.buttons & 1)) return;
+      if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) < 24) return;
+      armed = false;
+      this._showShiftHint(e.clientX, e.clientY);
+    }, true);
+  },
+
+  _HINT_COOLDOWN_MS: 30000,
+
+  _showShiftHint(clientX, clientY) {
+    const now = Date.now();
+    if (this._hintShownAt && now - this._hintShownAt < this._HINT_COOLDOWN_MS) return;
+    this._hintShownAt = now;
+    const container = document.getElementById('terminalContainer');
+    if (!container) return;
+    let hint = this._hint;
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.className = 'tsel-hint';
+      hint.textContent = 'Hold \u21e7 Shift to select text';
+      container.appendChild(hint);
+      this._hint = hint;
+    }
+    hint.hidden = false;
+    // Show it where the drag is happening rather than in a fixed corner, so it
+    // lands in the user's field of view and covers as little output as possible.
+    const box = container.getBoundingClientRect();
+    const w = hint.offsetWidth || 180;
+    const h = hint.offsetHeight || 26;
+    const x = Math.min(Math.max(clientX - box.left + 14, 4), Math.max(box.width - w - 4, 4));
+    const y = Math.min(Math.max(clientY - box.top + 18, 4), Math.max(box.height - h - 4, 4));
+    hint.style.left = x + 'px';
+    hint.style.top = y + 'px';
+    if (this._hintTimer) clearTimeout(this._hintTimer);
+    this._hintTimer = setTimeout(() => {
+      hint.hidden = true;
+      this._hintTimer = null;
+    }, 2600);
+  },
+
+  /** The chip is a discoverability aid for Ctrl/Cmd+C, not the only way to copy. */
+  _ensureChip() {
+    if (this._chip) return this._chip;
+    const container = document.getElementById('terminalContainer');
+    if (!container) return null;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'tsel-chip';
+    chip.hidden = true;
+    chip.textContent = 'Copy selection';
+    chip.addEventListener('mousedown', (e) => {
+      // Keep the mousedown from clearing the selection before we read it.
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.copySelection();
+    });
+    container.appendChild(chip);
+    this._chip = chip;
+    return chip;
+  },
+
+  _syncChip(terminal) {
+    const chip = this._chip || this._ensureChip();
+    if (!chip) return;
+    const hasSelection = !!terminal.getSelection?.();
+    if (!hasSelection) {
+      chip.hidden = true;
+      chip.classList.remove('copied');
+      chip.textContent = 'Copy selection';
+      return;
+    }
+    if (chip.hidden) {
+      chip.hidden = false;
+      chip.classList.remove('copied');
+      chip.textContent = 'Copy selection';
+    }
+  },
+
+  /**
+   * Copy whatever is selected in the terminal — xterm's own selection first,
+   * then a native DOM selection inside the terminal (touch long-press).
+   * @returns {Promise<boolean>} whether anything was copied
+   */
+  async copySelection() {
+    const text = this.getSelectionText();
+    if (!text) return false;
+    if (typeof FeatureTracker !== 'undefined') FeatureTracker.track('terminal-copy-selection');
+    const ok = await this.copyText(text);
+    const chip = this._chip;
+    if (ok && chip && !chip.hidden) {
+      chip.classList.add('copied');
+      chip.textContent = '\u2713 Copied';
+      if (this._chipHideTimer) clearTimeout(this._chipHideTimer);
+      this._chipHideTimer = setTimeout(() => {
+        chip.hidden = true;
+        chip.classList.remove('copied');
+        chip.textContent = 'Copy selection';
+        this._chipHideTimer = null;
+      }, 1200);
+    }
+    if (ok) window.app?.showToast?.('Copied', 'success');
+    else window.app?.showToast?.('Copy blocked \u2014 use the copy panel instead', 'error');
+    return ok;
+  },
+
+  /** The current terminal selection, xterm's or a native one over the rows. */
+  getSelectionText() {
+    const xtermSel = window.app?.terminal?.getSelection?.();
+    if (xtermSel) return xtermSel;
+    return this.getNativeSelectionText();
+  },
+
+  /**
+   * A native DOM selection that lies inside the terminal. On touch devices the
+   * rows are selectable text, so a long-press produces a real browser selection
+   * that xterm knows nothing about.
+   */
+  getNativeSelectionText() {
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
+    const container = document.getElementById('terminalContainer');
+    if (!container) return '';
+    const node = sel.anchorNode;
+    const el = node && node.nodeType === 1 ? node : node?.parentElement;
+    if (!el || !container.contains(el)) return '';
+    return sel.toString();
+  },
+
+  /** True when the terminal holds a selection of either kind. */
+  hasSelection() {
+    return !!this.getSelectionText();
+  },
 
   /** True when the overlay is on screen. */
   isOpen() {

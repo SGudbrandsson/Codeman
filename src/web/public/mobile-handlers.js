@@ -579,6 +579,9 @@ const SwipeHandler = {
     if (typeof InputPanel !== 'undefined' && InputPanel._open && KeyboardHandler.keyboardVisible) return true;
     // Block swipe when an inline AskUserQuestion widget is visible in the transcript
     if (document.querySelector('.tv-auq-block')) return true;
+    // Block swipe while text is selected in the terminal — dragging the native
+    // selection handles is horizontal too, and would otherwise switch sessions.
+    if (typeof TerminalCopy !== 'undefined' && TerminalCopy.hasSelection()) return true;
     return false;
   },
 

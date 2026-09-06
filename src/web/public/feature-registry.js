@@ -13,6 +13,7 @@ window.FeatureRegistry = [
   { id: 'header-lifecycle-log',     name: 'Lifecycle Log',          category: 'header-nav',         description: 'Lifecycle Log from overflow menu' },
   { id: 'terminal-copy-open',       name: 'Copy Terminal Text',     category: 'header-nav',         description: 'Selectable terminal text view opened' },
   { id: 'terminal-copy-copy-all',   name: 'Copy Terminal All',      category: 'header-nav',         description: 'Copy all button in terminal text view' },
+  { id: 'terminal-copy-selection',   name: 'Copy Selection',         category: 'header-nav',         description: 'Terminal selection copied (chip, Ctrl+C, accessory)' },
   { id: 'header-font-increase',     name: 'Font Size +',            category: 'header-nav',         description: 'Increase font size button' },
   { id: 'header-font-decrease',     name: 'Font Size -',            category: 'header-nav',         description: 'Decrease font size button' },
   { id: 'header-model-picker',      name: 'Model Picker',           category: 'header-nav',         description: 'Model chip click — opens model switcher' },
@@ -54,6 +55,7 @@ window.FeatureRegistry = [
   { id: 'keyboard-shortcut-ctrl-shift-k', name: 'Shortcut: Ctrl+Shift+K',category: 'terminal-chat', description: 'Command panel keyboard shortcut' },
   { id: 'keyboard-shortcut-ctrl-shift-v', name: 'Shortcut: Ctrl+Shift+V',category: 'terminal-chat', description: 'Paste from clipboard keyboard shortcut' },
   { id: 'keyboard-shortcut-ctrl-shift-x', name: 'Shortcut: Ctrl+Shift+X',category: 'terminal-chat', description: 'Open selectable terminal text view' },
+  { id: 'keyboard-shortcut-ctrl-c-copy', name: 'Shortcut: Ctrl+C Copy',category: 'terminal-chat', description: 'Ctrl/Cmd+C copied a terminal selection' },
   { id: 'terminal-search-open',        name: 'Terminal Search',          category: 'terminal-chat', description: 'Terminal search opened' },
 
   // voice-input
