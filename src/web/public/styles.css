@@ -9052,6 +9052,12 @@ kbd {
   min-height: 22px;
 }
 .worktree-creator-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.worktree-creator-actions .session-creator-need-case {
+  margin-right: auto;
+  align-self: center;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
 .worktree-mode-selector {
   display: flex;
   gap: 6px;

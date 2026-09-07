@@ -13097,6 +13097,15 @@ class CodemanApp {
     } catch {
       this._sessionCreatorCases = [];
     }
+    // Preselect the current project. Without this the modal opens with a mode
+    // already highlighted but no project, so Start is disabled and clicking it
+    // does nothing — which reads as "the button is broken".
+    if (!this._sessionCreatorCaseName) {
+      const preferred = document.getElementById('quickStartCase')?.value;
+      if (preferred && this._sessionCreatorCases.some(c => c.name === preferred)) {
+        this._sessionCreatorCaseName = preferred;
+      }
+    }
     this._renderSessionCreator();
   }
 
@@ -13131,10 +13140,17 @@ class CodemanApp {
       `<button class="worktree-mode-btn${currentMode === 'shell' ? ' selected' : ''}" onclick="app._setSessionMode('shell')"><span class="run-mode-dot shell"></span>Shell</button>` +
       '</div>';
     html += '<div class="worktree-creator-actions">' +
+      (!selectedCase && cases.length > 0
+        ? '<span class="session-creator-need-case">Pick a project to continue</span>'
+        : '') +
       '<button class="btn btn-secondary" onclick="app.closeSessionCreator()">Cancel</button>' +
       `<button class="btn btn-primary" id="sessionCreatorStartBtn" onclick="app._submitCreateSession()"${!selectedCase ? ' disabled' : ''}>Start</button>` +
       '</div>';
     body['inner' + 'HTML'] = html;
+    // The project list scrolls; a preselected card below the fold looks like no
+    // selection at all.
+    body.querySelector('.session-creator-case-card.selected')
+      ?.scrollIntoView({ block: 'nearest' });
   }
 
   _selectSessionCase(caseName) {
@@ -13145,6 +13161,7 @@ class CodemanApp {
     });
     const startBtn = document.getElementById('sessionCreatorStartBtn');
     if (startBtn) startBtn.disabled = false;
+    document.querySelector('.session-creator-need-case')?.remove();
   }
 
   _setSessionMode(mode) {
