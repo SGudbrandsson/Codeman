@@ -8,7 +8,7 @@
  * the state file back off disk.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,5 +100,99 @@ describe('harnessSessionIdDiscovered reaches state.json', () => {
     await flush();
     store.saveNow();
     expect(harnessSessionIdOnDisk(session.id)).toBe('dup-id');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The `conversationId` PTY listener's harness gate.
+//
+// `conversationId` is emitted from Session.processOutput(), which parses JSON lines for
+// EVERY mode — it is not behind caps.claudeParsers. Without the gate in the listener, any
+// codex/pi session that happens to print a JSON object carrying a `session_id` writes
+// claudeResumeId, and setClaudeResumeId() mirrors that straight into harnessSessionId — so
+// the next restore would spawn `codex resume <claude-uuid>`.
+//
+// These tests attach the REAL WebServer.setupSessionListeners() and emit on a real Session,
+// so deleting the gate must fail them.
+// ---------------------------------------------------------------------------
+
+/** Reads claudeResumeId for a session straight out of the state file on disk. */
+function claudeResumeIdOnDisk(sessionId: string): string | null | undefined {
+  if (!existsSync(statePath)) return undefined;
+  const raw = JSON.parse(readFileSync(statePath, 'utf-8')) as {
+    sessions?: Record<string, { claudeResumeId?: string | null }>;
+  };
+  return raw.sessions?.[sessionId]?.claudeResumeId;
+}
+
+describe('conversationId listener is gated on the Claude-transcript capability', () => {
+  const CLAUDE_UUID = '7f3c1c58-9c4c-4a1f-9c0e-6a1a2b3c4d5e';
+  let watcherCalls: string[][];
+
+  beforeEach(() => {
+    watcherCalls = [];
+    // Stub the transcript watcher: it is the observable side effect of the listener body,
+    // and stubbing keeps the test off the user's real ~/.claude/projects.
+    (server as unknown as { startTranscriptWatcher(id: string, path: string): void }).startTranscriptWatcher = (
+      id: string,
+      path: string
+    ) => {
+      watcherCalls.push([id, path]);
+    };
+  });
+
+  /** Registers a real session with the real listeners and writes its baseline to disk. */
+  async function attach(id: string, mode: 'claude' | 'codex' | 'pi'): Promise<Session> {
+    const session = new Session({ id, workingDir: dir, mode, useMux: false });
+    (server as unknown as { sessions: Map<string, Session> }).sessions.set(session.id, session);
+    await (server as unknown as { setupSessionListeners(s: Session): Promise<void> }).setupSessionListeners(session);
+    store.setSession(session.id, session.toState());
+    store.saveNow();
+    return session;
+  }
+
+  it('does not adopt a conversationId as the harness identity of a codex session', async () => {
+    const session = await attach('sess-convid-codex', 'codex');
+
+    session.emit('conversationId', CLAUDE_UUID);
+
+    await flush();
+    store.saveNow();
+    expect(session.claudeResumeId).toBeFalsy();
+    expect(session.harnessSessionId).toBeUndefined();
+    expect(claudeResumeIdOnDisk(session.id)).toBeFalsy();
+    expect(harnessSessionIdOnDisk(session.id)).toBeUndefined();
+    expect(watcherCalls).toEqual([]);
+  });
+
+  it('does not adopt a conversationId as the harness identity of a pi session', async () => {
+    const session = await attach('sess-convid-pi', 'pi');
+    // A pi session already carries its own preassigned id — it must survive untouched.
+    session.recordHarnessSessionId('sess-convid-pi');
+    await flush();
+
+    session.emit('conversationId', CLAUDE_UUID);
+
+    await flush();
+    store.saveNow();
+    expect(session.claudeResumeId).toBeFalsy();
+    expect(session.harnessSessionId).toBe('sess-convid-pi');
+    expect(harnessSessionIdOnDisk(session.id)).toBe('sess-convid-pi');
+    expect(watcherCalls).toEqual([]);
+  });
+
+  it('still adopts a conversationId for a claude session (positive control)', async () => {
+    const session = await attach('sess-convid-claude', 'claude');
+
+    session.emit('conversationId', CLAUDE_UUID);
+
+    await flush();
+    store.saveNow();
+    expect(session.claudeResumeId).toBe(CLAUDE_UUID);
+    expect(session.harnessSessionId).toBe(CLAUDE_UUID);
+    expect(claudeResumeIdOnDisk(session.id)).toBe(CLAUDE_UUID);
+    expect(harnessSessionIdOnDisk(session.id)).toBe(CLAUDE_UUID);
+    expect(watcherCalls).toHaveLength(1);
+    expect(watcherCalls[0][1].endsWith(`${CLAUDE_UUID}.jsonl`)).toBe(true);
   });
 });

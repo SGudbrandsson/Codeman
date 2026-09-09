@@ -1166,6 +1166,77 @@ describe('WebServer.restoreMuxSessions() — non-mux auto-resume', () => {
     expect(sessions.has('sess-fail-resume')).toBe(true);
     expect(sessions.has('sess-ok-resume')).toBe(true);
   });
+
+  // The payoff of smoke Defects 1, 3 and 4: those were all about getting a codex/pi
+  // harness id onto disk. This is the read-back — an idle codex entry carrying only a
+  // persisted harnessSessionId (no claudeResumeId, which the harness never has) must be
+  // reconstructed WITH that id and auto-started. Drop the constructor argument, or let
+  // the auto-resume gate drift back to claudeResumeId, and every codex/pi session
+  // silently fails to come back after a server restart.
+  it('calls startInteractive() for an idle codex session with a persisted harnessSessionId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-codex-restore': {
+        id: 'sess-codex-restore',
+        workingDir: '/tmp/proj',
+        mode: 'codex',
+        name: 'Codex',
+        status: 'idle',
+        createdAt: 1000,
+        // No claudeResumeId — codex never has one.
+        harnessSessionId: '01a0863d-5708-77e2-9048-e69ac9faa27d',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(1);
+    // The id must reach the Session constructor, not just the auto-resume gate.
+    const call = sessionConstructorCalls.find((c) => c.id === 'sess-codex-restore');
+    expect(call?.harnessSessionId).toBe('01a0863d-5708-77e2-9048-e69ac9faa27d');
+    expect(call?.claudeResumeId).toBeUndefined();
+  });
+
+  it('calls startInteractive() for a busy pi session with a persisted harnessSessionId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-pi-restore': {
+        id: 'sess-pi-restore',
+        workingDir: '/tmp/proj',
+        mode: 'pi',
+        name: 'Pi',
+        status: 'busy',
+        createdAt: 1000,
+        harnessSessionId: 'sess-pi-restore',
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(1);
+    const call = sessionConstructorCalls.find((c) => c.id === 'sess-pi-restore');
+    expect(call?.harnessSessionId).toBe('sess-pi-restore');
+  });
+
+  it('does NOT call startInteractive() for an idle codex session with no harnessSessionId', async () => {
+    (getStore() as any).getSessions.mockReturnValue({
+      'sess-codex-noid': {
+        id: 'sess-codex-noid',
+        workingDir: '/tmp/proj',
+        mode: 'codex',
+        name: 'Codex No Id',
+        status: 'idle',
+        createdAt: 1000,
+        // Never learned an id — there is nothing to resume.
+      },
+    });
+
+    await (server as any).restoreMuxSessions();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+    expect((server as any).sessions.has('sess-codex-noid')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
