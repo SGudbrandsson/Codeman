@@ -1133,6 +1133,27 @@ export class Session extends EventEmitter {
     this.harnessSessionId = id;
   }
 
+  /**
+   * Records a harness-native session id, learned either at spawn (harnesses that are
+   * handed their id, `caps.preassignsSessionId`) or afterwards (codex, read back from
+   * its rollout file), and notifies the server so it can persist it to state.json.
+   *
+   * The "is this actually new?" test lives HERE rather than in the server's
+   * `harnessSessionIdDiscovered` listener: the listener only ever runs after the field
+   * has already been assigned, so it cannot distinguish a new id from a repeat and its
+   * dedupe guard short-circuited every event, leaving the id unpersisted until the next
+   * graceful shutdown (smoke test Defect 4). Emitting only on a real change keeps the
+   * event itself the dedupe signal, so repeat calls cost no extra disk writes.
+   *
+   * Not the path for Claude: its id is authoritatively the transcript filename and
+   * arrives through `setClaudeResumeId()`.
+   */
+  recordHarnessSessionId(id: string): void {
+    if (this.harnessSessionId === id) return;
+    this.harnessSessionId = id;
+    this.emit('harnessSessionIdDiscovered', id);
+  }
+
   /** OpenCode configuration for this session, if any. */
   get openCodeConfig(): OpenCodeConfig | undefined {
     return this._openCodeConfig;
@@ -1257,8 +1278,7 @@ export class Session extends EventEmitter {
     // would widen Claude's restore gate to conversations that never actually started.
     const spawnCaps = getHarness(this.mode).caps;
     if (spawnCaps.preassignsSessionId && !spawnCaps.claudeTranscript && !this.harnessSessionId) {
-      this.harnessSessionId = this.id;
-      this.emit('harnessSessionIdDiscovered', this.id);
+      this.recordHarnessSessionId(this.id);
     }
 
     // If mux wrapping is enabled, create or attach to a mux session
@@ -1660,8 +1680,7 @@ export class Session extends EventEmitter {
             console.warn(`[Session] codex session id not discovered for ${this.id}; not resumable`);
             return;
           }
-          this.harnessSessionId = id;
-          this.emit('harnessSessionIdDiscovered', id);
+          this.recordHarnessSessionId(id);
         })
         .catch((err) => console.error(`[Session] codex discovery failed for ${this.id}:`, err));
     }

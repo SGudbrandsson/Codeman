@@ -650,3 +650,32 @@ Dev server on 3419 killed, the private tmux server on `/tmp/cme2e` killed
 real Codeman session was created, modified or killed. Three new rollout files were added to
 `~/.codex/sessions/2026/09/09/` as the normal by-product of running codex; nothing in the
 user's codex history was deleted or rewritten.
+
+---
+
+## Defect 4 resolution
+
+Fixed 2026-09-09. The dedupe moved out of the server listener and into `Session`:
+
+* `src/session.ts` — `recordHarnessSessionId(id)` returns early when the id is unchanged,
+  otherwise assigns `harnessSessionId` **and then** emits. Both learn-sites call it: the
+  `caps.preassignsSessionId` spawn path (pi) and the codex rollout-discovery `.then()`.
+* `src/web/server.ts` — `harnessSessionIdDiscovered` no longer guards on
+  `session.harnessSessionId === id` (it could never be false there); it assigns and calls
+  `persistSessionState(session)` every time. The event is now emitted only on a genuine
+  change, so duplicate emits cost no extra writes.
+
+Claude is unaffected — its id arrives via `setClaudeResumeId()` from the transcript-filename
+hook, which keeps its own `claudeResumeId !== uuid` guard and its own persist call.
+
+Regression coverage: `test/harness-session-id-persistence.test.ts` binds the `StateStore`
+singleton to a temp `state.json`, attaches the real `WebServer.setupSessionListeners()`, and
+asserts the id **read back off disk** for the codex path, the pi path, and the
+duplicate-record case. With the old guard restored all three fail
+(`expected undefined to be '01a0863d-…'`); with the fix all three pass. The previous tests
+only ever checked the in-memory field, which is why this shipped.
+
+Not fixed (documented as a known limitation in TASK.md `## Decisions & Context`): the
+recursive `fs.watch` over `~/.codex/sessions` costs ~550 inotify watch descriptors per
+active codex session, so many concurrent codex sessions could approach
+`fs.inotify.max_user_watches`.

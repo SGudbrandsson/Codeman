@@ -2001,9 +2001,15 @@ export class WebServer extends EventEmitter {
         this.startTranscriptWatcher(session.id, join(projectDir, `${uuid}.jsonl`));
       },
 
-      /** Persists a harness session id that had to be discovered after spawn (codex). */
+      /**
+       * Persists a harness session id learned at spawn (preassigning harnesses) or
+       * discovered afterwards (codex). No dedupe guard here: `Session` already assigned
+       * the field before emitting, so comparing against it always matched and nothing
+       * was ever persisted (smoke test Defect 4). `Session.recordHarnessSessionId()`
+       * emits only when the value actually changes, so this event is itself the
+       * "newly learned" signal and cannot cause redundant writes.
+       */
       harnessSessionIdDiscovered: (id: string) => {
-        if (session.harnessSessionId === id) return;
         session.harnessSessionId = id;
         this.persistSessionState(session);
       },
