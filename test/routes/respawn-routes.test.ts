@@ -154,6 +154,26 @@ describe('respawn-routes', () => {
     });
   });
 
+  describe('capability refusal copy', () => {
+    // Smoke Defect 2: every respawn guard said "opencode sessions" regardless of mode.
+    it('names the actual harness on respawn/start', async () => {
+      for (const [mode, label] of [
+        ['shell', 'Shell'],
+        ['codex', 'Codex'],
+        ['pi', 'Pi'],
+      ] as const) {
+        harness.ctx._session.mode = mode;
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/respawn/start`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(false);
+        expect(body.error).toBe(`Respawn is not supported for ${label} sessions`);
+      }
+    });
+  });
+
   // ========== PUT /api/sessions/:id/respawn/config ==========
 
   describe('PUT /api/sessions/:id/respawn/config', () => {
@@ -196,7 +216,7 @@ describe('respawn-routes', () => {
       expect(mockController.updateConfig).toHaveBeenCalled();
       expect(harness.ctx.broadcast).toHaveBeenCalledWith(
         'respawn:configUpdated',
-        expect.objectContaining({ sessionId: harness.ctx._sessionId }),
+        expect.objectContaining({ sessionId: harness.ctx._sessionId })
       );
     });
 

@@ -376,3 +376,53 @@ Dev server on 3417 stopped, all seven private tmux sessions (`codeman-*` plus th
 `resumetest`) killed on the `/tmp/cmsmoke` socket, and the scratch `HOME` removed. No process
 or session belonging to the user's real Codeman was created, modified or killed by this run
 (verified: `tmux ls | grep -c codeman` = 36 before and after).
+
+---
+
+## Defect resolution (2026-09-09, follow-up fix pass)
+
+The findings above are the original evidence and are left untouched. All three defects
+have since been fixed on `feat/harness-registry`.
+
+**Defect 1 (codex `harnessSessionId` never discovered) — FIXED.**
+`src/harnesses/codex-session-discovery.ts` no longer polls for a fixed 15 s from spawn.
+`discoverCodexSessionId()` is now a long-lived watch:
+
+* an `fs.watch` on `$CODEX_HOME/sessions` (`recursive: true`, `persistent: false`) wakes a
+  rescan the moment codex writes the rollout, so detection after the first submitted turn
+  is effectively instant;
+* a backing-off poll (1 s, doubling to a 30 s ceiling, reset to 1 s on any filesystem
+  event, 100 ms debounce) is the fallback where recursive watch is unavailable and covers
+  the case where `$CODEX_HOME/sessions` does not exist yet — the watcher is created lazily
+  and re-created after an error;
+* the watch ends on the first match, on an `AbortSignal`, or at
+  `CODEX_DISCOVERY_DEFAULT_TIMEOUT_MS` (1 hour). `Session` holds the AbortController and
+  aborts it in `stop()`, so teardown ends the watch; timer, watcher and abort listener are
+  released in a `finally` on every path.
+
+The match predicate (`session_meta` + `payload.cwd` + start-time floor) and the strict
+`/^[a-zA-Z0-9-]{1,128}$/` validation in front of the `codex resume '<id>'` interpolation are
+unchanged — the smoke test had already verified both.
+
+Verification honesty: this is proven by unit tests over temp fixture directories
+(`test/codex-session-discovery.test.ts`, 14 passed) — a rollout that only appears several
+poll gaps after the call IS found, a lazily-created sessions dir IS picked up, an aborted
+watch resolves null promptly, and no handles leak. **No new live codex session was spawned
+for the fix**, so the end-to-end "real codex first turn → resume id persisted" path has not
+been re-observed on a real TUI; it rests on the measured root cause above plus the
+already-verified predicate and resume command.
+
+**Defect 2 (hardcoded "opencode" in capability refusals) — FIXED.**
+`ralph-routes.ts:54` and `respawn-routes.ts:98,252,320` now interpolate
+`getHarness(session.mode).label`, matching the pause route. A shell session is told
+"Ralph tracker is not supported for Shell sessions", codex "Codex", pi "Pi". Covered by new
+cases in `test/routes/ralph-routes.test.ts` and `test/routes/respawn-routes.test.ts`.
+
+**Defect 3 (`preassignsSessionId` not persisted) — FIXED.**
+`Session.startInteractive()` now sets `harnessSessionId` to the Codeman session id and emits
+`harnessSessionIdDiscovered` (which the server persists) whenever the harness declares
+`caps.preassignsSessionId` and no id is known yet. This is capability-driven, not a pi
+name check. Harnesses that also declare `caps.claudeTranscript` (claude) are excluded: their
+id is authoritatively published by the transcript-filename hook via `setClaudeResumeId()`,
+and inventing it at spawn would widen Claude's restore gate — out of scope for a defect fix.
+Covered by two new cases in `test/harness-spawn-plumbing.test.ts`.

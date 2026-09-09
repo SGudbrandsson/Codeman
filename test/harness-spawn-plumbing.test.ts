@@ -89,6 +89,40 @@ describe('Session forwards harness config and identity to the mux spawn boundary
     expect(state.harnessSessionId).toBe('harness-id-3');
   });
 
+  it('a preassigning harness records its own session id at spawn', async () => {
+    // pi is spawned with `--session-id <codeman session id>`, so its harness-native
+    // identity is known at spawn. Without persisting it, the state.json restore gate
+    // (which requires harnessSessionId) never resumes the session — smoke Defect 3.
+    const { mux } = recordingMux();
+    const session = new Session({ id: 'sess-pi', workingDir: '/tmp', mode: 'pi', mux, useMux: true });
+    const emitted: string[] = [];
+    session.on('harnessSessionIdDiscovered', (id: string) => emitted.push(id));
+
+    await expect(session.startInteractive()).rejects.toThrow(/require tmux/i);
+
+    expect(session.harnessSessionId).toBe('sess-pi');
+    expect(emitted).toEqual(['sess-pi']);
+  });
+
+  it('does not overwrite an existing harness id, and leaves non-preassigning harnesses alone', async () => {
+    const { mux } = recordingMux();
+    const restored = new Session({
+      id: 'sess-pi-2',
+      workingDir: '/tmp',
+      mode: 'pi',
+      mux,
+      useMux: true,
+      harnessSessionId: 'previously-known',
+    });
+    await expect(restored.startInteractive()).rejects.toThrow(/require tmux/i);
+    expect(restored.harnessSessionId).toBe('previously-known');
+
+    // opencode cannot be handed an id, so nothing is invented for it.
+    const oc = new Session({ id: 'sess-oc', workingDir: '/tmp', mode: 'opencode', mux, useMux: true });
+    await expect(oc.startInteractive()).rejects.toThrow(/require tmux/i);
+    expect(oc.harnessSessionId).toBeUndefined();
+  });
+
   it('setClaudeResumeId mirrors into the neutral harnessSessionId', () => {
     const session = new Session({ id: 'sess-4', workingDir: '/tmp', mode: 'claude' });
     session.setClaudeResumeId('11111111-2222-4333-8444-555555555555');

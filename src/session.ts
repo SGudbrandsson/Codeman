@@ -347,6 +347,11 @@ export class Session extends EventEmitter {
   private _useMux: boolean = false;
   // Flag to prevent new timers after session is stopped
   private _isStopped: boolean = false;
+  /**
+   * Aborts the in-flight codex rollout watch. The watch outlives the first user turn
+   * (see codex-session-discovery.ts), so session teardown is what ends it.
+   */
+  private _harnessIdDiscoveryAbort: AbortController | null = null;
   // User parked this session: process + mux killed, session entry preserved
   private _paused: boolean = false;
   private _pausedAt: number | null = null;
@@ -1241,6 +1246,21 @@ export class Session extends EventEmitter {
       `[Session] Starting interactive ${modeLabel} session` + (this._useMux ? ` (with ${this._mux!.backend})` : '')
     );
 
+    // A harness that accepts a caller-chosen session id is spawned with THIS session's
+    // id (see its buildCommand), so its harness-native identity is known at spawn —
+    // record it now, otherwise the state.json restore gate (which requires
+    // harnessSessionId) never resumes it. Capability-driven so any future preassigning
+    // harness gets it for free.
+    //
+    // Excluded: harnesses whose id is authoritatively published elsewhere. Claude's is
+    // the transcript filename, mirrored in by setClaudeResumeId(); guessing it here
+    // would widen Claude's restore gate to conversations that never actually started.
+    const spawnCaps = getHarness(this.mode).caps;
+    if (spawnCaps.preassignsSessionId && !spawnCaps.claudeTranscript && !this.harnessSessionId) {
+      this.harnessSessionId = this.id;
+      this.emit('harnessSessionIdDiscovered', this.id);
+    }
+
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
@@ -1623,11 +1643,20 @@ export class Session extends EventEmitter {
     // writes. Deliberately codex-specific: the rollout format is codex's own, so this
     // is not driven by a capability flag. Fire-and-forget — a failure costs only
     // restore-after-reboot, not the session.
+    //
+    // The watch runs until the id is found, the session stops, or the discovery
+    // timeout: codex writes the rollout on the FIRST SUBMITTED TURN, not at spawn,
+    // so a short window from here would never see it (smoke test Defect 1).
     if (this.mode === 'codex' && !this.harnessSessionId) {
       const startedAt = Date.now();
-      void discoverCodexSessionId(this.workingDir, startedAt)
+      this._harnessIdDiscoveryAbort?.abort();
+      const abort = new AbortController();
+      this._harnessIdDiscoveryAbort = abort;
+      void discoverCodexSessionId(this.workingDir, startedAt, { signal: abort.signal })
         .then((id) => {
+          if (this._harnessIdDiscoveryAbort === abort) this._harnessIdDiscoveryAbort = null;
           if (!id) {
+            if (abort.signal.aborted) return;
             console.warn(`[Session] codex session id not discovered for ${this.id}; not resumable`);
             return;
           }
@@ -2805,6 +2834,10 @@ export class Session extends EventEmitter {
   async stop(killMux: boolean = true, options: { preserveTrackers?: boolean } = {}): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
+
+    // End any harness-id watch (codex rollout poll/watcher) so it cannot outlive the session
+    this._harnessIdDiscoveryAbort?.abort();
+    this._harnessIdDiscoveryAbort = null;
 
     // Stop activity monitor
     this._activityMonitor?.stop();

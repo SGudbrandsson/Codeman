@@ -66,7 +66,9 @@ describe('ralph-routes', () => {
     });
 
     it('enables ralph tracker', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       const res = await harness.app.inject({
         method: 'POST',
@@ -79,7 +81,9 @@ describe('ralph-routes', () => {
     });
 
     it('disables ralph tracker', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       const res = await harness.app.inject({
         method: 'POST',
@@ -99,7 +103,7 @@ describe('ralph-routes', () => {
       });
       expect((harness.ctx.mux as Record<string, unknown>).updateRalphEnabled).toHaveBeenCalledWith(
         harness.ctx._sessionId,
-        true,
+        true
       );
     });
 
@@ -116,7 +120,9 @@ describe('ralph-routes', () => {
     });
 
     it('handles reset option', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       await harness.app.inject({
         method: 'POST',
@@ -127,7 +133,9 @@ describe('ralph-routes', () => {
     });
 
     it('configures completion phrase and max iterations', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       await harness.app.inject({
         method: 'POST',
@@ -138,7 +146,9 @@ describe('ralph-routes', () => {
     });
 
     it('sets max iterations independently', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       await harness.app.inject({
         method: 'POST',
@@ -172,6 +182,26 @@ describe('ralph-routes', () => {
       expect(body.success).toBe(false);
     });
 
+    it('names the actual harness in the refusal, not always opencode', async () => {
+      // Smoke Defect 2: the copy was hardcoded to "opencode sessions", so a shell,
+      // codex or pi session was told it was an opencode session.
+      for (const [mode, label] of [
+        ['shell', 'Shell'],
+        ['codex', 'Codex'],
+        ['pi', 'Pi'],
+      ] as const) {
+        harness.ctx._session.mode = mode;
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/ralph-config`,
+          payload: { enabled: true },
+        });
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(false);
+        expect(body.error).toBe(`Ralph tracker is not supported for ${label} sessions`);
+      }
+    });
+
     it('rejects invalid request body', async () => {
       const res = await harness.app.inject({
         method: 'POST',
@@ -184,7 +214,9 @@ describe('ralph-routes', () => {
     });
 
     it('handles disableAutoEnable flag', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       await harness.app.inject({
         method: 'POST',
@@ -208,7 +240,9 @@ describe('ralph-routes', () => {
 
   describe('POST /api/sessions/:id/ralph-circuit-breaker/reset', () => {
     it('resets circuit breaker for valid session', async () => {
-      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<typeof createMockRalphTracker>;
+      const tracker = (harness.ctx._session as Record<string, unknown>).ralphTracker as ReturnType<
+        typeof createMockRalphTracker
+      >;
 
       const res = await harness.app.inject({
         method: 'POST',

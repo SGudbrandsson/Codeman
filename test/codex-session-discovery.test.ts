@@ -9,7 +9,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discoverCodexSessionId } from '../src/harnesses/codex-session-discovery.js';
+import {
+  discoverCodexSessionId,
+  CODEX_DISCOVERY_DEFAULT_TIMEOUT_MS,
+} from '../src/harnesses/codex-session-discovery.js';
 
 let home: string;
 
@@ -94,6 +97,99 @@ describe('discoverCodexSessionId', () => {
     );
     utimesSync(file, (started + 100) / 1000, (started + 100) / 1000);
     await expect(discoverCodexSessionId('/work/proj', started, opts())).resolves.toBeNull();
+  });
+
+  // --- Timing / trigger contract (smoke test Defect 1) -------------------------
+  //
+  // Codex creates the rollout file only when the first user turn is submitted, which
+  // can be minutes after spawn. The watch must therefore outlive any short window,
+  // and must end on abort rather than run to its deadline.
+
+  it('defaults to a watch far longer than a first-turn delay', () => {
+    // Measured worst case in the smoke test was 91 s after spawn, with an idle TUI
+    // producing nothing at all. Anything under a few minutes is a broken trigger.
+    expect(CODEX_DISCOVERY_DEFAULT_TIMEOUT_MS).toBeGreaterThanOrEqual(10 * 60 * 1000);
+  });
+
+  it('finds a rollout that only appears long after the first poll', async () => {
+    const started = Date.now();
+    const promise = discoverCodexSessionId('/work/proj', started, {
+      codexHome: home,
+      timeoutMs: 10_000,
+      intervalMs: 20,
+      maxIntervalMs: 60,
+    });
+    // Well past the old 15 s-equivalent window at this scale: several poll gaps elapse
+    // with no file present at all before codex "submits its first turn".
+    await new Promise((r) => setTimeout(r, 600));
+    writeRollout('late-uuid', '/work/proj', Date.now());
+    await expect(promise).resolves.toBe('late-uuid');
+  });
+
+  it('creates the sessions directory watch lazily when codex has never run', async () => {
+    // $CODEX_HOME/sessions does not exist at spawn time here.
+    const fresh = join(home, 'later');
+    const started = Date.now();
+    const promise = discoverCodexSessionId('/work/proj', started, {
+      codexHome: fresh,
+      timeoutMs: 10_000,
+      intervalMs: 20,
+      maxIntervalMs: 60,
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const dir = join(fresh, 'sessions', '2026', '09', '09');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'rollout-late.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: 'session_meta',
+        payload: { session_id: 'appeared-later', cwd: '/work/proj' },
+      }) + '\n'
+    );
+    await expect(promise).resolves.toBe('appeared-later');
+  });
+
+  it('stops promptly when aborted, resolving null', async () => {
+    const controller = new AbortController();
+    const startedWall = Date.now();
+    const promise = discoverCodexSessionId('/work/proj', Date.now(), {
+      codexHome: home,
+      // Deliberately huge: only the abort can end this watch.
+      timeoutMs: 10 * 60 * 1000,
+      intervalMs: 50,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 100);
+    await expect(promise).resolves.toBeNull();
+    expect(Date.now() - startedWall).toBeLessThan(5_000);
+  });
+
+  it('resolves null immediately for an already-aborted signal', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      discoverCodexSessionId('/work/proj', Date.now(), {
+        codexHome: home,
+        timeoutMs: 10 * 60 * 1000,
+        signal: controller.signal,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('leaves no pending timer or watcher behind after it resolves', async () => {
+    // A leaked timer/watcher would keep the process alive; vitest surfaces that as a
+    // hanging worker. Assert on the handle count instead, which is deterministic.
+    const before = (process as unknown as { _getActiveHandles(): unknown[] })._getActiveHandles().length;
+    const started = Date.now();
+    writeRollout('clean-uuid', '/work/proj', started + 10);
+    await discoverCodexSessionId('/work/proj', started, {
+      codexHome: home,
+      timeoutMs: 5_000,
+      intervalMs: 20,
+    });
+    const after = (process as unknown as { _getActiveHandles(): unknown[] })._getActiveHandles().length;
+    expect(after).toBeLessThanOrEqual(before);
   });
 
   it('ignores a malformed first line and a non session_meta record', async () => {

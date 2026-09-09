@@ -95,7 +95,10 @@ export function registerRespawnRoutes(
 
     // Respawn is Claude-only
     if (!getHarness(session.mode).caps.respawn) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Respawn is not supported for ${getHarness(session.mode).label} sessions`
+      );
     }
 
     // Create or get existing controller
@@ -249,7 +252,10 @@ export function registerRespawnRoutes(
 
     // Respawn is Claude-only
     if (!getHarness(session.mode).caps.respawn) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Respawn is not supported for ${getHarness(session.mode).label} sessions`
+      );
     }
 
     try {
@@ -317,7 +323,10 @@ export function registerRespawnRoutes(
 
     // Respawn is Claude-only
     if (!getHarness(session.mode).caps.respawn) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Respawn is not supported for ${getHarness(session.mode).label} sessions`
+      );
     }
 
     // Check if session is running (has a PID)

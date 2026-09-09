@@ -51,7 +51,10 @@ export function registerRalphRoutes(
 
     // Ralph tracker is Claude-only
     if (!getHarness(session.mode).caps.ralph) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Ralph tracker is not supported for opencode sessions');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Ralph tracker is not supported for ${getHarness(session.mode).label} sessions`
+      );
     }
 
     // Handle reset first (before other config)
