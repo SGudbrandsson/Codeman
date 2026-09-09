@@ -22,10 +22,11 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { execSync, exec } from 'node:child_process';
+import { execSync, exec, execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 import { existsSync, readFileSync, mkdirSync, realpathSync, writeFileSync, renameSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -358,7 +359,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       def.setupMuxEnv?.(muxName, spawnContext);
 
       // Replace the shell with the actual command (no echo in terminal)
-      execSync(`tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`, {
+      // argv form (execFileSync, no shell): the assembled command reaches tmux —
+      // and from there bash — as a single opaque argument. The string form went
+      // through /bin/sh first, and `JSON.stringify` does not escape `$` or
+      // backticks, so free-form user text (worktreeNotes -> extraArgs) was
+      // command-substituted by that outer shell before bash ever saw the single
+      // quotes shellQuote added. See test/tmux-spawn-outer-shell.test.ts.
+      execFileSync('tmux', ['respawn-pane', '-k', '-t', muxName, 'bash', '-c', fullCmd], {
         timeout: EXEC_TIMEOUT_MS,
         stdio: 'ignore',
       });
@@ -554,7 +561,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Harness-specific tmux setenv work before the respawn
       def.setupMuxEnv?.(muxName, spawnContext);
 
-      await execAsync(`tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`, {
+      // argv form — no outer shell. See createSession() for why.
+      await execFileAsync('tmux', ['respawn-pane', '-k', '-t', muxName, 'bash', '-c', fullCmd], {
         timeout: EXEC_TIMEOUT_MS,
       });
       // Wait for the respawned process to start

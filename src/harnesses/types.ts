@@ -89,6 +89,13 @@ export interface HarnessDefinition {
  * it emits double quotes, and the shell still expands `$(...)`, backticks and
  * backslashes inside those. `worktreeNotes` reaches `extraArgs` as free-form user
  * text, so double quoting is command injection.
+ *
+ * This protects the INNER layer — the command bash runs inside the pane. The outer
+ * layer (handing that command to tmux) is a separate concern: it is safe only because
+ * both spawn sites invoke tmux via the argv form (`execFileSync`/`execFile`, no shell).
+ * Reintroducing a `execSync(\`tmux ... ${JSON.stringify(cmd)}\`)` template would reopen
+ * the hole at that outer /bin/sh regardless of this function. See
+ * test/tmux-spawn-outer-shell.test.ts.
  */
 export function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, `'\\''`)}'`;

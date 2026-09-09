@@ -44,11 +44,15 @@
 
 ### Fixed
 
-- **Hardened shell quoting for spawned harness commands.** Arguments interpolated into the
-  command line (models, session ids, and the free-form worktree notes that reach `extraArgs`)
-  were escaped with `JSON.stringify`, which leaves `$(...)`, backticks and backslashes live
-  inside double quotes. They are now POSIX single-quoted. Pre-existing behaviour, not a
-  regression introduced here.
+- **Closed a command-injection hole in session spawning.** Free-form user text — notably the
+  worktree notes that reach a harness command as `extraArgs` — was interpolated into the
+  spawned command line with `JSON.stringify`, which leaves `$(...)`, backticks and
+  backslashes live inside double quotes. It was then executed *twice*: once by the outer
+  `/bin/sh` that `execSync` uses to run `tmux respawn-pane ... bash -c "<cmd>"`, and once by
+  bash inside the pane. A note containing `$(` or a backtick ran at spawn time. Both layers
+  are fixed: every interpolated argument is now POSIX single-quoted, and both spawn sites
+  invoke tmux through the argv form (`execFile`), so there is no outer shell at all.
+  Pre-existing behaviour, not a regression introduced here.
 
 ### Known limitations
 

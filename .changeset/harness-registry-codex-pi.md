@@ -17,6 +17,9 @@ be paused") instead of always blaming OpenCode, and `codeman list` badges non-Cl
 sessions `[sh]` / `[oc]` / `[cx]` / `[pi]`. One deliberate behaviour change: shell sessions
 no longer get a Ralph tracker, a respawn controller, the Claude transcript wiring or the
 Claude output parsers, and can no longer be paused — they were only ever getting those
-because the old guards read "not opencode" rather than "is claude". Shell arguments
-interpolated into a spawned harness command are now POSIX single-quoted rather than passed
-through `JSON.stringify`, which left `$(...)`, backticks and backslashes live.
+because the old guards read "not opencode" rather than "is claude". A pre-existing command-injection hole
+in session spawning is also closed: arguments interpolated into a spawned harness command
+are now POSIX single-quoted rather than passed through `JSON.stringify` (which left
+`$(...)`, backticks and backslashes live), and both spawn sites hand tmux its arguments via
+`execFile` instead of a shell-interpolated `execSync` string, so free-form worktree notes
+are no longer evaluated by an outer `/bin/sh` at spawn time.
