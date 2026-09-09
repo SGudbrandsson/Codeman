@@ -12,11 +12,15 @@ import type { HarnessDefinition } from './types.js';
 import { claudeHarness } from './claude.js';
 import { shellHarness } from './shell.js';
 import { openCodeHarness } from './opencode.js';
+import { codexHarness } from './codex.js';
+import { piHarness } from './pi.js';
 
 const HARNESSES: Partial<Record<SessionMode, HarnessDefinition>> = {
   claude: claudeHarness,
   shell: shellHarness,
   opencode: openCodeHarness,
+  codex: codexHarness,
+  pi: piHarness,
 };
 
 /**

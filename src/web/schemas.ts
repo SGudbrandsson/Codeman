@@ -137,13 +137,18 @@ const OpenCodeConfigSchema = z
   })
   .optional();
 
+/** Per-harness config for codex and pi: the model is the only exposed knob. */
+const HarnessModelConfigSchema = z.object({ model: z.string().max(200).optional() }).optional();
+
 export const CreateSessionSchema = z
   .object({
     workingDir: safePathSchema.optional(),
-    mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+    mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'pi']).optional(),
     name: z.string().max(100).optional(),
     envOverrides: safeEnvOverridesSchema,
     openCodeConfig: OpenCodeConfigSchema,
+    codexConfig: HarnessModelConfigSchema,
+    piConfig: HarnessModelConfigSchema,
     safeMode: z.boolean().optional(),
     worktreeBranch: z.string().optional(),
     worktreePath: z.string().optional(),
@@ -226,8 +231,10 @@ export const QuickStartSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.')
     .optional(),
-  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'pi']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
+  codexConfig: HarnessModelConfigSchema,
+  piConfig: HarnessModelConfigSchema,
 });
 
 // ========== Hook Events ==========
@@ -691,7 +698,7 @@ export const McpServerListSchema = z.array(McpServerEntrySchema).max(50);
 export const CreateWorktreeSchema = z.object({
   branch: z.string().min(1).max(200),
   isNew: z.boolean(),
-  mode: z.enum(['claude', 'opencode', 'shell']).optional(),
+  mode: z.enum(['claude', 'opencode', 'shell', 'codex', 'pi']).optional(),
   notes: z.string().max(2000).optional(),
   autoStart: z.boolean().optional(),
   taskMd: z.string().max(20000).optional(),
@@ -728,7 +735,7 @@ export const ResumeClosedSessionSchema = z.object({
   workingDir: safePathSchema,
   resumeId: z.string().uuid(),
   name: z.string().max(128).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'pi']).optional(),
   worktreePath: z.string().optional(),
   worktreeBranch: z.string().optional(),
   worktreeOriginId: z.string().optional(),

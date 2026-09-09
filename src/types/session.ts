@@ -8,7 +8,7 @@
  * - SessionConfig — creation-time config (id, workingDir, createdAt)
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
- * - SessionMode — 'claude' | 'shell' | 'opencode' (which CLI backend)
+ * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'pi' (which CLI backend)
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
@@ -70,7 +70,7 @@ export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error' | 'archived';
 export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
 
 /** Session mode: which CLI backend a session runs */
-export type SessionMode = 'claude' | 'shell' | 'opencode';
+export type SessionMode = 'claude' | 'shell' | 'opencode' | 'codex' | 'pi';
 
 /** A single MCP server entry stored per-session */
 export interface McpServerEntry {

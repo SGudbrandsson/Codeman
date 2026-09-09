@@ -96,33 +96,33 @@ describe('Session forwards harness config and identity to the mux spawn boundary
   });
 });
 
-// The codex/pi harnesses do not exist until Task 4; these are un-skipped there.
+// Arguments are POSIX single-quoted via shellQuote, hence the quotes below.
 describe('spawn boundary carries harness config', () => {
-  it.skip('a configured codex session gets its model on the command line', () => {
+  it('a configured codex session gets its model on the command line', () => {
     const cmd = buildSpawnCommand({
-      mode: 'codex' as never,
+      mode: 'codex',
       sessionId: 's1',
       codexConfig: { model: 'gpt-5.2' },
     });
-    expect(cmd).toContain('-m gpt-5.2');
+    expect(cmd).toContain("-m 'gpt-5.2'");
   });
 
-  it.skip('a restored codex session resumes by its harnessSessionId', () => {
+  it('a restored codex session resumes by its harnessSessionId', () => {
     const cmd = buildSpawnCommand({
-      mode: 'codex' as never,
+      mode: 'codex',
       sessionId: 's1',
       harnessSessionId: '01a085e9-15f5-7b80-8af1-411de2591ffe',
     });
-    expect(cmd).toContain('resume 01a085e9-15f5-7b80-8af1-411de2591ffe');
+    expect(cmd).toContain("resume '01a085e9-15f5-7b80-8af1-411de2591ffe'");
   });
 
-  it.skip('a fresh pi session reuses the Codeman session id', () => {
-    const cmd = buildSpawnCommand({ mode: 'pi' as never, sessionId: 'codeman-sid-9' });
-    expect(cmd).toContain('--session-id codeman-sid-9');
+  it('a fresh pi session reuses the Codeman session id', () => {
+    const cmd = buildSpawnCommand({ mode: 'pi', sessionId: 'codeman-sid-9' });
+    expect(cmd).toContain("--session-id 'codeman-sid-9'");
   });
 
-  it.skip('a configured pi session gets its model', () => {
-    const cmd = buildSpawnCommand({ mode: 'pi' as never, sessionId: 's', piConfig: { model: 'anthropic/sonnet' } });
-    expect(cmd).toContain('--model anthropic/sonnet');
+  it('a configured pi session gets its model', () => {
+    const cmd = buildSpawnCommand({ mode: 'pi', sessionId: 's', piConfig: { model: 'anthropic/sonnet' } });
+    expect(cmd).toContain("--model 'anthropic/sonnet'");
   });
 });

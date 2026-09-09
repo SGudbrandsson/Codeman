@@ -11,12 +11,12 @@ import { getHarness, listHarnesses } from '../src/harnesses/registry.js';
 import type { SessionMode } from '../src/types/session.js';
 
 describe('harness registry', () => {
-  it('exposes exactly the three existing harnesses', () => {
+  it('exposes exactly the five harnesses', () => {
     expect(
       listHarnesses()
         .map((h) => h.id)
         .sort()
-    ).toEqual(['claude', 'opencode', 'shell']);
+    ).toEqual(['claude', 'codex', 'opencode', 'pi', 'shell']);
   });
 
   it('throws on an unknown mode rather than falling back to a shell', () => {

@@ -10,7 +10,9 @@ import type { SessionMode } from '../src/types/session.js';
 
 describe('buildSpawnCommand delegates to the registry', () => {
   it('throws on an unknown mode instead of silently launching a shell', () => {
-    expect(() => buildSpawnCommand({ mode: 'codex' as SessionMode, sessionId: 'x' })).toThrow(/unknown harness/i);
+    // 'codex' was the placeholder here until Task 4 registered it; use a mode
+    // that will never exist so the assertion keeps testing the throw.
+    expect(() => buildSpawnCommand({ mode: 'nope' as SessionMode, sessionId: 'x' })).toThrow(/unknown harness/i);
   });
 
   it('produces the same claude command the registry does', () => {
