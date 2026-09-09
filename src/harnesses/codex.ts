@@ -9,8 +9,12 @@ import { shellQuote } from './types.js';
 import type { HarnessDefinition, HarnessSpawnContext } from './types.js';
 import { MODEL_PATTERN } from './claude.js';
 
-/** Codex session ids are UUIDs; anything else must not reach the shell. */
-const SESSION_ID_PATTERN = /^[a-zA-Z0-9-]+$/;
+/**
+ * Codex session ids are UUIDs; anything else must not reach the shell. Bounded to the
+ * same length as CODEX_SESSION_ID_PATTERN in codex-session-discovery.ts — this is the
+ * last line of defence for ids that did not come from discovery.
+ */
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{1,128}$/;
 
 export const codexHarness: HarnessDefinition = {
   id: 'codex',

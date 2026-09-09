@@ -1516,6 +1516,9 @@ body {
   box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3);
   z-index: 9500;
   min-width: 210px;
+  /* Right-anchored fixed popover: without a cap it grows leftwards off-screen on a
+     narrow drawer now that the mode row holds up to six buttons. */
+  max-width: calc(100vw - 20px);
 }
 .drawer-quick-add-title {
   font-size: 0.7rem;
@@ -1524,7 +1527,8 @@ body {
   font-weight: 600;
   letter-spacing: 0.04em;
 }
-.drawer-quick-add-row { display: flex; gap: 6px; }
+/* wrap: six mode buttons no longer fit on one line in a narrow drawer */
+.drawer-quick-add-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .drawer-mode-btn {
   flex: 1;
   padding: 10px 4px 8px;

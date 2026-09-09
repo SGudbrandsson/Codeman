@@ -1659,9 +1659,13 @@ export class Session extends EventEmitter {
       // End codex id discovery only when the harness process itself is gone. Under mux
       // this PTY is the `tmux attach` client, so a plain detach must NOT abort the watch
       // (the id appears on codex's first submitted turn, which may come after a detach).
-      // When there is no mux session, or the mux session has died, the rollout file will
+      // When there is no mux session, or the mux session is gone, the rollout file will
       // never gain an id for this run — release the recursive fs.watch instead of leaving
-      // it to the 1 h cap.
+      // it to the 1 h cap. Note the probe is only `muxSessionExists()`: with
+      // `remain-on-exit on` the mux session outlives a dead pane, so a dead-but-present
+      // pane keeps the watch to the cap (deliberate — such a pane can be respawned and
+      // still produce a rollout, and `isPaneDead()` is async and unusable in this
+      // synchronous exit handler).
       if (this._harnessIdDiscoveryAbort) {
         let harnessGone = true;
         try {
