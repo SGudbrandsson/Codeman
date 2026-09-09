@@ -387,9 +387,17 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
               Cloudflare Tunnel
             </button>
-            <button class="welcome-btn welcome-btn-opencode" onclick="app.setRunMode('opencode'); app.runOpenCode()">
+            <button class="welcome-btn welcome-btn-opencode" onclick="app.setRunMode('opencode'); app.runHarness('opencode')">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run OpenCode
+            </button>
+            <button class="welcome-btn welcome-btn-codex" onclick="app.setRunMode('codex'); app.runHarness('codex')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Codex
+            </button>
+            <button class="welcome-btn welcome-btn-pi" onclick="app.setRunMode('pi'); app.runHarness('pi')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Pi
             </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
@@ -462,6 +470,12 @@
               </button>
               <button class="run-mode-option" data-mode="opencode" onclick="app.setRunMode('opencode')">
                 <span class="run-mode-dot opencode"></span>OpenCode
+              </button>
+              <button class="run-mode-option" data-mode="codex" onclick="app.setRunMode('codex')">
+                <span class="run-mode-dot codex"></span>Codex
+              </button>
+              <button class="run-mode-option" data-mode="pi" onclick="app.setRunMode('pi')">
+                <span class="run-mode-dot pi"></span>Pi
               </button>
             </div>
           </div>

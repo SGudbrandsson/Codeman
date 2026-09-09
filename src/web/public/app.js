@@ -5732,6 +5732,9 @@ class CodemanApp {
     this.pendingCloseSessionId = null; // Session pending close confirmation
     this.muxSessions = []; // Screen sessions for process monitor
 
+    /** Harness metadata from the registry, keyed by mode. Populated once at startup. */
+    this._harnesses = new Map();
+
     // Ralph loop/todo state per session
     this.ralphStates = new Map(); // Map<sessionId, { loop, todos }>
 
@@ -6294,6 +6297,7 @@ class CodemanApp {
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
     this._initRunMode();
+    this.loadHarnesses();
     this.setupEventListeners();
     // Mobile: ensure button taps register even when keyboard is visible.
     // On mobile, tapping a button while the soft keyboard is up causes the
@@ -10170,12 +10174,17 @@ class CodemanApp {
       const tallTabsEnabled = this._tallTabsEnabled ?? false;
       const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
+      // Harness badge on the tab — shortLabel from the registry, blank for claude.
+      const modeBadge = mode && mode !== 'claude'
+        ? `<span class="tab-mode ${escapeHtml(mode)}" aria-hidden="true">${escapeHtml(this.harnessMeta(mode).shortLabel || mode)}</span>`
+        : '';
+
       const tooltip = this._getSessionTooltip(session);
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${paused ? ' paused' : ''}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tooltip ? `title="${escapeHtml(tooltip)}"` : ''}>
           <span class="tab-status ${paused ? 'paused' : status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
-              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
+              ${modeBadge}
               <span class="tab-name" data-session-id="${id}" draggable="false" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondblclick="event.stopPropagation(); app.startInlineRename('${escapeHtml(id)}')" title="Double-click to rename">${escapeHtml(name)}</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
@@ -11081,9 +11090,7 @@ class CodemanApp {
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
     if (killTitle) {
-      killTitle.textContent = session.mode === 'opencode'
-        ? 'Kill Tmux & OpenCode'
-        : 'Kill Tmux & Claude Code';
+      killTitle.textContent = `Kill Tmux & ${this.harnessMeta(session.mode).label}`;
     }
 
     // Show merge option for worktree sessions
@@ -11448,13 +11455,10 @@ class CodemanApp {
     return this.run();
   }
 
-  /** Run using the selected mode (Claude Code or OpenCode) */
+  /** Run using the selected harness (Claude Code, OpenCode, Codex, Pi, ...) */
   async run() {
     const mode = this._runMode || 'claude';
-    if (mode === 'opencode') {
-      return this.runOpenCode();
-    }
-    return this.runClaude();
+    return mode === 'claude' ? this.runClaude() : this.runHarness(mode);
   }
 
   /** Get/set the run mode, persisted in localStorage */
@@ -11501,7 +11505,9 @@ class CodemanApp {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : 'Run';
+      label.textContent = mode === 'claude'
+        ? 'Run'
+        : `Run ${(this.harnessMeta(mode).shortLabel || mode).toUpperCase()}`;
     }
   }
 
@@ -11768,35 +11774,71 @@ class CodemanApp {
     }
   }
 
-  async runOpenCode() {
+  /** Fetch harness registry metadata once at startup. */
+  async loadHarnesses() {
+    try {
+      const res = await fetch('/api/harnesses');
+      const data = await res.json();
+      for (const h of data.harnesses || []) this._harnesses.set(h.id, h);
+      // The run-button label is derived from shortLabel, so re-apply it once
+      // metadata lands (init runs _applyRunMode before this fetch resolves).
+      this._applyRunMode();
+    } catch (err) {
+      console.error('Failed to load harness metadata:', err);
+    }
+  }
+
+  /** Harness metadata with a safe fallback, so UI code never throws on an unknown mode. */
+  harnessMeta(mode) {
+    return this._harnesses.get(mode || 'claude')
+      || { id: mode, label: 'Claude Code', shortLabel: 'cc', caps: {}, available: true, installHint: '' };
+  }
+
+  /**
+   * One static "Run with" button for the session / worktree creators.
+   * Markup stays static per spec section 5 — the registry supplies the label,
+   * availability and install hint, not the button list itself.
+   */
+  _modeSelectorButton(mode, label, currentMode, setter) {
+    const meta = this.harnessMeta(mode);
+    const unavailable = meta.available === false;
+    const title = unavailable ? ` title="${escapeHtml(meta.installHint || (label + ' CLI not found'))}"` : '';
+    return `<button class="worktree-mode-btn${currentMode === mode ? ' selected' : ''}${unavailable ? ' disabled' : ''}"` +
+      `${unavailable ? ' disabled' : ''}${title} onclick="app.${setter}('${mode}')">` +
+      `<span class="run-mode-dot ${mode}"></span>${escapeHtml(label)}</button>`;
+  }
+
+  /** Run any non-claude harness. Generic version of the old runOpenCode(). */
+  async runHarness(mode) {
+    const meta = this.harnessMeta(mode);
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
 
     this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
+    this.terminal.writeln(`\x1b[1;32m Starting ${meta.label} session in ${caseName}...\x1b[0m`);
     this.terminal.writeln('');
 
     try {
-      // Check if OpenCode is available
-      const statusRes = await fetch('/api/opencode/status');
+      // Check if the harness CLI is available
+      const statusRes = await fetch(`/api/harness/${encodeURIComponent(mode)}/status`);
       const status = await statusRes.json();
       if (!status.available) {
-        this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
-        this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
+        this.terminal.writeln(`\x1b[1;31m ${meta.label} CLI not found.\x1b[0m`);
+        this.terminal.writeln(`\x1b[90m ${meta.installHint}\x1b[0m`);
         return;
       }
 
-      // Quick-start with opencode mode (auto-allow tools by default)
+      const body = { caseName, mode };
+      // OpenCode auto-allows tools by default; other harnesses hardcode their
+      // bypass flags in the registry's buildCommand.
+      if (mode === 'opencode') body.openCodeConfig = { autoAllowTools: true };
+
       const res = await fetch('/api/quick-start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          caseName,
-          mode: 'opencode',
-          openCodeConfig: { autoAllowTools: true },
-        })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
+      if (!data.success) throw new Error(data.error || `Failed to start ${meta.label}`);
 
       // Switch to the new session (don't pre-set activeSessionId — selectSession
       // early-returns when IDs match, skipping buffer load and sendResize)
@@ -11810,6 +11852,11 @@ class CodemanApp {
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
     }
+  }
+
+  /** Retained for existing callers (welcome button, quick-start case flow). */
+  async runOpenCode() {
+    return this.runHarness('opencode');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -12607,7 +12654,7 @@ class CodemanApp {
     menu.setAttribute('role', 'menu');
 
     const isShell = session.mode === 'shell';
-    const canPark = !isShell && session.mode !== 'opencode';
+    const canPark = this.harnessMeta(session.mode).caps.pausable === true;
     const isPaused = !!session.paused;
 
     // Pause / Resume item (Claude sessions only)
@@ -12935,7 +12982,7 @@ class CodemanApp {
     this.editingSessionId = sessionId;
 
     // Reset to an appropriate tab — Summary for OpenCode (Respawn/Ralph are Claude-only)
-    this.switchOptionsTab(session.mode === 'opencode' ? 'summary' : 'respawn');
+    this.switchOptionsTab(this.harnessMeta(session.mode).caps.respawn ? 'respawn' : 'summary');
 
     // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');
@@ -12963,10 +13010,12 @@ class CodemanApp {
       respawnSection.style.display = 'none';
     }
 
-    // Hide Claude-specific options for OpenCode sessions
-    const isOpenCode = session.mode === 'opencode';
+    // Hide Claude-specific options for harnesses without Claude's transcript/respawn
+    const meta = this.harnessMeta(session.mode);
+    const hideClaudeOnly = !meta.caps.claudeTranscript;
+    const hideRalphRespawn = !meta.caps.respawn;
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
-    claudeOnlyEls.forEach(el => { el.style.display = isOpenCode ? 'none' : ''; });
+    claudeOnlyEls.forEach(el => { el.style.display = hideClaudeOnly ? 'none' : ''; });
 
     // Reset duration presets to default (unlimited)
     this.selectDurationPreset('');
@@ -13000,21 +13049,21 @@ class CodemanApp {
     document.getElementById('respawnPresetSelect').value = '';
     document.getElementById('presetDescriptionHint').textContent = '';
 
-    // Hide Ralph/Todo tab and Respawn tab for opencode sessions (not supported)
+    // Hide Ralph/Todo tab and Respawn tab for harnesses that do not support them
     const ralphTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="ralph"]');
     const respawnTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="respawn"]');
-    if (isOpenCode) {
+    if (hideRalphRespawn) {
       if (ralphTabBtn) ralphTabBtn.style.display = 'none';
       if (respawnTabBtn) respawnTabBtn.style.display = 'none';
-      // Default to Context tab for opencode sessions since Respawn is hidden
+      // Default to Context tab since Respawn is hidden
       this.switchOptionsTab('context');
     } else {
       if (ralphTabBtn) ralphTabBtn.style.display = '';
       if (respawnTabBtn) respawnTabBtn.style.display = '';
     }
 
-    // Populate Ralph Wiggum form with current session values (skip for opencode)
-    if (!isOpenCode) {
+    // Populate Ralph Wiggum form with current session values (skip when unsupported)
+    if (!hideRalphRespawn) {
       const ralphState = this.ralphStates.get(sessionId);
       this.populateRalphForm({
         enabled: ralphState?.loop?.enabled ?? session.ralphLoop?.enabled ?? false,
@@ -13135,9 +13184,11 @@ class CodemanApp {
       html += '</div>';
     }
     html += '<div class="worktree-section-label">Run with</div><div class="worktree-mode-selector">' +
-      `<button class="worktree-mode-btn${currentMode === 'claude' ? ' selected' : ''}" onclick="app._setSessionMode('claude')"><span class="run-mode-dot claude"></span>Claude Code</button>` +
-      `<button class="worktree-mode-btn${currentMode === 'opencode' ? ' selected' : ''}" onclick="app._setSessionMode('opencode')"><span class="run-mode-dot opencode"></span>OpenCode</button>` +
-      `<button class="worktree-mode-btn${currentMode === 'shell' ? ' selected' : ''}" onclick="app._setSessionMode('shell')"><span class="run-mode-dot shell"></span>Shell</button>` +
+      this._modeSelectorButton('claude', 'Claude Code', currentMode, '_setSessionMode') +
+      this._modeSelectorButton('opencode', 'OpenCode', currentMode, '_setSessionMode') +
+      this._modeSelectorButton('codex', 'Codex', currentMode, '_setSessionMode') +
+      this._modeSelectorButton('pi', 'Pi', currentMode, '_setSessionMode') +
+      this._modeSelectorButton('shell', 'Shell', currentMode, '_setSessionMode') +
       '</div>';
     html += '<div class="worktree-creator-actions">' +
       (!selectedCase && cases.length > 0
@@ -13208,22 +13259,25 @@ class CodemanApp {
     }
     const sessionName = `${prefix}${maxN + 1}-${caseName}`;
 
-    if (mode === 'opencode') {
-      // OpenCode uses its own quick-start route
+    if (mode !== 'claude' && mode !== 'shell') {
+      // Non-claude harnesses go through the quick-start route
+      const meta = this.harnessMeta(mode);
       try {
-        const statusRes = await fetch('/api/opencode/status');
+        const statusRes = await fetch(`/api/harness/${encodeURIComponent(mode)}/status`);
         const status = await statusRes.json();
         if (!status.available) {
-          console.error('OpenCode CLI not found.');
+          console.error(`${meta.label} CLI not found.`);
           return;
         }
+        const qsBody = { caseName, mode };
+        if (mode === 'opencode') qsBody.openCodeConfig = { autoAllowTools: true };
         const res = await fetch('/api/quick-start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ caseName, mode: 'opencode', openCodeConfig: { autoAllowTools: true } }),
+          body: JSON.stringify(qsBody),
         });
         const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
+        if (!data.success) throw new Error(data.error || `Failed to start ${meta.label}`);
         if (data.sessionId) {
           // Quick-start doesn't support name field; set it via rename endpoint
           fetch(`/api/sessions/${data.sessionId}/name`, {
@@ -13234,7 +13288,7 @@ class CodemanApp {
           await this.selectSession(data.sessionId);
         }
       } catch (err) {
-        console.error('startSessionInCase opencode error:', err);
+        console.error(`startSessionInCase ${mode} error:`, err);
       }
       return;
     }
@@ -13281,10 +13335,10 @@ class CodemanApp {
     // Set the quickStartCase select to the chosen case so runClaude/runShell/runOpenCode can use it
     const caseSelect = document.getElementById('quickStartCase');
     if (caseSelect) caseSelect.value = caseName;
-    if (mode === 'opencode') {
-      await this.runOpenCode();
-    } else if (mode === 'shell') {
+    if (mode === 'shell') {
       await this.runShell();
+    } else if (mode !== 'claude') {
+      await this.runHarness(mode);
     } else {
       await this.runClaude();
     }
@@ -13352,12 +13406,11 @@ class CodemanApp {
 
     const currentMode = this._worktreeCreatorMode || this._runMode || 'claude';
     html += `<div class="worktree-section-label">Run with</div><div class="worktree-mode-selector">` +
-      `<button class="worktree-mode-btn${currentMode === 'claude' ? ' selected' : ''}" onclick="app._setWorktreeMode('claude')">` +
-      `<span class="run-mode-dot claude"></span>Claude Code</button>` +
-      `<button class="worktree-mode-btn${currentMode === 'opencode' ? ' selected' : ''}" onclick="app._setWorktreeMode('opencode')">` +
-      `<span class="run-mode-dot opencode"></span>OpenCode</button>` +
-      `<button class="worktree-mode-btn${currentMode === 'shell' ? ' selected' : ''}" onclick="app._setWorktreeMode('shell')">` +
-      `<span class="run-mode-dot shell"></span>Shell</button>` +
+      this._modeSelectorButton('claude', 'Claude Code', currentMode, '_setWorktreeMode') +
+      this._modeSelectorButton('opencode', 'OpenCode', currentMode, '_setWorktreeMode') +
+      this._modeSelectorButton('codex', 'Codex', currentMode, '_setWorktreeMode') +
+      this._modeSelectorButton('pi', 'Pi', currentMode, '_setWorktreeMode') +
+      this._modeSelectorButton('shell', 'Shell', currentMode, '_setWorktreeMode') +
       `</div>`;
 
     html += `<div id="worktreeBranchPicker" style="display:${selectedCase ? 'block' : 'none'}">
