@@ -54,6 +54,9 @@ interface HarnessCapabilities {
   pausable: boolean;
   /** Claude-format hooks (.claude/settings.local.json) should be written for this harness's cases. */
   claudeHooks: boolean;
+  /** Global Claude default model applies to this harness. Today's code says "not shell",
+   *  which silently hands Claude model names to every non-shell harness. */
+  usesClaudeModelDefaults: boolean;
 }
 
 interface HarnessDefinition {
@@ -90,6 +93,7 @@ user's fish PATH but not on the `/bin/sh` PATH that `execSync('which pi')` sees.
 | `preassignsSessionId` | yes | no | no | yes | no |
 | `pausable` | yes | no | no | no | no |
 | `claudeHooks` | yes | no | no | no | no |
+| `usesClaudeModelDefaults` | yes | no | no | no | no |
 | `readiness` | prompt | settle 3000ms | settle 3000ms | settle 2000ms | prompt |
 
 Every `session.mode !== 'opencode'` guard becomes a capability read, e.g.
@@ -156,12 +160,56 @@ harnessSessionId?: string;
 
 The restore path keys off `harnessSessionId` rather than `claudeResumeId`.
 `claudeResumeId` is kept and still written for claude sessions (back-compat with existing
-`state.json` entries and every current reader); claude populates both. On load, a session
-with `claudeResumeId` but no `harnessSessionId` backfills the latter from the former.
+`state.json` entries and every current reader); claude populates both.
+
+**Backfill is restricted to legacy Claude entries.** `CreateSessionSchema` currently accepts
+`claudeResumeId: z.string().uuid().optional()` alongside any `mode` (`schemas.ts:140,152`).
+Once the enum grows, a caller could pair a Claude UUID with `mode: 'codex'`; an unconditional
+backfill would then run `codex resume <Claude UUID>`. Two guards:
+
+1. The schema rejects `claudeResumeId` when `mode` is anything other than `'claude'`
+   (or absent, which defaults to claude). Enforced with a zod `superRefine`.
+2. The migration backfills `harnessSessionId` from `claudeResumeId` **only** when the stored
+   entry's `mode` is absent or `'claude'`.
+
+**Migration location.** `StateStore.load()` raw-merges JSON and performs no per-session
+migration (`state-store.ts:135,150`); the restore path separately copies `claudeResumeId`
+into the in-memory session (`server.ts:3462`). The backfill goes in the restore path next to
+that copy, and must mark the session dirty so the migrated value is written back — otherwise
+it re-runs on every boot.
+
+**`harnessSessionId` is a restore identity, not a general pause identity.** Pause and
+`/resume` still go through `transcriptPreflight()` and a
+`.claude/projects/<dir>/<claudeResumeId>.jsonl` lookup (`session-routes.ts:593,703,823,840`).
+Those paths stay Claude-only and are unreachable for codex/pi because `pausable: false`.
+Generalising pause is explicitly out of scope.
+
+**Claude-specific `claudeResumeId` readers stay Claude-specific**, guarded by
+`caps.claudeTranscript` where they are not already: transcript watcher setup
+(`server.ts:933,989`), transcript fallback endpoint (`session-routes.ts:1480`), history
+resume (`history-routes.ts:244,263`), Claude CLI arg building
+(`session-cli-builder.ts:64,128`), MCP restart reporting (`mcp-routes.ts:77`).
 
 - `pi` sets `harnessSessionId` to the Codeman session id (it is passed as `--session-id`).
-- `codex` sets it from the id codex records for the session, read back after start.
+- `codex` discovers its id after start (protocol below).
 - `opencode` and `shell` leave it unset, exactly as today.
+
+**Codex identity discovery protocol.** Codex has no flag to preassign a session id, but it
+writes a rollout file per session at
+`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ISO-ts>-<uuid>.jsonl` (default `CODEX_HOME` is
+`~/.codex`). Its first line is a `session_meta` record carrying both `session_id` and `cwd`:
+
+```json
+{"timestamp":"...","type":"session_meta","payload":{"session_id":"01a085e9-...","cwd":"/home/siggi/sources/Codeman","cli_version":"0.144.5", ...}}
+```
+
+Discovery mirrors the existing Claude approach in `src/web/transcript-path-resolver.ts`:
+after `startInteractive()` returns, poll for up to 15s (1s interval) for the newest rollout
+file whose `session_meta.payload.cwd` equals the session's `workingDir` **and** whose file
+mtime is at or after the recorded session start time. On a match, set `harnessSessionId`
+and persist. On timeout, leave it unset, log a warning, and mark the session
+non-resumable — the session still runs; only restore-after-reboot is lost. The `cwd` +
+start-time pair is what prevents attaching a concurrently-started codex session's id.
 
 ### Per-harness config
 
@@ -176,6 +224,12 @@ piConfig?: { model?: string };
 
 Deliberately *not* unified into a single `harnessConfig` blob: at this config depth the
 generalisation buys nothing and would require a state migration.
+
+**`Session` class plumbing.** Declaring the fields on `SessionState` is not enough. `Session`
+today stores only `claudeResumeId` (`session.ts:415`) and `_openCodeConfig` (`session.ts:403`),
+and its constructor accepts neither codex/pi config nor a harness identity
+(`session.ts:452,523`). All three need a private field, a constructor input, a public
+accessor, and serialization.
 
 **`Session.toState()` must serialize `codexConfig`, `piConfig`, and `harnessSessionId`**
 alongside the existing `openCodeConfig` (`src/session.ts:1074`). Omitting this is silent —
@@ -198,6 +252,20 @@ Sites that branch on mode and must be updated. Each was verified against source.
 | `src/web/routes/system-routes.ts:241` | `/api/opencode/status` only | generalise to `/api/harness/:id/status`, driven by the registry. Keep the old path as an alias so existing tests and clients keep working. |
 | `src/cli.ts:111` | labels only `[shell]` | label every non-claude harness from `shortLabel`, else codex/pi are indistinguishable from claude in `codeman list` |
 | `src/web/server.ts:3886` | restore gated on `claudeResumeId` | gate on `harnessSessionId` (see §4) |
+| `src/session.ts:1364` | direct-PTY rejection is opencode-only | gate on `caps.requiresMux` |
+| `src/session.ts:1261` | Claude parsers / readiness | gate on `caps.claudeParsers` |
+| `src/session.ts:1562` | `_processExpensiveParsers` early return | gate on `caps.claudeParsers` |
+| `src/web/routes/session-routes.ts:131` | opencode-only availability check | generic registry availability check |
+| `src/web/routes/session-routes.ts:145` | `mode !== 'shell'` -> Claude default model | gate on `caps.usesClaudeModelDefaults` |
+| `src/web/routes/session-routes.ts:157,1384,1389` | passes only `openCodeConfig` | pass the harness's own config blob |
+| `src/web/routes/session-routes.ts:604` | ralph guard | `caps.ralph` |
+| `src/web/routes/session-routes.ts:1311,1373` | quick-start availability + model default | registry availability + `caps.usesClaudeModelDefaults` |
+| `src/web/routes/ralph-routes.ts:52` | ralph route gate | `caps.ralph` |
+| `src/web/routes/respawn-routes.ts:96,250,318` | respawn route gates | `caps.respawn` |
+| `src/web/server.ts:1559,1599,3427,3634,3647` | ralph lifecycle/restore gates | `caps.ralph` |
+| `src/web/server.ts:1574,3473,3617` | respawn restore/resume gates | `caps.respawn` |
+| `src/web/server.ts:1406,1408,1428` | archive/clear child-session model + startup selection | `caps.usesClaudeModelDefaults`, registry startup dispatch |
+| `src/tmux-manager.ts:429,435,509,653,693` | create + respawn PATH export and env/config setup know only claude and opencode | driven by `binary`/`searchDirs` and `setupMuxEnv()` from the registry |
 
 **Sites deliberately left alone.** `src/web/public/app.js:10720` and
 `src/web/public/keyboard-accessory.js:390` suppress the transcript view with *positive*
@@ -228,6 +296,15 @@ Also:
 - `app.js:10178`: `cx` / `pi` tab badges from `shortLabel`.
 - `app.js:11084`: kill-dialog copy is hardcoded to "Kill Tmux & Claude Code" for anything
   that is not opencode; drive it from the harness `label`.
+- `app.js:11504`: run-button label is `mode === 'opencode' ? 'Run OC' : 'Run'`; drive from
+  `shortLabel`.
+- `app.js:12609`: pause-menu eligibility tests `isShell` only, so codex/pi would appear
+  pausable; gate on `caps.pausable`.
+- `app.js:12938,12960,12967`: options-modal default tab and section visibility are
+  claude-vs-opencode; drive from `caps.respawn` / `caps.claudeTranscript`.
+- `app.js:13137,13211,13284`: session-creator mode buttons and their opencode-only
+  shortcut.
+- `app.js:13353`: worktree-creator mode selector.
 
 Button markup stays static — templating five buttons is more machinery than it saves.
 
@@ -258,8 +335,23 @@ Button markup stays static — templating five buttons is more machinery than it
   `harnessSessionId` without clobbering anything.
 - **Spawn fallback test** — `buildSpawnCommand` throws on an unknown mode rather than
   returning `$SHELL`.
-- **Route guard tests** — pause is rejected for codex/pi; Claude hooks are not written for
-  codex/pi cases; `history-routes` does not assign the Claude default model to codex/pi.
+- **Parameterized capability-consumer tests** — the registry-table test proves the *data*;
+  these prove each consumer actually reads it. One parameterized suite per capability,
+  asserting the guarded behaviour for all five harnesses: ralph (route + lifecycle +
+  restore), respawn (route + resume + restore), `claudeParsers`, `claudeTranscript`,
+  `requiresMux` direct-PTY rejection, `pausable`, `claudeHooks`, `usesClaudeModelDefaults`,
+  across the create / quick-start / worktree / archive paths.
+- **Migration test** — backfill applies to a legacy entry with no `mode`, and to `claude`;
+  it must NOT apply to a `codex`/`pi` entry that carries a `claudeResumeId`. Asserts the
+  migrated value is written back so it does not repeat every boot.
+- **Schema test** — `CreateSessionSchema` rejects `claudeResumeId` paired with a non-claude
+  mode.
+- **Codex discovery test** — `session_meta` matching by `cwd` + start time picks the right
+  rollout file, ignores one from another cwd, and times out cleanly to "unset, non-resumable"
+  rather than throwing.
+- **Live smoke: server restart** — the manual test must restart the Codeman server, not just
+  reload the page, since restore-after-reboot is the stated requirement for
+  `harnessSessionId`.
 - **Live smoke test (manual)** — launch a codex session and a pi session in the worktree's
   Codeman instance; confirm the TUI renders in the web terminal, input reaches the agent,
   and buffer restore survives a page reload. Not automatable; results reported by hand.
