@@ -28,7 +28,7 @@
 curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash
 ```
 
-This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai) (or both). After install:
+This installs Node.js and tmux if missing, clones Codeman to `~/.codeman/app`, and builds it. You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) or [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (`npm i -g @earendil-works/pi-coding-agent`) — any combination. After install:
 
 ```bash
 codeman web
@@ -61,7 +61,7 @@ mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?
 wsl bash -c "curl -fsSL https://raw.githubusercontent.com/SGudbrandsson/Codeman/master/install.sh | bash"
 ```
 
-Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenCode](https://opencode.ai)). After installing, `http://localhost:3000` is accessible from your Windows browser.
+Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install your preferred AI coding CLI inside WSL ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://github.com/openai/codex) or [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)). After installing, `http://localhost:3000` is accessible from your Windows browser.
 </details>
 
 ---
@@ -200,6 +200,23 @@ Run **20 parallel sessions** with full visibility — real-time xterm.js termina
   <img src="docs/screenshots/multi-session-dashboard.png" alt="Multi-Session Dashboard" width="800">
 </p>
 
+### Session Harnesses
+
+Every session runs one **harness**: **Claude Code**, **OpenCode**, **Codex**, **Pi**, or a plain
+**shell**. Pick one from the welcome screen, the run-mode menu next to the Run button, the New
+Session modal, or the worktree creator. Codex and Pi are installed with
+`npm i -g @openai/codex` and `npm i -g @earendil-works/pi-coding-agent`; Codeman greys out any
+harness it cannot find on `PATH` and shows the install command instead of failing at spawn.
+
+Harnesses are declared in a capability registry (`src/harnesses/`), so a feature is offered only
+where it works. Pause/resume, the respawn controller, Ralph tracking, the transcript view and the
+token/cost parsers are Claude-only; Codex and Pi get spawn, restore and the full terminal. Shell
+sessions are just a shell — they carry none of the agent subsystems.
+
+Codex and Pi sessions survive a Codeman restart the same way Claude sessions do: Pi is relaunched
+with its original `--session-id`, and a Codex session that has taken at least one turn is restored
+with `codex resume <id>`, picking up the earlier conversation.
+
 ### Persistent Sessions
 
 Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Managed sessions are environment-tagged so the agent won't kill its own session.
@@ -229,7 +246,7 @@ Click the chart icon on any session tab to see a timeline of everything that hap
 
 ### Zero-Flicker Terminal
 
-Terminal-based AI agents (Claude Code's Ink, OpenCode's Bubble Tea) redraw the screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
+Terminal-based AI agents (Claude Code's Ink, OpenCode's Bubble Tea, Codex's Ratatui) redraw the screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
 
 ```
 PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xterm.js (60fps)
@@ -407,6 +424,13 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 | `POST` | `/api/sessions/:id/pause` | Park a session: kill Claude + its tmux session to free memory, keeping the session entry and `claudeResumeId`. `{"force":true}` pauses mid-turn |
 | `POST` | `/api/sessions/:id/resume` | Relaunch a parked session with `--resume`. Refuses when the local transcript is gone; `{"force":true}` starts a fresh conversation instead |
 
+### Harnesses
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/harnesses` | List every harness: `id`, `label`, `shortLabel`, `installHint`, `available`, `caps` |
+| `GET` | `/api/harness/:id/status` | `{ available, path }` for one harness; `404` on an unknown id |
+| `GET` | `/api/opencode/status` | Retained alias of `/api/harness/opencode/status` |
+
 ### Respawn
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -474,7 +498,7 @@ flowchart TB
         end
 
         subgraph External["External"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Pi</small>"]
             BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end

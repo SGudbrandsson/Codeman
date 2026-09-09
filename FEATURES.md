@@ -27,13 +27,14 @@ This document is the comprehensive feature reference for **Codeman v0.5.4** (SGu
 19. [Command Panel](#19-command-panel)
 20. [Security](#20-security)
 21. [API Reference](#21-api-reference)
-22. [Fork Differences vs Ark0N/Codeman v0.3.7](#22-fork-differences-vs-ark0ncodeman-v037)
+22. [Session Harnesses](#22-session-harnesses)
+23. [Fork Differences vs Ark0N/Codeman v0.3.7](#23-fork-differences-vs-ark0ncodeman-v037)
 
 ---
 
 ## 1. Multi-Session Dashboard
 
-Codeman's primary view manages up to 50 concurrent Claude Code (or OpenCode) sessions from a single browser tab. Each session is a full xterm.js terminal backed by a persistent tmux pane, rendering at 60fps via SSE streaming.
+Codeman's primary view manages up to 50 concurrent agent sessions from a single browser tab — Claude Code, OpenCode, Codex, Pi, or a plain shell, mixed freely. Each session is a full xterm.js terminal backed by a persistent tmux pane, rendering at 60fps via SSE streaming.
 
 ![Multi-session dashboard](docs/screenshots/dashboard-multi-session.png)
 
@@ -42,7 +43,8 @@ Codeman's primary view manages up to 50 concurrent Claude Code (or OpenCode) ses
 - **Tab-based navigation** — each session gets a tab with live status indicators: token count, cost, agent count badge, and blink alerts for attention-required states
 - **Per-session token and cost tracking** — reads Claude Code's JSON message stream; tracks input tokens, output tokens, cache tokens, and cumulative USD cost
 - **tmux-backed persistence** — sessions survive server restarts, network drops, and machine sleep; auto-recovered on startup
-- **Pause / resume** — park a session from the gear menu: Claude and its tmux session are stopped (freeing the memory a long-lived session was holding) while the session entry, name, worktree and conversation id are kept. Resume relaunches with `--resume` and picks up where it left off. Paused sessions survive a server restart and are skipped by every background loop (respawn, Ralph, orchestrator, idle checks), so parking 20 sessions costs nothing until you come back to them
+- **Pause / resume** (Claude sessions only) — park a session from the gear menu: Claude and its tmux session are stopped (freeing the memory a long-lived session was holding) while the session entry, name, worktree and conversation id are kept. Resume relaunches with `--resume` and picks up where it left off. Paused sessions survive a server restart and are skipped by every background loop (respawn, Ralph, orchestrator, idle checks), so parking 20 sessions costs nothing until you come back to them
+- **Five session harnesses** — Claude Code, OpenCode, Codex, Pi or a plain shell, chosen per session; see [Session Harnesses](#22-session-harnesses)
 - **Ghost session discovery** — finds orphaned tmux sessions from previous runs and reattaches them
 - **Managed session tagging** — `CODEMAN_MUX=1` environment variable prevents the agent from killing its own tmux session
 - **Quick-start** — `Ctrl+Enter` or the Start button creates a session from the last-used case
@@ -839,7 +841,7 @@ Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follo
 | `POST`   | `/api/sessions/:id/resize`  | Resize terminal (cols × rows) |
 | `GET`    | `/api/sessions/:id/buffer`  | Terminal buffer (last 128KB)  |
 | `POST`   | `/api/sessions/:id/restart` | Restart Claude process        |
-| `POST`   | `/api/sessions/:id/pause`   | Park session (frees memory)   |
+| `POST`   | `/api/sessions/:id/pause`   | Park session (Claude only)    |
 | `POST`   | `/api/sessions/:id/resume`  | Relaunch with `--resume`      |
 | `POST`   | `/api/sessions/:id/kill`    | SIGKILL Claude process        |
 
@@ -877,6 +879,8 @@ Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follo
 | `GET`  | `/api/status`                   | Full app state             |
 | `POST` | `/api/hook-event`               | Claude Code hook callbacks |
 | `GET`  | `/api/sessions/:id/run-summary` | Timeline + stats           |
+| `GET`  | `/api/harnesses`                | Harness registry + caps    |
+| `GET`  | `/api/harness/:id/status`       | One harness's availability |
 
 ### Cases
 
@@ -917,7 +921,87 @@ Codeman exposes ~111 HTTP endpoints across 12 route modules. All responses follo
 
 ---
 
-## 22. Fork Differences vs Ark0N/Codeman v0.3.7
+## 22. Session Harnesses
+
+Every session runs exactly one **harness** — the CLI that occupies its tmux pane. Codeman ships
+five, declared in a capability registry under `src/harnesses/`:
+
+| Harness | Mode id | Badge | Binary | Install |
+| ------- | ------- | ----- | ------ | ------- |
+| Claude Code | `claude` | — | `claude` | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| OpenCode | `opencode` | `oc` | `opencode` | `curl -fsSL https://opencode.ai/install \| bash` |
+| Codex | `codex` | `cx` | `codex` | `npm i -g @openai/codex` |
+| Pi | `pi` | `pi` | `pi` | `npm i -g @earendil-works/pi-coding-agent` |
+| Shell | `shell` | `sh` | — | (your `$SHELL`) |
+
+The badge is what `codeman list` prints next to a session and what the session tab shows; Claude
+sessions carry no badge.
+
+### Capabilities
+
+Each harness declares what it supports, and every route, background loop and UI element reads
+those flags rather than branching on the mode string. This is what a harness gets:
+
+| Capability | claude | opencode | codex | pi | shell |
+| ---------- | ------ | -------- | ----- | -- | ----- |
+| Pause / resume | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Respawn controller | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Ralph / todo tracking | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Transcript view + `--resume` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Token / cost parsers | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Claude Code hooks | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Claude model defaults | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Conversation restore | ✅ `--resume` | ❌ | ✅ `codex resume` | ✅ `--session-id` | ❌ |
+
+Anything a harness does not support is refused with copy that names it — pausing a shell session
+answers `Shell sessions cannot be paused` — and the corresponding UI (Ralph tab, Respawn tab,
+transcript controls, Park menu item) is hidden.
+
+> **Behaviour change.** Shell sessions used to receive the Ralph tracker, the respawn controller,
+> the Claude transcript wiring and the Claude output parsers, because the guards that gated those
+> features read "not opencode" rather than "is claude". They no longer do, and shell sessions can
+> no longer be paused.
+
+### Model selection
+
+Bypass-permission flags are fixed per harness; the model is the one knob exposed. Pass
+`openCodeConfig`, `codexConfig` or `piConfig` (`{ "model": "…" }`) to `POST /api/sessions` or
+`POST /api/quick-start`. Claude's own model defaults apply only to Claude sessions. A worktree
+created from an existing session inherits that session's harness config.
+
+### Identity and restore
+
+Codeman tracks a neutral `harnessSessionId` per session and uses it to bring a session back after
+a restart:
+
+- **Claude** — the transcript-filename hook publishes the conversation id; restore spawns
+  `claude --resume <id>`.
+- **Codex** — the codex TUI writes `~/.codex/sessions/**/rollout-*.jsonl` when the first turn is
+  submitted, not at spawn. Codeman watches that tree (`fs.watch`, with a backing-off poll as a
+  fallback) and matches on the rollout's `cwd` and a start-time floor; the id typically lands
+  within a few hundred milliseconds of that first Enter. Restore spawns `codex resume <id>`.
+  *Known limitation:* the recursive watch costs roughly 550 inotify watch descriptors per active
+  codex session on Linux, so many concurrent codex sessions can approach
+  `fs.inotify.max_user_watches` (65536 by default, shared with every other watcher).
+- **Pi** — Codeman assigns the session id at spawn (`pi --session-id <id>`) and records it
+  immediately.
+- **OpenCode and shell** — no identity, no conversation restore; the pane is simply respawned.
+
+### API
+
+| Method | Endpoint                    | Description                                                             |
+| ------ | --------------------------- | ----------------------------------------------------------------------- |
+| `GET`  | `/api/harnesses`            | All harnesses: `id`, `label`, `shortLabel`, `installHint`, `available`, `caps` |
+| `GET`  | `/api/harness/:id/status`   | `{ available, path }` for one harness; `404` on an unknown id            |
+| `GET`  | `/api/opencode/status`      | Retained alias of `/api/harness/opencode/status`, same response shape    |
+
+A harness whose binary is not on `PATH` (or in its known install directories) reports
+`available: false`, and session creation refuses with that harness's `installHint` instead of
+failing at spawn time.
+
+---
+
+## 23. Fork Differences vs Ark0N/Codeman v0.3.7
 
 This fork (SGudbrandsson/Codeman v0.5.4) is 33 commits ahead of upstream Ark0N/Codeman v0.3.7. The last upstream merge was commit `11150a4` (performance fixes).
 

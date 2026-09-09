@@ -1,5 +1,62 @@
 # aicodeman
 
+## Unreleased
+
+<!--
+  Hand-written notes for the harness registry work. `changeset version` folds
+  `.changeset/*.md` into a real version section above this block — delete this
+  block at that point so the notes are not duplicated.
+-->
+
+### Added
+
+- **Codex and Pi are now supported session harnesses**, alongside Claude Code, OpenCode and
+  plain shell. Pick one from the welcome screen, the run-mode menu, the New Session modal
+  or the worktree creator. Install them with `npm i -g @openai/codex` and
+  `npm i -g @earendil-works/pi-coding-agent`. Each takes an optional model
+  (`codexConfig` / `piConfig` on `POST /api/sessions` and `POST /api/quick-start`).
+- **`GET /api/harnesses`** — every registered harness with its label, short label, install
+  hint, availability and capability flags.
+- **`GET /api/harness/:id/status`** — `{ available, path }` for one harness; 404 on an
+  unknown id.
+- **Capability-based harness registry** (`src/harnesses/`). Each harness declares what it
+  supports — pause, respawn, Ralph, Claude transcript, Claude parsers, Claude hooks, Claude
+  model defaults — and every route, guard and UI element now reads those flags instead of
+  branching on a mode string.
+- **Codex conversation resume.** Once a codex session has had its first turn, Codeman learns
+  its rollout id from `~/.codex/sessions` and restores the session with
+  `codex resume <id>` after a restart, the same way Claude sessions restore with `--resume`.
+
+### Changed
+
+- **Shell sessions no longer receive Claude-only subsystems, and can no longer be paused.**
+  They previously got a Ralph tracker, a restorable respawn controller, the Claude transcript
+  wiring and the Claude output parsers, because the old guards read "not opencode" rather
+  than "is claude". This is a deliberate correction, and the one user-visible behaviour
+  change in this release.
+- Capability refusals now name the harness you are actually running. Pausing a shell session
+  answers "Shell sessions cannot be paused", and the Ralph and respawn endpoints no longer
+  tell a shell, codex or pi session that it is an OpenCode session.
+- `codeman list` badges every non-Claude session: `[sh]`, `[oc]`, `[cx]`, `[pi]`. Shell
+  sessions previously rendered `[shell]`; the others had no badge at all.
+- `GET /api/opencode/status` is unchanged and still works — it is now a registry-backed
+  alias of `GET /api/harness/opencode/status`, with the same `{ available, path }` response.
+
+### Fixed
+
+- **Hardened shell quoting for spawned harness commands.** Arguments interpolated into the
+  command line (models, session ids, and the free-form worktree notes that reach `extraArgs`)
+  were escaped with `JSON.stringify`, which leaves `$(...)`, backticks and backslashes live
+  inside double quotes. They are now POSIX single-quoted. Pre-existing behaviour, not a
+  regression introduced here.
+
+### Known limitations
+
+- Codex session-id discovery watches `~/.codex/sessions` recursively, which costs roughly
+  550 inotify watch descriptors per active codex session on Linux. Many concurrent codex
+  sessions can approach `fs.inotify.max_user_watches` (65536 by default, shared with every
+  other watcher on the machine).
+
 ## 0.6.4
 
 ### Patch Changes
