@@ -40,6 +40,7 @@ import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getWorktreeStore } from '../../worktree-store.js';
 import { getHarness, isHarnessAvailable } from '../../harnesses/registry.js';
+import type { HarnessDefinition } from '../../harnesses/types.js';
 
 // Validate branch name: alphanumeric, dots, hyphens, forward slashes only
 const BRANCH_PATTERN = /^[a-zA-Z0-9._\-/]+$/;
@@ -229,13 +230,23 @@ export function registerWorktreeSessionRoutes(
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
 
-    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd, openCodeConfig, codexConfig, piConfig } =
+      parsed.data;
     if (!BRANCH_PATTERN.test(branch)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     }
 
     const resolvedMode = mode ?? session.mode;
-    const harnessDef = getHarness(resolvedMode);
+    // resolvedMode can come from the originating session's PERSISTED mode, which a
+    // downgrade or a hand-edited state.json can leave unrecognised. getHarness() throws
+    // on those; answer 400 rather than letting it surface as a 500 (same soft-fallback
+    // posture as harnessAllowsClaudeTranscript in server.ts and harnessShortLabel in cli.ts).
+    let harnessDef: HarnessDefinition;
+    try {
+      harnessDef = getHarness(resolvedMode);
+    } catch {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Unknown session mode: ${resolvedMode}`);
+    }
     if (!isHarnessAvailable(harnessDef)) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, harnessDef.installHint);
     }
@@ -320,11 +331,11 @@ export function registerWorktreeSessionRoutes(
       model: harnessDef.caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined,
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
-      // CreateWorktreeSchema carries no harness config — a worktree inherits it
-      // from the session it was spawned off.
-      openCodeConfig: resolvedMode === 'opencode' ? session.openCodeConfig : undefined,
-      codexConfig: resolvedMode === 'codex' ? session.codexConfig : undefined,
-      piConfig: resolvedMode === 'pi' ? session.piConfig : undefined,
+      // Explicit request config wins; otherwise the worktree inherits the harness config
+      // of the session it was spawned off.
+      openCodeConfig: resolvedMode === 'opencode' ? (openCodeConfig ?? session.openCodeConfig) : undefined,
+      codexConfig: resolvedMode === 'codex' ? (codexConfig ?? session.codexConfig) : undefined,
+      piConfig: resolvedMode === 'pi' ? (piConfig ?? session.piConfig) : undefined,
       worktreePath,
       worktreeBranch: branch,
       worktreeOriginId: id,
@@ -571,7 +582,8 @@ export function registerWorktreeSessionRoutes(
     if (!casePath) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     const parsed = CreateWorktreeSchema.safeParse(req.body);
     if (!parsed.success) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd } = parsed.data;
+    const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd, openCodeConfig, codexConfig, piConfig } =
+      parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     const resolvedMode = mode ?? 'claude';
     const caseHarnessDef = getHarness(resolvedMode);
@@ -652,6 +664,11 @@ export function registerWorktreeSessionRoutes(
       model: caseHarnessDef.caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined,
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
+      // No originating session to inherit from — the request is the only source of
+      // harness config on this route.
+      openCodeConfig: resolvedMode === 'opencode' ? openCodeConfig : undefined,
+      codexConfig: resolvedMode === 'codex' ? codexConfig : undefined,
+      piConfig: resolvedMode === 'pi' ? piConfig : undefined,
       worktreePath,
       worktreeBranch: branch,
       worktreeNotes: finalNotes,

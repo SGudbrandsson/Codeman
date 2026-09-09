@@ -10,7 +10,11 @@ import { shellQuote } from './types.js';
 import type { HarnessDefinition, HarnessSpawnContext } from './types.js';
 import { MODEL_PATTERN } from './claude.js';
 
-const SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+/**
+ * Pi session ids are internally generated UUIDs; anything else must not reach the shell.
+ * Bounded to the same length as codex.ts's SESSION_ID_PATTERN.
+ */
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
 
 export const piHarness: HarnessDefinition = {
   id: 'pi',

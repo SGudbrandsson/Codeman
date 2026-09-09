@@ -914,8 +914,10 @@ export class WebServer extends EventEmitter {
     // has ever run would adopt a stranger's conversation and, via setClaudeResumeId()'s
     // mirror into harnessSessionId, overwrite the real harness id with a Claude UUID.
     // Guarding here covers all callers at once (design spec section "claudeResumeId").
+    // Fails CLOSED: every caller registers the session in `this.sessions` before calling
+    // (verified for all six call sites), so an unknown id means there is nothing to watch.
     const gateSession = this.sessions.get(sessionId);
-    if (gateSession && !harnessAllowsClaudeTranscript(gateSession.mode)) return;
+    if (!gateSession || !harnessAllowsClaudeTranscript(gateSession.mode)) return;
 
     let watcher = this.transcriptWatchers.get(sessionId);
 

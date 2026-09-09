@@ -699,6 +699,12 @@ export const CreateWorktreeSchema = z.object({
   branch: z.string().min(1).max(200),
   isNew: z.boolean(),
   mode: z.enum(['claude', 'opencode', 'shell', 'codex', 'pi']).optional(),
+  // Per-harness config. The session-scoped route falls back to the originating session's
+  // config when these are absent; the case-scoped route has no session to inherit from,
+  // so the request is the only way a codex/pi model reaches the new session.
+  openCodeConfig: OpenCodeConfigSchema,
+  codexConfig: HarnessModelConfigSchema,
+  piConfig: HarnessModelConfigSchema,
   notes: z.string().max(2000).optional(),
   autoStart: z.boolean().optional(),
   taskMd: z.string().max(20000).optional(),

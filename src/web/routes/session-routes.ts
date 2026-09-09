@@ -253,7 +253,6 @@ export function registerSessionRoutes(
       // Dynamic import — SDK is optional, not in package.json
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Anthropic = ((await import('@anthropic-ai/sdk' as string)) as any).default;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const client = new Anthropic() as {
         messages: {
           create: (opts: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>;
