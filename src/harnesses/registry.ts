@@ -36,4 +36,5 @@ export function listHarnesses(): HarnessDefinition[] {
 }
 
 export { isHarnessAvailable, resolveHarnessDir } from './resolver.js';
+export { shellQuote } from './types.js';
 export type { HarnessDefinition, HarnessCapabilities, HarnessSpawnContext } from './types.js';

@@ -80,7 +80,7 @@ describe('harness registry', () => {
       });
       expect(cmd).toContain('claude');
       expect(cmd).toContain('--dangerously-skip-permissions');
-      expect(cmd).toContain('--session-id "abc-123"');
+      expect(cmd).toContain(`--session-id 'abc-123'`);
       expect(cmd).toContain('--disallowedTools AskUserQuestion');
     });
 

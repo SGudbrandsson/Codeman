@@ -80,3 +80,16 @@ export interface HarnessDefinition {
   readiness: HarnessReadiness;
   caps: HarnessCapabilities;
 }
+
+/**
+ * POSIX single-quote a string for safe interpolation into a `sh -c` command line.
+ *
+ * Harness commands are assembled as shell strings, so every value that can carry
+ * user-supplied text MUST go through this. `JSON.stringify` is NOT a substitute:
+ * it emits double quotes, and the shell still expands `$(...)`, backticks and
+ * backslashes inside those. `worktreeNotes` reaches `extraArgs` as free-form user
+ * text, so double quoting is command injection.
+ */
+export function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}

@@ -6,6 +6,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ClaudeMode } from '../types/session.js';
+import { shellQuote } from './types.js';
 import type { HarnessDefinition, HarnessSpawnContext } from './types.js';
 
 /** Model strings safe to interpolate into a shell command. */
@@ -70,13 +71,13 @@ export const claudeHarness: HarnessDefinition = {
   buildCommand(ctx: HarnessSpawnContext): string {
     const safeModel = ctx.model && CLAUDE_MODEL_PATTERN.test(ctx.model) ? ctx.model : undefined;
     const modelFlag = safeModel ? ` --model ${safeModel}` : '';
-    const extra = (ctx.extraArgs ?? []).map((a) => JSON.stringify(a)).join(' ');
+    const extra = (ctx.extraArgs ?? []).map((a) => shellQuote(a)).join(' ');
     const extraStr = extra ? ` ${extra}` : '';
     // --session-id is only valid for fresh sessions; the Claude CLI rejects
     // --session-id together with --resume unless --fork-session is also passed
     // (which branches the conversation — not what a plain resume wants).
     const isResuming = (ctx.extraArgs ?? []).includes('--resume');
-    const sessionIdFlag = isResuming ? '' : ` --session-id "${ctx.sessionId}"`;
+    const sessionIdFlag = isResuming ? '' : ` --session-id ${shellQuote(ctx.sessionId)}`;
     // AskUserQuestion is disabled for every Codeman claude session: its interactive
     // picker never renders in the web transcript, so Claude asks as plain text instead.
     const disallowFlag = ' --disallowedTools AskUserQuestion';
