@@ -233,6 +233,25 @@ interface SessionListenerRefs {
   continueSent: () => void;
 }
 
+/**
+ * Backfill the neutral harnessSessionId from a legacy claudeResumeId.
+ *
+ * Only legacy Claude entries qualify — an entry with an explicit non-claude mode
+ * may carry a claudeResumeId (the create schema allowed it before this release),
+ * and copying that into harnessSessionId would make a codex session try to resume
+ * a Claude UUID.
+ *
+ * @returns true when the state was mutated and must be written back. Callers MUST
+ *   persist on true, or the migration re-runs on every boot.
+ */
+export function backfillHarnessSessionId(state: SessionState): boolean {
+  if (state.harnessSessionId) return false;
+  if (!state.claudeResumeId) return false;
+  if (state.mode !== undefined && state.mode !== 'claude') return false;
+  state.harnessSessionId = state.claudeResumeId;
+  return true;
+}
+
 /** Returns false for sessions that must never have tmux reattachment attempted. */
 export function shouldAttemptReattach(session: SessionState): boolean {
   return session.status !== 'archived';
@@ -939,7 +958,7 @@ export class WebServer extends EventEmitter {
     if (resumeId && resumeId.length === 36) {
       const session = this.sessions.get(sessionId);
       if (session && session.claudeResumeId !== resumeId) {
-        session.claudeResumeId = resumeId;
+        session.setClaudeResumeId(resumeId);
         this.persistSessionState(session);
       }
     }
@@ -3460,8 +3479,14 @@ export class WebServer extends EventEmitter {
     if (savedState.mcpServers !== undefined) {
       session.mcpServers = savedState.mcpServers;
     }
+    if (backfillHarnessSessionId(savedState)) {
+      this.store.setSession(savedState.id, savedState);
+    }
     if (savedState.claudeResumeId !== undefined) {
       session.claudeResumeId = savedState.claudeResumeId;
+    }
+    if (savedState.harnessSessionId !== undefined) {
+      session.harnessSessionId = savedState.harnessSessionId;
     }
     if (savedState.safeMode) {
       session.setSafeMode(true);
@@ -3601,6 +3626,11 @@ export class WebServer extends EventEmitter {
               worktreeOriginId,
               worktreeNotes: savedState?.worktreeNotes, // FIX: was missing from mux recovery path
               assignedPort: savedState?.assignedPort, // FIX: was missing from mux recovery path
+              // Harness config and identity — inert unless restored here too
+              openCodeConfig: savedState?.openCodeConfig,
+              codexConfig: savedState?.codexConfig,
+              piConfig: savedState?.piConfig,
+              harnessSessionId: savedState?.harnessSessionId,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
@@ -3854,6 +3884,11 @@ export class WebServer extends EventEmitter {
               worktreeOriginId: savedState.worktreeOriginId,
               worktreeNotes: savedState.worktreeNotes,
               assignedPort: savedState.assignedPort,
+              // Harness config and identity — inert unless restored here too
+              openCodeConfig: savedState.openCodeConfig,
+              codexConfig: savedState.codexConfig,
+              piConfig: savedState.piConfig,
+              harnessSessionId: savedState.harnessSessionId,
             });
 
             // Restore all persisted config (autoCompact, tokens, ralph, nice, respawn, etc.)
@@ -3884,7 +3919,12 @@ export class WebServer extends EventEmitter {
               this.startTranscriptWatcher(session.id, transcriptPath);
             }
 
-            if (wasRunning && !savedState.paused && session.claudeResumeId && session.mode !== 'opencode') {
+            if (
+              wasRunning &&
+              !savedState.paused &&
+              session.harnessSessionId &&
+              getHarness(session.mode).caps.claudeTranscript
+            ) {
               // Auto-resume: restart Claude with --resume so the user sees a live session
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);

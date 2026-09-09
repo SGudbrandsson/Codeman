@@ -46,6 +46,7 @@ import {
   type OpenCodeConfig,
 } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
+import type { HarnessModelConfig } from './harnesses/types.js';
 import { getHarness } from './harnesses/registry.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -404,6 +405,12 @@ export class Session extends EventEmitter {
   // OpenCode configuration (only for mode === 'opencode')
   private _openCodeConfig: OpenCodeConfig | undefined;
 
+  // Codex configuration (only for mode === 'codex')
+  private _codexConfig: HarnessModelConfig | undefined;
+
+  // Pi configuration (only for mode === 'pi')
+  private _piConfig: HarnessModelConfig | undefined;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -415,6 +422,10 @@ export class Session extends EventEmitter {
 
   // Claude session UUID for --resume (extracted from transcript filename)
   claudeResumeId?: string;
+
+  // Harness-native session id used to resume this session, for any harness.
+  // Claude mirrors claudeResumeId into it via setClaudeResumeId().
+  harnessSessionId?: string;
 
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
@@ -470,6 +481,12 @@ export class Session extends EventEmitter {
       allowedTools?: string;
       /** OpenCode configuration (only for mode === 'opencode') */
       openCodeConfig?: OpenCodeConfig;
+      /** Codex configuration (only for mode === 'codex') */
+      codexConfig?: HarnessModelConfig;
+      /** Pi configuration (only for mode === 'pi') */
+      piConfig?: HarnessModelConfig;
+      /** Harness-native id to resume (set on restore) */
+      harnessSessionId?: string;
       /** When true, strips --resume and MCP config flags from CLI args */
       safeMode?: boolean;
     }
@@ -524,6 +541,17 @@ export class Session extends EventEmitter {
     // Apply OpenCode configuration
     if (config.openCodeConfig) {
       this._openCodeConfig = config.openCodeConfig;
+    }
+
+    // Apply per-harness configuration and the neutral resume identity
+    if (config.codexConfig) {
+      this._codexConfig = config.codexConfig;
+    }
+    if (config.piConfig) {
+      this._piConfig = config.piConfig;
+    }
+    if (config.harnessSessionId) {
+      this.harnessSessionId = config.harnessSessionId;
     }
 
     // Apply safe mode flag
@@ -1073,6 +1101,9 @@ export class Session extends EventEmitter {
       cliAccountType: this._cliAccountType || undefined,
       cliLatestVersion: this._cliLatestVersion || undefined,
       openCodeConfig: this._openCodeConfig,
+      ...(this._codexConfig !== undefined && { codexConfig: this._codexConfig }),
+      ...(this._piConfig !== undefined && { piConfig: this._piConfig }),
+      ...(this.harnessSessionId !== undefined && { harnessSessionId: this.harnessSessionId }),
       draft: this.draft,
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
@@ -1086,9 +1117,29 @@ export class Session extends EventEmitter {
     };
   }
 
-  /** Sets the Claude resume ID (from transcript filename). Caller is responsible for persisting state. */
+  /**
+   * Sets the Claude resume ID (from transcript filename), mirroring it into the
+   * neutral `harnessSessionId` that the restore path keys off. Claude is the only
+   * harness where the two are the same value. Caller persists state.
+   */
   setClaudeResumeId(id: string): void {
     this.claudeResumeId = id;
+    this.harnessSessionId = id;
+  }
+
+  /** OpenCode configuration for this session, if any. */
+  get openCodeConfig(): OpenCodeConfig | undefined {
+    return this._openCodeConfig;
+  }
+
+  /** Codex configuration for this session, if any. */
+  get codexConfig(): HarnessModelConfig | undefined {
+    return this._codexConfig;
+  }
+
+  /** Pi configuration for this session, if any. */
+  get piConfig(): HarnessModelConfig | undefined {
+    return this._piConfig;
   }
 
   toDetailedState() {
@@ -1212,7 +1263,12 @@ export class Session extends EventEmitter {
             claudeMode: this._safeMode ? 'dangerously-skip-permissions' : this._claudeMode,
             allowedTools: this._safeMode ? undefined : this._allowedTools,
             openCodeConfig: this._openCodeConfig,
-            extraArgs: buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
+            codexConfig: this._codexConfig,
+            piConfig: this._piConfig,
+            harnessSessionId: this.harnessSessionId,
+            extraArgs: getHarness(this.mode).caps.claudeTranscript
+              ? buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode)
+              : [],
           });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
@@ -1249,8 +1305,13 @@ export class Session extends EventEmitter {
             claudeMode: this._safeMode ? 'dangerously-skip-permissions' : this._claudeMode,
             allowedTools: this._safeMode ? undefined : this._allowedTools,
             openCodeConfig: this._openCodeConfig,
+            codexConfig: this._codexConfig,
+            piConfig: this._piConfig,
+            harnessSessionId: this.harnessSessionId,
             extraArgs: [
-              ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
+              ...(getHarness(this.mode).caps.claudeTranscript
+                ? buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode)
+                : []),
               ...initialPromptArgs,
             ],
           });
@@ -1383,7 +1444,9 @@ export class Session extends EventEmitter {
             this.claudeResumeId,
             this._safeMode
           ),
-          ...buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode),
+          ...(getHarness(this.mode).caps.claudeTranscript
+            ? buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode)
+            : []),
           ...initialArg,
         ];
         this.ptyProcess = pty.spawn('claude', args, {

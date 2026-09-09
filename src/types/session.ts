@@ -25,6 +25,7 @@
  */
 
 import type { RespawnConfig } from './respawn.js';
+import type { HarnessModelConfig } from '../harnesses/types.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Agent types
@@ -226,6 +227,18 @@ export interface SessionState {
   mcpServers?: McpServerEntry[];
   /** Claude session UUID for --resume (set from transcript filename) */
   claudeResumeId?: string;
+  /**
+   * Harness-native session id used to resume this session, for any harness.
+   *
+   * Claude sets this alongside claudeResumeId (which stays, since it is also the
+   * transcript filename and a tmux-recovery match key). pi sets it to the Codeman
+   * session id. codex discovers it after start. opencode and shell leave it unset.
+   */
+  harnessSessionId?: string;
+  /** Codex-specific configuration (only for mode === 'codex') */
+  codexConfig?: HarnessModelConfig;
+  /** Pi-specific configuration (only for mode === 'pi') */
+  piConfig?: HarnessModelConfig;
   /** When true, session launches with stripped CLI args: no --resume, no MCP config */
   safeMode?: boolean;
   /** True when the user parked this session: Claude + tmux killed, entry and claudeResumeId preserved. */

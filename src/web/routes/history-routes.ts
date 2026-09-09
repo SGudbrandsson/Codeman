@@ -261,7 +261,7 @@ export function registerHistoryRoutes(
     });
 
     // Set claudeResumeId BEFORE startInteractive() so CLI builder injects --resume <uuid>
-    newSession.claudeResumeId = resumeId;
+    newSession.setClaudeResumeId(resumeId);
 
     ctx.addSession(newSession);
     ctx.store.incrementSessionsCreated();

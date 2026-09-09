@@ -15,6 +15,7 @@ import type {
   SessionMode,
   OpenCodeConfig,
 } from './types.js';
+import type { HarnessModelConfig } from './harnesses/types.js';
 
 /**
  * Multiplexer session metadata.
@@ -61,6 +62,10 @@ export interface CreateSessionOptions {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  codexConfig?: HarnessModelConfig;
+  piConfig?: HarnessModelConfig;
+  /** Harness-native id to resume, for harnesses that resume by id (codex). */
+  harnessSessionId?: string;
   /** Extra CLI arguments appended after the base command (e.g. initial prompt) */
   extraArgs?: string[];
 }
@@ -75,6 +80,10 @@ export interface RespawnPaneOptions {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  codexConfig?: HarnessModelConfig;
+  piConfig?: HarnessModelConfig;
+  /** Harness-native id to resume, for harnesses that resume by id (codex). */
+  harnessSessionId?: string;
   /** Extra CLI arguments appended after the base command (e.g. --mcp-config, --resume) */
   extraArgs?: string[];
 }

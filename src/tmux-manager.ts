@@ -245,6 +245,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      codexConfig,
+      piConfig,
+      harnessSessionId,
       extraArgs,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
@@ -310,6 +313,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      codexConfig,
+      piConfig,
+      harnessSessionId,
       extraArgs,
     };
     const baseCmd = buildSpawnCommand(spawnContext);
@@ -480,8 +486,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * preserving the session and its scrollback buffer.
    */
   async respawnPane(options: RespawnPaneOptions): Promise<number | null> {
-    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig, extraArgs } =
-      options;
+    const {
+      sessionId,
+      workingDir,
+      mode,
+      niceConfig,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+      codexConfig,
+      piConfig,
+      harnessSessionId,
+      extraArgs,
+    } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
@@ -522,6 +540,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      codexConfig,
+      piConfig,
+      harnessSessionId,
       extraArgs,
     };
     const baseCmd = buildSpawnCommand(spawnContext);

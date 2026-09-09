@@ -137,20 +137,32 @@ const OpenCodeConfigSchema = z
   })
   .optional();
 
-export const CreateSessionSchema = z.object({
-  workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
-  name: z.string().max(100).optional(),
-  envOverrides: safeEnvOverridesSchema,
-  openCodeConfig: OpenCodeConfigSchema,
-  safeMode: z.boolean().optional(),
-  worktreeBranch: z.string().optional(),
-  worktreePath: z.string().optional(),
-  worktreeOriginId: z.string().optional(),
-  worktreeNotes: z.string().optional(),
-  assignedPort: z.number().optional(),
-  claudeResumeId: z.string().uuid().optional(),
-});
+export const CreateSessionSchema = z
+  .object({
+    workingDir: safePathSchema.optional(),
+    mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+    name: z.string().max(100).optional(),
+    envOverrides: safeEnvOverridesSchema,
+    openCodeConfig: OpenCodeConfigSchema,
+    safeMode: z.boolean().optional(),
+    worktreeBranch: z.string().optional(),
+    worktreePath: z.string().optional(),
+    worktreeOriginId: z.string().optional(),
+    worktreeNotes: z.string().optional(),
+    assignedPort: z.number().optional(),
+    claudeResumeId: z.string().uuid().optional(),
+  })
+  .superRefine((val, ctx) => {
+    // claudeResumeId is a Claude conversation UUID. Pairing it with another harness
+    // would resume the wrong thing — reject rather than silently ignore it.
+    if (val.claudeResumeId && val.mode !== undefined && val.mode !== 'claude') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['claudeResumeId'],
+        message: 'claudeResumeId is only valid for claude sessions',
+      });
+    }
+  });
 
 /** POST /api/sessions/:id/safe-mode */
 export const SafeModeSchema = z.object({ enabled: z.boolean() });

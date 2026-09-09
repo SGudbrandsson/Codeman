@@ -164,7 +164,8 @@ export function registerSessionRoutes(
       assignedPort: body.assignedPort,
     });
     if (body.claudeResumeId) {
-      session.claudeResumeId = body.claudeResumeId;
+      // Use the setter so harnessSessionId (what restore keys off) stays in sync.
+      session.setClaudeResumeId(body.claudeResumeId);
     }
 
     ctx.addSession(session);
