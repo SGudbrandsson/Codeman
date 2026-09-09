@@ -229,6 +229,7 @@ interface SessionListenerRefs {
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
   contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
   conversationId: (uuid: string) => void;
+  harnessSessionIdDiscovered: (id: string) => void;
   compactSent: () => void;
   continueSent: () => void;
 }
@@ -1270,6 +1271,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
+        session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
         this.sessionListenerRefs.delete(sessionId);
       }
 
@@ -1382,6 +1384,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
+        session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();
@@ -1784,6 +1787,7 @@ export class WebServer extends EventEmitter {
             session.off('bashToolsUpdate', listenerRefs.bashToolsUpdate);
             session.off('contextUpdate', listenerRefs.contextUpdate);
             session.off('conversationId', listenerRefs.conversationId);
+            session.off('harnessSessionIdDiscovered', listenerRefs.harnessSessionIdDiscovered);
             this.sessionListenerRefs.delete(session.id);
           }
         } catch (err) {
@@ -1993,6 +1997,13 @@ export class WebServer extends EventEmitter {
         const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
         this.startTranscriptWatcher(session.id, join(projectDir, `${uuid}.jsonl`));
       },
+
+      /** Persists a harness session id that had to be discovered after spawn (codex). */
+      harnessSessionIdDiscovered: (id: string) => {
+        if (session.harnessSessionId === id) return;
+        session.harnessSessionId = id;
+        this.persistSessionState(session);
+      },
     };
 
     // Store listener refs for cleanup
@@ -2028,6 +2039,7 @@ export class WebServer extends EventEmitter {
     session.on('bashToolsUpdate', listeners.bashToolsUpdate);
     session.on('contextUpdate', listeners.contextUpdate);
     session.on('conversationId', listeners.conversationId);
+    session.on('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -3919,12 +3931,7 @@ export class WebServer extends EventEmitter {
               this.startTranscriptWatcher(session.id, transcriptPath);
             }
 
-            if (
-              wasRunning &&
-              !savedState.paused &&
-              session.harnessSessionId &&
-              getHarness(session.mode).caps.claudeTranscript
-            ) {
+            if (wasRunning && !savedState.paused && session.harnessSessionId) {
               // Auto-resume: restart Claude with --resume so the user sees a live session
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);
@@ -4065,6 +4072,7 @@ export class WebServer extends EventEmitter {
         session.off('bashToolsUpdate', listeners.bashToolsUpdate);
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
+        session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();

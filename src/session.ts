@@ -48,6 +48,7 @@ import {
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import type { HarnessModelConfig } from './harnesses/types.js';
 import { getHarness } from './harnesses/registry.js';
+import { discoverCodexSessionId } from './harnesses/codex-session-discovery.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
@@ -1617,6 +1618,24 @@ export class Session extends EventEmitter {
       }
       this.emit('exit', exitCode);
     });
+
+    // Codex cannot be told its session id, so read it back from the rollout file it
+    // writes. Deliberately codex-specific: the rollout format is codex's own, so this
+    // is not driven by a capability flag. Fire-and-forget — a failure costs only
+    // restore-after-reboot, not the session.
+    if (this.mode === 'codex' && !this.harnessSessionId) {
+      const startedAt = Date.now();
+      void discoverCodexSessionId(this.workingDir, startedAt)
+        .then((id) => {
+          if (!id) {
+            console.warn(`[Session] codex session id not discovered for ${this.id}; not resumable`);
+            return;
+          }
+          this.harnessSessionId = id;
+          this.emit('harnessSessionIdDiscovered', id);
+        })
+        .catch((err) => console.error(`[Session] codex discovery failed for ${this.id}:`, err));
+    }
   }
 
   /**
