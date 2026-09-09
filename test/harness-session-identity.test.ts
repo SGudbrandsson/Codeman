@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { backfillHarnessSessionId } from '../src/web/server.js';
-import { CreateSessionSchema } from '../src/web/schemas.js';
+import { CreateSessionSchema, ResumeClosedSessionSchema } from '../src/web/schemas.js';
 import type { SessionState } from '../src/types/session.js';
 
 const base = (over: Partial<SessionState>): SessionState =>
@@ -58,5 +58,28 @@ describe('CreateSessionSchema rejects a mismatched resume id', () => {
   it('rejects claudeResumeId paired with a non-claude mode', () => {
     const r = CreateSessionSchema.safeParse({ mode: 'opencode', claudeResumeId: uuid });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('ResumeClosedSessionSchema rejects non-claude harnesses', () => {
+  const uuid = '11111111-2222-4333-8444-555555555555';
+  const base = { workingDir: '/tmp', resumeId: uuid };
+
+  it('accepts mode claude', () => {
+    expect(ResumeClosedSessionSchema.safeParse({ ...base, mode: 'claude' }).success).toBe(true);
+  });
+
+  it('accepts an omitted mode (defaults to claude)', () => {
+    expect(ResumeClosedSessionSchema.safeParse(base).success).toBe(true);
+  });
+
+  it.each(['codex', 'pi', 'opencode', 'shell'] as const)('rejects mode %s', (mode) => {
+    // resumeId is a Claude conversation UUID. The route feeds it to
+    // setClaudeResumeId(), which mirrors it into harnessSessionId — so a codex
+    // session would spawn as `codex resume <claude-uuid>` and a shell session
+    // would become eligible for the state.json auto-resume gate.
+    const r = ResumeClosedSessionSchema.safeParse({ ...base, mode });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0]?.message).toMatch(/only.*claude/i);
   });
 });

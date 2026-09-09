@@ -261,7 +261,10 @@ export function registerHistoryRoutes(
       worktreeOriginId,
     });
 
-    // Set claudeResumeId BEFORE startInteractive() so CLI builder injects --resume <uuid>
+    // Set claudeResumeId BEFORE startInteractive() so CLI builder injects --resume <uuid>.
+    // Safe unconditionally: ResumeClosedSessionSchema rejects every non-claude mode, so
+    // resolvedMode is always 'claude' here and the Claude UUID this setter mirrors into
+    // harnessSessionId can never reach another harness.
     newSession.setClaudeResumeId(resumeId);
 
     ctx.addSession(newSession);

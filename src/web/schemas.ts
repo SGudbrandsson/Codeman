@@ -731,15 +731,31 @@ export const SaveDormantWorktreeSchema = z.object({
 // ========== History / Resume Closed Sessions ==========
 
 /** POST /api/sessions/resume — resume a previously closed session */
-export const ResumeClosedSessionSchema = z.object({
-  workingDir: safePathSchema,
-  resumeId: z.string().uuid(),
-  name: z.string().max(128).optional(),
-  mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'pi']).optional(),
-  worktreePath: z.string().optional(),
-  worktreeBranch: z.string().optional(),
-  worktreeOriginId: z.string().optional(),
-});
+export const ResumeClosedSessionSchema = z
+  .object({
+    workingDir: safePathSchema,
+    resumeId: z.string().uuid(),
+    name: z.string().max(128).optional(),
+    mode: z.enum(['claude', 'shell', 'opencode', 'codex', 'pi']).optional(),
+    worktreePath: z.string().optional(),
+    worktreeBranch: z.string().optional(),
+    worktreeOriginId: z.string().optional(),
+  })
+  .superRefine((val, ctx) => {
+    // resumeId is a Claude conversation UUID and the route feeds it straight to
+    // Session.setClaudeResumeId(), which mirrors it into harnessSessionId. Pairing
+    // it with another harness would resume the wrong thing — a codex session would
+    // spawn as `codex resume <claude-uuid>` (that id passes codex's own id pattern,
+    // so nothing downstream catches it) and a shell session would become eligible
+    // for the state.json auto-resume gate. Same hazard CreateSessionSchema guards.
+    if (val.mode !== undefined && val.mode !== 'claude') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['mode'],
+        message: 'resume is only supported for claude sessions',
+      });
+    }
+  });
 
 export type ResumeClosedSessionInput = z.infer<typeof ResumeClosedSessionSchema>;
 
