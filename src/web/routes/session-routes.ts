@@ -46,7 +46,7 @@ import { writeHooksConfig, updateCaseEnvVars } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import { getHarness } from '../../harnesses/registry.js';
+import { getHarness, isHarnessAvailable } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
@@ -128,22 +128,26 @@ export function registerSessionRoutes(
       await updateCaseEnvVars(workingDir, body.envOverrides);
     }
 
-    // Check OpenCode availability if requested
-    if (body.mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-      if (!isOpenCodeAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-        );
-      }
+    // Refuse up front when the requested harness's CLI isn't installed.
+    const mode = body.mode || 'claude';
+    const harnessDef = getHarness(mode);
+    if (!isHarnessAvailable(harnessDef)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, harnessDef.installHint);
     }
 
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
-    const mode = body.mode || 'claude';
-    const model =
-      mode === 'opencode' ? body.openCodeConfig?.model : mode !== 'shell' ? modelConfig?.defaultModel : undefined;
+    // An explicit per-harness model always wins; the global Claude default only
+    // applies to harnesses that actually consume it.
+    const harnessModel =
+      mode === 'opencode'
+        ? body.openCodeConfig?.model
+        : mode === 'codex'
+          ? body.codexConfig?.model
+          : mode === 'pi'
+            ? body.piConfig?.model
+            : undefined;
+    const model = harnessModel ?? (harnessDef.caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined);
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     const session = new Session({
       workingDir,
@@ -156,6 +160,8 @@ export function registerSessionRoutes(
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
+      codexConfig: mode === 'codex' ? body.codexConfig : undefined,
+      piConfig: mode === 'pi' ? body.piConfig : undefined,
       safeMode: body.safeMode,
       worktreeBranch: body.worktreeBranch,
       worktreePath: body.worktreePath,
@@ -1310,17 +1316,12 @@ ${contextLines.join('\n')}`;
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
     }
-    const { caseName = 'testcase', mode = 'claude', openCodeConfig } = result.data;
+    const { caseName = 'testcase', mode = 'claude', openCodeConfig, codexConfig, piConfig } = result.data;
 
-    // Check OpenCode availability if requested
-    if (mode === 'opencode') {
-      const { isOpenCodeAvailable } = await import('../../utils/opencode-cli-resolver.js');
-      if (!isOpenCodeAvailable()) {
-        return createErrorResponse(
-          ApiErrorCode.OPERATION_FAILED,
-          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-        );
-      }
+    // Refuse up front when the requested harness's CLI isn't installed.
+    const qsHarnessDef = getHarness(mode);
+    if (!isHarnessAvailable(qsHarnessDef)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, qsHarnessDef.installHint);
     }
 
     // Check linked cases first — linked case paths may live outside CASES_DIR
@@ -1360,7 +1361,7 @@ ${contextLines.join('\n')}`;
 
         // Write .claude/settings.local.json with hooks for desktop notifications
         // (Claude-specific — other harnesses use their own plugin systems)
-        if (getHarness(mode ?? 'claude').caps.claudeHooks) {
+        if (qsHarnessDef.caps.claudeHooks) {
           await writeHooksConfig(casePath);
         }
 
@@ -1374,8 +1375,16 @@ ${contextLines.join('\n')}`;
     // Apply global Nice priority config and model config from settings
     const niceConfig = await ctx.getGlobalNiceConfig();
     const qsModelConfig = await ctx.getModelConfig();
+    const qsHarnessModel =
+      mode === 'opencode'
+        ? openCodeConfig?.model
+        : mode === 'codex'
+          ? codexConfig?.model
+          : mode === 'pi'
+            ? piConfig?.model
+            : undefined;
     const qsModel =
-      mode === 'opencode' ? openCodeConfig?.model : mode !== 'shell' ? qsModelConfig?.defaultModel : undefined;
+      qsHarnessModel ?? (qsHarnessDef.caps.usesClaudeModelDefaults ? qsModelConfig?.defaultModel : undefined);
     const qsClaudeModeConfig = await ctx.getClaudeModeConfig();
     const session = new Session({
       workingDir: casePath,
@@ -1387,6 +1396,8 @@ ${contextLines.join('\n')}`;
       claudeMode: qsClaudeModeConfig.claudeMode,
       allowedTools: qsClaudeModeConfig.allowedTools,
       openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
+      codexConfig: mode === 'codex' ? codexConfig : undefined,
+      piConfig: mode === 'pi' ? piConfig : undefined,
     });
 
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -1411,9 +1422,10 @@ ${contextLines.join('\n')}`;
     });
     ctx.broadcast(SseEvent.SessionCreated, ctx.getSessionStateWithRespawn(session));
 
-    // Start in the appropriate mode
+    // Start in the appropriate mode.
+    // Registry-driven: a harness with no binary of its own is a plain shell.
     try {
-      if (mode === 'shell') {
+      if (!qsHarnessDef.binary) {
         await session.startShell();
         getLifecycleLog().log({
           event: 'started',

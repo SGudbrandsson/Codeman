@@ -1428,7 +1428,9 @@ export class WebServer extends EventEmitter {
         name: incrementSessionName(archivedState.name),
         mode: archivedState.mode ?? 'claude',
         niceConfig: await this.getGlobalNiceConfig(),
-        model: archivedState.mode !== 'shell' ? (modelConfig?.defaultModel ?? undefined) : undefined,
+        model: getHarness(archivedState.mode ?? 'claude').caps.usesClaudeModelDefaults
+          ? (modelConfig?.defaultModel ?? undefined)
+          : undefined,
         claudeMode: claudeModeConfig.claudeMode,
         allowedTools: claudeModeConfig.allowedTools,
       });
@@ -1447,8 +1449,9 @@ export class WebServer extends EventEmitter {
       this.sessions.set(childSession.id, childSession);
       await this.setupSessionListeners(childSession);
 
-      // 12. Start the child session's Claude/shell process automatically
-      if (archivedState.mode === 'shell') {
+      // 12. Start the child session's harness process automatically.
+      // Registry-driven: a harness with no binary of its own is a plain shell.
+      if (!getHarness(archivedState.mode ?? 'claude').binary) {
         await childSession.startShell();
       } else {
         await childSession.startInteractive();

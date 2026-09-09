@@ -15,8 +15,24 @@ import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
 import { getStore } from './state-store.js';
 import { getErrorMessage } from './types.js';
+import { getHarness } from './harnesses/registry.js';
+import type { SessionMode } from './types/session.js';
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Two-character harness badge for the session list.
+ * State written by an older/newer build can name a mode this build doesn't know,
+ * so fall back to the raw mode string rather than throwing out of `codeman list`.
+ */
+function harnessShortLabel(mode: string): string {
+  try {
+    return getHarness(mode as SessionMode).shortLabel;
+  } catch {
+    return mode;
+  }
+}
+
 const pkg = require('../package.json') as { version: string };
 
 const program = new Command();
@@ -108,7 +124,8 @@ sessionCmd
               ? chalk.yellow('busy')
               : chalk.red(session.status);
         const name = session.name ? ` (${session.name})` : '';
-        const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
+        const mode =
+          session.mode && session.mode !== 'claude' ? chalk.gray(` [${harnessShortLabel(session.mode)}]`) : '';
         const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
         console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`);
       }

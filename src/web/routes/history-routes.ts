@@ -16,6 +16,7 @@ import { SseEvent } from '../sse-events.js';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { ResumeClosedSessionSchema } from '../schemas.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { getHarness } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 /** Maximum JSONL files to scan across all project dirs */
@@ -242,7 +243,7 @@ export function registerHistoryRoutes(
     ]);
 
     const resolvedMode = mode ?? 'claude';
-    const model = resolvedMode !== 'shell' ? modelConfig?.defaultModel : undefined;
+    const model = getHarness(resolvedMode).caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined;
 
     // Create session WITHOUT claudeResumeId in constructor — set it after construction
     const newSession = new Session({

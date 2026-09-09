@@ -21,6 +21,8 @@ import {
   SubagentParentMapSchema,
   RevokeSessionSchema,
 } from '../schemas.js';
+import { getHarness, isHarnessAvailable, listHarnesses, resolveHarnessDir } from '../../harnesses/registry.js';
+import type { SessionMode } from '../../types/session.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
@@ -233,16 +235,42 @@ export function registerSystemRoutes(
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CLI Integrations (OpenCode)
+  // CLI Integrations (session harnesses)
   // ═══════════════════════════════════════════════════════════════
 
-  // ========== OpenCode ==========
+  // ========== Harness registry ==========
 
-  app.get('/api/opencode/status', async () => {
-    const { isOpenCodeAvailable, resolveOpenCodeDir } = await import('../../utils/opencode-cli-resolver.js');
+  app.get('/api/harnesses', async () => ({
+    harnesses: listHarnesses().map((h) => ({
+      id: h.id,
+      label: h.label,
+      shortLabel: h.shortLabel,
+      installHint: h.installHint,
+      available: isHarnessAvailable(h),
+      caps: h.caps,
+    })),
+  }));
+
+  app.get<{ Params: { id: string } }>('/api/harness/:id/status', async (req, reply) => {
+    let def;
+    try {
+      def = getHarness(req.params.id as SessionMode);
+    } catch {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `Unknown harness: ${req.params.id}`);
+    }
     return {
-      available: isOpenCodeAvailable(),
-      path: resolveOpenCodeDir(),
+      available: isHarnessAvailable(def),
+      path: def.binary ? resolveHarnessDir(def.binary, def.searchDirs) : null,
+    };
+  });
+
+  // Retained alias — existing clients and the frontend still call this path.
+  app.get('/api/opencode/status', async () => {
+    const def = getHarness('opencode');
+    return {
+      available: isHarnessAvailable(def),
+      path: def.binary ? resolveHarnessDir(def.binary, def.searchDirs) : null,
     };
   });
 

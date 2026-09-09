@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 
+// Harness binary resolution is machine-dependent; keep route tests hermetic.
+vi.mock('../../src/harnesses/resolver.js', () => ({
+  isHarnessAvailable: vi.fn(() => true),
+  resolveHarnessDir: vi.fn(() => '/usr/local/bin'),
+  _clearResolverCache: vi.fn(),
+}));
+
 vi.mock('../../src/session-lifecycle-log.js', () => ({
   getLifecycleLog: vi.fn().mockReturnValue({ log: vi.fn() }),
 }));

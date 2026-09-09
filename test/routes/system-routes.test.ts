@@ -5,7 +5,7 @@
  * Port: N/A (app.inject doesn't open ports)
  *
  * Mocks: fs (promises + sync), subagentWatcher, imageWatcher,
- * session-lifecycle-log, and opencode-cli-resolver singletons.
+ * session-lifecycle-log, and the harness binary resolver.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -71,16 +71,19 @@ vi.mock('../../src/session-lifecycle-log.js', () => ({
   })),
 }));
 
-vi.mock('../../src/utils/opencode-cli-resolver.js', () => ({
-  isOpenCodeAvailable: vi.fn(() => false),
-  resolveOpenCodeDir: vi.fn(() => null),
+// /api/opencode/status is now a registry-backed alias (Task 6), so the harness
+// resolver — not the old opencode-cli-resolver — is what drives its answer.
+vi.mock('../../src/harnesses/resolver.js', () => ({
+  isHarnessAvailable: vi.fn(() => false),
+  resolveHarnessDir: vi.fn(() => null),
+  _clearResolverCache: vi.fn(),
 }));
 
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { subagentWatcher } from '../../src/subagent-watcher.js';
 import { getLifecycleLog } from '../../src/session-lifecycle-log.js';
-import { isOpenCodeAvailable, resolveOpenCodeDir } from '../../src/utils/opencode-cli-resolver.js';
+import { isHarnessAvailable, resolveHarnessDir } from '../../src/harnesses/resolver.js';
 
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
@@ -88,8 +91,8 @@ const mockedExistsSync = vi.mocked(existsSync);
 const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedSubagentWatcher = vi.mocked(subagentWatcher);
 const mockedGetLifecycleLog = vi.mocked(getLifecycleLog);
-const mockedIsOpenCodeAvailable = vi.mocked(isOpenCodeAvailable);
-const mockedResolveOpenCodeDir = vi.mocked(resolveOpenCodeDir);
+const mockedIsOpenCodeAvailable = vi.mocked(isHarnessAvailable);
+const mockedResolveOpenCodeDir = vi.mocked(resolveHarnessDir);
 
 describe('system-routes', () => {
   let harness: RouteTestHarness;

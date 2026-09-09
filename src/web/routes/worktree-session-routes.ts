@@ -39,6 +39,7 @@ import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { detectPortsFromDir, allocateNextPort } from '../../utils/port-detection.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getWorktreeStore } from '../../worktree-store.js';
+import { getHarness, isHarnessAvailable } from '../../harnesses/registry.js';
 
 // Validate branch name: alphanumeric, dots, hyphens, forward slashes only
 const BRANCH_PATTERN = /^[a-zA-Z0-9._\-/]+$/;
@@ -234,6 +235,10 @@ export function registerWorktreeSessionRoutes(
     }
 
     const resolvedMode = mode ?? session.mode;
+    const harnessDef = getHarness(resolvedMode);
+    if (!isHarnessAvailable(harnessDef)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, harnessDef.installHint);
+    }
     const gitRoot = findGitRoot(session.workingDir);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
 
@@ -312,9 +317,14 @@ export function registerWorktreeSessionRoutes(
       mux: ctx.mux,
       useMux: true,
       niceConfig: globalNice,
-      model: modelConfig?.defaultModel,
+      model: harnessDef.caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined,
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
+      // CreateWorktreeSchema carries no harness config — a worktree inherits it
+      // from the session it was spawned off.
+      openCodeConfig: resolvedMode === 'opencode' ? session.openCodeConfig : undefined,
+      codexConfig: resolvedMode === 'codex' ? session.codexConfig : undefined,
+      piConfig: resolvedMode === 'pi' ? session.piConfig : undefined,
       worktreePath,
       worktreeBranch: branch,
       worktreeOriginId: id,
@@ -331,7 +341,7 @@ export function registerWorktreeSessionRoutes(
 
     if (autoStart) {
       try {
-        if (resolvedMode === 'shell') {
+        if (!getHarness(resolvedMode).binary) {
           await newSession.startShell();
           getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
@@ -349,7 +359,7 @@ export function registerWorktreeSessionRoutes(
         ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
 
         // Send notes as the first prompt if provided
-        if (notes && resolvedMode !== 'shell') {
+        if (notes && getHarness(resolvedMode).binary) {
           // Wait for the session to fully initialize before sending input
           await new Promise((resolve) => setTimeout(resolve, 2000));
           const noteInput = notes + '\r';
@@ -564,6 +574,10 @@ export function registerWorktreeSessionRoutes(
     const { branch, isNew, mode, notes, autoStart, taskMd, claudeMd } = parsed.data;
     if (!BRANCH_PATTERN.test(branch)) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid branch name');
     const resolvedMode = mode ?? 'claude';
+    const caseHarnessDef = getHarness(resolvedMode);
+    if (!isHarnessAvailable(caseHarnessDef)) {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, caseHarnessDef.installHint);
+    }
     const gitRoot = findGitRoot(casePath);
     if (!gitRoot) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Not a git repository');
     const projectName = gitRoot.split('/').pop() ?? 'project';
@@ -635,7 +649,7 @@ export function registerWorktreeSessionRoutes(
       mux: ctx.mux,
       useMux: true,
       niceConfig: globalNice,
-      model: modelConfig?.defaultModel,
+      model: caseHarnessDef.caps.usesClaudeModelDefaults ? modelConfig?.defaultModel : undefined,
       claudeMode: claudeModeConfig.claudeMode,
       allowedTools: claudeModeConfig.allowedTools,
       worktreePath,
@@ -651,7 +665,7 @@ export function registerWorktreeSessionRoutes(
 
     if (autoStart) {
       try {
-        if (resolvedMode === 'shell') {
+        if (!getHarness(resolvedMode).binary) {
           await newSession.startShell();
           getLifecycleLog().log({ event: 'started', sessionId: newSession.id, name: newSession.name, mode: 'shell' });
           ctx.broadcast(SseEvent.SessionInteractive, { id: newSession.id, mode: 'shell' });
@@ -669,7 +683,7 @@ export function registerWorktreeSessionRoutes(
         ctx.broadcast(SseEvent.SessionUpdated, { session: lightState });
 
         // Send notes as the first prompt if provided
-        if (notes && resolvedMode !== 'shell') {
+        if (notes && getHarness(resolvedMode).binary) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
           const noteInput = notes + '\r';
           const sent = await newSession.writeViaMux(noteInput);

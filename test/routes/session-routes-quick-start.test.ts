@@ -59,6 +59,13 @@ vi.mock('../../src/session-lifecycle-log.js', () => ({
   getLifecycleLog: vi.fn().mockReturnValue({ log: vi.fn() }),
 }));
 
+// Harness binary resolution is machine-dependent; keep route tests hermetic.
+vi.mock('../../src/harnesses/resolver.js', () => ({
+  isHarnessAvailable: vi.fn(() => true),
+  resolveHarnessDir: vi.fn(() => '/usr/local/bin'),
+  _clearResolverCache: vi.fn(),
+}));
+
 vi.mock('../../src/utils/opencode-cli-resolver.js', () => ({
   isOpenCodeAvailable: vi.fn(() => true),
 }));
