@@ -669,23 +669,31 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Neutral harness session identity
+### Task 3: Neutral identity and config, threaded through the spawn boundary
 
-Adds `harnessSessionId` so restore-after-reboot stops depending on Claude's `claudeResumeId`, plus the `codexConfig` / `piConfig` fields and the schema guard that makes the backfill safe. No new modes yet.
+Adds `harnessSessionId` and the `codexConfig` / `piConfig` fields, and — critically — threads all three all the way to the spawn command.
+
+**The spawn boundary is the whole point of this task.** `Session` fields alone are inert: `TmuxManager` receives its inputs through `CreateSessionOptions` / `RespawnPaneOptions` (`src/mux-interface.ts:54,69`), and `Session.startInteractive()` currently forwards only `openCodeConfig` (`src/session.ts:1213,1250`). Without this plumbing, Task 4's `ctx.codexConfig` / `ctx.piConfig` / `ctx.harnessSessionId` are always `undefined`: codex and pi model selection would silently do nothing, and a restored codex session would start fresh instead of resuming.
 
 **Files:**
-- Modify: `src/types/session.ts` — `SessionState` and `SessionConfig` (around :221-231)
-- Modify: `src/session.ts` — private field (:403 area), constructor input (:452-525), accessor, `toState()` (:1074)
-- Modify: `src/web/server.ts:3462` — restore-path backfill
+- Modify: `src/types/session.ts` — `SessionState` (:221 area) and `SessionConfig` (:105 area). Note these are two separate interfaces at different offsets; do not assume one edit covers both.
+- Modify: `src/mux-interface.ts:54-80` — both `CreateSessionOptions` and `RespawnPaneOptions`
+- Modify: `src/tmux-manager.ts` — `createSession()` and `respawnPane()` destructuring and their `buildSpawnCommand()` calls
+- Modify: `src/session.ts` — private fields (:403 area), constructor input (:452-525), accessors, both mux spawn calls (:1213, :1250), `toState()` (:1074), `setClaudeResumeId()`
+- Modify: `src/session-cli-builder.ts` / `src/session.ts:1214,1252` — gate `buildMcpArgs` on the harness
+- Modify: `src/web/server.ts:3462` — restore backfill; `:3585`, `:3839` — pass saved config into restored `Session`s; `:1965` — sync via `setClaudeResumeId`
+- Modify: `src/web/routes/session-routes.ts:165` — incoming `claudeResumeId`
 - Modify: `src/web/schemas.ts:140-154` — `CreateSessionSchema.superRefine`
-- Test: `test/harness-session-identity.test.ts`
+- Test: `test/harness-session-identity.test.ts`, `test/harness-spawn-plumbing.test.ts`
 
 **Interfaces:**
 - Consumes: `getHarness` (Task 1).
 - Produces:
   - `SessionState.harnessSessionId?: string`, `SessionState.codexConfig?: HarnessModelConfig`, `SessionState.piConfig?: HarnessModelConfig` (same three on `SessionConfig`).
   - `Session.harnessSessionId: string | undefined` — public read/write accessor, mirrors `claudeResumeId`.
+  - `Session.openCodeConfig` / `Session.codexConfig` / `Session.piConfig` — public getters (the worktree route in Task 6 needs to read them off an originating session).
   - `backfillHarnessSessionId(state: SessionState): boolean` exported from `src/web/server.ts` — returns true when it mutated, so the caller knows to persist.
+  - `CreateSessionOptions` / `RespawnPaneOptions` gain `codexConfig?`, `piConfig?`, `harnessSessionId?`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -818,16 +826,83 @@ export function backfillHarnessSessionId(state: SessionState): boolean {
 }
 ```
 
-At the call site:
+At the call site — note the store API is `setSession(id, state)`. There is **no** `updateSession` method on `StateStore`; see `src/state-store.ts:478`:
 
 ```typescript
 if (backfillHarnessSessionId(savedState)) {
-  this.store.updateSession(savedState.id, { harnessSessionId: savedState.harnessSessionId });
+  this.store.setSession(savedState.id, savedState);
 }
 if (savedState.claudeResumeId !== undefined) {
   session.claudeResumeId = savedState.claudeResumeId;
 }
 session.harnessSessionId = savedState.harnessSessionId;
+```
+
+- [ ] **Step 5a: Keep fresh Claude sessions populating `harnessSessionId`**
+
+Without this, Step 7's restore gate breaks Claude restore outright: new Claude sessions only ever set `claudeResumeId` (`server.ts:1965`, `server.ts:940`), so they would have no neutral id and would stop auto-resuming.
+
+`Session` already has a `setClaudeResumeId()` setter, which is the single choke point. Make it sync both:
+
+```typescript
+/**
+ * Set the Claude conversation UUID. Also mirrors it into the neutral
+ * harnessSessionId, which is what the restore path keys off. Claude is the only
+ * harness where the two are the same value.
+ */
+setClaudeResumeId(id: string): void {
+  this.claudeResumeId = id;
+  this.harnessSessionId = id;
+}
+```
+
+Audit for any site that assigns `session.claudeResumeId = ...` directly rather than through the setter and route it through the setter instead — `server.ts:941`, `history-routes.ts:264`, and `session-routes.ts:166` all do this today.
+
+- [ ] **Step 5b: Thread config and identity through the spawn boundary**
+
+This is the step that makes Task 4 actually function.
+
+In `src/mux-interface.ts`, add to **both** `CreateSessionOptions` (`:54`) and `RespawnPaneOptions` (`:69`):
+
+```typescript
+codexConfig?: HarnessModelConfig;
+piConfig?: HarnessModelConfig;
+/** Harness-native id to resume, for harnesses that resume by id (codex). */
+harnessSessionId?: string;
+```
+
+In `src/tmux-manager.ts`, add the three to the destructuring in `createSession()` (`:398` area) and `respawnPane()` (`:643`), and pass them into `buildSpawnCommand({...})` at both call sites.
+
+In `src/session.ts`, add all three to **both** mux spawn calls (`:1213` and `:1250`), beside the existing `openCodeConfig`:
+
+```typescript
+openCodeConfig: this._openCodeConfig,
+codexConfig: this._codexConfig,
+piConfig: this._piConfig,
+harnessSessionId: this.harnessSessionId,
+```
+
+- [ ] **Step 5c: Stop sending Claude-only CLI args to other harnesses**
+
+`buildMcpArgs()` appends `--mcp-config <path>` and `--resume <claudeResumeId>` (`src/session-cli-builder.ts:91-128`), and `startInteractive()` calls it unconditionally for every mux spawn (`session.ts:1214,1252`). Codex and pi reject both flags.
+
+At both call sites:
+
+```typescript
+extraArgs: getHarness(this.mode).caps.claudeTranscript
+  ? buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode)
+  : [],
+```
+
+- [ ] **Step 5d: Restore saved config into restored sessions**
+
+The two restore construction paths (`server.ts:3585`, `server.ts:3839`) build `new Session({...})` without any harness config, and `_restoreSessionConfig()` (`:3462`) restores only `claudeResumeId`. Add to both constructions:
+
+```typescript
+openCodeConfig: savedState?.openCodeConfig,
+codexConfig: savedState?.codexConfig,
+piConfig: savedState?.piConfig,
+harnessSessionId: savedState?.harnessSessionId,
 ```
 
 - [ ] **Step 6: Guard the schema in `src/web/schemas.ts`**
@@ -856,10 +931,58 @@ if (wasRunning && !savedState.paused && session.harnessSessionId && getHarness(s
 
 Keep the `claudeTranscript` capability in the condition for now — Task 5 relaxes it once codex and pi can actually resume.
 
+- [ ] **Step 7a: Write the spawn-plumbing test**
+
+This is the test that would have caught the whole feature being a silent no-op. Create `test/harness-spawn-plumbing.test.ts`:
+
+```typescript
+/**
+ * @fileoverview Proves harness config and identity reach the spawn command.
+ *
+ * Session fields are inert unless they are forwarded through CreateSessionOptions
+ * into TmuxManager.buildSpawnCommand. This asserts the command string actually
+ * carries them.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { buildSpawnCommand } from '../src/tmux-manager.js';
+
+describe('spawn boundary carries harness config', () => {
+  it('a configured codex session gets its model on the command line', () => {
+    const cmd = buildSpawnCommand({
+      mode: 'codex', sessionId: 's1', codexConfig: { model: 'gpt-5.2' },
+    });
+    expect(cmd).toContain('-m gpt-5.2');
+  });
+
+  it('a restored codex session resumes by its harnessSessionId', () => {
+    const cmd = buildSpawnCommand({
+      mode: 'codex', sessionId: 's1',
+      harnessSessionId: '01a085e9-15f5-7b80-8af1-411de2591ffe',
+    });
+    expect(cmd).toContain('resume 01a085e9-15f5-7b80-8af1-411de2591ffe');
+  });
+
+  it('a fresh pi session reuses the Codeman session id', () => {
+    const cmd = buildSpawnCommand({ mode: 'pi', sessionId: 'codeman-sid-9' });
+    expect(cmd).toContain('--session-id codeman-sid-9');
+  });
+
+  it('a configured pi session gets its model', () => {
+    const cmd = buildSpawnCommand({ mode: 'pi', sessionId: 's', piConfig: { model: 'anthropic/sonnet' } });
+    expect(cmd).toContain('--model anthropic/sonnet');
+  });
+});
+```
+
+Note this test requires Task 4's harnesses; run it at the end of Task 4 as well as here, and expect the codex/pi cases to fail until then. If executing strictly in order, write it now and mark the codex/pi cases `it.skip`, un-skipping them in Task 4 Step 7.
+
 - [ ] **Step 8: Run the tests**
 
-Run: `npx vitest run test/harness-session-identity.test.ts test/harness-registry.test.ts test/claude-resume-id-update.test.ts`
+Run: `npx vitest run test/harness-session-identity.test.ts test/harness-registry.test.ts test/claude-resume-id-update.test.ts test/harness-spawn-plumbing.test.ts`
 Expected: PASS.
+
+Also confirm Claude restore still works, since Step 7 changed its gate: `npx vitest run test/claude-resume-id-update.test.ts` must show the same result as on master.
 
 - [ ] **Step 9: Typecheck and commit**
 
@@ -1163,7 +1286,8 @@ Codex cannot be told its session id, so Codeman reads it back from the rollout f
 
 **Files:**
 - Create: `src/harnesses/codex-session-discovery.ts`
-- Modify: `src/session.ts` — call discovery after `startInteractive()` for harnesses with `preassignsSessionId: false` and `requiresMux: true`
+- Modify: `src/session.ts` — call discovery after `startInteractive()`, codex-specific (the rollout format is codex's own, not a generic capability)
+- Modify: `src/web/server.ts:1962` — add the `harnessSessionIdDiscovered` listener that persists
 - Modify: `src/web/server.ts:3886` — drop the `claudeTranscript` condition added in Task 3 Step 7
 - Test: `test/codex-session-discovery.test.ts`
 
@@ -1385,7 +1509,9 @@ At the end of `startInteractive()`, after the mux session is created and readine
 
 ```typescript
 // Codex cannot be told its session id, so read it back from the rollout file it
-// writes. Fire-and-forget: a failure only costs restore-after-reboot, not the session.
+// writes. Deliberately codex-specific: the rollout format is codex's own, so this
+// is not driven by a capability flag. Fire-and-forget — a failure costs only
+// restore-after-reboot, not the session.
 if (this.mode === 'codex' && !this.harnessSessionId) {
   const startedAt = Date.now();
   void discoverCodexSessionId(this.workingDir, startedAt)
@@ -1395,13 +1521,23 @@ if (this.mode === 'codex' && !this.harnessSessionId) {
         return;
       }
       this.harnessSessionId = id;
-      this.emit('stateChanged');
+      this.emit('harnessSessionIdDiscovered', id);
     })
     .catch((err) => console.error(`[Session] codex discovery failed for ${this.id}:`, err));
 }
 ```
 
-Confirm `'stateChanged'` is the event the server already listens to for persisting session state; if the codebase uses a different event name for "persist me", use that one instead.
+`Session` emits no `'stateChanged'` event today and the server subscribes to none — verified against the full listener list at `src/web/server.ts:1982`. Emitting one without a listener would leave the discovered id in memory only, lost on reboot. Add the listener in `setupSessionListeners()` alongside the existing `conversationId` handler (`server.ts:1962`), following the exact same shape:
+
+```typescript
+harnessSessionIdDiscovered: (id: string) => {
+  if (session.harnessSessionId === id) return;
+  session.harnessSessionId = id;
+  this.persistSessionState(session);
+},
+```
+
+and emit `this.emit('harnessSessionIdDiscovered', id)` from the discovery callback instead of `'stateChanged'`.
 
 - [ ] **Step 5: Relax the restore gate**
 
@@ -1453,55 +1589,64 @@ Fixes the server-side sites that mean "Claude" but are written as "not shell" or
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/harness-route-audit.test.ts`:
+Create `test/harness-route-audit.test.ts`. It must exercise the **real routes** — a local helper that re-implements the routing rule would pass before any route change and prove nothing.
+
+Follow the Fastify injection pattern in `test/routes/system-routes.test.ts` (it builds an app harness and calls `harness.app.inject({...})`). Assert:
 
 ```typescript
-/**
- * @fileoverview Tests for the harness availability endpoints and the model-default guard.
- */
-
 import { describe, it, expect } from 'vitest';
-import { getHarness } from '../src/harnesses/registry.js';
-import type { SessionMode } from '../src/types/session.js';
 
-/** Mirrors the model-selection rule the routes now share. */
-function pickModel(mode: SessionMode, defaultModel: string | undefined, harnessModel?: string): string | undefined {
-  if (harnessModel) return harnessModel;
-  return getHarness(mode).caps.usesClaudeModelDefaults ? defaultModel : undefined;
-}
-
-describe('model default selection', () => {
-  it('gives claude the global default', () => {
-    expect(pickModel('claude', 'opus')).toBe('opus');
-  });
-
-  it.each(['codex', 'pi', 'opencode', 'shell'] as const)(
-    'does not hand the Claude default model to %s',
-    (mode) => {
-      expect(pickModel(mode, 'opus')).toBeUndefined();
-    }
-  );
-
-  it('prefers an explicit harness model over the default', () => {
-    expect(pickModel('codex', 'opus', 'gpt-5.2')).toBe('gpt-5.2');
+describe('GET /api/harnesses', () => {
+  it('lists all five harnesses with labels and availability', async () => {
+    const res = await harness.app.inject({ method: 'GET', url: '/api/harnesses' });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().harnesses.map((h: { id: string }) => h.id).sort();
+    expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi', 'shell']);
   });
 });
 
-describe('harness metadata is serialisable for the UI', () => {
-  it('every harness exposes the fields the frontend needs', () => {
-    for (const h of [getHarness('claude'), getHarness('codex'), getHarness('pi')]) {
-      expect(typeof h.label).toBe('string');
-      expect(h.shortLabel.length).toBeLessThanOrEqual(2);
-      expect(typeof h.installHint).toBe('string');
-    }
+describe('GET /api/harness/:id/status', () => {
+  it('404s on an unknown harness', async () => {
+    const res = await harness.app.inject({ method: 'GET', url: '/api/harness/nope/status' });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('keeps the legacy opencode alias working', async () => {
+    const res = await harness.app.inject({ method: 'GET', url: '/api/opencode/status' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty('available');
+  });
+});
+
+describe('POST /api/sessions model defaults', () => {
+  it('does not hand the Claude default model to a codex session', async () => {
+    const res = await harness.app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { workingDir: '/tmp', mode: 'codex' },
+    });
+    // Inspect the created session's persisted state rather than the response shape,
+    // so this fails if the route still applies the "not shell" rule.
+    const created = res.json();
+    const state = harness.store.getSession(created.sessionId ?? created.id);
+    expect(state?.model).toBeUndefined();
+  });
+
+  it('rejects a create with claudeResumeId on a non-claude mode', async () => {
+    const res = await harness.app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { workingDir: '/tmp', mode: 'codex', claudeResumeId: '11111111-2222-4333-8444-555555555555' },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
 ```
 
+If the existing test harness in `test/routes/system-routes.test.ts` does not expose `store`, extend it rather than falling back to a pure-function stand-in.
+
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run test/harness-route-audit.test.ts`
-Expected: FAIL — `pi.shortLabel` is fine, but the suite fails to import until Task 4 is in place. If Task 4 is committed, this test passes immediately; in that case add the route changes first and re-run.
+Expected: FAIL — `/api/harnesses` and `/api/harness/:id/status` return 404, and the codex create still receives the Claude default model.
 
 - [ ] **Step 3: Replace the availability checks in `session-routes.ts`**
 
@@ -1542,10 +1687,28 @@ model: getHarness(archivedState.mode ?? 'claude').caps.usesClaudeModelDefaults
 
 - [ ] **Step 5: Pass the harness config through at `session-routes.ts:157,1384`**
 
+The two routes use **different variable names**. The create route (`:157`) reads from `body`; the quick-start route (`:1384`) destructures from `result.data` at `:1308` and has no `body` in scope — writing `body.codexConfig` there is a compile error.
+
+Create route (`:157`):
+
 ```typescript
 openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
 codexConfig: mode === 'codex' ? body.codexConfig : undefined,
 piConfig: mode === 'pi' ? body.piConfig : undefined,
+```
+
+Quick-start route — first extend the destructuring at `:1308`:
+
+```typescript
+const { caseName, mode, openCodeConfig, codexConfig, piConfig } = result.data;
+```
+
+then at `:1384`:
+
+```typescript
+openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
+codexConfig: mode === 'codex' ? codexConfig : undefined,
+piConfig: mode === 'pi' ? piConfig : undefined,
 ```
 
 - [ ] **Step 6: Fix the worktree creation path**
@@ -1559,7 +1722,20 @@ if (!isHarnessAvailable(harnessDef)) {
 }
 ```
 
-At both `:334` and `:654`, replace `if (resolvedMode === 'shell')` with `if (!getHarness(resolvedMode).binary)` so the shell branch is registry-driven, and pass the harness config into the `new Session({...})` call in the same way as Step 5.
+At both `:334` and `:654`, replace `if (resolvedMode === 'shell')` with `if (!getHarness(resolvedMode).binary)` so the shell branch is registry-driven.
+
+**Where the worktree's harness config comes from:** `CreateWorktreeSchema` (`src/web/schemas.ts:679`) has no config fields, and the route destructures only `{ branch, isNew, mode, notes, autoStart, taskMd, claudeMd }` (`:231`) — so there is no `body.codexConfig` to forward. Inherit it from the originating session instead, which is what a worktree spawned off a session should do:
+
+```typescript
+const newSession = new Session({
+  // ...existing fields...
+  openCodeConfig: resolvedMode === 'opencode' ? session.openCodeConfig : undefined,
+  codexConfig: resolvedMode === 'codex' ? session.codexConfig : undefined,
+  piConfig: resolvedMode === 'pi' ? session.piConfig : undefined,
+});
+```
+
+This relies on the public getters added in Task 3. Do **not** add config fields to `CreateWorktreeSchema` — inheritance is the intended behaviour and needs no new API surface.
 
 - [ ] **Step 7: Generalise the availability endpoint in `system-routes.ts`**
 
@@ -1642,35 +1818,53 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/harness-ui.test.ts`. Follow the jsdom setup used by `test/transcript-mode-guard.test.ts` for loading `app.js`. Assert:
+Create `test/harness-ui.test.ts`. It must load and drive the real `app.js` — a local `dispatchTarget()` helper re-implementing the rule would pass against the current broken UI, making the required initial FAIL meaningless.
+
+Follow the jsdom + `app.js` loading setup already used by `test/transcript-mode-guard.test.ts`. Stub `fetch` so `/api/harnesses` returns the five-harness payload and `/api/harness/:id/status` returns `{ available: true }`, then assert on the real object:
 
 ```typescript
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-/** Mirrors the run-mode dispatch rule in app.js run(). */
-function dispatchTarget(mode: string): string {
-  return mode === 'claude' ? 'runClaude' : 'runHarness';
-}
-
-describe('run-mode dispatch', () => {
-  it('sends claude to runClaude', () => {
-    expect(dispatchTarget('claude')).toBe('runClaude');
+describe('run() dispatch', () => {
+  beforeEach(() => {
+    app._harnesses = new Map([
+      ['claude', { id: 'claude', label: 'Claude Code', shortLabel: 'cc', caps: { pausable: true, respawn: true } }],
+      ['codex',  { id: 'codex',  label: 'Codex',       shortLabel: 'cx', caps: { pausable: false, respawn: false } }],
+      ['pi',     { id: 'pi',     label: 'Pi',          shortLabel: 'pi', caps: { pausable: false, respawn: false } }],
+    ]);
   });
 
-  it.each(['opencode', 'codex', 'pi'])('sends %s to runHarness, not runClaude', (mode) => {
+  it.each(['codex', 'pi'])('routes %s to runHarness, not runClaude', async (mode) => {
     // Before this change run() special-cased only opencode, so codex and pi
     // silently launched Claude.
-    expect(dispatchTarget(mode)).toBe('runHarness');
+    const runHarness = vi.spyOn(app, 'runHarness').mockResolvedValue(undefined);
+    const runClaude = vi.spyOn(app, 'runClaude').mockResolvedValue(undefined);
+    app._runMode = mode;
+    await app.run();
+    expect(runHarness).toHaveBeenCalledWith(mode);
+    expect(runClaude).not.toHaveBeenCalled();
+  });
+
+  it('still routes claude to runClaude', async () => {
+    const runClaude = vi.spyOn(app, 'runClaude').mockResolvedValue(undefined);
+    app._runMode = 'claude';
+    await app.run();
+    expect(runClaude).toHaveBeenCalled();
   });
 });
 
-describe('pause-menu eligibility', () => {
-  const caps: Record<string, { pausable: boolean }> = {
-    claude: { pausable: true }, shell: { pausable: false }, opencode: { pausable: false },
-    codex: { pausable: false }, pi: { pausable: false },
-  };
-  it.each(['shell', 'opencode', 'codex', 'pi'])('%s is not offered pause', (mode) => {
-    expect(caps[mode]!.pausable).toBe(false);
+describe('harness-driven UI copy', () => {
+  it('names the harness in the kill dialog', () => {
+    expect(app.harnessMeta('codex').label).toBe('Codex');
+  });
+
+  it('falls back safely for an unknown mode', () => {
+    expect(() => app.harnessMeta('nonesuch')).not.toThrow();
+  });
+
+  it('does not offer pause for a non-pausable harness', () => {
+    expect(app.harnessMeta('codex').caps.pausable).toBe(false);
+    expect(app.harnessMeta('claude').caps.pausable).toBe(true);
   });
 });
 ```
@@ -1774,7 +1968,7 @@ async run() {
 | `:12960,:12967` | `session.mode === 'claude'` | leave unchanged — positive claude checks are already correct |
 | `:13211` | `if (mode === 'opencode')` in the session creator | `if (mode !== 'claude' && mode !== 'shell')`, passing the mode through |
 | `:13284` | opencode-only quick-start shortcut | `await this.runHarness(mode)` for any non-claude, non-shell mode |
-| `:13137,:13353` | static mode-selector markup | render one button per entry of `this._harnesses`, marking unavailable ones disabled with the install hint as the title |
+| `:13137,:13353` | static mode-selector markup | add static codex and pi buttons matching the existing opencode ones, and disable a button when `this.harnessMeta(mode).available` is false, using `installHint` as its `title` |
 
 - [ ] **Step 6: Add the buttons to `index.html`**
 
@@ -1803,6 +1997,8 @@ After the OpenCode run-mode option (`:463`):
 ```
 
 Add `.run-mode-dot.codex` and `.run-mode-dot.pi` colours next to the existing `.opencode` rule, and matching `.session-mode-badge[data-mode="codex"|"pi"]` rules.
+
+Markup stays **static**, per spec section 5 — the registry supplies labels, availability, and capabilities, not the button list. Do not template the selectors.
 
 - [ ] **Step 7: Run the tests and commit**
 
@@ -1926,4 +2122,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Type consistency.** `HarnessSpawnContext` is defined once (Task 1) and consumed unchanged by Tasks 2 and 4. `harnessSessionId` is the same name across `SessionState`, `Session`, `HarnessSpawnContext`, and the discovery call. `getHarness` / `listHarnesses` / `isHarnessAvailable` / `resolveHarnessDir` / `MODEL_PATTERN` keep the same signatures throughout. `HarnessModelConfig` is the single shape behind both `codexConfig` and `piConfig`.
 
-**Known ordering constraint.** Task 6's test imports the codex and pi harnesses, so Task 4 must land first. The task order already reflects this.
+**Known ordering constraints.**
+- Task 6's tests expect codex and pi to be registered, so Task 4 must land first. The task order reflects this.
+- Task 3's `test/harness-spawn-plumbing.test.ts` asserts codex/pi command shapes that only exist after Task 4. Write it in Task 3 with those cases `it.skip`ped, and un-skip them in Task 4 Step 7.
+
+**Second-review corrections folded in.** An adversarial pass over the first draft of this plan found, and this version fixes: config and identity never reaching `TmuxManager` through `CreateSessionOptions` / `RespawnPaneOptions` (which would have made codex/pi model selection and resume silent no-ops); a call to a nonexistent `StateStore.updateSession`; fresh Claude sessions never populating `harnessSessionId`, which would have broken Claude restore; an emitted `'stateChanged'` event nothing listens for; `buildMcpArgs` sending Claude-only `--resume` and `--mcp-config` flags to codex and pi; `body.codexConfig` referenced in the quick-start route where `body` is not in scope; an unspecified config source for the worktree route; saved config never restored into reconstructed sessions; and two tests (route audit, UI) that re-implemented the logic they claimed to verify and so would have passed against unfixed code.
