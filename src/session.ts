@@ -46,6 +46,7 @@ import {
   type OpenCodeConfig,
 } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
+import { getHarness } from './harnesses/registry.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
@@ -1183,7 +1184,7 @@ export class Session extends EventEmitter {
     this._lineBuffer = '';
     this._lastActivityAt = Date.now();
 
-    const modeLabel = this.mode === 'opencode' ? 'OpenCode' : 'Claude';
+    const modeLabel = getHarness(this.mode).label;
     console.log(
       `[Session] Starting interactive ${modeLabel} session` + (this._useMux ? ` (with ${this._mux!.backend})` : '')
     );
@@ -1311,9 +1312,10 @@ export class Session extends EventEmitter {
             this.emit('needsRefresh');
           }, 500);
         } else {
-          if (this.mode === 'opencode') {
-            // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
-            // Wait for TUI to stabilize (output stops changing), then mark ready.
+          const readiness = getHarness(this.mode).readiness;
+          if (readiness.kind === 'settle') {
+            // Full-screen TUI harnesses (opencode) have no ❯ prompt to detect.
+            // Wait for the TUI to stabilize, then mark ready.
             // Don't clear the buffer — the TUI's initial render IS the useful content.
             // Emit needsRefresh so the client fetches the full buffer once the TUI has rendered.
             this._promptCheckTimeout = setTimeout(() => {
@@ -1321,7 +1323,7 @@ export class Session extends EventEmitter {
               if (this._isStopped) return;
               this._status = 'idle';
               this.emit('needsRefresh');
-            }, 3000);
+            }, readiness.ms);
           } else {
             // Claude mode: wait for ❯ prompt
             this._promptCheckInterval = setInterval(() => {
@@ -1363,9 +1365,9 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
-      // OpenCode sessions require tmux for env var injection (API keys via setenv)
-      if (this.mode === 'opencode') {
-        throw new Error('OpenCode sessions require tmux. Direct PTY fallback is not supported.');
+      // Some harnesses require tmux for env var injection (API keys via setenv)
+      if (getHarness(this.mode).caps.requiresMux) {
+        throw new Error(`${getHarness(this.mode).label} sessions require tmux. Direct PTY fallback is not supported.`);
       }
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
@@ -1560,9 +1562,10 @@ export class Session extends EventEmitter {
    * PTY data chunk. Receives accumulated raw data to process in one batch.
    */
   private _processExpensiveParsers(rawData: string): void {
-    // Skip Claude-specific parsers for OpenCode sessions — Ralph tracker, BashToolParser,
-    // token parsing, and CLI info parsing all depend on Claude's output format.
-    if (this.mode === 'opencode') return;
+    // Skip Claude-specific parsers for harnesses that don't emit Claude's output
+    // format — Ralph tracker, BashToolParser, token parsing and CLI info parsing
+    // all depend on it.
+    if (!getHarness(this.mode).caps.claudeParsers) return;
 
     // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
     let _cleanData: string | null = null;

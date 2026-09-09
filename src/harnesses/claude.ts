@@ -14,20 +14,30 @@ export const MODEL_PATTERN = /^[a-zA-Z0-9._\-/:]+$/;
 /** Claude's own model flag is stricter — no slashes or colons. */
 const CLAUDE_MODEL_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
-/** Build Claude's permission flags. Moved verbatim from tmux-manager. */
+/**
+ * Build Claude's permission flags.
+ *
+ * Copied verbatim from `buildClaudePermissionFlags` in tmux-manager.ts, including
+ * the `dangerously-skip-permissions` default for an unset claudeMode — Task 1's
+ * copy dropped both and would have changed behaviour once the delegation landed.
+ */
 function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: string): string {
-  switch (claudeMode) {
+  const mode = claudeMode || 'dangerously-skip-permissions';
+  switch (mode) {
     case 'dangerously-skip-permissions':
       return ' --dangerously-skip-permissions';
-    case 'allowedTools': {
+    case 'allowedTools':
       if (allowedTools) {
-        const hasDangerousChars = /[;&|`$(){}[\]<>\\'"]/.test(allowedTools);
-        if (!hasDangerousChars) return ` --allowedTools "${allowedTools}"`;
+        // Sanitize: allow tool names with patterns like Bash(git:*), space/comma-separated
+        // Block shell metacharacters: ; & | $ ` \ { } < > ' " newlines
+        const hasDangerousChars = /[;&|$`\\{}<>'"[\]\n\r]/.test(allowedTools);
+        if (!hasDangerousChars) {
+          return ` --allowedTools "${allowedTools}"`;
+        }
       }
+      // Fall back to normal mode if tools are invalid or missing
       return '';
-    }
     case 'normal':
-    default:
       return '';
   }
 }
@@ -38,13 +48,13 @@ export const claudeHarness: HarnessDefinition = {
   shortLabel: 'cc',
   binary: 'claude',
   searchDirs: [
-    join(homedir(), '.claude', 'local'),
     join(homedir(), '.local', 'bin'),
+    join(homedir(), '.claude', 'local'),
     '/usr/local/bin',
     join(homedir(), '.npm-global', 'bin'),
     join(homedir(), 'bin'),
   ],
-  installHint: 'Claude CLI not found. Install from https://claude.com/claude-code',
+  installHint: 'Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash',
   readiness: { kind: 'prompt' },
   caps: {
     ralph: true,

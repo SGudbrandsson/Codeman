@@ -121,7 +121,7 @@ export const openCodeHarness: HarnessDefinition = {
     join(homedir(), '.npm-global', 'bin'), // npm global
     join(homedir(), 'bin'), // User bin
   ],
-  installHint: 'OpenCode CLI not found. Install from https://opencode.ai',
+  installHint: 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash',
   readiness: { kind: 'settle', ms: 3000 },
   caps: {
     ralph: false,

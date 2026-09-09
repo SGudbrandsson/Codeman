@@ -46,6 +46,7 @@ import { writeHooksConfig, updateCaseEnvVars } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { getHarness } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
@@ -599,9 +600,9 @@ ${contextLines.join('\n')}`;
 
     try {
       // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-      // Ralph tracker is not supported for opencode sessions
+      // Ralph tracker is Claude-only
       if (
-        session.mode !== 'opencode' &&
+        getHarness(session.mode).caps.ralph &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -727,8 +728,11 @@ ${contextLines.join('\n')}`;
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
-    if (session.mode === 'shell' || session.mode === 'opencode') {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Only Claude sessions can be paused');
+    if (!getHarness(session.mode).caps.pausable) {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `${getHarness(session.mode).label} sessions cannot be paused`
+      );
     }
 
     // Idempotent: pausing an already-paused session is a no-op — UNLESS the previous
@@ -1354,8 +1358,8 @@ ${contextLines.join('\n')}`;
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode uses its own plugin system)
-        if (mode !== 'opencode') {
+        // (Claude-specific — other harnesses use their own plugin systems)
+        if (getHarness(mode ?? 'claude').caps.claudeHooks) {
           await writeHooksConfig(casePath);
         }
 

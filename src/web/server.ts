@@ -47,6 +47,7 @@ import {
   type ActiveBashTool,
 } from '../session.js';
 import type { ClaudeMode } from '../types.js';
+import { getHarness } from '../harnesses/registry.js';
 import { installGlobalCodemanHooks } from '../hooks-config.js';
 import type { SessionState } from '../types/session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
@@ -1556,7 +1557,7 @@ export class WebServer extends EventEmitter {
     if (!session) return;
 
     // Re-arm Ralph's fix-plan watcher and stall accrual if the loop is still enabled
-    if (session.mode !== 'opencode') {
+    if (getHarness(session.mode).caps.ralph) {
       session.ralphTracker.setWorkingDir(session.workingDir);
     }
     const wasLoopActive = this.pausedRalphLoopActive.get(sessionId);
@@ -1571,7 +1572,7 @@ export class WebServer extends EventEmitter {
     // Rebuild the respawn controller from the config pause persisted
     if (this.respawnControllers.has(sessionId)) return;
     const savedState = this.store.getSession(sessionId);
-    if (session.mode !== 'opencode' && savedState?.respawnEnabled && savedState.respawnConfig) {
+    if (getHarness(session.mode).caps.respawn && savedState?.respawnEnabled && savedState.respawnConfig) {
       try {
         this.restoreRespawnController(session, savedState.respawnConfig, 'resume');
       } catch (err) {
@@ -1595,8 +1596,8 @@ export class WebServer extends EventEmitter {
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
 
-    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for opencode sessions)
-    if (session.mode !== 'opencode') {
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md (Claude-only)
+    if (getHarness(session.mode).caps.ralph) {
       session.ralphTracker.setWorkingDir(session.workingDir);
     }
 
@@ -3423,8 +3424,8 @@ export class WebServer extends EventEmitter {
       }
     }
 
-    // Ralph / Todo tracker (not supported for opencode sessions)
-    if (session.mode !== 'opencode') {
+    // Ralph / Todo tracker (Claude-only)
+    if (getHarness(session.mode).caps.ralph) {
       if (savedState.ralphAutoEnableDisabled) {
         session.ralphTracker.disableAutoEnable();
         console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
@@ -3469,8 +3470,8 @@ export class WebServer extends EventEmitter {
     if (savedState.color && savedState.color !== 'default') {
       session.setColor(savedState.color);
     }
-    // Respawn controller (not supported for opencode sessions)
-    if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
+    // Respawn controller (Claude-only)
+    if (getHarness(session.mode).caps.respawn && savedState.respawnEnabled && savedState.respawnConfig) {
       try {
         this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
       } catch (err) {
@@ -3612,9 +3613,9 @@ export class WebServer extends EventEmitter {
               this._restoreSessionConfig(session, savedState);
             }
 
-            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (not supported for opencode)
+            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (Claude-only)
             if (
-              session.mode !== 'opencode' &&
+              getHarness(session.mode).caps.respawn &&
               !this.respawnControllers.has(session.id) &&
               muxSession.respawnConfig?.enabled
             ) {
@@ -3629,9 +3630,9 @@ export class WebServer extends EventEmitter {
             }
 
             // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
-            // Ralph tracker is not supported for opencode sessions
+            // Ralph tracker is Claude-only
             if (
-              session.mode !== 'opencode' &&
+              getHarness(session.mode).caps.ralph &&
               !session.ralphTracker.enabled &&
               !session.ralphTracker.autoEnableDisabled
             ) {
@@ -3642,9 +3643,9 @@ export class WebServer extends EventEmitter {
               }
             }
 
-            // Fallback: auto-detect completion phrase from CLAUDE.md (not supported for opencode)
+            // Fallback: auto-detect completion phrase from CLAUDE.md (Claude-only)
             if (
-              session.mode !== 'opencode' &&
+              getHarness(session.mode).caps.ralph &&
               session.ralphTracker.enabled &&
               !session.ralphTracker.loopState.completionPhrase
             ) {

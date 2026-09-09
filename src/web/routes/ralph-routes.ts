@@ -17,6 +17,7 @@ import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.j
 import { writeHooksConfig } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { getHarness } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 
@@ -48,8 +49,8 @@ export function registerRalphRoutes(
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
-    // Ralph tracker is not supported for opencode sessions
-    if (session.mode === 'opencode') {
+    // Ralph tracker is Claude-only
+    if (!getHarness(session.mode).caps.ralph) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Ralph tracker is not supported for opencode sessions');
     }
 

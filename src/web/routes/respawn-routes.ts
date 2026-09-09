@@ -11,6 +11,7 @@ import { SseEvent } from '../sse-events.js';
 import { findSessionOrFail, autoConfigureRalph } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { getHarness } from '../../harnesses/registry.js';
 import {
   AI_CHECK_MODEL,
   AI_IDLE_CHECK_MAX_CONTEXT,
@@ -92,8 +93,8 @@ export function registerRespawnRoutes(
     }
     const session = findSessionOrFail(ctx, id);
 
-    // Respawn is not supported for opencode sessions
-    if (session.mode === 'opencode') {
+    // Respawn is Claude-only
+    if (!getHarness(session.mode).caps.respawn) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
     }
 
@@ -246,8 +247,8 @@ export function registerRespawnRoutes(
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Session is paused — resume it first');
     }
 
-    // Respawn is not supported for opencode sessions
-    if (session.mode === 'opencode') {
+    // Respawn is Claude-only
+    if (!getHarness(session.mode).caps.respawn) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
     }
 
@@ -314,8 +315,8 @@ export function registerRespawnRoutes(
     const body = reResult.data as { config?: Partial<RespawnConfig>; durationMinutes?: number };
     const session = findSessionOrFail(ctx, id);
 
-    // Respawn is not supported for opencode sessions
-    if (session.mode === 'opencode') {
+    // Respawn is Claude-only
+    if (!getHarness(session.mode).caps.respawn) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
     }
 

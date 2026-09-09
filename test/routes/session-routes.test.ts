@@ -869,7 +869,7 @@ describe('session-routes', () => {
       const body = JSON.parse((await pause()).body);
       expect(body.success).toBe(false);
       expect(body.errorCode).toBe('OPERATION_FAILED');
-      expect(body.error).toContain('Only Claude sessions can be paused');
+      expect(body.error).toContain('Shell sessions cannot be paused');
       expect(session.pause).not.toHaveBeenCalled();
     });
 
