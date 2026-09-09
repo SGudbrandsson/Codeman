@@ -470,6 +470,23 @@ describe('WebServer.restoreMuxSessions() — auto-reconnect on restart', () => {
     expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
   });
 
+  it('continues restoring remaining mux sessions when one entry has an unrecognised mode', async () => {
+    // getHarness() throws by design on an unknown mode. mux-sessions.json can carry one
+    // after a downgrade or a corrupted write; without per-iteration guarding that single
+    // throw escaped restoreMuxSessions(), skipping every later mux session AND the whole
+    // state.json restore pass.
+    const bad = makeMuxSession({ sessionId: 'sess-bogus', muxName: 'codeman-bogus111', mode: 'bogus' });
+    const good = makeMuxSession({ sessionId: 'sess-good', muxName: 'codeman-good1111' });
+    mocks.muxSessions = [bad, good];
+    mocks.reconcileResult = { alive: ['sess-bogus', 'sess-good'], dead: [], discovered: [] };
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    await expect((server as any).restoreMuxSessions()).resolves.not.toThrow();
+
+    const sessions: Map<string, unknown> = (server as any).sessions;
+    expect(sessions.has('sess-good')).toBe(true);
+  });
+
   it('continues restoring remaining sessions when startInteractive() rejects for one session', async () => {
     const session1 = makeMuxSession({ sessionId: 'sess-fail', muxName: 'codeman-fail1111' });
     const session2 = makeMuxSession({ sessionId: 'sess-ok', muxName: 'codeman-ok222222' });

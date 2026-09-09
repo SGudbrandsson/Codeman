@@ -43,6 +43,8 @@ export const piHarness: HarnessDefinition = {
     usesClaudeModelDefaults: false,
   },
   buildCommand(ctx: HarnessSpawnContext): string {
+    // ctx.extraArgs is deliberately unsupported — see codexHarness.buildCommand:
+    // worktree notes are delivered via writeViaMux() after spawn, not on the command line.
     const parts = ['pi', '--approve'];
     // Validate first (drop, never error), then quote — belt and braces.
     if (SESSION_ID_PATTERN.test(ctx.sessionId)) {

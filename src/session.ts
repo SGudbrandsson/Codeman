@@ -1656,6 +1656,27 @@ export class Session extends EventEmitter {
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
       }
+      // End codex id discovery only when the harness process itself is gone. Under mux
+      // this PTY is the `tmux attach` client, so a plain detach must NOT abort the watch
+      // (the id appears on codex's first submitted turn, which may come after a detach).
+      // When there is no mux session, or the mux session has died, the rollout file will
+      // never gain an id for this run — release the recursive fs.watch instead of leaving
+      // it to the 1 h cap.
+      if (this._harnessIdDiscoveryAbort) {
+        let harnessGone = true;
+        try {
+          if (this._muxSession && this._mux) {
+            harnessGone = !this._mux.muxSessionExists(this._muxSession.muxName);
+          }
+        } catch {
+          // Probe failed — assume the harness is still there and let the cap end the watch.
+          harnessGone = false;
+        }
+        if (harnessGone) {
+          this._harnessIdDiscoveryAbort.abort();
+          this._harnessIdDiscoveryAbort = null;
+        }
+      }
       this.emit('exit', exitCode);
     });
 

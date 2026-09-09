@@ -22,6 +22,7 @@ import {
   RevokeSessionSchema,
 } from '../schemas.js';
 import { getHarness, isHarnessAvailable, listHarnesses, resolveHarnessDir } from '../../harnesses/registry.js';
+import type { HarnessDefinition } from '../../harnesses/types.js';
 import type { SessionMode } from '../../types/session.js';
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
@@ -252,7 +253,7 @@ export function registerSystemRoutes(
   }));
 
   app.get<{ Params: { id: string } }>('/api/harness/:id/status', async (req, reply) => {
-    let def;
+    let def: HarnessDefinition;
     try {
       def = getHarness(req.params.id as SessionMode);
     } catch {

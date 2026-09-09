@@ -49,6 +49,10 @@ export const codexHarness: HarnessDefinition = {
     // Validate first (drop, never error), then quote — belt and braces.
     if (model && MODEL_PATTERN.test(model)) flags.push('-m', shellQuote(model));
 
+    // ctx.extraArgs is deliberately unsupported: codex takes no free-form trailing
+    // arguments here, so worktree notes reach it via writeViaMux() after spawn instead.
+    // (session.ts still marks _initialPromptSent when it passes extraArgs — that flag
+    // tracks the note having been handed off, not this command consuming it.)
     const resumeId = ctx.harnessSessionId;
     if (resumeId && SESSION_ID_PATTERN.test(resumeId)) {
       return `codex resume ${shellQuote(resumeId)} ${flags.join(' ')}`;

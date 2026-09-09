@@ -11790,8 +11790,22 @@ class CodemanApp {
 
   /** Harness metadata with a safe fallback, so UI code never throws on an unknown mode. */
   harnessMeta(mode) {
-    return this._harnesses.get(mode || 'claude')
-      || { id: mode, label: 'Claude Code', shortLabel: 'cc', caps: {}, available: true, installHint: '' };
+    const id = mode || 'claude';
+    const known = this._harnesses.get(id);
+    if (known) return known;
+    // Fallback for an unknown mode, or for any mode before /api/harnesses resolves.
+    // Only 'claude' gets Claude's labels — anything else echoes its own id rather than
+    // claiming to be Claude Code (a shell session's kill dialog said "Kill Tmux &
+    // Claude Code" before the registry loaded).
+    const isClaude = id === 'claude';
+    return {
+      id,
+      label: isClaude ? 'Claude Code' : id,
+      shortLabel: isClaude ? 'cc' : id,
+      caps: {},
+      available: true,
+      installHint: '',
+    };
   }
 
   /**
@@ -25351,6 +25365,19 @@ const InputPanel = {
  * SessionDrawer — session drawer — right-anchored popup (desktop and mobile).
  * All DOM text uses textContent (no innerHTML with session data).
  */
+/**
+ * Harness modes offered by the drawer's quick-add popover and worktree form.
+ * The list is static per spec section 5 (markup is not registry-generated); the
+ * registry supplies the label at render time via app.harnessMeta().
+ */
+const DRAWER_HARNESS_MODES = [
+  { mode: 'claude', icon: '▶', label: 'Claude' },
+  { mode: 'opencode', icon: '◈', label: 'OpenCode' },
+  { mode: 'codex', icon: '✦', label: 'Codex' },
+  { mode: 'pi', icon: 'π', label: 'Pi' },
+  { mode: 'shell', icon: '⚡', label: 'Shell' },
+];
+
 const SessionDrawer = {
   _el: null,
   _overlay: null,
@@ -26524,11 +26551,7 @@ const SessionDrawer = {
     const row = document.createElement('div');
     row.className = 'drawer-quick-add-row';
 
-    const modes = [
-      { mode: 'claude', icon: '▶', label: 'Claude' },
-      { mode: 'shell', icon: '⚡', label: 'Shell' },
-      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
-    ];
+    const modes = DRAWER_HARNESS_MODES.map(m => ({ ...m }));
     if (!worktreeOnly) {
       modes.push({ mode: 'worktree', icon: '⎇', label: 'Worktree' });
     }
@@ -26648,11 +26671,7 @@ const SessionDrawer = {
     modeRow.className = 'drawer-quick-add-row';
 
     let selectedMode = 'claude';
-    for (const { mode, icon, label } of [
-      { mode: 'claude', icon: '▶', label: 'Claude' },
-      { mode: 'shell', icon: '⚡', label: 'Shell' },
-      { mode: 'opencode', icon: '◈', label: 'OpenCode' },
-    ]) {
+    for (const { mode, icon, label } of DRAWER_HARNESS_MODES) {
       const btn = document.createElement('button');
       btn.className = 'drawer-mode-btn' + (mode === selectedMode ? ' selected' : '');
       const iconEl = document.createElement('span');

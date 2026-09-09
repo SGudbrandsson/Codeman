@@ -3590,211 +3590,222 @@ export class WebServer extends EventEmitter {
         const muxSessions = this.mux.getSessions();
         for (const muxSession of muxSessions) {
           if (!this.sessions.has(muxSession.sessionId)) {
-            // Restore session settings from state.json (single source of truth)
-            const savedState = this.store.getSession(muxSession.sessionId);
+            try {
+              // Restore session settings from state.json (single source of truth)
+              const savedState = this.store.getSession(muxSession.sessionId);
 
-            // Skip archived sessions — they have no tmux pane and must not be reattached
-            if (savedState && !shouldAttemptReattach(savedState)) {
-              console.log(`[Server] Skipping archived session ${muxSession.sessionId}`);
-              continue;
-            }
-
-            // Determine the correct session name (priority: savedState > muxSession > muxName)
-            // This ensures renamed sessions keep their name after server restart
-            const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
-
-            // Create a session object for this mux session
-            const recoveryClaudeMode = await this.getClaudeModeConfig();
-
-            // Restore worktree metadata from savedState, or auto-detect if the working
-            // dir is a git worktree that was started outside of Codeman's worktree UI
-            let worktreePath = savedState?.worktreePath;
-            let worktreeBranch = savedState?.worktreeBranch;
-            const worktreeOriginId = savedState?.worktreeOriginId;
-            if (!worktreeBranch && muxSession.workingDir && isGitWorktreeDir(muxSession.workingDir)) {
-              try {
-                worktreeBranch = await getCurrentBranch(muxSession.workingDir);
-                worktreePath = worktreePath ?? muxSession.workingDir;
-                console.log(
-                  `[Server] Auto-detected worktree branch "${worktreeBranch}" for session ${muxSession.sessionId}`
-                );
-              } catch {
-                // Not a valid git repo or branch detection failed — leave as undefined
+              // Skip archived sessions — they have no tmux pane and must not be reattached
+              if (savedState && !shouldAttemptReattach(savedState)) {
+                console.log(`[Server] Skipping archived session ${muxSession.sessionId}`);
+                continue;
               }
-            }
 
-            // Use the auto-detected branch as the display name for "Restored:" placeholder sessions
-            // so the sidebar shows "feat/fix-supabase" instead of "Restored: codeman-a157d657".
-            // Also replaces stale savedState names that are still "Restored:" placeholders.
-            const isRestoredPlaceholder = sessionName.startsWith('Restored: ');
-            const effectiveName = isRestoredPlaceholder && worktreeBranch ? worktreeBranch : sessionName;
+              // Determine the correct session name (priority: savedState > muxSession > muxName)
+              // This ensures renamed sessions keep their name after server restart
+              const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
 
-            const session = new Session({
-              id: muxSession.sessionId, // Preserve the original session ID
-              workingDir: muxSession.workingDir,
-              mode: muxSession.mode,
-              name: effectiveName,
-              mux: this.mux,
-              useMux: true,
-              muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
-              claudeMode: recoveryClaudeMode.claudeMode,
-              allowedTools: recoveryClaudeMode.allowedTools,
-              // Preserve original creation timestamp so parent-before-child sort remains stable
-              createdAt: savedState?.createdAt,
-              // Restored/auto-detected worktree metadata so drawer grouping and merge actions survive restarts
-              worktreePath,
-              worktreeBranch,
-              worktreeOriginId,
-              worktreeNotes: savedState?.worktreeNotes, // FIX: was missing from mux recovery path
-              assignedPort: savedState?.assignedPort, // FIX: was missing from mux recovery path
-              // Harness config and identity — inert unless restored here too
-              openCodeConfig: savedState?.openCodeConfig,
-              codexConfig: savedState?.codexConfig,
-              piConfig: savedState?.piConfig,
-              harnessSessionId: savedState?.harnessSessionId,
-            });
+              // Create a session object for this mux session
+              const recoveryClaudeMode = await this.getClaudeModeConfig();
 
-            // Update session name if it was a "Restored:" placeholder or doesn't match saved name
-            if (savedState?.name && muxSession.name !== savedState.name) {
-              this.mux.updateSessionName(muxSession.sessionId, savedState.name);
-            } else if (effectiveName !== sessionName) {
-              this.mux.updateSessionName(muxSession.sessionId, effectiveName);
-            }
-            if (savedState) {
-              this._restoreSessionConfig(session, savedState);
-            }
-
-            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (Claude-only)
-            if (
-              getHarness(session.mode).caps.respawn &&
-              !this.respawnControllers.has(session.id) &&
-              muxSession.respawnConfig?.enabled
-            ) {
-              try {
-                this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
-              } catch (err) {
-                console.error(
-                  `[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`,
-                  err
-                );
-              }
-            }
-
-            // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
-            // Ralph tracker is Claude-only
-            if (
-              getHarness(session.mode).caps.ralph &&
-              !session.ralphTracker.enabled &&
-              !session.ralphTracker.autoEnableDisabled
-            ) {
-              const ralphState = this.store.getRalphState(muxSession.sessionId);
-              if (ralphState?.loop?.enabled) {
-                session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
-                console.log(`[Server] Restored Ralph state from inner store for session ${session.id}`);
-              }
-            }
-
-            // Fallback: auto-detect completion phrase from CLAUDE.md (Claude-only)
-            if (
-              getHarness(session.mode).caps.ralph &&
-              session.ralphTracker.enabled &&
-              !session.ralphTracker.loopState.completionPhrase
-            ) {
-              const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
-              const completionPhrase = extractCompletionPhrase(claudeMdPath);
-              if (completionPhrase) {
-                session.ralphTracker.startLoop(completionPhrase);
-                console.log(`[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`);
-              }
-            }
-
-            this.sessions.set(session.id, session);
-            await this.setupSessionListeners(session);
-            this.persistSessionState(session);
-
-            // Eagerly start transcript watcher for sessions with a known claudeResumeId.
-            // This wires up SSE events before PTY output arrives, and prevents the spurious
-            // transcript:clear that would otherwise fire when the conversationId event is
-            // processed from scrollback output.
-            if (session.claudeResumeId && session.workingDir) {
-              const escapedDir = session.workingDir.replace(/\//g, '-');
-              const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
-              const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
-              this.startTranscriptWatcher(session.id, transcriptPath);
-            } else if (!session.claudeResumeId && session.workingDir) {
-              // claudeResumeId was never persisted (e.g. hooks not configured for this dir).
-              // Codeman passes --session-id <sessionId> to Claude for fresh sessions, so the
-              // JSONL file should be named after the session ID. Try that first — safe for
-              // any dir since the filename is session-specific.
-              // If not found, scan the project dir for the most recent JSONL, but only when
-              // no other active session shares this workingDir (prevents cross-contamination).
-              const escapedDir = session.workingDir.replace(/\//g, '-');
-              const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
-              const sessionIdFile = join(projectDir, `${session.id}.jsonl`);
-              if (existsSync(sessionIdFile)) {
-                console.log(`[Server] Discovered transcript by session ID for ${session.id}`);
-                this.startTranscriptWatcher(session.id, sessionIdFile);
-              } else {
-                // For sessions restored from tmux (e.g. id='restored-6fc31da7', muxName='codeman-6fc31da7'),
-                // the JSONL filename starts with the same prefix that was passed to Claude via --session-id.
-                // This is safe even when sessions share a workingDir because the prefix is session-unique.
-                const muxPrefix = muxSession.muxName.replace(/^codeman-/, '');
-                let foundByPrefix = false;
-                if (muxPrefix && muxPrefix !== muxSession.muxName) {
-                  try {
-                    const prefixMatch = readdirSync(projectDir)
-                      .filter((f) => f.endsWith('.jsonl') && f.startsWith(muxPrefix))
-                      .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
-                      .sort((a, b) => b.mtime - a.mtime)[0];
-                    if (prefixMatch) {
-                      console.log(
-                        `[Server] Discovered transcript by mux prefix for ${session.id}: ${prefixMatch.path}`
-                      );
-                      this.startTranscriptWatcher(session.id, prefixMatch.path);
-                      foundByPrefix = true;
-                    }
-                  } catch {
-                    /* project dir unreadable */
-                  }
-                }
-                const sharesDir = [...this.sessions.values()].some(
-                  (s) => s.id !== session.id && s.workingDir === session.workingDir
-                );
-                if (!foundByPrefix && !sharesDir) {
-                  try {
-                    const files = readdirSync(projectDir)
-                      .filter((f) => f.endsWith('.jsonl') && !f.startsWith('.'))
-                      .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
-                      .sort((a, b) => b.mtime - a.mtime);
-                    if (files.length > 0) {
-                      console.log(`[Server] Discovered transcript by recency for ${session.id}: ${files[0].path}`);
-                      this.startTranscriptWatcher(session.id, files[0].path);
-                    }
-                  } catch {
-                    // project dir doesn't exist or can't be read — no transcript yet
-                  }
+              // Restore worktree metadata from savedState, or auto-detect if the working
+              // dir is a git worktree that was started outside of Codeman's worktree UI
+              let worktreePath = savedState?.worktreePath;
+              let worktreeBranch = savedState?.worktreeBranch;
+              const worktreeOriginId = savedState?.worktreeOriginId;
+              if (!worktreeBranch && muxSession.workingDir && isGitWorktreeDir(muxSession.workingDir)) {
+                try {
+                  worktreeBranch = await getCurrentBranch(muxSession.workingDir);
+                  worktreePath = worktreePath ?? muxSession.workingDir;
+                  console.log(
+                    `[Server] Auto-detected worktree branch "${worktreeBranch}" for session ${muxSession.sessionId}`
+                  );
+                } catch {
+                  // Not a valid git repo or branch detection failed — leave as undefined
                 }
               }
-            }
 
-            // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
-            // failure does not abort the entire startup loop.
-            if (savedState?.paused) {
-              console.log(`[Server] Session ${session.id} is paused — leaving it parked`);
-            } else if (!(await this.mux.isPaneDead(muxSession.muxName))) {
-              session.startInteractive().catch((err) => {
-                console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
+              // Use the auto-detected branch as the display name for "Restored:" placeholder sessions
+              // so the sidebar shows "feat/fix-supabase" instead of "Restored: codeman-a157d657".
+              // Also replaces stale savedState names that are still "Restored:" placeholders.
+              const isRestoredPlaceholder = sessionName.startsWith('Restored: ');
+              const effectiveName = isRestoredPlaceholder && worktreeBranch ? worktreeBranch : sessionName;
+
+              const session = new Session({
+                id: muxSession.sessionId, // Preserve the original session ID
+                workingDir: muxSession.workingDir,
+                mode: muxSession.mode,
+                name: effectiveName,
+                mux: this.mux,
+                useMux: true,
+                muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
+                claudeMode: recoveryClaudeMode.claudeMode,
+                allowedTools: recoveryClaudeMode.allowedTools,
+                // Preserve original creation timestamp so parent-before-child sort remains stable
+                createdAt: savedState?.createdAt,
+                // Restored/auto-detected worktree metadata so drawer grouping and merge actions survive restarts
+                worktreePath,
+                worktreeBranch,
+                worktreeOriginId,
+                worktreeNotes: savedState?.worktreeNotes, // FIX: was missing from mux recovery path
+                assignedPort: savedState?.assignedPort, // FIX: was missing from mux recovery path
+                // Harness config and identity — inert unless restored here too
+                openCodeConfig: savedState?.openCodeConfig,
+                codexConfig: savedState?.codexConfig,
+                piConfig: savedState?.piConfig,
+                harnessSessionId: savedState?.harnessSessionId,
               });
-              console.log(`[Server] Auto-reconnecting session ${session.id} to mux ${muxSession.muxName}`);
-            }
 
-            // Mark it as restored (not started yet - user needs to attach)
-            getLifecycleLog().log({
-              event: 'recovered',
-              sessionId: session.id,
-              name: session.name,
-            });
-            console.log(`[Server] Restored session ${session.id} from mux ${muxSession.muxName}`);
+              // Update session name if it was a "Restored:" placeholder or doesn't match saved name
+              if (savedState?.name && muxSession.name !== savedState.name) {
+                this.mux.updateSessionName(muxSession.sessionId, savedState.name);
+              } else if (effectiveName !== sessionName) {
+                this.mux.updateSessionName(muxSession.sessionId, effectiveName);
+              }
+              if (savedState) {
+                this._restoreSessionConfig(session, savedState);
+              }
+
+              // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (Claude-only)
+              if (
+                getHarness(session.mode).caps.respawn &&
+                !this.respawnControllers.has(session.id) &&
+                muxSession.respawnConfig?.enabled
+              ) {
+                try {
+                  this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
+                } catch (err) {
+                  console.error(
+                    `[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`,
+                    err
+                  );
+                }
+              }
+
+              // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
+              // Ralph tracker is Claude-only
+              if (
+                getHarness(session.mode).caps.ralph &&
+                !session.ralphTracker.enabled &&
+                !session.ralphTracker.autoEnableDisabled
+              ) {
+                const ralphState = this.store.getRalphState(muxSession.sessionId);
+                if (ralphState?.loop?.enabled) {
+                  session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
+                  console.log(`[Server] Restored Ralph state from inner store for session ${session.id}`);
+                }
+              }
+
+              // Fallback: auto-detect completion phrase from CLAUDE.md (Claude-only)
+              if (
+                getHarness(session.mode).caps.ralph &&
+                session.ralphTracker.enabled &&
+                !session.ralphTracker.loopState.completionPhrase
+              ) {
+                const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
+                const completionPhrase = extractCompletionPhrase(claudeMdPath);
+                if (completionPhrase) {
+                  session.ralphTracker.startLoop(completionPhrase);
+                  console.log(
+                    `[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`
+                  );
+                }
+              }
+
+              this.sessions.set(session.id, session);
+              await this.setupSessionListeners(session);
+              this.persistSessionState(session);
+
+              // Eagerly start transcript watcher for sessions with a known claudeResumeId.
+              // This wires up SSE events before PTY output arrives, and prevents the spurious
+              // transcript:clear that would otherwise fire when the conversationId event is
+              // processed from scrollback output.
+              if (session.claudeResumeId && session.workingDir) {
+                const escapedDir = session.workingDir.replace(/\//g, '-');
+                const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+                const transcriptPath = join(projectDir, `${session.claudeResumeId}.jsonl`);
+                this.startTranscriptWatcher(session.id, transcriptPath);
+              } else if (!session.claudeResumeId && session.workingDir) {
+                // claudeResumeId was never persisted (e.g. hooks not configured for this dir).
+                // Codeman passes --session-id <sessionId> to Claude for fresh sessions, so the
+                // JSONL file should be named after the session ID. Try that first — safe for
+                // any dir since the filename is session-specific.
+                // If not found, scan the project dir for the most recent JSONL, but only when
+                // no other active session shares this workingDir (prevents cross-contamination).
+                const escapedDir = session.workingDir.replace(/\//g, '-');
+                const projectDir = join(homedir(), '.claude', 'projects', escapedDir);
+                const sessionIdFile = join(projectDir, `${session.id}.jsonl`);
+                if (existsSync(sessionIdFile)) {
+                  console.log(`[Server] Discovered transcript by session ID for ${session.id}`);
+                  this.startTranscriptWatcher(session.id, sessionIdFile);
+                } else {
+                  // For sessions restored from tmux (e.g. id='restored-6fc31da7', muxName='codeman-6fc31da7'),
+                  // the JSONL filename starts with the same prefix that was passed to Claude via --session-id.
+                  // This is safe even when sessions share a workingDir because the prefix is session-unique.
+                  const muxPrefix = muxSession.muxName.replace(/^codeman-/, '');
+                  let foundByPrefix = false;
+                  if (muxPrefix && muxPrefix !== muxSession.muxName) {
+                    try {
+                      const prefixMatch = readdirSync(projectDir)
+                        .filter((f) => f.endsWith('.jsonl') && f.startsWith(muxPrefix))
+                        .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+                        .sort((a, b) => b.mtime - a.mtime)[0];
+                      if (prefixMatch) {
+                        console.log(
+                          `[Server] Discovered transcript by mux prefix for ${session.id}: ${prefixMatch.path}`
+                        );
+                        this.startTranscriptWatcher(session.id, prefixMatch.path);
+                        foundByPrefix = true;
+                      }
+                    } catch {
+                      /* project dir unreadable */
+                    }
+                  }
+                  const sharesDir = [...this.sessions.values()].some(
+                    (s) => s.id !== session.id && s.workingDir === session.workingDir
+                  );
+                  if (!foundByPrefix && !sharesDir) {
+                    try {
+                      const files = readdirSync(projectDir)
+                        .filter((f) => f.endsWith('.jsonl') && !f.startsWith('.'))
+                        .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
+                        .sort((a, b) => b.mtime - a.mtime);
+                      if (files.length > 0) {
+                        console.log(`[Server] Discovered transcript by recency for ${session.id}: ${files[0].path}`);
+                        this.startTranscriptWatcher(session.id, files[0].path);
+                      }
+                    } catch {
+                      // project dir doesn't exist or can't be read — no transcript yet
+                    }
+                  }
+                }
+              }
+
+              // Auto-reconnect sessions whose tmux pane is alive — fire-and-forget so a single
+              // failure does not abort the entire startup loop.
+              if (savedState?.paused) {
+                console.log(`[Server] Session ${session.id} is paused — leaving it parked`);
+              } else if (!(await this.mux.isPaneDead(muxSession.muxName))) {
+                session.startInteractive().catch((err) => {
+                  console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
+                });
+                console.log(`[Server] Auto-reconnecting session ${session.id} to mux ${muxSession.muxName}`);
+              }
+
+              // Mark it as restored (not started yet - user needs to attach)
+              getLifecycleLog().log({
+                event: 'recovered',
+                sessionId: session.id,
+                name: session.name,
+              });
+              console.log(`[Server] Restored session ${session.id} from mux ${muxSession.muxName}`);
+            } catch (err) {
+              // One bad entry must not abort the rest of the restore. getHarness() throws on an
+              // unrecognised mode (a corrupted or downgrade-written mux-sessions.json), and without
+              // this guard that single throw escaped restoreMuxSessions()' outer try, skipping every
+              // remaining mux session AND the state.json restore pass below. Matches the per-session
+              // guarding the state.json pass and `codeman list` already have.
+              console.error(`[Server] Failed to restore mux session ${muxSession.sessionId}:`, err);
+            }
           }
         }
 
