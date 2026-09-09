@@ -178,6 +178,7 @@ vi.mock('../src/session.js', async () => {
     name: string;
     status: string = 'idle';
     claudeResumeId: string | null = null;
+    harnessSessionId: string | undefined = undefined;
     flickerFilterEnabled: boolean | undefined = undefined;
     draft: string | undefined = undefined;
     mcpServers: unknown = undefined;
@@ -206,10 +207,17 @@ vi.mock('../src/session.js', async () => {
       this.mode = opts.mode ?? 'claude';
       this.name = opts.name ?? 'unnamed';
       this.claudeResumeId = opts.claudeResumeId ?? null;
+      this.harnessSessionId = (opts.harnessSessionId as string | undefined) ?? undefined;
       // Record constructor arguments for test assertions (Gap 3)
       sessionConstructorCalls.push({ ...opts });
     }
 
+    // Mirrors the real Session.setClaudeResumeId(): since Task 3 it also writes
+    // harnessSessionId, which is exactly what must not happen for a non-Claude harness.
+    setClaudeResumeId = vi.fn(function (this: MockSession, id: string) {
+      this.claudeResumeId = id;
+      this.harnessSessionId = id;
+    });
     markStopped = vi.fn(function (this: MockSession) {
       this.status = 'stopped';
     });
@@ -2151,5 +2159,104 @@ describe('WebServer.restoreMuxSessions() — paused sessions stay parked', () =>
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression (review attempt 2, N1) — the mux-recovery transcript discovery must
+// not adopt a Claude JSONL for a harness that does not write Claude transcripts.
+//
+// Without the caps.claudeTranscript gate in startTranscriptWatcher(), a plain server
+// restart of a codex session in any directory where Claude has ever run picks the most
+// recent ~/.claude/projects/<escaped dir>/*.jsonl by mtime, calls setClaudeResumeId()
+// with its UUID, and — because that setter mirrors into harnessSessionId — replaces the
+// genuine discovered codex id with a Claude conversation UUID. The next respawn would
+// then run `codex resume <claude-uuid>`.
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — non-Claude harnesses keep their harnessSessionId', () => {
+  let server: WebServer;
+  const CODEX_ID = '0199f2aa-1111-4222-8333-444455556666';
+  const STRANGER_CLAUDE_UUID = 'deadbeef-0000-4000-8000-abcdefabcdef';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+    mocks.transcriptWatcherInstances.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+    mocks.existsSync.mockReturnValue(false);
+    // A project dir populated by earlier Claude runs in the same working directory.
+    mocks.readdirSync.mockReturnValue([`${STRANGER_CLAUDE_UUID}.jsonl`] as never);
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    mocks.readdirSync.mockReturnValue([] as never);
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  it('does not overwrite a codex session harnessSessionId with a Claude transcript UUID', async () => {
+    mocks.muxSessions = [
+      makeMuxSession({
+        sessionId: 'sess-codex',
+        muxName: 'codeman-cdx00001',
+        workingDir: '/home/user/codexproj',
+        mode: 'codex',
+      }),
+    ];
+    mocks.reconcileResult = { alive: ['sess-codex'], dead: [], discovered: [] };
+    (getStore() as any).getSession.mockReturnValue({
+      status: 'idle',
+      mode: 'codex',
+      harnessSessionId: CODEX_ID,
+    });
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-codex');
+    expect(session).toBeDefined();
+    expect(session.mode).toBe('codex');
+    expect(session.setClaudeResumeId).not.toHaveBeenCalled();
+    expect(session.claudeResumeId).toBeNull();
+    expect(session.harnessSessionId).toBe(CODEX_ID);
+    // and no Claude transcript watcher was wired to the stranger's conversation
+    expect(mocks.transcriptWatcherInstances).toHaveLength(0);
+  });
+
+  it('still adopts the recency-discovered transcript for a claude session', async () => {
+    mocks.muxSessions = [
+      makeMuxSession({
+        sessionId: 'sess-claude-recency',
+        muxName: 'codeman-cla00001',
+        workingDir: '/home/user/claudeproj',
+        mode: 'claude',
+      }),
+    ];
+    mocks.reconcileResult = { alive: ['sess-claude-recency'], dead: [], discovered: [] };
+    (getStore() as any).getSession.mockReturnValue({ status: 'idle', mode: 'claude' });
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-claude-recency');
+    expect(session).toBeDefined();
+    expect(session.setClaudeResumeId).toHaveBeenCalledWith(STRANGER_CLAUDE_UUID);
+    expect(session.harnessSessionId).toBe(STRANGER_CLAUDE_UUID);
+    expect(mocks.transcriptWatcherInstances).toHaveLength(1);
   });
 });

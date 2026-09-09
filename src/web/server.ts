@@ -49,7 +49,7 @@ import {
 import type { ClaudeMode } from '../types.js';
 import { getHarness } from '../harnesses/registry.js';
 import { installGlobalCodemanHooks } from '../hooks-config.js';
-import type { SessionState } from '../types/session.js';
+import type { SessionMode, SessionState } from '../types/session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
@@ -256,6 +256,19 @@ export function backfillHarnessSessionId(state: SessionState): boolean {
 /** Returns false for sessions that must never have tmux reattachment attempted. */
 export function shouldAttemptReattach(session: SessionState): boolean {
   return session.status !== 'archived';
+}
+
+/**
+ * True when `mode`'s harness writes Claude-format transcript JSONL. Unknown/legacy modes
+ * (a state.json written by a newer build) answer `false` rather than throwing: a restore
+ * pass must not be aborted by an unrecognised mode, and "not Claude" is the safe answer.
+ */
+function harnessAllowsClaudeTranscript(mode: SessionMode): boolean {
+  try {
+    return getHarness(mode).caps.claudeTranscript;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -893,6 +906,17 @@ export class WebServer extends EventEmitter {
    * Creates a new watcher or updates an existing one with the new transcript path.
    */
   private startTranscriptWatcher(sessionId: string, transcriptPath: string): void {
+    // Claude-transcript harnesses only. Every caller (mux restore, state.json restore,
+    // the conversationId PTY hook, the Claude hook route and the two session routes)
+    // is about a Claude-format JSONL, but only some of them check the mode — and the
+    // mux-recovery "most recent *.jsonl by mtime" branch runs for EVERY mode. Without
+    // this gate a plain server restart of a codex/pi session in a directory where Claude
+    // has ever run would adopt a stranger's conversation and, via setClaudeResumeId()'s
+    // mirror into harnessSessionId, overwrite the real harness id with a Claude UUID.
+    // Guarding here covers all callers at once (design spec section "claudeResumeId").
+    const gateSession = this.sessions.get(sessionId);
+    if (gateSession && !harnessAllowsClaudeTranscript(gateSession.mode)) return;
+
     let watcher = this.transcriptWatchers.get(sessionId);
 
     if (!watcher) {
@@ -1987,6 +2011,12 @@ export class WebServer extends EventEmitter {
        *  a conversation UUID that doesn't match the file the watcher is currently tracking).
        *  This catches /clear and fresh-spawn cases before any hook event fires. */
       conversationId: (uuid: string) => {
+        // Claude-transcript harnesses only. `conversationId` is emitted from
+        // Session.processOutput(), which parses JSON lines for every mode (it is not
+        // behind the caps.claudeParsers gate), so any harness that happens to print a
+        // JSON object carrying a `session_id` must not be able to write
+        // claudeResumeId — and through it harnessSessionId.
+        if (!harnessAllowsClaudeTranscript(session.mode)) return;
         // Always persist the new conversation ID explicitly so it survives server restarts,
         // regardless of whether the watcher setup path is taken below.
         if (session.claudeResumeId !== uuid) {
