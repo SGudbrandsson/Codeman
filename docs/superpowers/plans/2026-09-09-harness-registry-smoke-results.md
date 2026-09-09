@@ -426,3 +426,227 @@ name check. Harnesses that also declare `caps.claudeTranscript` (claude) are exc
 id is authoritatively published by the transcript-filename hook via `setClaudeResumeId()`,
 and inventing it at spawn would widen Claude's restore gate — out of scope for a defect fix.
 Covered by two new cases in `test/harness-spawn-plumbing.test.ts`.
+
+---
+
+## Defect 1 end-to-end verification
+
+Date: 2026-09-09, ~12:55–13:04 UTC. Branch `feat/harness-registry` @ `72e19290`.
+Purpose: the Defect 1 fix above was proven by unit tests over temp fixtures only. This run
+watches a **real codex 0.144.5 TUI** produce an id and follows it through persistence,
+restart-restore and teardown.
+
+### Environment
+
+Same isolation recipe as the original run: symlink-farm `HOME` (every entry of `/home/siggi`
+symlinked except `.codeman`, which is a fresh empty dir), private tmux server via
+`env -u TMUX TMUX_TMPDIR=/tmp/cme2e`. `$CODEX_HOME` therefore resolves through the symlink to
+the **real** `~/.codex` (auth + trust intact; only new rollout files were added, nothing
+deleted or rewritten).
+
+```
+env -u TMUX HOME=$S/home TMUX_TMPDIR=/tmp/cme2e \
+  nohup npx tsx src/index.ts web --port 3419 > /tmp/codeman-3419.log 2>&1 &
+$ curl -s http://localhost:3419/api/status
+{"version":"0.6.6","sessions":[],...}          <- clean, 0 adopted sessions
+```
+
+User tmux session count before: `tmux ls | grep -c codeman` = **36**.
+
+### Step 1 — codex session spawns and the pane renders — **PASS**
+
+```
+$ curl -s -X POST http://localhost:3419/api/sessions -d \
+  '{"workingDir":"…/e2e/wd-codex","mode":"codex","name":"e2e-codex"}'
+{"success":true,"session":{"id":"0bfee5c9-f02e-4257-8cc6-48f8029e0dfb", … "mode":"codex" …}}
+$ curl -s -X POST http://localhost:3419/api/sessions/0bfee5c9-…/interactive -d '{}'
+{"success":true}          (12:55:39.102)
+```
+
+First capture (265 bytes, non-blank) is the update prompt; answered with `"2"` + `"\r"`
+through the app's own input route. Then:
+
+```
+$ tmux capture-pane -p -t codeman-0bfee5c9
+╭──────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.144.5)                               │
+│ model:       gpt-5.6-terra medium   /model to change     │
+│ directory:   /tmp/claude-1000/…s-registry/…/e2e/wd-codex │
+│ permissions: YOLO mode                                   │
+╰──────────────────────────────────────────────────────────╯
+  Tip: You can resume a previous conversation by running codex resume
+› Implement {feature}
+```
+
+### Step 2 — submitting the first user turn — **PASS** (with a correction)
+
+`{"useMux":true}` **does not submit**; it only types. Confirmed again here — after
+
+```
+12:56:11.256  POST …/input {"input":"say hi in one word","useMux":true}  -> {"success":true}
+```
+
+the pane showed the text sitting in the composer (`› say hi in one word`) and, over a
+**120 s** poll of `GET /api/sessions/:id`, `harnessSessionId` stayed `null` and **no new
+rollout file appeared** — codex had not been given the turn. Enter has to be sent
+separately (`{"input":"\r","useMux":true}`) or via `{"submit":true}`. This is also a second,
+independent confirmation of the root cause: an idle-but-typed-into codex TUI writes no rollout.
+
+### Step 3 — `harnessSessionId` populated after the turn — **PASS**
+
+```
+12:58:45.041  POST …/input {"input":"\r","useMux":true}   -> {"success":true}
+              (poll loop: GET /api/sessions/0bfee5c9-… | jq -r .harnessSessionId)
+FOUND 01a0863d-5708-77e2-9048-e69ac9faa27d after .142687878s
+```
+
+Filesystem evidence for the same id:
+
+```
+$ stat -c 'birth %w  mtime %y' ~/.codex/sessions/2026/09/09/rollout-*01a0863d*.jsonl
+birth 2026-09-09 12:58:45.163517335 +0000  mtime 2026-09-09 12:58:47.975530303 +0000
+```
+
+**Measured latency: rollout file born 122 ms after the Enter; the API reported
+`harnessSessionId` 143 ms after the Enter — i.e. within ~21 ms of the file appearing.**
+The `fs.watch` wake path, not the poll, is what fires. Compare with the old behaviour: the
+turn was submitted **186 s** after spawn, far outside the previous 15 s window, and the old
+implementation would have found nothing. Defect 1 is genuinely fixed in reality.
+
+Second turn for an unambiguous restore check:
+
+```
+› say hi in one word
+• Hi
+› reply with just the word alpha
+• alpha
+```
+
+### Step 4 — persisted to state.json — **FAIL at discovery time / PASS at shutdown** (new Defect 4)
+
+45+ s after the id was live in the API, state.json had **not** been written:
+
+```
+$ jq '.sessions[] | {id, mode, harnessSessionId}' $HOME/.codeman/state.json
+{ "id": "0bfee5c9-…", "mode": "codex", "harnessSessionId": null }
+$ stat -c %y state.json      2026-09-09 12:55:36.054645007 +0000   <- still the spawn-time write
+$ curl -s …/api/sessions/0bfee5c9-… | jq -r .harnessSessionId
+01a0863d-5708-77e2-9048-e69ac9faa27d                              <- in memory only
+```
+
+Root cause, `src/web/server.ts:2005`:
+
+```ts
+harnessSessionIdDiscovered: (id: string) => {
+  if (session.harnessSessionId === id) return;   // <- ALWAYS true
+  session.harnessSessionId = id;
+  this.persistSessionState(session);
+},
+```
+
+Both emitters set the field **before** emitting — `src/session.ts:1663` (codex discovery)
+and `src/session.ts:1260` (the `preassignsSessionId` path added for Defect 3) — so the
+dedupe guard short-circuits on every event and `persistSessionState()` is never called.
+
+It is saved anyway on a **graceful** shutdown, because `stopServer()` calls
+`_persistSessionStateNow()` for every session (`src/web/server.ts:4045`):
+
+```
+SIGTERM received, shutting down gracefully…
+$ jq '.sessions[] | {id,harnessSessionId,status}' state.json
+{ "id": "0bfee5c9-…", "harnessSessionId": "01a0863d-5708-77e2-9048-e69ac9faa27d", "status": "idle" }
+```
+
+So the normal restart path works (Step 5 below), but an ungraceful exit (SIGKILL, OOM,
+power loss, container stop) between discovery and shutdown loses the id and the codex
+session becomes unresumable — exactly the outcome Defect 1 was fixed to prevent. Recorded
+as **Defect 4** below. Marked FAIL because the deliverable was "persisted when discovered".
+
+### Step 5 — restart restores via `codex resume '<id>'` — **PASS**
+
+Server stopped (SIGTERM), then the mux session was **killed** so the reattach path could not
+be used and the `harnessSessionId`-gated state.json path was the only one left:
+
+```
+$ tmux kill-session -t codeman-0bfee5c9 ; tmux ls
+no server running on /tmp/cme2e/tmux-1000/default
+```
+
+Relaunching the same command:
+
+```
+[Server] Restoring 1 stopped session(s) from state.json (no tmux pane found)
+[Session] Starting interactive Codex session (with tmux)
+[Server] Auto-resuming session 0bfee5c9-f02e-4257-8cc6-48f8029e0dfb (was running, claudeResumeId=undefined)
+```
+
+The actual process command line:
+
+```
+$ ps -eo args | grep 'codex resume'
+node /home/siggi/.local/bin/codex resume 01a0863d-5708-77e2-9048-e69ac9faa27d --dangerously-bypass-approvals-and-sandbox --no-alt-screen
+```
+
+and after dismissing the update prompt the restored pane really holds the earlier
+conversation:
+
+```
+  Tip: Use /personality to customize how Codex communicates.
+› say hi in one word
+• Hi
+› reply with just the word alpha
+• alpha
+```
+
+### Step 6 — the watch does not leak — **PASS**
+
+Measured with the inotify watch-descriptor count of the real node process
+(`/proc/<pid>/fdinfo/<inotify fd>`; note `npx`/`tsx` wrappers are separate pids — the leaf
+`/usr/bin/node … src/index.ts` is the one to inspect):
+
+```
+settled baseline (no codex watch active)   :  761
+POST /api/sessions -> codex + /interactive :  1317   (+556 = recursive watch on ~/.codex/sessions)
+DELETE /api/sessions/<id>  (Session.stop)  :   761   (immediately, within 10 s)
++30 s later                                :   761
+```
+
+Two separate sessions (`e2e-codex-leak`, `e2e-codex-leak2`) gave the identical
+761 → 1317 → 761 profile. The `AbortController` in `stop()` closes the watcher and clears
+the backoff timer deterministically; no rescanning, no lingering handle, and no
+`codex session id not discovered` warning is logged on the aborted path (correct — abort
+returns silently).
+
+Side observation (not a defect, worth knowing): a recursive watch over a long-lived
+`~/.codex/sessions` tree costs ~550 inotify watch descriptors *per active codex session*
+here. With many concurrent codex sessions this can approach
+`fs.inotify.max_user_watches`. Watching only the current day's shard, or a single
+non-recursive watch shared by all sessions, would avoid that.
+
+### Result summary
+
+| Step | Check | Result |
+|---|---|---|
+| 1 | Real codex session spawns, pane non-blank | PASS |
+| 2 | First user turn submitted (`useMux` types, `\r` submits) | PASS |
+| 3 | `harnessSessionId` populated from a real rollout | **PASS — 143 ms after the Enter** |
+| 4 | Persisted to state.json when discovered | **FAIL** (only at graceful shutdown — Defect 4) |
+| 5 | Restart restores with `codex resume '<id>'`, conversation intact | PASS |
+| 6 | No timer/watcher leak after `stop()` | PASS |
+
+**Defect 4 (functional, codex + pi) — `harnessSessionIdDiscovered` never persists.**
+`src/web/server.ts:2005` guards with `if (session.harnessSessionId === id) return;`, but both
+emit sites (`src/session.ts:1260`, `src/session.ts:1663`) assign the field before emitting, so
+the guard always fires and `persistSessionState()` is never reached. The id survives only
+because graceful shutdown re-persists every session. Fix: compare against the value *before*
+assignment (or drop the guard and let the debounce coalesce). Also affects the Defect 3 fix
+for pi.
+
+### Cleanup
+
+Dev server on 3419 killed, the private tmux server on `/tmp/cme2e` killed
+(`tmux kill-server`, then `no server running on /tmp/cme2e/tmux-1000/default`), scratch
+`HOME` and `/tmp/cme2e` removed. `tmux ls | grep -c codeman` = **36** before and after — no
+real Codeman session was created, modified or killed. Three new rollout files were added to
+`~/.codex/sessions/2026/09/09/` as the normal by-product of running codex; nothing in the
+user's codex history was deleted or rewritten.
