@@ -233,6 +233,7 @@ describe('TranscriptWatcher — fromOffset, transcriptId and replacement', () =>
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     watcher.stop();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -330,5 +331,45 @@ describe('TranscriptWatcher — fromOffset, transcriptId and replacement', () =>
     writeFileSync(file, userLine('first turn'));
     await waitFor(() => blocks.length >= 1);
     expect(texts(blocks)).toEqual(['first turn']);
+  });
+
+  it('stop() clears the stat-poll interval and updatePath() does not stack a second one', () => {
+    vi.useFakeTimers();
+    writeFileSync(file, '');
+    const other = join(dir, 'other.jsonl');
+    writeFileSync(other, '');
+
+    watcher.start(file);
+    expect(vi.getTimerCount()).toBe(1);
+
+    watcher.updatePath(other);
+    expect(vi.getTimerCount()).toBe(1);
+
+    watcher.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a deleted file falls back to polling and a recreated file is read from offset 0', async () => {
+    writeFileSync(file, userLine('before delete'));
+    const blocks: Array<{ text?: string }> = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.start(file, { fromOffset: 0 });
+    await waitFor(() => blocks.length >= 1);
+
+    unlinkSync(file);
+    const pollInterval = () => (watcher as unknown as { pollInterval: NodeJS.Timeout | null }).pollInterval;
+    await waitFor(() => pollInterval() !== null);
+    expect(pollInterval()).not.toBeNull();
+    expect(watcher.isRunning()).toBe(true);
+
+    // Longer than the deleted file, so a stale offset would skip or split the new line.
+    writeFileSync(file, userLine('after recreate, a longer first line'));
+    await waitFor(() => blocks.length >= 2);
+    expect(texts(blocks)).toEqual(['before delete', 'after recreate, a longer first line']);
+
+    // Watching resumes on the new file.
+    appendFileSync(file, userLine('appended'));
+    await waitFor(() => blocks.length >= 3);
+    expect(texts(blocks)).toEqual(['before delete', 'after recreate, a longer first line', 'appended']);
   });
 });

@@ -312,6 +312,32 @@ describe('detach paths', () => {
     expect(count(events, 'idle')).toBe(0);
   });
 
+  it.each([
+    ['codex', 'transcript'],
+    ['pi', 'hook'],
+  ] as const)('stop() on %s stops and clears the monitor; a late event changes nothing', async (mode, source) => {
+    installFake(source, 'working');
+    const { session, events } = makeSession(mode);
+    await session.startInteractive();
+    const m = instances[0];
+    expect(monitorOf(session)).toBe(m);
+
+    await session.stop(false);
+
+    expect(m.stopped).toBe(true);
+    expect(monitorOf(session)).toBeNull();
+    const status = session.status;
+    const isWorking = session.isWorking;
+    events.length = 0;
+
+    m.emit('idle', { reason: 'completed' });
+    m.emit('working');
+
+    expect(events).toEqual([]);
+    expect(session.status).toBe(status);
+    expect(session.isWorking).toBe(isWorking);
+  });
+
   it('a late callback from a detached monitor changes nothing', async () => {
     installFake('claudeTranscript', 'idle');
     const { session, events } = makeSession('claude');
@@ -428,6 +454,45 @@ describe('rebindMuxSession', () => {
     expect(instances).toHaveLength(2);
     expect(instances[0].stopped).toBe(true);
     expect(monitorOf(session)).toBe(instances[1]);
+  });
+
+  it('claude with no attached monitor keeps the PTY spinner heuristics after rebind', async () => {
+    installFake('claudeTranscript', 'idle');
+    const { session, mux, events } = makeSession('claude');
+    await session.startInteractive();
+    // The attach PTY exits: the monitor is detached and not re-attached by the rebind.
+    lastPty().onExit!({ exitCode: 0 });
+    expect(monitorOf(session)).toBeNull();
+    events.length = 0;
+
+    await session.rebindMuxSession('codeman-other', mux as unknown as TerminalMultiplexer);
+    expect(monitorOf(session)).toBeNull();
+    expect(session.isWorking).toBe(false);
+
+    lastPty().onData!('⠋ working');
+
+    expect(count(events, 'working')).toBe(1);
+    expect(session.status).toBe('busy');
+    expect(session.isWorking).toBe(true);
+  });
+
+  it('pi ignores PTY spinner and prompt output after rebind', async () => {
+    installFake('hook', 'idle');
+    const { session, mux, events } = makeSession('pi');
+    await session.startInteractive();
+
+    await session.rebindMuxSession('codeman-other', mux as unknown as TerminalMultiplexer);
+    expect(monitorOf(session)).toBe(instances[1]);
+    events.length = 0;
+
+    vi.useFakeTimers();
+    lastPty().onData!('⠋ Working');
+    lastPty().onData!('❯ ');
+    vi.advanceTimersByTime(30_000);
+
+    expect(count(events, 'working') + count(events, 'idle')).toBe(0);
+    expect(session.status).toBe('idle');
+    expect(session.isWorking).toBe(false);
   });
 
   it('codex is detached, not re-attached, and PTY output drives no activity', async () => {
