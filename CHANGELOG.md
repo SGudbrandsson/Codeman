@@ -40,6 +40,13 @@
 
 ### Changed
 
+- **Auto-compact-and-continue is Claude-only.** It types Claude's `/compact`, so
+  `POST /api/sessions/:id/auto-compact-continue` now refuses to enable it for codex, pi,
+  OpenCode and shell sessions (disabling still works), and the idle handler never runs it for them.
+- **Transcript streams carry a `transcriptId`.** `transcript:block`, `transcript:clear` and
+  `transcript:ready` include it, and `GET /api/sessions/:id/transcript` sends `X-Transcript-Id`.
+  It changes whenever the watcher starts on a file, switches files, or sees the file replaced or
+  truncated; the web view reloads instead of mixing blocks from two files.
 - **Transcript blocks carry a `seq`** (line byte offset × 1000 + index within the line) and the
   client dedups periodic recovery on it instead of on `timestamp`. Sibling Claude blocks from one
   entry share a timestamp and could previously be dropped.
@@ -62,6 +69,15 @@
 
 ### Fixed
 
+- **Pi sessions no longer stay busy forever, and codex sessions now show busy while working.**
+  The terminal-output heuristics only understood Claude's prompt glyph. Codex status now comes from
+  its rollout's turn records (`task_started` / `task_complete` / `turn_aborted`). Pi status comes
+  from a Codeman pi extension, loaded with `-e`, that posts ordered, token-authenticated
+  `harness_activity` events to `/api/hook-event`. Idle events now carry a reason: a `stale` idle
+  (tracking lost mid-turn) updates the UI but is never recorded as a completed run.
+- **A new pi session's transcript streams live from its first turn** and follows `/new` and
+  `/resume`: Codeman watches the session file the pi extension reports instead of waiting for a
+  directory scan to find it.
 - **Closed a command-injection hole in session spawning.** Free-form user text — notably the
   worktree notes that reach a harness command as `extraArgs` — was interpolated into the
   spawned command line with `JSON.stringify`, which leaves `$(...)`, backticks and
@@ -74,6 +90,10 @@
 
 ### Known limitations
 
+- Pi sessions started before the activity extension existed get it only when restarted; until
+  then they have no busy/idle tracking (their transcript view still works). Codeman and pi must
+  resolve the same pi agent directory (`PI_CODING_AGENT_DIR`). After a mux rebind, codex activity
+  is not tracked until the session is restarted.
 - Codex session-id discovery watches `~/.codex/sessions` recursively, which costs roughly
   550 inotify watch descriptors per active codex session on Linux. Many concurrent codex
   sessions can approach `fs.inotify.max_user_watches` (65536 by default, shared with every

@@ -953,6 +953,8 @@ those flags rather than branching on the mode string. This is what a harness get
 | Claude Code hooks | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Claude model defaults | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Conversation restore | ✅ `--resume` | ❌ | ✅ `codex resume` | ✅ `--session-id` | ❌ |
+| Busy / idle source | transcript | terminal output | rollout records | pi extension | terminal output |
+| Auto-compact-and-continue | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 Anything a harness does not support is refused with copy that names it — pausing a shell session
 answers `Shell sessions cannot be paused` — and the corresponding UI (Ralph tab, Respawn tab,
@@ -968,6 +970,39 @@ their root. Pi's plaintext reasoning renders as a collapsed **Thinking** block; 
 encrypted at source and never shown. Codex and pi watchers are view-only — completion, plan-mode
 and AskUserQuestion detection stay Claude-only. Neither harness writes a transcript before the
 first submitted turn, so a fresh session shows "No transcript yet".
+
+### Activity detection (busy / idle)
+
+Each harness declares where its busy/idle status comes from (`activity` in its definition):
+
+- **Claude** — `ClaudeActivityMonitor` tails Claude's transcript JSONL (unchanged).
+- **Codex** — the rollout's own turn records: `task_started` is busy, `task_complete` and
+  `turn_aborted` are idle. On attach Codeman reads the rollout backward from its end to find the
+  current state, then follows appends, replacement and truncation.
+- **Pi** — a small Codeman pi extension, loaded with `pi -e <codeman-activity-extension>`, posts
+  `harness_activity` events (`agent_start`, `agent_settled`, compaction start/end, and a 30 s
+  heartbeat) to `POST /api/hook-event`. Each report carries the per-process
+  `CODEMAN_ACTIVITY_TOKEN` exported at spawn plus ordering counters, so reports from any other
+  process, a superseded pi runtime or a delayed heartbeat are ignored. The token survives a Codeman
+  restart, so a pi process that kept running is still accepted. These events are activity-only: no
+  `hook:*` broadcast, push notification, run-summary hook record, vault capture or orchestrator call.
+- **OpenCode and shell** — the terminal-output heuristics as before.
+
+Idle events carry a reason. `completed` is an authoritative end of turn; `stale` means tracking was
+lost mid-turn (pi silent for 90 s, or codex silent for 5 minutes while busy). A stale idle updates
+the UI but never counts as a completed run, and the real completion still registers when it arrives.
+
+The pi extension also reports pi's session file. Codeman accepts it only under pi's sessions root
+(`$PI_CODING_AGENT_DIR` or `~/.pi/agent`, plus `/sessions`), persists it and streams the transcript
+from it, so a new pi session's first turn appears live and the view follows `/new` and `/resume`.
+Every transcript stream carries a `transcriptId` (SSE `transcript:block` / `clear` / `ready` and the
+`X-Transcript-Id` header on `GET /api/sessions/:id/transcript`), and the client uses it to avoid
+mixing blocks from two files.
+
+*Known limitations:* pi sessions started before this feature have no extension until restarted
+(their transcript view still works through the old file lookup). Codeman and pi must resolve the
+same pi agent directory. After a mux rebind, codex activity is not tracked until the session
+restarts. Auto-compact-and-continue types Claude's `/compact` and is therefore Claude-only.
 
 > **Behaviour change.** Shell sessions used to receive the Ralph tracker, the respawn controller,
 > the Claude transcript wiring and the Claude output parsers, because the guards that gated those
