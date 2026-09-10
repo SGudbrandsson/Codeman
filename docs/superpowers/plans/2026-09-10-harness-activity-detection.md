@@ -31,7 +31,7 @@
 **Files:**
 - Modify: `src/harnesses/types.ts` — `HarnessDefinition`
 - Modify: `src/harnesses/{claude,codex,pi,opencode,shell}.ts`
-- Modify: `src/web/server.ts` — `SessionListeners.idle` type and the `idle` listener in `setupSessionListeners`
+- Modify: `src/web/server.ts` — `SessionListenerRefs.idle` type and the `idle` listener in `setupSessionListeners`
 - Create: `src/types/activity.ts`
 - Test: `test/harness-activity-source.test.ts`, extend `test/harness-registry.test.ts`
 
@@ -154,7 +154,8 @@ export interface ActivityMonitorHost {
   readonly harnessSessionId?: string;
 }
 ```
-- `Session` private methods: `_attachActivityMonitor(): void`, `_detachActivityMonitor(): void`, `_setActivityFieldsIdleSilently(): void`. Tasks 3 and 6 register their monitors through a factory map keyed by `ActivitySource`, so this task ships with only the Claude entry wired and `hook`/`transcript` returning `null` until then.
+- `Session` private methods: `_attachActivityMonitor(): void`, `_detachActivityMonitor(): void`, `_setActivityFieldsIdleSilently(): void`.
+- `Session` fields: add `private _activityGeneration = 0;` beside `_activityMonitor`, and retype `_activityMonitor` from `ClaudeActivityMonitor | null` to `ActivityMonitor | null`. Tasks 3 and 6 register their monitors through a factory map keyed by `ActivitySource`, so this task ships with only the Claude entry wired and `hook`/`transcript` returning `null` until then.
 
 - [ ] **Step 1: Write the failing tests.** Use a mock mux (follow `test/harness-spawn-plumbing.test.ts`) and a fake monitor factory that records instances. Assert:
   - claude attaches a `ClaudeActivityMonitor`; shell/opencode attach none;
@@ -164,7 +165,8 @@ export interface ActivityMonitorHost {
   - the settle timer does not overwrite a monitor-reported `working`;
   - with a monitor attached, `sendInput`/`assignTask`/`clearTask` leave `_status` unchanged;
   - `rebindMuxSession`: a late `onExit` from the killed PTY does not detach or change state;
-  - a late callback from a detached monitor (emit on the old instance) changes nothing.
+  - a late callback from a detached monitor (emit on the old instance) changes nothing;
+  - a codex session after `rebindMuxSession` (monitor detached, not re-attached) emits no `working`/`idle` from spinner characters or `❯` in terminal output.
 - [ ] **Step 2:** Run — expect FAIL.
 - [ ] **Step 3: Implement.**
   - Add `get state(): ActivityState { return this._isBusy ? 'working' : 'idle'; }` to `ClaudeActivityMonitor`. No other change there.
@@ -216,6 +218,7 @@ private _setActivityFieldsIdleSilently(): void {
   - The monitor, not the session, decides whether a `completed` idle is a duplicate: monitors emit `completed` only when an authoritative end closes an open turn (`turnOpen`, Tasks 3 and 6). `ClaudeActivityMonitor` already emits idle only on a real transition, which satisfies that.
   - PTY `onExit` (current generation only), `prepareForRestart()`, and the `startInteractive()` catch path: call `_detachActivityMonitor()` then `_setActivityFieldsIdleSilently()`.
   - Settle timer: when `getHarness(this.mode).activity !== 'pty'`, emit `needsRefresh` only and leave `_status` alone.
+  - **Gate both PTY fallback copies on the activity source, not on monitor absence.** In `startInteractive()` and `rebindMuxSession()`, change each busy/idle heuristic guard from `if (!this._activityMonitor && …)` / `if (!this._activityMonitor)` to `if (getHarness(this.mode).activity === 'pty' && …)`. Otherwise a codex session detached after rebind (no monitor attached) falls back to PTY inference and can emit false activity and completion.
   - `sendInput()`, `assignTask()`, `clearTask()`, legacy `start()`: wrap their `_status` writes in `if (!this._activityMonitor)`.
   - `rebindMuxSession()`: move `const ptyGeneration = ++this._ptyGeneration;` to **before** the old PTY is killed, and use that value for the new PTY's callbacks. After re-spawning the attach PTY: if the harness `activity` is `'hook'`, call `_attachActivityMonitor()`; if `'transcript'`, call `_detachActivityMonitor()` and `_setActivityFieldsIdleSilently()` and do not re-attach (spec §5); if `'claudeTranscript'`, keep today's behaviour but re-synchronise fields from `this._activityMonitor.state` instead of forcing idle.
   - `recordHarnessSessionId(id)`: after recording, `this._activityMonitor?.setHarnessSessionId?.(id)`.
@@ -227,7 +230,7 @@ private _setActivityFieldsIdleSilently(): void {
 ### Task 3: `CodexTranscriptActivityMonitor`
 
 **Files:**
-- Modify: `src/harnesses/transcripts/types.ts` — optional `classifyActivity`
+- Modify: `src/harnesses/transcripts/types.ts` — optional `classifyActivity` on `TranscriptAdapter` **and** in `defineTranscriptAdapter`'s input and returned object
 - Modify: `src/harnesses/transcripts/codex.ts` — implement it
 - Create: `src/codex-transcript-activity-monitor.ts`
 - Modify: `src/activity-monitor.ts` — register the `transcript` factory
@@ -246,13 +249,14 @@ private _setActivityFieldsIdleSilently(): void {
   - trailing unterminated fragment at EOF seeds the pending buffer and parses once its newline is appended;
   - replacement between scan and publish → rescan (swap the file inode between the two `stat` calls via an injected `statFn`);
   - writes between scan and watch are not skipped;
+  - a `task_complete` appended between scan and watch, after a scanned `task_started`, publishes idle and emits **nothing**;
   - oversized pending line (`pendingCapBytes: 128`): the rest of that record is discarded, the next record parses;
   - truncation, and **equal-size replacement** (write a new file of identical size, rename over) → reset and rescan;
   - `staleMs` of silence while working → `idle { reason: 'stale' }`, then `task_complete` → `idle { reason: 'completed' }` exactly once;
   - `fs.watch` throwing → polling still detects appends;
   - `setHarnessSessionId` on a file already containing `task_started` → `working`.
 - [ ] **Step 2:** Run — expect FAIL.
-- [ ] **Step 3: Implement.** Classification:
+- [ ] **Step 3: Implement.** First, `defineTranscriptAdapter` (`src/harnesses/transcripts/types.ts`) currently accepts only `mode`, `locate` and `parseRecord`, and builds the returned object from those. Add an optional `classifyActivity?(record: unknown): 'working' | 'idle' | null` to its `def` parameter, and forward it on the returned adapter wrapped in `try`/`catch` returning `null`. Without this the codex definition below either fails to compile or the hook is silently dropped. Classification, inside `codexTranscriptAdapter`:
 
 ```typescript
 classifyActivity(record) {
@@ -267,13 +271,13 @@ classifyActivity(record) {
 
 Monitor, following spec §6 exactly:
   - `state`, `turnOpen`, `generation`, `offset`, `inode`, `pending: string`, `discardUntilNewline: boolean`.
-  - `start()`: `locate()`; if null, poll every `pollMs`. When found: `scanBackward()`, then arm `fs.watch`, then `readForward()` from the consumed offset, then publish initial state (emit `working` only if the scan result is `working`; set `turnOpen`).
+  - `start()`: `locate()`; if null, poll every `pollMs`. When found: `scanBackward()`; **seed** `state` and `turnOpen` from the scan result without emitting; arm `fs.watch`; `readForward()` from the consumed offset, applying transitions **silently** to that seeded state; then publish the **resulting** state once — emit `working` only if it is `working`, emit nothing for `idle` or `unknown`. Publishing the scan result after catch-up would wrongly report `working` for a turn whose `task_complete` was just read.
   - `scanBackward()`: `stat` → `{ ino, size }`; read chunks from `size` backward; carry the leading fragment; at position 0 treat the fragment as a complete line; exclude the trailing fragment after the last newline at EOF and seed `pending` with it; iterate complete lines newest-first; return the first non-null classification; stop at `scanBudgetBytes` → `unknown` (also `unknown` when the budget boundary splits an unclassified record). `stat` again before returning; on inode change or shrink, restart the scan.
   - `readForward()`: read at most 4 MB per pass (a constant, looping until caught up), append to `pending`, split on `\n`, and keep the last fragment. If `pending` exceeds `pendingCapBytes`, drop it and set `discardUntilNewline`; while that flag is set, drop bytes up to and including the next newline.
   - On each change event and each poll tick: `stat`; inode change or `size < offset` → reset pending, flag and timers, rescan, re-arm watcher; missing file → re-run `locate()`.
   - Transitions: classification `working` → if not working, set working, `turnOpen = true`, emit `working`; reset the stale timer. `idle` → if `turnOpen`, set idle, `turnOpen = false`, emit `idle { completed }`. Any write while working resets the stale timer; on expiry emit `idle { stale }` and keep `turnOpen`.
   - Every callback checks `generation`; `setHarnessSessionId` and `stop()` bump it.
-  - Register `transcript: (host) => new CodexTranscriptActivityMonitor(codexTranscriptAdapter, host)` in the factory map.
+  - Register `transcript: (host) => new CodexTranscriptActivityMonitor(codexTranscriptAdapter, { workingDir: host.workingDir, sessionId: host.id, harnessSessionId: host.harnessSessionId })` in the factory map. `ActivityMonitorHost` exposes `id`, not `sessionId`, so map it explicitly.
 - [ ] **Step 4:** Run the new tests plus `test/transcript-adapter-codex.test.ts` — expect PASS. `npx tsc --noEmit`.
 - [ ] **Step 5:** Commit `feat(codex): derive busy/idle from rollout turn records`.
 
@@ -295,9 +299,10 @@ Monitor, following spec §6 exactly:
   - `startInteractive()` on a pi session with no mux session → `createSession` receives a 32-hex token, and `toState().activityToken` equals it;
   - dead pane → `respawnPane` receives a **new** token;
   - **restored session (existing live pane) → no new token; the persisted `activityToken` is kept**;
-  - a claude session passes no token.
+  - a claude session passes no token;
+  - rotating the token clears the hook ordering state; attaching to a surviving pane keeps it.
 - [ ] **Step 2:** Run — expect FAIL.
-- [ ] **Step 3: Implement.** In `startInteractive()`: in the dead-pane branch before `respawnPane(...)` and in the create branch before `createSession(...)`, when `getHarness(this.mode).activity === 'hook'`, set `this.activityToken = newActivityToken()` and pass it. Do nothing in the `isRestoredSession` attach branch. Serialise `activityToken` in `toState()` and restore it in both server restore construction paths, as `harnessSessionId` is. In `tmux-manager.ts` append to both arrays:
+- [ ] **Step 3: Implement.** In `startInteractive()`: in the dead-pane branch before `respawnPane(...)` and in the create branch before `createSession(...)`, when `getHarness(this.mode).activity === 'hook'`, set `this.activityToken = newActivityToken()` and pass it. Do nothing in the `isRestoredSession` attach branch. **When rotating the token, also reset the hook ordering state** (`this._hookOwner = {}`, used by Task 6): a new pi process restarts its `seq` and `gen` at 1. On surviving-pane attach, keep both the token and the ordering state. Serialise `activityToken` in `toState()` and restore it in both server restore construction paths, as `harnessSessionId` is. In `tmux-manager.ts` append to both arrays:
 
 ```typescript
 if (activityToken && ACTIVITY_TOKEN_PATTERN.test(activityToken)) {
@@ -445,10 +450,11 @@ export function resolvePiActivityExtension(exists = existsSync): string | null {
 
 - [ ] **Step 1: Write the failing tests:**
   - `acceptActivityReport`: wrong token → false; first valid report with no prior state → true and initialises `lastSeq`/`ownerGen`; `seq` ≤ `lastSeq` → false; `gen` < `ownerGen` → false even when `seq` is higher; higher `gen` → true.
+  - after a token rotation, the new process's first report (`seq: 1`, `gen: 1`) is accepted even though the previous process reached higher values;
   - Route: pi session + valid `harness_activity` → 200, activity applied; same payload for claude/codex/shell/opencode sessions → ignored; invalid `data` shapes → 400; **zero** `broadcast('hook:harness_activity')`, `sendPushNotifications`, `recordHookEvent`, vault capture and orchestrator calls; a payload that also carries `transcript_path` does **not** start a watcher through the legacy branch.
   - `HookActivityMonitor`: `working` report → one `working`; `idle` → `idle { completed }`; 90 s without any report while working → `idle { stale }`; a later `idle` report → `idle { completed }` exactly once; repeated `working` heartbeats emit nothing new.
 - [ ] **Step 2:** Run — expect FAIL.
-- [ ] **Step 3: Implement.** Add `'harness_activity'` to the schema enum. In the route, directly after the session-exists and paused checks:
+- [ ] **Step 3: Implement.** Add `'harness_activity'` to the schema enum. The handler is currently `async (req) => {…}`; change it to `async (req, reply) => {…}`, because `createErrorResponse` only builds a response body and does not set the HTTP status. In the route, directly after the session-exists and paused checks:
 
 ```typescript
 if (event === 'harness_activity') {
@@ -456,6 +462,7 @@ if (event === 'harness_activity') {
   if (!session || getHarness(session.mode).activity !== 'hook') return { success: true };
   const parsed = HarnessActivityDataSchema.safeParse(data);
   if (!parsed.success) {
+    reply.code(400);
     return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid harness_activity payload');
   }
   const outcome = session.applyHookActivity(parsed.data);
@@ -466,7 +473,7 @@ if (event === 'harness_activity') {
 }
 ```
 
-  with `HarnessActivityDataSchema = z.object({ state: z.enum(['working','idle']), token: z.string().regex(/^[0-9a-f]{32}$/), gen: z.number().int().positive(), seq: z.number().int().positive(), sessionFile: z.string().max(4096).optional() })`. Until Task 7, `acceptHarnessTranscriptPath` is a no-op on the port. `Session.applyHookActivity` keeps `{ lastSeq, ownerGen }` in memory, calls `acceptActivityReport(owner, this.activityToken, report)`, and forwards accepted states to the attached `HookActivityMonitor`.
+  with `HarnessActivityDataSchema = z.object({ state: z.enum(['working','idle']), token: z.string().regex(/^[0-9a-f]{32}$/), gen: z.number().int().positive(), seq: z.number().int().positive(), sessionFile: z.string().max(4096).optional() })`. Until Task 7, `acceptHarnessTranscriptPath` is a no-op on the port. `Session.applyHookActivity` keeps `{ lastSeq, ownerGen }` in memory as `this._hookOwner` — **reset whenever `activityToken` is rotated** (Task 4) and preserved on surviving-pane attach, because a replacement pi process restarts its counters at 1 — calls `acceptActivityReport(this._hookOwner, this.activityToken, report)`, and forwards accepted states to the attached `HookActivityMonitor`.
 - [ ] **Step 4:** Run tests; typecheck.
 - [ ] **Step 5:** Commit `feat(pi): ordered harness_activity hook events drive pi busy/idle`.
 
@@ -493,7 +500,7 @@ if (event === 'harness_activity') {
   - server: the first accepted `sessionFile` for a missing file starts a polling watcher and persists `harnessTranscriptPath`; creating the file later broadcasts its blocks; a changed `sessionFile` retargets with `fromOffset: 0` and a new `transcriptId`; an out-of-root path is ignored;
   - REST: for a pi session, `/transcript` and `/state` read `harnessTranscriptPath` (not `locate()`), and `/transcript` sends `X-Transcript-Id` matching the watcher.
 - [ ] **Step 2:** Run — expect FAIL.
-- [ ] **Step 3: Implement** per spec §7. In `start()`, replace the existing-file branch's `this.filePosition = stat.size` with `this.filePosition = opts?.fromOffset ?? stat.size`, record `this._inode = stat.ino`, and set `this._transcriptId = randomUUID()`. In `processNewContent()`, `stat` and treat `stat.ino !== this._inode` like the existing shrink branch (reset position, new id, emit clear). `acceptHarnessTranscriptPath(sessionId, raw)`: canonicalise with `isUnderPiSessionsRoot`; if null, return; if it differs from `session.harnessTranscriptPath` or no watcher exists, persist it and `watcher.updatePath(path, { fromOffset: 0 })` (creating the watcher as `startHarnessTranscriptWatcher` does).
+- [ ] **Step 3: Implement** per spec §7. In `start()`, replace the existing-file branch's `this.filePosition = stat.size` with `this.filePosition = opts?.fromOffset ?? stat.size`, record `this._inode = stat.ino`, and set `this._transcriptId = randomUUID()`. In `processNewContent()`, `stat` and treat `stat.ino !== this._inode` like the existing shrink branch (reset position, new id, emit clear). **That alone is not enough:** `setupFileWatcher()` handles only `change` events, and polling stops once a watcher is armed, so a rename-over replacement may never call `processNewContent()`, and updates to the new file would then be missed. Also handle `rename` events by closing and re-arming the watcher on the same path and then running the inode check, and keep a 2 s `stat` poll running while watching that performs the same inode and shrink check. `acceptHarnessTranscriptPath(sessionId, raw)`: canonicalise with `isUnderPiSessionsRoot`; if null, return; if it differs from `session.harnessTranscriptPath` or no watcher exists, persist it and `watcher.updatePath(path, { fromOffset: 0 })` (creating the watcher as `startHarnessTranscriptWatcher` does).
 - [ ] **Step 4:** Run tests; typecheck.
 - [ ] **Step 5:** Commit `feat(transcript): follow pi's authoritative session file with transcript identity`.
 
@@ -567,5 +574,7 @@ env -u TMUX HOME=$SCRATCH/home TMUX_TMPDIR=/tmp/cmact \
 **Placeholders.** None: each step names files, functions and the exact change; the extension, classification, token export, route branch and reconciliation helpers are given in full.
 
 **Type consistency.** `ActivitySource`, `IdleReason`, `IdleInfo`, `normalizeIdleReason` (Task 1); `ActivityMonitor`, `ActivityState` (Task 2); `HarnessActivityReport`, `acceptActivityReport` (Task 6); `activityToken`, `newActivityToken`, `ACTIVITY_TOKEN_PATTERN` (Task 4); `harnessTranscriptPath`, `transcriptId`, `isUnderPiSessionsRoot` (Task 7) are used with the same names and shapes throughout.
+
+**Plan review.** A codex review of the first draft found seven blocking issues, all fixed above: the codex factory's `id`→`sessionId` mapping; `defineTranscriptAdapter` forwarding `classifyActivity`; codex initial publication ordering; PTY fallback gated on activity source; hook ordering reset on token rotation; `reply.code(400)`; and rename-over replacement in `TranscriptWatcher`. It also confirmed the pi extension type-checks under the repo's strict config, compiles to `dist/harnesses/pi/codeman-activity-extension.js`, and loads through pi's jiti loader.
 
 **Ordering.** Task 2 needs Task 1's types. Tasks 3 and 6 register factories created in Task 2. Task 6 calls Task 7's port method, which is a no-op until Task 7. Task 8 needs Task 7's `transcriptId`. Task 10 needs everything.
