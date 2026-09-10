@@ -1252,6 +1252,23 @@ ${contextLines.join('\n')}`;
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
     }
 
+    // Claude-only: it sends Claude's /compact. Disabling stays allowed so a flag set before
+    // this gate existed can still be turned off.
+    if (body.enabled) {
+      let claudeTranscript = false;
+      try {
+        claudeTranscript = getHarness(session.mode).caps.claudeTranscript;
+      } catch {
+        claudeTranscript = false;
+      }
+      if (!claudeTranscript) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          'Auto-compact-and-continue is only available for Claude sessions'
+        );
+      }
+    }
+
     session.setAutoCompactAndContinue(body.enabled);
     ctx.persistSessionState(session);
     ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));

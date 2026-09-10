@@ -719,6 +719,34 @@ describe('session-routes', () => {
       expect(harness.ctx._session.setAutoCompactAndContinue).toHaveBeenCalledWith(false);
     });
 
+    for (const mode of ['codex', 'pi', 'shell', 'opencode']) {
+      it(`rejects enabling for a ${mode} session (Claude-only) and leaves it disabled`, async () => {
+        harness.ctx._session.mode = mode;
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+          payload: { enabled: true },
+        });
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(false);
+        expect(harness.ctx._session.setAutoCompactAndContinue).not.toHaveBeenCalled();
+        expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+      });
+    }
+
+    it('still allows disabling for a non-Claude session', async () => {
+      harness.ctx._session.mode = 'pi';
+      harness.ctx._session.autoCompactAndContinue = true;
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/auto-compact-continue`,
+        payload: { enabled: false },
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(harness.ctx._session.setAutoCompactAndContinue).toHaveBeenCalledWith(false);
+    });
+
     it('returns error for invalid body (missing enabled field)', async () => {
       const res = await harness.app.inject({
         method: 'POST',

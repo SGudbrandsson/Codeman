@@ -310,6 +310,23 @@ describe('idle reason', () => {
   });
 });
 
+describe('auto-compact-and-continue is Claude-only', () => {
+  for (const mode of ['codex', 'pi'] as const) {
+    it(`a ${mode} session with the flag forced on never calls onIdle on a completed idle`, async () => {
+      const s = await addSession(`sess-acc-${mode}`, mode, { listeners: true });
+      s.setAutoCompactAndContinue(true);
+      const onIdle = vi.spyOn(s.compactContinue, 'onIdle').mockResolvedValue(undefined as never);
+
+      s.emit('idle', { reason: 'completed' });
+      s.emit('idle');
+
+      expect(events.filter((e) => e.event === 'session:idle' && e.data?.id === s.id)).toHaveLength(2);
+      expect(onIdle).not.toHaveBeenCalled();
+      s.setAutoCompactAndContinue(false);
+    });
+  }
+});
+
 describe('archive-time transcriptPath fallback', () => {
   for (const mode of ['codex', 'pi'] as const) {
     it(`clearSession persists the adapter-located path for a ${mode} session that never had a watcher`, async () => {

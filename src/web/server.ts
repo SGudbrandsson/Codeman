@@ -1986,8 +1986,9 @@ export class WebServer extends EventEmitter {
           if (reason === 'completed') tracker.recordIdle();
           tracker.recordTokens(session.inputTokens, session.outputTokens);
         }
-        // Auto-compact-and-continue: detect compaction request and send /compact then continue
-        if (reason === 'completed' && session.autoCompactAndContinue) {
+        // Auto-compact-and-continue: detect compaction request and send /compact then continue.
+        // Claude-only: it types Claude's /compact, which means nothing to codex or pi.
+        if (reason === 'completed' && session.autoCompactAndContinue && harnessAllowsClaudeTranscript(session.mode)) {
           void session.compactContinue.onIdle(session.workingDir, session.textOutput);
         }
       },
