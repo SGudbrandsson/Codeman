@@ -235,6 +235,27 @@ describe('rendering and recovery', () => {
     expect(r.body).toBe('Let me consider the deep question.');
   });
 
+  it.each([
+    ['claude', 'Claude'],
+    ['codex', 'Codex'],
+    ['pi', 'Pi'],
+  ])('%s assistant bubbles are labelled "%s"', async (mode, expected) => {
+    // The author label was hard-coded to "Claude", so codex and pi replies
+    // were attributed to Claude in their own transcript.
+    const id = `fake-${mode}-label`;
+    await addFakeSession(id, mode);
+    await mockTranscript(id, [
+      { type: 'text', role: 'user', text: 'hi', timestamp: '2026-01-01T00:00:00Z', seq: 0 },
+      { type: 'text', role: 'assistant', text: 'hello back', timestamp: '2026-01-01T00:00:01Z', seq: 1000 },
+    ]);
+    await select(id);
+    await page.waitForSelector('#transcriptView .tv-assistant-dot', { timeout: 5000 });
+    const label = await page.evaluate(() =>
+      (document.querySelector('#transcriptView .tv-assistant-dot') as HTMLElement).parentElement!.textContent!.trim()
+    );
+    expect(label).toBe(expected);
+  });
+
   it('two blocks sharing a timestamp both survive the periodic recovery dedup', async () => {
     const id = 'fake-codex-dedup';
     const b1 = { type: 'text', role: 'user', text: 'run it', timestamp: '2026-01-01T00:00:00Z', seq: 0 };

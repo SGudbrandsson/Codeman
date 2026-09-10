@@ -4935,6 +4935,20 @@ const TranscriptView = {
     }
   },
 
+  /**
+   * Author label for assistant bubbles. Uses the session's harness so codex and pi
+   * replies are not labelled "Claude". Claude sessions (and sessions with no mode)
+   * keep the original "Claude" label. Before /api/harnesses resolves, known modes
+   * still get a readable name instead of the bare mode id.
+   */
+  _assistantLabel() {
+    const session = (typeof app !== 'undefined' && this._sessionId) ? app.sessions?.get(this._sessionId) : null;
+    const mode = session?.mode;
+    if (!mode || mode === 'claude') return 'Claude';
+    const known = typeof app !== 'undefined' ? app._harnesses?.get(mode) : null;
+    return known?.label || { codex: 'Codex', pi: 'Pi', opencode: 'OpenCode' }[mode] || 'Assistant';
+  },
+
   _renderTextBlock(block) {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
@@ -5108,7 +5122,7 @@ const TranscriptView = {
       const dot = document.createElement('span');
       dot.className = 'tv-assistant-dot';
       label.appendChild(dot);
-      label.appendChild(document.createTextNode('Claude'));
+      label.appendChild(document.createTextNode(this._assistantLabel()));
       const content = document.createElement('div');
       content.className = 'tv-content tv-markdown';
       // renderMarkdown escapes all user/assistant text via esc() before processing.
