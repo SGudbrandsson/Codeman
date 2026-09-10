@@ -59,13 +59,13 @@ function restoreEnv(): void {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type W = any;
 
-async function addFakeSession(id: string, mode: string): Promise<void> {
+async function addFakeSession(id: string, mode: string, workingDir = '/tmp'): Promise<void> {
   await page.evaluate(
-    ([sid, m]) => {
-      (window as W).app.sessions.set(sid, { id: sid, mode: m, name: `fake-${m}`, status: 'idle', workingDir: '/tmp' });
+    ([sid, m, wd]) => {
+      (window as W).app.sessions.set(sid, { id: sid, mode: m, name: `fake-${m}`, status: 'idle', workingDir: wd });
       localStorage.removeItem('transcriptViewMode:' + sid);
     },
-    [id, mode]
+    [id, mode, workingDir]
   );
 }
 
@@ -795,5 +795,117 @@ describe('transcript identity reconciliation (X-Transcript-Id / SSE transcriptId
     expect(m.calls()).toBe(1);
     expect(st.texts).toEqual(['after-clear']);
     expect(st.transcriptId).toBe('D');
+  });
+});
+
+describe('codex markdown file links open the file editor, never navigate', () => {
+  const ID = 'fake-codex-filelinks';
+  const WD = '/home/u/proj';
+  const EXISTING = new Set(['src/a.ts', 'src/b.ts', 'src/session.ts']);
+  const requested: string[] = [];
+  const link = (path: string) => `#transcriptView a.tv-md-file-link[data-file-path="${path}"]`;
+  const editorCalls = () => page.evaluate(() => (window as W).__openCalls as Array<[string, number | null]>);
+
+  it('in-dir links open via openFileInEditor; outside/prefix links stay inert; Claude <code> paths still bind', async () => {
+    await addFakeSession(ID, 'codex', WD);
+    await mockTranscript(ID, [
+      tb(0, 'where are the files?'),
+      tb(
+        1000,
+        `In-dir [src/a.ts:12](${WD}/src/a.ts:12), outside [hosts](/etc/hosts:3), ` +
+          `prefix [x.ts](${WD}bar/x.ts:5), labelled [\`b.ts\`](${WD}/src/b.ts) and Claude \`src/session.ts\`.`,
+        'assistant'
+      ),
+    ]);
+    // Registered after the catch-all fake-* route, so it takes precedence.
+    await page.route(`**/api/sessions/${ID}/file-content**`, (route) => {
+      const p = new URL(route.request().url()).searchParams.get('path') ?? '';
+      requested.push(p);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(EXISTING.has(p) ? { success: true, data: { content: 'x' } } : { success: false }),
+      });
+    });
+    await page.evaluate(() => {
+      const app = (window as W).app;
+      (window as W).__origOpenFileInEditor = app.openFileInEditor;
+      (window as W).__openCalls = [];
+      app.openFileInEditor = (p: string, o?: { line?: number }) => {
+        (window as W).__openCalls.push([p, o?.line ?? null]);
+      };
+    });
+    let newPages = 0;
+    const onPage = () => newPages++;
+    context.on('page', onPage);
+    try {
+      await select(ID);
+      await page.waitForSelector(`${link(`${WD}/src/a.ts`)}.tv-file-link`, { timeout: 5000 });
+      await page.waitForSelector(`${link('/etc/hosts')}.tv-file-link-unavailable`, { timeout: 5000 });
+      await page.waitForSelector(`${link(`${WD}bar/x.ts`)}.tv-file-link-unavailable`, { timeout: 5000 });
+      await page.waitForSelector(`${link(`${WD}/src/b.ts`)}.tv-file-link`, { timeout: 5000 });
+      await page.waitForSelector('#transcriptView code.tv-file-link', { timeout: 5000 });
+      const urlBefore = page.url();
+
+      // Absolute in-dir link: bound, href-less, opens the working-dir-relative path with its line.
+      const inDir = await page.evaluate(
+        (sel) => {
+          const el = document.querySelector(sel) as HTMLElement;
+          return {
+            href: el.hasAttribute('href'),
+            role: el.getAttribute('role'),
+            tabindex: el.getAttribute('tabindex'),
+          };
+        },
+        link(`${WD}/src/a.ts`)
+      );
+      expect(inDir).toEqual({ href: false, role: 'link', tabindex: '0' });
+      await page.click(link(`${WD}/src/a.ts`));
+      expect(await editorCalls()).toEqual([['src/a.ts', 12]]);
+      await page.focus(link(`${WD}/src/a.ts`));
+      await page.keyboard.press('Enter');
+      expect(await editorCalls()).toEqual([
+        ['src/a.ts', 12],
+        ['src/a.ts', 12],
+      ]);
+
+      // Outside the working dir, and a sibling dir sharing the prefix: kept absolute, unavailable, inert.
+      expect(requested).toContain('/etc/hosts');
+      expect(requested).toContain(`${WD}bar/x.ts`);
+      for (const p of ['/etc/hosts', `${WD}bar/x.ts`]) {
+        const st = await page.evaluate((sel) => {
+          const el = document.querySelector(sel) as HTMLElement;
+          return { href: el.hasAttribute('href'), bound: el.classList.contains('tv-file-link') };
+        }, link(p));
+        expect(st).toEqual({ href: false, bound: false });
+        await page.click(link(p));
+      }
+      expect(await editorCalls()).toHaveLength(2);
+
+      // A <code> label inside a file link is bound once, via the anchor (its own text is never checked).
+      expect(requested).not.toContain('b.ts');
+      expect(
+        await page.evaluate(
+          (sel) => document.querySelector(`${sel} code`)!.classList.contains('tv-file-link'),
+          link(`${WD}/src/b.ts`)
+        )
+      ).toBe(false);
+      await page.click(`${link(`${WD}/src/b.ts`)} code`);
+      expect((await editorCalls()).slice(2)).toEqual([['src/b.ts', null]]);
+
+      // Claude-style inline code path in the same view still opens the editor.
+      await page.click('#transcriptView code.tv-file-link');
+      expect((await editorCalls()).slice(3)).toEqual([['src/session.ts', null]]);
+
+      await page.waitForTimeout(200);
+      expect(newPages).toBe(0);
+      expect(page.url()).toBe(urlBefore);
+    } finally {
+      context.off('page', onPage);
+      await page.evaluate(() => {
+        (window as W).app.openFileInEditor = (window as W).__origOpenFileInEditor;
+      });
+      await page.unroute(`**/api/sessions/${ID}/file-content**`);
+    }
   });
 });

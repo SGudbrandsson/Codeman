@@ -10306,6 +10306,24 @@ kbd {
   outline: 2px solid rgba(103,232,249,0.6);
   outline-offset: 1px;
 }
+/* Markdown file links (codex `[label](/abs/path:12)`) carry no href; they only
+   become clickable once linkifyFilePaths() confirms the file exists. */
+.tv-markdown a.tv-md-file-link {
+  cursor: default;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.tv-markdown a.tv-md-file-link.tv-file-link {
+  cursor: pointer;
+}
+.tv-markdown a.tv-md-file-link.tv-file-link:focus-visible {
+  outline: 2px solid rgba(103,232,249,0.6);
+  outline-offset: 1px;
+}
+.tv-markdown a.tv-md-file-link.tv-file-link-unavailable {
+  color: inherit;
+  text-decoration: none;
+}
 .tv-code-block {
   position: relative;
 }

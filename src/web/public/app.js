@@ -426,6 +426,21 @@ function inlineMarkdown(escaped, safeHref, esc) {
     return '\x00CODESNIP' + (snippets.length - 1) + '\x00';
   });
 
+  // Step 1b: Extract markdown links whose target is a file path (codex writes
+  // `[src/a.ts:12](/abs/src/a.ts:12)`) into placeholders before the URL/emphasis
+  // passes can mangle `_`/`*` in the target. They render WITHOUT an href so the
+  // browser never navigates; linkifyFilePaths() binds them to the file editor.
+  // Every other link is left untouched for Step 3.
+  const fileLinks = [];
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, target) => {
+    const raw = target.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+    const parsed = parseMarkdownFileLinkTarget(raw);
+    if (!parsed) return match;
+    fileLinks.push('<a class="tv-md-file-link" data-file-path="' + esc(parsed.path) + '"' +
+      (parsed.line ? ' data-line="' + parsed.line + '"' : '') + '>' + label + '</a>');
+    return '\x00FILELINK' + (fileLinks.length - 1) + '\x00';
+  });
+
   // Step 2: Linkify bare URLs (code content is now opaque — no false matches).
   s = s.replace(/(?<!\()(https?:\/\/[^\s<>"&()*_]+)(?!\))/g, (_, url) => {
     const cleanUrl = url.replace(/[.,!?]+$/, '');
@@ -442,7 +457,9 @@ function inlineMarkdown(escaped, safeHref, esc) {
       '<a href="' + esc(safeHref(url)) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
     );
 
-  // Step 4: Restore code span placeholders to their original <code>...</code> HTML.
+  // Step 4: Restore file-link placeholders (labels may hold code placeholders, so
+  // first), then code span placeholders to their original <code>...</code> HTML.
+  s = s.replace(/\x00FILELINK(\d+)\x00/g, (_, i) => fileLinks[+i]);
   s = s.replace(/\x00CODESNIP(\d+)\x00/g, (_, i) => snippets[+i]);
 
   return s;
@@ -514,6 +531,52 @@ function looksLikePath(text) {
 }
 
 /**
+ * Classify a raw (unescaped) markdown link target. Returns `{ path, line, col }` when
+ * it points at a file — codex writes `[label](/abs/path.ts:12)`, `<...>` for paths
+ * with spaces, `file:///...`, and relative `path:12` / `path#L12` — or null for
+ * anything else (URLs, schemes, anchors, queries), which keeps the normal link path.
+ * The `:line[:col]` / `:L-L` / `#Lnn` suffix is stripped from `path`.
+ */
+function parseMarkdownFileLinkTarget(rawTarget) {
+  if (!rawTarget) return null;
+  var t = rawTarget.trim();
+  var angled = false;
+  if (t.charAt(0) === '<' && t.charAt(t.length - 1) === '>') {
+    t = t.slice(1, -1).trim();
+    angled = true;
+  }
+  if (!t || t.length > 512 || /[\x00<>"`?]/.test(t) || t.charAt(0) === '#') return null;
+  if (/^file:\/\//i.test(t)) {
+    t = t.replace(/^file:\/\/(?:localhost)?/i, '');
+    if (t.charAt(0) !== '/') return null; // file://host/... is not a local path
+    try { t = decodeURIComponent(t); } catch (_) { return null; }
+  } else if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(t)) {
+    // Any scheme (http:, mailto:, app://, javascript:...). `app.py:12` is a
+    // path with a line suffix, not a scheme, hence the (?!\d).
+    return null;
+  }
+  var line = null;
+  var col = null;
+  var m = t.match(/#L(\d+)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/) || t.match(/:(\d+)(?::(\d+))?(?:-\d+(?::\d+)?)?$/);
+  if (m) {
+    t = t.slice(0, m.index);
+    line = parseInt(m[1], 10);
+    if (m[2]) col = parseInt(m[2], 10);
+  }
+  if (t.indexOf('#') > 0) t = t.slice(0, t.indexOf('#')); // drop other fragments (heading anchors)
+  if (!t) return null;
+  // Reject bare `/`, `.`, `..`, `../..` and the like.
+  if (t.split('/').every(function (seg) { return seg === '' || seg === '.' || seg === '..'; })) return null;
+  if (t.charAt(0) === '/') {
+    if (t.charAt(1) === '/') return null; // protocol-relative URL
+  } else if (!looksLikePath(angled ? t.replace(/ /g, '_') : t)) {
+    // Relative targets must look like a path; spaces only inside `<...>`.
+    return null;
+  }
+  return { path: t, line: line, col: col };
+}
+
+/**
  * Check whether `path` exists within the session's working dir, reusing the existing
  * file-content endpoint (sandbox + existence enforced server-side). Cached per
  * session+path. Returns a Promise<boolean>.
@@ -553,6 +616,7 @@ function linkifyFilePaths(rootEl) {
     var codeEl = codeEls[i];
     if (codeEl.closest('pre')) continue; // inline code only, skip fenced blocks
     if (codeEl.classList.contains('tv-file-link')) continue; // already bound
+    if (codeEl.closest('a.tv-md-file-link')) continue; // the enclosing markdown file link handles it
     var text = (codeEl.textContent || '').trim();
     if (!looksLikePath(text)) continue;
     if (!byPath.has(text)) byPath.set(text, []);
@@ -574,6 +638,52 @@ function linkifyFilePaths(rootEl) {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             app.openFileInEditor(path);
+          }
+        });
+      });
+    });
+  });
+
+  // Markdown file links (rendered without an href by inlineMarkdown). Absolute paths
+  // under the working dir are made relative so they match tree-opened files (review
+  // notes and restore state are keyed by that path); anything else stays absolute
+  // and the server sandbox decides. Missing/outside-dir links stay inert.
+  var session = app.sessions && app.sessions.get(sessionId);
+  var workingDir = session && session.workingDir ? String(session.workingDir).replace(/\/+$/, '') : '';
+  var linksByPath = new Map();
+  var linkEls = rootEl.querySelectorAll('a.tv-md-file-link[data-file-path]');
+  for (var j = 0; j < linkEls.length; j++) {
+    var linkEl = linkEls[j];
+    if (linkEl.classList.contains('tv-file-link')) continue; // already bound
+    var linkPath = linkEl.getAttribute('data-file-path');
+    if (workingDir && linkPath.indexOf(workingDir + '/') === 0) linkPath = linkPath.slice(workingDir.length + 1);
+    if (!linksByPath.has(linkPath)) linksByPath.set(linkPath, []);
+    linksByPath.get(linkPath).push(linkEl);
+  }
+  linksByPath.forEach(function (els, path) {
+    _checkFilePathExists(sessionId, path).then(function (exists) {
+      els.forEach(function (el) {
+        if (el.classList.contains('tv-file-link')) return; // guard double-binding
+        if (!exists) {
+          el.classList.add('tv-file-link-unavailable');
+          el.setAttribute('title', "File not available in this session's working directory");
+          return;
+        }
+        var line = parseInt(el.getAttribute('data-line'), 10) || undefined;
+        el.classList.add('tv-file-link');
+        el.setAttribute('role', 'link');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('title', 'Open ' + path);
+        el.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          app.openFileInEditor(path, { line: line });
+        });
+        el.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            app.openFileInEditor(path, { line: line });
           }
         });
       });
@@ -21173,6 +21283,8 @@ class CodemanApp {
    * frame and images/binaries in their real previews — the old read-only <pre>
    * modal is gone. Back stack ends up as files-sheet → files-file, so Back walks
    * file → tree → closed exactly like opening from the sheet.
+   * opts.line (from transcript file links) is accepted but not applied yet: the
+   * default file views have no source-line mapping.
    */
   async openFileInEditor(path, opts = {}) {
     if (!this.activeSessionId) { this.showToast('No active session', 'error'); return; }
