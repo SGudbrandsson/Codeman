@@ -331,6 +331,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       harnessSessionId,
       extraArgs,
+      workingDir,
     };
     const baseCmd = buildSpawnCommand(spawnContext);
 
@@ -566,6 +567,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       harnessSessionId,
       extraArgs,
+      workingDir,
     };
     const baseCmd = buildSpawnCommand(spawnContext);
     const config = niceConfig || DEFAULT_NICE_CONFIG;

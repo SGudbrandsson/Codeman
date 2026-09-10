@@ -64,6 +64,8 @@ export interface HarnessSpawnContext {
   extraArgs?: string[];
   /** Harness-native id to resume, when the harness supports resuming. */
   harnessSessionId?: string;
+  /** The session's working directory. codex uses it to pre-trust the directory for this launch. */
+  workingDir?: string;
 }
 
 /**
