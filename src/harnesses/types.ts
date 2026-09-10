@@ -6,6 +6,7 @@
  */
 
 import type { ClaudeMode, OpenCodeConfig, SessionMode } from '../types/session.js';
+import type { ActivitySource } from '../types/activity.js';
 
 /** Minimal per-harness config: the only knob codex and pi expose is the model. */
 export interface HarnessModelConfig {
@@ -88,6 +89,12 @@ export interface HarnessDefinition {
   /** Optional tmux `setenv` work performed after session creation (API keys, config JSON). */
   setupMuxEnv?(muxName: string, ctx: HarnessSpawnContext): void;
   readiness: HarnessReadiness;
+  /**
+   * Where busy/idle status comes from: Claude's JSONL monitor ('claudeTranscript'), reports
+   * posted by a harness extension ('hook'), the harness's own transcript records
+   * ('transcript'), or terminal-output heuristics ('pty').
+   */
+  activity: ActivitySource;
   caps: HarnessCapabilities;
 }
 

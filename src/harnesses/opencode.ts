@@ -123,6 +123,7 @@ export const openCodeHarness: HarnessDefinition = {
   ],
   installHint: 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash',
   readiness: { kind: 'settle', ms: 3000 },
+  activity: 'pty',
   caps: {
     ralph: false,
     respawn: false,

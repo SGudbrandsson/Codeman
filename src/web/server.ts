@@ -50,6 +50,7 @@ import type { ClaudeMode } from '../types.js';
 import { getHarness } from '../harnesses/registry.js';
 import { installGlobalCodemanHooks } from '../hooks-config.js';
 import type { SessionMode, SessionState } from '../types/session.js';
+import { normalizeIdleReason, type IdleInfo } from '../types/activity.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
@@ -211,7 +212,7 @@ interface SessionListenerRefs {
   completion: (result: string, cost: number) => void;
   exit: (code: number | null) => void;
   working: () => void;
-  idle: () => void;
+  idle: (info?: IdleInfo) => void;
   taskCreated: (task: BackgroundTask) => void;
   taskUpdated: (task: BackgroundTask) => void;
   taskCompleted: (task: BackgroundTask) => void;
@@ -1907,8 +1908,13 @@ export class WebServer extends EventEmitter {
         }
       },
 
-      /** Broadcasts `session:idle` — Claude finished processing, waiting for input */
-      idle: () => {
+      /**
+       * Broadcasts `session:idle` — the harness finished processing, waiting for input.
+       * A missing reason means 'completed' (legacy emitters). A 'stale' idle means tracking was
+       * lost mid-turn: update the UI, but never fire completion side effects.
+       */
+      idle: (info?: IdleInfo) => {
+        const reason = normalizeIdleReason(info);
         this.broadcast(SseEvent.SessionIdle, { id: session.id });
         // pi writes its session file on the first submitted turn and emits no discovery
         // event; attach the view-only watcher on the first idle after that turn.
@@ -1917,11 +1923,12 @@ export class WebServer extends EventEmitter {
         this.broadcastSessionStateDebounced(session.id);
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
-          tracker.recordIdle();
+          // A stale idle means tracking was lost, not that the turn finished.
+          if (reason === 'completed') tracker.recordIdle();
           tracker.recordTokens(session.inputTokens, session.outputTokens);
         }
         // Auto-compact-and-continue: detect compaction request and send /compact then continue
-        if (session.autoCompactAndContinue) {
+        if (reason === 'completed' && session.autoCompactAndContinue) {
           void session.compactContinue.onIdle(session.workingDir, session.textOutput);
         }
       },

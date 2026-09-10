@@ -33,6 +33,7 @@ export const piHarness: HarnessDefinition = {
   ],
   installHint: 'Pi CLI not found. Install with: npm i -g @earendil-works/pi-coding-agent',
   readiness: { kind: 'settle', ms: 2000 },
+  activity: 'hook',
   caps: {
     ralph: false,
     respawn: false,

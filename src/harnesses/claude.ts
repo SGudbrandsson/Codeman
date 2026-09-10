@@ -57,6 +57,7 @@ export const claudeHarness: HarnessDefinition = {
   ],
   installHint: 'Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash',
   readiness: { kind: 'prompt' },
+  activity: 'claudeTranscript',
   caps: {
     ralph: true,
     respawn: true,

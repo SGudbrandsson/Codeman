@@ -14,7 +14,7 @@
  *
  * Run (system Node v24 — better-sqlite3 ABI): npx vitest run test/server-harness-transcript-watcher.test.ts
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,7 @@ const savedEnv: Record<string, string | undefined> = Object.fromEntries(ENV_KEYS
 interface ServerInternals {
   sessions: Map<string, Session>;
   transcriptWatchers: Map<string, TranscriptWatcher>;
+  runSummaryTrackers: Map<string, unknown>;
   store: {
     filePath: string;
     setSession(id: string, state: unknown): void;
@@ -248,6 +249,58 @@ describe('listener triggers', () => {
     expect(srv.transcriptWatchers.has(s.id)).toBe(false);
     expect(readyCount(s.id)).toBe(0);
     expect(claudeWatcherCalls).toEqual([]);
+  });
+});
+
+describe('idle reason', () => {
+  function fakeTracker() {
+    return { recordIdle: vi.fn(), recordWorking: vi.fn(), recordTokens: vi.fn() };
+  }
+
+  it('an argument-free idle is a completion: broadcasts, records idle, runs auto-compact-continue', async () => {
+    const s = await addSession('sess-idle-legacy', 'claude', { listeners: true });
+    const tracker = fakeTracker();
+    srv.runSummaryTrackers.set(s.id, tracker);
+    s.setAutoCompactAndContinue(true);
+    const onIdle = vi.spyOn(s.compactContinue, 'onIdle').mockResolvedValue(undefined as never);
+
+    s.emit('idle');
+
+    expect(events.filter((e) => e.event === 'session:idle')).toHaveLength(1);
+    expect(tracker.recordIdle).toHaveBeenCalledTimes(1);
+    expect(tracker.recordTokens).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    s.setAutoCompactAndContinue(false);
+  });
+
+  it('a completed idle behaves like the legacy idle', async () => {
+    const s = await addSession('sess-idle-completed', 'claude', { listeners: true });
+    const tracker = fakeTracker();
+    srv.runSummaryTrackers.set(s.id, tracker);
+    s.setAutoCompactAndContinue(true);
+    const onIdle = vi.spyOn(s.compactContinue, 'onIdle').mockResolvedValue(undefined as never);
+
+    s.emit('idle', { reason: 'completed' });
+
+    expect(tracker.recordIdle).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    s.setAutoCompactAndContinue(false);
+  });
+
+  it('a stale idle broadcasts session:idle but never records idle or runs auto-compact-continue', async () => {
+    const s = await addSession('sess-idle-stale', 'claude', { listeners: true });
+    const tracker = fakeTracker();
+    srv.runSummaryTrackers.set(s.id, tracker);
+    s.setAutoCompactAndContinue(true);
+    const onIdle = vi.spyOn(s.compactContinue, 'onIdle').mockResolvedValue(undefined as never);
+
+    s.emit('idle', { reason: 'stale' });
+
+    expect(events.filter((e) => e.event === 'session:idle')).toHaveLength(1);
+    expect(tracker.recordIdle).not.toHaveBeenCalled();
+    expect(tracker.recordTokens).toHaveBeenCalledTimes(1);
+    expect(onIdle).not.toHaveBeenCalled();
+    s.setAutoCompactAndContinue(false);
   });
 });
 

@@ -31,6 +31,7 @@ export const codexHarness: HarnessDefinition = {
   installHint: 'Codex CLI not found. Install with: npm i -g @openai/codex',
   // Codex renders a full-screen ratatui TUI with no prompt marker to watch for.
   readiness: { kind: 'settle', ms: 3000 },
+  activity: 'transcript',
   caps: {
     ralph: false,
     respawn: false,

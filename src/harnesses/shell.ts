@@ -13,6 +13,7 @@ export const shellHarness: HarnessDefinition = {
   searchDirs: [],
   installHint: '',
   readiness: { kind: 'prompt' },
+  activity: 'pty',
   // Every Claude-only capability is false. Before the registry these guards read
   // `mode !== 'opencode'`, which was true for shell — so shell was given a ralph
   // tracker, a restorable respawn controller, and the Claude output parsers. That
