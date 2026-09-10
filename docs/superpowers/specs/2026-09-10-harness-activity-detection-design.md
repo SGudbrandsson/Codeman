@@ -1,7 +1,7 @@
 # Harness Activity Detection (busy/idle for codex and pi)
 
 **Date:** 2026-09-10
-**Status:** Design, revision 5 (after four codex reviews)
+**Status:** Design, revision 5.1 (approved after five codex reviews; final two findings applied)
 **Scope:** Correct busy/idle status for `codex` and `pi` sessions, and stream pi's first turn live.
 
 ## Problem
@@ -137,9 +137,11 @@ locally, so no error mapping is inferred. Record size is unbounded: rollout
 
 ### 2. Process ownership: a spawn token
 
-Every time `Session` spawns or respawns a pi process it generates a random **activity token** (32 hex
-chars), persists it as `SessionState.activityToken`, and passes it in the spawn context. `tmux-manager.ts`
-exports it beside the existing variables, in both the create and respawn command prefixes:
+When `Session` **creates** a pi process (the `startInteractive()` branch that calls
+`this._mux.createSession(...)`) or **respawns** a dead pane (the branch that calls
+`this._mux.respawnPane(...)`), it generates a random **activity token** (32 hex chars), persists it as
+`SessionState.activityToken`, and passes it in the spawn context. `tmux-manager.ts` exports it beside the
+existing variables, in both the create and respawn command prefixes:
 
 ```sh
 export CODEMAN_ACTIVITY_TOKEN=<token>
@@ -148,6 +150,12 @@ export CODEMAN_ACTIVITY_TOKEN=<token>
 The token identifies **the process Codeman launched**, independent of clocks and of pi's own session
 switching. It is not a secret-grade credential — the hook route is already localhost-only — but it makes
 reports from any other process, including a different process behind a re-attached pane, fail to match.
+
+**The token is never rotated on attach.** When `startInteractive()` attaches to a pane whose pi process is
+still running — the restored-session path used after a Codeman restart (`server.ts` restore calls
+`startInteractive()` with the existing mux session) — no command prefix runs, so the surviving process keeps
+the token it was started with. Codeman must reuse the persisted `activityToken` there. Generating a new one
+on attach would make Codeman reject every report from that process.
 
 ### 3. The pi extension
 
@@ -269,7 +277,7 @@ restarts the warning timer, and consumes a pending Ctrl-L once.
 
 | Writer | Monitored sessions (`activity !== 'pty'`) |
 |---|---|
-| `startInteractive()` entry | `_attachActivityMonitor()`, replacing the Claude-only branch; for pi, a new `activityToken` first |
+| `startInteractive()` entry | `_attachActivityMonitor()`, replacing the Claude-only branch. For pi: a new `activityToken` only in the create-session and dead-pane-respawn branches; attaching to a surviving pane keeps the persisted token |
 | `startInteractive()` failure | detach; both fields idle; no event |
 | settle timer | emits `needsRefresh` only; does not write `_status` |
 | restored mux session | covered by attach |
@@ -370,7 +378,8 @@ detects replacement. It is sent as `X-Transcript-Id` on `GET …/transcript`, an
 | `_onTranscriptBlock`, view visible, not loading | id differs from stored → drop the block and call `load()`; else `append()` |
 | `_onTranscriptBlock`, view not visible | id differs → reset stored blocks and adopt the id; then push only if newer than the stored tail |
 | `append()` | skip unless `_isNewerBlock(block, lastStoredBlock)` |
-| `load()` response | adopt `X-Transcript-Id`. If the session's stored id changed while the request was in flight, discard the response and reload |
+| `load()` response | if the session's stored id changed while the request was in flight, discard the response and reload. Otherwise adopt `X-Transcript-Id` |
+| `load()` DOM reuse | today `load()` keeps the rendered DOM when the block count and last block match (`_isSameBlock` compares only `seq` and type). **Reuse the DOM only if the `transcriptId` also matches**; on a different id, clear the container and fully render the new snapshot. Otherwise a replacement file with matching offsets and types — e.g. after a missed `transcript:clear` — updates the cache while old messages stay on screen |
 | `load()` buffer replay, **both** the empty and non-empty snapshot paths | skip entries whose `transcriptId` ≠ the adopted id; append only if newer than the **current** stored tail, not the snapshot's fixed last block |
 | periodic incremental sync | read `X-Transcript-Id`; differs from stored → discard and `load()`; else keep the existing cached-tail check |
 | older-block pagination | read `X-Transcript-Id`; differs from stored → discard the page and `load()` instead of prepending |
@@ -422,7 +431,9 @@ Skip `compactContinue.onIdle()` unless `caps.claudeTranscript`, and reject enabl
 - the URL has no query string.
 
 **pi harness and spawn:** `buildCommand` includes `-e '<path>'`; missing file → no `-e`, one warning. Both
-tmux command prefixes export `CODEMAN_ACTIVITY_TOKEN`; the token is 32 hex chars and changes per spawn.
+tmux command prefixes export `CODEMAN_ACTIVITY_TOKEN`; the token is 32 hex chars and changes on create and on
+dead-pane respawn. **Attaching to a surviving pane (restore after a Codeman restart) keeps the persisted token**,
+and a report from that surviving process is accepted.
 
 **Route:**
 - pi `harness_activity` updates activity; rejected for claude, codex, shell and opencode;
@@ -470,7 +481,9 @@ tmux command prefixes export `CODEMAN_ACTIVITY_TOKEN`; the token is 32 hex chars
 - each row of the reconciliation table: buffered blocks with a stale id are skipped; empty-snapshot replay
   deduplicates; an in-flight `load()` superseded by a new id is discarded; incremental sync and pagination
   with a changed `X-Transcript-Id` reload instead of mixing files;
-- equal-size replacement emits `transcript:clear` with a new id.
+- equal-size replacement emits `transcript:clear` with a new id;
+- `load()` with a new `transcriptId` whose snapshot has the same block count, last `seq` and type as the cache
+  clears the container and renders the new blocks — no old message remains visible.
 
 **Live verification (acceptance), on the deployed app:**
 a new pi session goes busy when a turn starts and idle when it settles — dot turns green, working bubble
