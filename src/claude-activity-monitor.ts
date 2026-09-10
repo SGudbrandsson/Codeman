@@ -19,6 +19,11 @@ export class ClaudeActivityMonitor extends EventEmitter {
     this._filePath = path.join(os.homedir(), '.claude', 'projects', projectHash, `${sessionId}.jsonl`);
   }
 
+  /** Current activity as derived from the transcript (read-only view over the detection state). */
+  get state(): 'working' | 'idle' {
+    return this._isBusy ? 'working' : 'idle';
+  }
+
   async start(): Promise<void> {
     if (this._stopped) return;
     if (fs.existsSync(this._filePath)) {

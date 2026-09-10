@@ -81,7 +81,8 @@ import {
 import { SessionAutoOps } from './session-auto-ops.js';
 import { SessionCompactContinue } from './session-compact-continue.js';
 import { SessionTaskCache } from './session-task-cache.js';
-import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
+import { createActivityMonitor, type ActivityMonitor } from './activity-monitor.js';
+import { normalizeIdleReason, type IdleInfo } from './types/activity.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -304,7 +305,9 @@ export class Session extends EventEmitter {
   private rejectPromise: ((reason: Error) => void) | null = null;
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
   private _isWorking: boolean = false;
-  private _activityMonitor: ClaudeActivityMonitor | null = null;
+  private _activityMonitor: ActivityMonitor | null = null;
+  /** Bumped on every attach/detach; callbacks from an older monitor generation are ignored. */
+  private _activityGeneration: number = 0;
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
   private _awaitingIdleConfirmation: boolean = false; // Prevents timeout reset during idle detection
@@ -1151,6 +1154,7 @@ export class Session extends EventEmitter {
   recordHarnessSessionId(id: string): void {
     if (this.harnessSessionId === id) return;
     this.harnessSessionId = id;
+    this._activityMonitor?.setHarnessSessionId?.(id);
     this.emit('harnessSessionIdDiscovered', id);
   }
 
@@ -1360,29 +1364,9 @@ export class Session extends EventEmitter {
           // No extra sleep — createSession() already waits for tmux readiness
         }
 
-        // Start activity monitor for claude-mode (replaces PTY-based detection)
-        if (this.mode === 'claude') {
-          // Reset to idle before monitor starts — JSONL is authoritative for claude-mode.
-          // The monitor will emit 'working' immediately if the session is mid-turn.
-          this._isWorking = false;
-          this._status = 'idle';
-          this._activityMonitor = new ClaudeActivityMonitor(this.id, this.workingDir);
-          this._activityMonitor.on('working', () => {
-            if (this._isStopped) return;
-            this._isWorking = true;
-            this._status = 'busy';
-            this.emit('working');
-          });
-          this._activityMonitor.on('idle', () => {
-            if (this._isStopped) return;
-            this._isWorking = false;
-            this._status = 'idle';
-            this._lastPromptTime = Date.now();
-            this.emit('idle');
-            this._maybeRefreshContextAfterCompact();
-          });
-          void this._activityMonitor.start();
-        }
+        // Attach the harness's activity monitor (Claude JSONL, codex rollout, pi hook reports).
+        // PTY-heuristic harnesses get none; the PTY fallback below stays in charge for them.
+        this._attachActivityMonitor();
         try {
           this.ptyProcess = pty.spawn(
             this._mux.getAttachCommand(),
@@ -1423,7 +1407,8 @@ export class Session extends EventEmitter {
             this._promptCheckTimeout = setTimeout(() => {
               this._promptCheckTimeout = null;
               if (this._isStopped) return;
-              this._status = 'idle';
+              // A monitored harness's status belongs to its activity monitor; only refresh.
+              if (getHarness(this.mode).activity === 'pty') this._status = 'idle';
               this.emit('needsRefresh');
             }, readiness.ms);
           } else {
@@ -1460,6 +1445,9 @@ export class Session extends EventEmitter {
         }
       } catch (err) {
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
+        // The monitor may already be attached (attach precedes the PTY spawn). A direct-PTY
+        // Claude falls back to the PTY heuristics; mux-only harnesses fail just below.
+        this._detachActivityMonitor();
         this._useMux = false;
         this._muxSession = null;
       }
@@ -1469,6 +1457,8 @@ export class Session extends EventEmitter {
     if (!this.ptyProcess) {
       // Some harnesses require tmux for env var injection (API keys via setenv)
       if (getHarness(this.mode).caps.requiresMux) {
+        this._detachActivityMonitor();
+        if (getHarness(this.mode).activity !== 'pty') this._setActivityFieldsIdleSilently();
         throw new Error(`${getHarness(this.mode).label} sessions require tmux. Direct PTY fallback is not supported.`);
       }
       try {
@@ -1533,9 +1523,9 @@ export class Session extends EventEmitter {
       this.emit('output', data);
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
-      // When activity monitor is active, it handles working/idle via JSONL.
-      // Fall back to PTY-based ❯ prompt detection only when no monitor is present.
-      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
+      // Only when the terminal is this session's activity source (see _ptyHeuristicsEnabled);
+      // otherwise the attached activity monitor owns working/idle.
+      if (this._ptyHeuristicsEnabled() && (data.includes('❯') || data.includes('\u276f'))) {
         // Only start a new timeout if we're not already awaiting idle confirmation
         // This prevents status bar redraws (which include ❯) from resetting the timer
         if (!this._awaitingIdleConfirmation) {
@@ -1560,8 +1550,8 @@ export class Session extends EventEmitter {
 
       // Detect when Claude starts working (thinking, writing, etc)
       // Fast path: check spinner characters on raw data (Unicode, never in ANSI sequences)
-      // Skip when activity monitor handles detection.
-      if (!this._activityMonitor) {
+      // Skip unless the terminal is this session's activity source.
+      if (this._ptyHeuristicsEnabled()) {
         const hasSpinner = SPINNER_PATTERN.test(data);
         if (hasSpinner) {
           if (!this._isWorking) {
@@ -1629,9 +1619,13 @@ export class Session extends EventEmitter {
       this._pid = null;
       // A parked session must stay 'stopped' — this callback can land after `pause()`
       // has already set it, and every dead-session guard keys off `status === 'stopped'`.
+      // Under mux this is only the attach client exiting, not proof the harness stopped.
+      // Activity is not tracked while detached; the next startInteractive() re-attaches.
+      this._detachActivityMonitor();
       if (!this._paused) {
         this._status = 'idle';
       }
+      if (getHarness(this.mode).activity !== 'pty') this._isWorking = false;
       this._awaitingIdleConfirmation = false;
       // Clear all timers to prevent memory leaks
       if (this.activityTimeout) {
@@ -2698,6 +2692,68 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * PTY busy/idle heuristics (spinner glyphs, Claude's ❯ prompt) run only when the terminal is
+   * this session's activity source: 'pty' harnesses, and Claude while no JSONL monitor is
+   * attached (the direct-PTY fallback when mux is unavailable). Never for codex or pi, whose
+   * TUIs would produce false activity (e.g. a codex session detached by rebindMuxSession).
+   */
+  private _ptyHeuristicsEnabled(): boolean {
+    const activity = getHarness(this.mode).activity;
+    return activity === 'pty' || (activity === 'claudeTranscript' && !this._activityMonitor);
+  }
+
+  /**
+   * The single attach path for activity monitors. Detaches any existing monitor, then, for a
+   * monitored harness, sets both activity fields idle WITHOUT emitting and starts the monitor
+   * for the harness's activity source. The monitor publishes its initial state: `working`
+   * emits once; `idle`/`unknown` emit nothing. 'pty' harnesses are left to the PTY fallback.
+   */
+  private _attachActivityMonitor(): void {
+    this._detachActivityMonitor();
+    const activity = getHarness(this.mode).activity;
+    if (activity === 'pty') return;
+    this._setActivityFieldsIdleSilently();
+    const monitor = createActivityMonitor(activity, this);
+    if (!monitor) return;
+    const gen = ++this._activityGeneration;
+    this._activityMonitor = monitor;
+    monitor.on('working', () => {
+      if (this._isStopped || gen !== this._activityGeneration) return;
+      if (this._isWorking) return;
+      this._isWorking = true;
+      this._status = 'busy';
+      this.emit('working');
+    });
+    monitor.on('idle', (info?: IdleInfo) => {
+      if (this._isStopped || gen !== this._activityGeneration) return;
+      // A completed idle is forwarded even when already idle: it may close a turn that went
+      // stale. Monitors emit completed only when an authoritative end closes an open turn.
+      const reason = normalizeIdleReason(info);
+      if (!this._isWorking && reason === 'stale') return;
+      this._isWorking = false;
+      this._status = 'idle';
+      this._lastPromptTime = Date.now();
+      this.emit('idle', { reason });
+      if (reason === 'completed') this._maybeRefreshContextAfterCompact();
+    });
+    monitor.start().catch((err) => console.error(`[Session] activity monitor failed to start for ${this.id}:`, err));
+  }
+
+  /** The single detach path. Idempotent; late callbacks from the old monitor are ignored. */
+  private _detachActivityMonitor(): void {
+    this._activityGeneration++;
+    if (!this._activityMonitor) return;
+    this._activityMonitor.stop();
+    this._activityMonitor.removeAllListeners();
+    this._activityMonitor = null;
+  }
+
+  private _setActivityFieldsIdleSilently(): void {
+    this._isWorking = false;
+    this._status = 'idle';
+  }
+
+  /**
    * After a compaction the real context has shrunk, but the banner still shows the
    * stale pre-compaction percentage until /context is re-read. Called on idle: if a
    * /compact was issued, re-read /context once the TUI has settled so the percentage
@@ -2736,12 +2792,13 @@ export class Session extends EventEmitter {
 
   // Legacy method for compatibility with session-manager
   async start(): Promise<void> {
-    this._status = 'idle';
+    if (!this._activityMonitor) this._status = 'idle';
   }
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
-    this._status = 'busy';
+    // With an activity monitor attached, it alone writes _status.
+    if (!this._activityMonitor) this._status = 'busy';
     this._lastActivityAt = Date.now();
     this.runPrompt(input).catch((err) => {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -2749,10 +2806,10 @@ export class Session extends EventEmitter {
       if (this._currentTaskId) {
         const taskId = this._currentTaskId;
         this._currentTaskId = null;
-        this._status = 'idle';
+        if (!this._activityMonitor) this._status = 'idle';
         this._lastActivityAt = Date.now();
         this.emit('taskError', taskId, errorMsg);
-      } else {
+      } else if (!this._activityMonitor) {
         this._status = 'idle';
       }
       this.emit('error', errorMsg);
@@ -2884,8 +2941,7 @@ export class Session extends EventEmitter {
     this._harnessIdDiscoveryAbort = null;
 
     // Stop activity monitor
-    this._activityMonitor?.stop();
-    this._activityMonitor = null;
+    this._detachActivityMonitor();
 
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
@@ -3054,7 +3110,8 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
     }
     this._pid = null;
-    this._status = 'idle';
+    this._detachActivityMonitor();
+    this._setActivityFieldsIdleSilently();
     this._currentTaskId = null;
     this._terminalBuffer.clear();
     this._textOutput.clear();
@@ -3088,6 +3145,19 @@ export class Session extends EventEmitter {
     }
 
     console.log(`[Session] Rebinding mux session: ${this._muxSession?.muxName ?? 'none'} → ${newMuxName}`);
+
+    // Stale-callback guard (see _ptyGeneration). Bump BEFORE killing the old PTY: its onExit
+    // arrives asynchronously (possibly during the kill wait below) and must not run as current.
+    const ptyGeneration = ++this._ptyGeneration;
+
+    // The target pane may run a different process or conversation. pi re-attaches after the
+    // spawn (reports from another process fail its token check). codex is NOT re-attached: the
+    // retained harnessSessionId cannot be verified against the target pane.
+    const activity = getHarness(this.mode).activity;
+    if (activity === 'hook' || activity === 'transcript') {
+      this._detachActivityMonitor();
+      this._setActivityFieldsIdleSilently();
+    }
 
     // Step 1: Kill the current PTY process (the attach viewer, not the tmux session)
     if (this.ptyProcess) {
@@ -3177,13 +3247,18 @@ export class Session extends EventEmitter {
     }
 
     this._pid = this.ptyProcess.pid;
-    this._status = 'idle';
-    this._isWorking = false;
+    if (activity === 'hook') {
+      this._attachActivityMonitor();
+    } else if (activity === 'claudeTranscript' && this._activityMonitor) {
+      // The Claude monitor survives a rebind; resynchronise from it instead of forcing idle.
+      const working = this._activityMonitor.state === 'working';
+      this._isWorking = working;
+      this._status = working ? 'busy' : 'idle';
+    } else if (activity !== 'transcript') {
+      this._status = 'idle';
+      this._isWorking = false;
+    }
     console.log('[Session] Rebind PTY spawned with PID:', this._pid);
-
-    // Stale-callback guard (see _ptyGeneration) — the PTY killed in step 1 delivers its
-    // onExit asynchronously and must not null out this one.
-    const ptyGeneration = ++this._ptyGeneration;
 
     // Re-hook PTY data handler (same as startInteractive)
     this.ptyProcess.onData((rawData: string) => {
@@ -3199,7 +3274,7 @@ export class Session extends EventEmitter {
       }
       this.emit('output', data);
 
-      if (!this._activityMonitor && (data.includes('❯') || data.includes('\u276f'))) {
+      if (this._ptyHeuristicsEnabled() && (data.includes('❯') || data.includes('\u276f'))) {
         if (!this._awaitingIdleConfirmation) {
           if (this.activityTimeout) clearTimeout(this.activityTimeout);
           this._awaitingIdleConfirmation = true;
@@ -3217,7 +3292,7 @@ export class Session extends EventEmitter {
         }
       }
 
-      if (!this._activityMonitor) {
+      if (this._ptyHeuristicsEnabled()) {
         const hasSpinner = SPINNER_PATTERN.test(data);
         if (hasSpinner) {
           if (!this._isWorking) {
@@ -3270,7 +3345,9 @@ export class Session extends EventEmitter {
       console.log('[Session] Rebind PTY exited with code:', exitCode);
       this.ptyProcess = null;
       this._pid = null;
+      this._detachActivityMonitor();
       this._status = 'idle';
+      if (getHarness(this.mode).activity !== 'pty') this._isWorking = false;
       this._awaitingIdleConfirmation = false;
       if (this.activityTimeout) {
         clearTimeout(this.activityTimeout);
@@ -3306,7 +3383,7 @@ export class Session extends EventEmitter {
 
   assignTask(taskId: string): void {
     this._currentTaskId = taskId;
-    this._status = 'busy';
+    if (!this._activityMonitor) this._status = 'busy';
     this._terminalBuffer.clear();
     this._textOutput.clear();
     this._errorBuffer = '';
@@ -3316,7 +3393,7 @@ export class Session extends EventEmitter {
 
   clearTask(): void {
     this._currentTaskId = null;
-    this._status = 'idle';
+    if (!this._activityMonitor) this._status = 'idle';
     this._lastActivityAt = Date.now();
   }
 
