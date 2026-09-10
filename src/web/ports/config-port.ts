@@ -19,6 +19,11 @@ export interface ConfigPort {
   getLightState(): unknown;
   getLightSessionsState(): unknown[];
   startTranscriptWatcher(sessionId: string, transcriptPath: string): void;
+  /**
+   * View-only watcher for a harness with `caps.transcript && !caps.claudeTranscript` (codex, pi).
+   * Resolves the path itself via the harness adapter; returns it, or null if none yet.
+   */
+  startHarnessTranscriptWatcher(sessionId: string): string | null;
   /** Resolves the on-disk transcript for a conversation, or null when it no longer exists. */
   resolveSessionTranscript(workingDir: string, claudeResumeId: string | undefined): string | null;
   stopTranscriptWatcher(sessionId: string): void;

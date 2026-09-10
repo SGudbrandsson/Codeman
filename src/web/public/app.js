@@ -3765,15 +3765,28 @@ const TranscriptView = {
     // resumed in the background (e.g. an orchestrator that kept running after clear).
     if (state.blocks.length > 0) {
       const currentCount = state.blocks.length;
-      const lastTs = state.blocks[state.blocks.length - 1]?.timestamp ?? '';
+      const lastBlock = state.blocks[state.blocks.length - 1];
       // Use ?tail to avoid fetching all blocks for long sessions (perf/OOM guard).
       const tailCount = Math.min(currentCount + this._BATCH_SIZE, currentCount * 2);
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript?tail=' + tailCount)
         .then(r => r.ok ? r.json() : null)
         .then(blocks => {
           if (!Array.isArray(blocks) || this._sessionId !== sessionId) return;
-          // Find blocks newer than our last cached block
-          const newBlocks = blocks.filter(b => b.timestamp > lastTs);
+          // Transcript identity check. A Claude /clear switches to a NEW file whose seq restarts
+          // at 0; if the transcript:clear SSE was missed, every new-file block would compare as
+          // "older" than the cache and be dropped forever. When seq is available on both sides and
+          // the cached last block is no longer in the fetched tail, the cache no longer describes
+          // this transcript — resync with a full load() (its last-block check re-renders).
+          // Blocks without seq keep the timestamp comparison below.
+          if (typeof lastBlock?.seq === 'number' && blocks.length > 0 &&
+              blocks.every(b => typeof b?.seq === 'number') &&
+              !blocks.some(b => this._isSameBlock(b, lastBlock))) {
+            TranscriptView.load(sessionId).catch(() => {});
+            return;
+          }
+          // Find blocks newer than our last cached block. Compared on seq, not timestamp:
+          // sibling blocks from one record share a timestamp and were silently dropped.
+          const newBlocks = blocks.filter(b => this._isNewerBlock(b, lastBlock));
           if (newBlocks.length === 0) return;
           for (const b of newBlocks) {
             state.blocks.push(b);
@@ -3783,6 +3796,24 @@ const TranscriptView = {
         })
         .catch(() => {});
     }
+  },
+
+  /**
+   * True when block `b` comes after `ref` in the transcript. Every server block carries a
+   * `seq` (line byte offset * 1000 + index within the line), which — unlike timestamp —
+   * is unique for sibling blocks of one record. Falls back to timestamp if either lacks seq.
+   */
+  _isNewerBlock(b, ref) {
+    if (!ref) return true;
+    if (typeof b?.seq === 'number' && typeof ref.seq === 'number') return b.seq > ref.seq;
+    return (b?.timestamp ?? '') > (ref.timestamp ?? '');
+  },
+
+  /** Same-block identity: seq when both carry one, else timestamp (see _isNewerBlock). */
+  _isSameBlock(a, b) {
+    // type is stable for a given block; it guards a coincidental seq match across files.
+    if (typeof a?.seq === 'number' && typeof b?.seq === 'number') return a.seq === b.seq && a.type === b.type;
+    return a?.timestamp === b?.timestamp;
   },
 
   _getState(sessionId) {
@@ -3796,7 +3827,7 @@ const TranscriptView = {
   getViewMode(sessionId) {
     const stored = localStorage.getItem('transcriptViewMode:' + sessionId);
     if (stored === 'web' || stored === 'terminal') return stored;
-    return 'web'; // default to web view for Claude sessions
+    return 'web'; // default to web view for every harness with a transcript (claude, codex, pi)
   },
 
   setViewMode(sessionId, mode) {
@@ -3861,8 +3892,7 @@ const TranscriptView = {
       // it is the same; if new blocks were added, we detect incremental growth.
       const cachedLast = state.blocks[state.blocks.length - 1];
       const fetchedLast = blocks[blocks.length - 1];
-      const cacheMatchesFetch = !cachedLast || !fetchedLast ||
-        (cachedLast.timestamp === fetchedLast.timestamp);
+      const cacheMatchesFetch = !cachedLast || !fetchedLast || this._isSameBlock(cachedLast, fetchedLast);
       state.blocks = [...blocks];  // update cache with authoritative server data
 
       if (prevCount > 0 && blocks.length >= prevCount && cacheMatchesFetch) {
@@ -3900,7 +3930,7 @@ const TranscriptView = {
           }
           this._container.style.opacity = '';
           // Replay any SSE blocks that arrived during the HTTP fetch.
-          // The non-empty path does this too (httpLastTs replay loop below), but
+          // The non-empty path does this too (seq replay loop below), but
           // that path isn't reached when blocks.length === 0, so we do it here.
           for (const b of (state._sseBuffer ?? [])) {
             state.blocks.push(b);
@@ -3918,10 +3948,10 @@ const TranscriptView = {
       }
 
       // Replay any SSE blocks that arrived after the HTTP snapshot was taken
-      const httpLastTs = blocks[blocks.length - 1]?.timestamp ?? '';
+      const httpLast = blocks[blocks.length - 1];
       const allBlocks = [...blocks];
       for (const b of (state._sseBuffer ?? [])) {
-        if (!httpLastTs || b.timestamp > httpLastTs) {
+        if (this._isNewerBlock(b, httpLast)) {
           state.blocks.push(b);
           allBlocks.push(b);
           this._appendBlock(b, false);
@@ -3966,10 +3996,17 @@ const TranscriptView = {
     wrap.className = 'tv-empty-cta';
     const title = document.createElement('div');
     title.className = 'tv-empty-cta-title';
-    title.textContent = 'What\u2019s on your mind today?';
     const sub = document.createElement('div');
     sub.className = 'tv-empty-cta-sub';
-    sub.textContent = 'Send a message to start a conversation with Claude.';
+    const _emptySession = this._sessionId ? app.sessions?.get(this._sessionId) : null;
+    if (!_emptySession?.mode || _emptySession.mode === 'claude') {
+      title.textContent = 'What\u2019s on your mind today?';
+      sub.textContent = 'Send a message to start a conversation with Claude.';
+    } else {
+      // codex and pi write no transcript file until the first submitted turn.
+      title.textContent = 'No transcript yet';
+      sub.textContent = 'Send a message to start the conversation.';
+    }
     wrap.appendChild(title);
     wrap.appendChild(sub);
     this._container.appendChild(wrap);
@@ -4798,6 +4835,9 @@ const TranscriptView = {
       el = this._renderToolWrapper(null, block);
     } else if (block.type === 'result') {
       el = this._renderResultBlock(block);
+    } else if (block.type === 'thinking') {
+      // Without this branch a thinking block (pi) would render as nothing at all.
+      el = this._renderReasoningBlock(block);
     }
     if (el) {
       if (block.type === 'tool_use' || block.type === 'tool_result') {
@@ -5475,6 +5515,41 @@ const TranscriptView = {
     if (status) status.textContent = toolResult.isError ? '\u2717' : '\u2713';
     const toolUse = wrapper.dataset.toolId ? this._pendingToolUses[wrapper.dataset.toolId] : null;
     this._buildToolPanel(panel, toolUse, toolResult);
+  },
+
+  /**
+   * Plaintext model reasoning (pi `thinking` blocks): dimmed and collapsed by default, with a
+   * one-line preview. Named "reasoning" (tv-reasoning) to stay clear of the unrelated
+   * _thinkingBubbleEl / .tv-thinking-bubble "working" indicator.
+   */
+  _renderReasoningBlock(block) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tv-block tv-reasoning';
+    const hdr = document.createElement('div');
+    hdr.className = 'tv-reasoning-header';
+    const arrow = document.createElement('span');
+    arrow.className = 'tv-reasoning-arrow';
+    arrow.textContent = '\u25B6';
+    const lbl = document.createElement('span');
+    lbl.className = 'tv-reasoning-label';
+    lbl.textContent = 'Thinking';
+    const preview = document.createElement('span');
+    preview.className = 'tv-reasoning-preview';
+    const text = typeof block.text === 'string' ? block.text : '';
+    preview.textContent = text.replace(/\s+/g, ' ').trim().slice(0, 140);
+    hdr.appendChild(arrow);
+    hdr.appendChild(lbl);
+    hdr.appendChild(preview);
+    const body = document.createElement('div');
+    body.className = 'tv-reasoning-body';
+    body.textContent = text;
+    hdr.addEventListener('click', () => {
+      const open = hdr.classList.toggle('open');
+      body.classList.toggle('open', open);
+    });
+    wrap.appendChild(hdr);
+    wrap.appendChild(body);
+    return wrap;
   },
 
   _renderResultBlock(block) {
@@ -10724,11 +10799,11 @@ class CodemanApp {
 
     // Restore transcript vs terminal view for this session and update the accessory button.
     // Hide the previous session's transcript view first, then apply this session's preference.
-    // Non-Claude sessions (shell, opencode) never show the transcript view.
+    // Harnesses without a viewable transcript (shell, opencode) never show the transcript view.
     const _tvSession = this.sessions.get(sessionId);
-    const _tvIsClaude = !_tvSession?.mode || _tvSession.mode === 'claude';
+    const _tvHasTranscript = this.harnessHasTranscript(_tvSession?.mode);
     const _tvMode = TranscriptView.getViewMode(sessionId);
-    if (_tvIsClaude && _tvMode === 'web') {
+    if (_tvHasTranscript && _tvMode === 'web') {
       TranscriptView.show(sessionId);
     } else {
       TranscriptView.hide(sessionId);
@@ -11783,6 +11858,16 @@ class CodemanApp {
       // The run-button label is derived from shortLabel, so re-apply it once
       // metadata lands (init runs _applyRunMode before this fetch resolves).
       this._applyRunMode();
+      // The transcript gate reads caps too: a codex/pi session selected before metadata
+      // landed was gated by the claude-only fallback, so re-apply it for the active session.
+      const _activeId = this.activeSessionId;
+      const _active = _activeId ? this.sessions.get(_activeId) : null;
+      // Not "display === 'none'" alone: closing the board view sets display '' without showing it.
+      if (_active && this.harnessHasTranscript(_active.mode) && TranscriptView.getViewMode(_activeId) === 'web' &&
+          (document.getElementById('transcriptView')?.style.display === 'none' || TranscriptView._sessionId !== _activeId)) {
+        TranscriptView.show(_activeId);
+      }
+      if (_activeId && typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.updateViewModeBtn(_activeId);
     } catch (err) {
       console.error('Failed to load harness metadata:', err);
     }
@@ -11806,6 +11891,18 @@ class CodemanApp {
       available: true,
       installHint: '',
     };
+  }
+
+  /**
+   * Whether sessions of this mode offer the transcript view (`caps.transcript`: claude, codex, pi).
+   * `caps` is empty until /api/harnesses resolves — fall back to the mode test then, so
+   * Claude's transcript is not hidden during startup. Deliberately NOT `claudeTranscript`:
+   * that flag also gates the Respawn/Ralph tabs.
+   */
+  harnessHasTranscript(mode) {
+    const meta = this.harnessMeta(mode);
+    const hasCaps = !!meta.caps && Object.keys(meta.caps).length > 0;
+    return hasCaps ? !!meta.caps.transcript : (!mode || mode === 'claude');
   }
 
   /**

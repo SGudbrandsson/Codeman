@@ -34,6 +34,7 @@ export const codexHarness: HarnessDefinition = {
   caps: {
     ralph: false,
     respawn: false,
+    transcript: true,
     claudeTranscript: false,
     claudeParsers: false,
     requiresMux: true,

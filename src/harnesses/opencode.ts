@@ -126,6 +126,7 @@ export const openCodeHarness: HarnessDefinition = {
   caps: {
     ralph: false,
     respawn: false,
+    transcript: false,
     claudeTranscript: false,
     claudeParsers: false,
     requiresMux: true,

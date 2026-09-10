@@ -10202,6 +10202,27 @@ kbd {
 /* Timestamp span under user/assistant messages */
 .tv-ts { font-size: 0.65rem; color: #64748b; margin-top: 3px; display: block; }
 
+/* Model reasoning block (pi plaintext thinking) — dimmed, collapsed by default.
+   Distinct from .tv-thinking-bubble below, which is the "working" indicator. */
+.tv-reasoning { opacity: 0.8; }
+.tv-reasoning-header {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  cursor: pointer; user-select: none;
+  font-size: 0.75rem; color: #64748b;
+}
+.tv-reasoning-header:hover { color: #94a3b8; }
+.tv-reasoning-arrow { font-size: 0.6rem; transition: transform 0.15s; flex-shrink: 0; }
+.tv-reasoning-header.open .tv-reasoning-arrow { transform: rotate(90deg); }
+.tv-reasoning-label { flex-shrink: 0; font-style: italic; }
+.tv-reasoning-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; opacity: 0.8; }
+.tv-reasoning-header.open .tv-reasoning-preview { display: none; }
+.tv-reasoning-body {
+  display: none; margin-top: 4px; padding: 6px 10px;
+  border-left: 2px solid rgba(100, 116, 139, 0.35);
+  color: #94a3b8; font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;
+}
+.tv-reasoning-body.open { display: block; }
+
 /* In-flow thinking indicator bubble */
 .tv-thinking-bubble {
   display: flex;

@@ -379,17 +379,22 @@ const KeyboardAccessoryBar = {
 
   /**
    * Update the view-mode toggle button state for the given session.
-   * Shows the button only for Claude Code sessions; hides it for opencode/shell.
+   * Shows the button only for harnesses with a transcript view (claude, codex, pi);
+   * hides it for opencode/shell.
    */
   updateViewModeBtn(sessionId) {
     const toggle = document.getElementById('accessoryViewModeBtn');
     if (!toggle) return;
     const session = typeof app !== 'undefined' && sessionId ? app.sessions?.get(sessionId) : null;
     const mode = session?.mode;
-    // Show toggle only for claude (default when mode is unset) sessions
-    const isClaude = !mode || mode === 'claude';
-    toggle.style.display = isClaude && sessionId ? '' : 'none';
-    if (!isClaude || !sessionId) return;
+    // Show toggle only for harnesses with a viewable transcript. app.harnessHasTranscript
+    // falls back to the claude mode test until /api/harnesses has loaded.
+    const hasTranscript =
+      typeof app !== 'undefined' && typeof app.harnessHasTranscript === 'function'
+        ? app.harnessHasTranscript(mode)
+        : !mode || mode === 'claude';
+    toggle.style.display = hasTranscript && sessionId ? '' : 'none';
+    if (!hasTranscript || !sessionId) return;
     const viewMode = typeof TranscriptView !== 'undefined' ? TranscriptView.getViewMode(sessionId) : 'terminal';
     toggle.querySelectorAll('.view-mode-seg').forEach((seg) => {
       seg.classList.toggle('active', seg.dataset.mode === viewMode);

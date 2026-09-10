@@ -97,6 +97,7 @@ import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/ind
 import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
 import { SseEvent, type SessionClearedPayload } from './sse-events.js';
 import { resolveTranscriptPath } from './transcript-path-resolver.js';
+import { getTranscriptAdapter } from '../harnesses/transcripts/index.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders } from './middleware/auth.js';
 import {
@@ -629,6 +630,7 @@ export class WebServer extends EventEmitter {
       getLightState: this.getLightState.bind(this),
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
+      startHarnessTranscriptWatcher: this.startHarnessTranscriptWatcher.bind(this),
       resolveSessionTranscript: (workingDir: string, claudeResumeId: string | undefined) =>
         resolveTranscriptPath(workingDir, undefined, claudeResumeId),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
@@ -1001,6 +1003,64 @@ export class WebServer extends EventEmitter {
   }
 
   /**
+   * Start the view-only transcript watcher for a harness that has a viewable transcript but
+   * does NOT speak Claude's JSONL (codex, pi).
+   *
+   * Deliberately separate from startTranscriptWatcher(), which stays the Claude-only choke
+   * point for hooks, mux restore and the conversationId listener. This entry point:
+   *  - resolves the path itself through the harness adapter and never accepts one from a
+   *    caller (so no hook, restore scan or route can point it at another file);
+   *  - constructs the watcher with `claudeState: false`, so completion / plan-mode /
+   *    AskUserQuestion detection never runs on codex or pi records;
+   *  - never touches claudeResumeId or harnessSessionId.
+   *
+   * @returns the watched transcript path, or null when the harness does not qualify or its
+   *   file has not been written yet (neither harness writes one before the first turn).
+   */
+  private startHarnessTranscriptWatcher(sessionId: string): string | null {
+    const session = this.sessions.get(sessionId);
+    if (!session?.workingDir) return null;
+    let caps;
+    try {
+      caps = getHarness(session.mode).caps;
+    } catch {
+      return null;
+    }
+    if (!caps.transcript || caps.claudeTranscript) return null;
+    const adapter = getTranscriptAdapter(session.mode);
+    if (!adapter) return null;
+
+    const transcriptPath = adapter.locate({
+      workingDir: session.workingDir,
+      sessionId,
+      harnessSessionId: session.harnessSessionId,
+    });
+    if (!transcriptPath) return null;
+
+    let watcher = this.transcriptWatchers.get(sessionId);
+    if (!watcher) {
+      watcher = new TranscriptWatcher({ claudeState: false, adapter });
+      watcher.on('transcript:block', (block: TranscriptBlock) => {
+        this.broadcast(SseEvent.TranscriptBlock, { sessionId, block });
+      });
+      watcher.on('transcript:clear', () => {
+        this.broadcast(SseEvent.TranscriptClear, { sessionId });
+      });
+      watcher.on('transcript:error', (error: Error) => {
+        console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
+      });
+      this.transcriptWatchers.set(sessionId, watcher);
+    }
+
+    const wasUnwatched = !watcher.transcriptPath;
+    watcher.updatePath(transcriptPath);
+    if (wasUnwatched) {
+      this.broadcast(SseEvent.TranscriptReady, { sessionId });
+    }
+    return transcriptPath;
+  }
+
+  /**
    * Stop the transcript watcher for a session.
    */
   private stopTranscriptWatcher(sessionId: string): void {
@@ -1014,7 +1074,8 @@ export class WebServer extends EventEmitter {
 
   private getTranscriptState(sessionId: string): import('./hermes/digest.js').TranscriptStateLite | null {
     const watcher = this.transcriptWatchers.get(sessionId);
-    if (!watcher) return null;
+    // View-only (codex/pi) watchers carry no state — report "no watcher" as before.
+    if (!watcher || !watcher.claudeState) return null;
     const s = watcher.getState();
     return {
       isComplete: s.isComplete,
@@ -1036,11 +1097,18 @@ export class WebServer extends EventEmitter {
   private getTranscriptPath(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
-    return resolveTranscriptPath(
-      session.workingDir,
-      this.transcriptWatchers.get(sessionId),
-      session.claudeResumeId ?? undefined
-    );
+    // Per-harness locator. The Claude adapter keeps the exact order documented above
+    // (watcher path → claudeResumeId), plus the <sessionId>.jsonl fallback that used to
+    // live inline in GET /transcript. Harnesses without a transcript answer null.
+    const adapter = getTranscriptAdapter(session.mode);
+    if (!adapter) return null;
+    return adapter.locate({
+      workingDir: session.workingDir,
+      sessionId,
+      harnessSessionId: session.harnessSessionId,
+      claudeResumeId: session.claudeResumeId ?? undefined,
+      watcherPath: this.transcriptWatchers.get(sessionId)?.transcriptPath,
+    });
   }
 
   /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
@@ -1366,7 +1434,10 @@ export class WebServer extends EventEmitter {
       }
 
       // 3. Capture transcript path BEFORE stopping the watcher
-      const transcriptPath = this.transcriptWatchers.get(sessionId)?.transcriptPath ?? undefined;
+      // A codex/pi session only has a watcher if its transcript was viewed, so fall back to
+      // the harness locator — otherwise the archived session's /state shows nothing.
+      const transcriptPath =
+        this.transcriptWatchers.get(sessionId)?.transcriptPath ?? this.getTranscriptPath(sessionId) ?? undefined;
       this.stopTranscriptWatcher(sessionId);
 
       // 4. Kill subagents, close file streams, stop image watcher
@@ -1839,6 +1910,10 @@ export class WebServer extends EventEmitter {
       /** Broadcasts `session:idle` — Claude finished processing, waiting for input */
       idle: () => {
         this.broadcast(SseEvent.SessionIdle, { id: session.id });
+        // pi writes its session file on the first submitted turn and emits no discovery
+        // event; attach the view-only watcher on the first idle after that turn.
+        // startHarnessTranscriptWatcher is a no-op for Claude and transcript-less harnesses.
+        if (!this.transcriptWatchers.has(session.id)) this.startHarnessTranscriptWatcher(session.id);
         this.broadcastSessionStateDebounced(session.id);
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
@@ -2044,6 +2119,10 @@ export class WebServer extends EventEmitter {
       harnessSessionIdDiscovered: (id: string) => {
         session.harnessSessionId = id;
         this.persistSessionState(session);
+        // Codex's rollout exists by the time its id is discovered: attach the view-only
+        // watcher now so transcript:ready reaches an open transcript view immediately
+        // instead of on the client's next 30 s sync. No-op for Claude harnesses.
+        this.startHarnessTranscriptWatcher(session.id);
       },
     };
 

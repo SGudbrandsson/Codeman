@@ -32,6 +32,7 @@ describe('harness registry', () => {
       claude: {
         ralph: true,
         respawn: true,
+        transcript: true,
         claudeTranscript: true,
         claudeParsers: true,
         requiresMux: false,
@@ -43,6 +44,7 @@ describe('harness registry', () => {
       opencode: {
         ralph: false,
         respawn: false,
+        transcript: false,
         claudeTranscript: false,
         claudeParsers: false,
         requiresMux: true,
@@ -54,6 +56,7 @@ describe('harness registry', () => {
       shell: {
         ralph: false,
         respawn: false,
+        transcript: false,
         claudeTranscript: false,
         claudeParsers: false,
         requiresMux: false,

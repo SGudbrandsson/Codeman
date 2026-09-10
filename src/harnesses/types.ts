@@ -24,7 +24,17 @@ export interface HarnessCapabilities {
   ralph: boolean;
   /** Respawn controller may be armed for this harness. */
   respawn: boolean;
-  /** Harness writes Claude-format transcript JSONL (transcript view, claudeResumeId). */
+  /**
+   * Harness has a viewable transcript: the web transcript view and its toggle are offered,
+   * backed by a per-harness adapter in src/harnesses/transcripts/. Says nothing about the
+   * file format — see `claudeTranscript` for that.
+   */
+  transcript: boolean;
+  /**
+   * Harness speaks Claude's transcript JSONL schema, `--resume`, Claude hooks and the Claude
+   * state machine in TranscriptWatcher (claudeResumeId, completion, plan mode). Deliberately
+   * separate from `transcript`: it also hides the Respawn/Ralph tabs client-side.
+   */
   claudeTranscript: boolean;
   /** Terminal output can be fed to Claude-specific parsers (BashToolParser, tokens, CLI info). */
   claudeParsers: boolean;

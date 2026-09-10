@@ -1,0 +1,14 @@
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"session_meta","payload":{"session_id":"00000000-0000-4000-8000-000000000001","id":"00000000-0000-4000-8000-000000000001","cwd":"/tmp/example-project","originator":"codex-tui","cli_version":"0.0.0","base_instructions":{"text":"SYSTEM PROMPT"}}}
+{"timestamp":"2026-01-01T00:00:00.100Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":1000}}
+{"timestamp":"2026-01-01T00:00:00.200Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"SYSTEM PROMPT"}]}}
+{"timestamp":"2026-01-01T00:00:00.300Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp/example-project</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-01-01T00:00:00.400Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/tmp/example-project","model":"example-model"}}
+{"timestamp":"2026-01-01T00:00:00.500Z","type":"event_msg","payload":{"type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-01-01T00:00:01.000Z","type":"response_item","payload":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"ZmFrZS1ibG9i"}}
+{"timestamp":"2026-01-01T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"hello back","phase":"commentary"}}
+{"timestamp":"2026-01-01T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello back"}],"phase":"commentary"}}
+{"timestamp":"2026-01-01T00:00:03.000Z","type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_1","status":"completed","call_id":"call_1","name":"exec","input":"echo hello"}}
+{"timestamp":"2026-01-01T00:00:03.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_1","call_id":"call_1","output":[{"type":"input_text","text":"Script completed\n"},{"type":"input_text","text":"hello\n"},{"type":"input_image","image_url":"data:image/png;base64,ZmFrZS1pbWFnZQ=="}]}}
+{"timestamp":"2026-01-01T00:00:03.100Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110},"model_context_window":1000}}}
+{"timestamp":"2026-01-01T00:00:04.000Z","type":"world_state","payload":{"full":true,"state":{"agents_md":{}}}}
+{"timestamp":"2026-01-01T00:00:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"hello back","duration_ms":4500}}

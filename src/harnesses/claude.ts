@@ -60,6 +60,7 @@ export const claudeHarness: HarnessDefinition = {
   caps: {
     ralph: true,
     respawn: true,
+    transcript: true,
     claudeTranscript: true,
     claudeParsers: true,
     requiresMux: false,

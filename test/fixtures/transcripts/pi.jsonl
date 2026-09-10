@@ -1,0 +1,9 @@
+{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000002","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp/example-project"}
+{"type":"model_change","id":"m0000001","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","provider":"example","modelId":"example-model"}
+{"type":"thinking_level_change","id":"m0000002","parentId":"m0000001","timestamp":"2026-01-01T00:00:01.000Z","thinkingLevel":"low"}
+{"type":"message","id":"m0000003","parentId":"m0000002","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1767225602000}}
+{"type":"message","id":"m0000004","parentId":"m0000003","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"thinking about hello","thinkingSignature":"reasoning_content"},{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"/tmp/example-project/README.md"}}],"stopReason":"toolUse","timestamp":1767225603000}}
+{"type":"message","id":"m0000005","parentId":"m0000004","timestamp":"2026-01-01T00:00:03.100Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"read","content":[{"type":"text","text":"hello\n"},{"type":"image","data":"ZmFrZS1pbWFnZQ==","mimeType":"image/png"}],"isError":false,"timestamp":1767225603100}}
+{"type":"message","id":"m0000006","parentId":"m0000005","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hello back"}],"stopReason":"stop","timestamp":1767225604000}}
+{"type":"session_info","id":"m0000007","parentId":null,"timestamp":"2026-01-01T00:00:05.000Z","name":"example"}
+{"type":"message","id":"m0000008","parentId":"m0000006","timestamp":"2026-01-01T00:00:06.000Z","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"example error"}}

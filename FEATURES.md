@@ -947,7 +947,8 @@ those flags rather than branching on the mode string. This is what a harness get
 | Pause / resume | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Respawn controller | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Ralph / todo tracking | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Transcript view + `--resume` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Transcript view | ✅ | ❌ | ✅ (no thinking) | ✅ (with thinking) | ❌ |
+| Claude transcript state + `--resume` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Token / cost parsers | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Claude Code hooks | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Claude model defaults | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -956,6 +957,17 @@ those flags rather than branching on the mode string. This is what a harness get
 Anything a harness does not support is refused with copy that names it — pausing a shell session
 answers `Shell sessions cannot be paused` — and the corresponding UI (Ralph tab, Respawn tab,
 transcript controls, Park menu item) is hidden.
+
+**Transcript view for Codex and Pi.** The `transcript` capability (claude, codex, pi) offers the
+web transcript view; `claudeTranscript` (claude only) is the separate Claude JSONL / `--resume` /
+hooks / state-machine flag. Each harness has a locator and a record adapter in
+`src/harnesses/transcripts/`: codex reads `$CODEX_HOME/sessions/**/rollout-*-<id>.jsonl` (once its
+id is discovered after the first turn), pi reads
+`~/.pi/agent/sessions/--<cwd>--/<ts>_<id>.jsonl`, and both refuse any path that resolves outside
+their root. Pi's plaintext reasoning renders as a collapsed **Thinking** block; codex reasoning is
+encrypted at source and never shown. Codex and pi watchers are view-only — completion, plan-mode
+and AskUserQuestion detection stay Claude-only. Neither harness writes a transcript before the
+first submitted turn, so a fresh session shows "No transcript yet".
 
 > **Behaviour change.** Shell sessions used to receive the Ralph tracker, the respawn controller,
 > the Claude transcript wiring and the Claude output parsers, because the guards that gated those

@@ -52,7 +52,8 @@ import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
-import { parseTranscriptJSONL } from '../../types/transcript-blocks.js';
+import type { TranscriptBlock } from '../../types/transcript-blocks.js';
+import { getTranscriptAdapter, readTranscriptFile, readTranscriptTail } from '../../harnesses/transcripts/index.js';
 import type { SessionState } from '../../types/session.js';
 import { injectVaultBriefing } from '../../vault/index.js';
 
@@ -397,14 +398,25 @@ ${contextLines.join('\n')}`;
       return reply.send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found'));
     }
 
-    // Read transcript blocks
-    let transcript: ReturnType<typeof parseTranscriptJSONL> = [];
-    // Archived sessions have transcriptPath; active sessions use getTranscriptPath()
-    const transcriptPath = sessionState.transcriptPath ?? ctx.getTranscriptPath(id);
-    if (transcriptPath) {
+    // Read transcript blocks with the adapter for the session's harness (a missing mode is
+    // a legacy Claude session). Archived sessions have a persisted transcriptPath, which is
+    // honoured as-is; active sessions use getTranscriptPath(). An archived session with no
+    // persisted path (e.g. a codex/pi session whose transcript was never viewed) is located
+    // from its own persisted workingDir and harness id.
+    let transcript: TranscriptBlock[] = [];
+    const adapter = getTranscriptAdapter(sessionState.mode);
+    let transcriptPath = sessionState.transcriptPath ?? ctx.getTranscriptPath(id);
+    if (!transcriptPath && adapter && sessionState.workingDir && !ctx.sessions.has(id)) {
+      transcriptPath = adapter.locate({
+        workingDir: sessionState.workingDir,
+        sessionId: id,
+        harnessSessionId: sessionState.harnessSessionId,
+        claudeResumeId: sessionState.claudeResumeId ?? undefined,
+      });
+    }
+    if (transcriptPath && adapter) {
       try {
-        const raw = await fs.readFile(transcriptPath, 'utf-8');
-        transcript = parseTranscriptJSONL(raw);
+        transcript = await readTranscriptFile(adapter, transcriptPath);
       } catch (_e) {
         transcript = [];
       }
@@ -1493,33 +1505,44 @@ ${contextLines.join('\n')}`;
     '/api/sessions/:id/transcript',
     async (req, reply) => {
       const { id } = req.params;
-      let transcriptPath = ctx.getTranscriptPath(id);
-      // Fallback: if claudeResumeId was never persisted (e.g. Claude finished before the
-      // conversationId event could fire), look for a JSONL named after the session ID itself.
-      if (!transcriptPath) {
-        const session = ctx.sessions.get(id);
-        if (session?.workingDir) {
-          const { homedir } = await import('node:os');
-          const escapedDir = session.workingDir.replace(/\//g, '-');
-          const candidate = join(homedir(), '.claude', 'projects', escapedDir, `${id}.jsonl`);
-          if (existsSync(candidate)) transcriptPath = candidate;
-        }
+      const session = ctx.sessions.get(id);
+      let caps: ReturnType<typeof getHarness>['caps'] | undefined;
+      try {
+        caps = session ? getHarness(session.mode).caps : undefined;
+      } catch {
+        caps = undefined;
       }
-      if (!transcriptPath) {
+      const adapter = getTranscriptAdapter(session?.mode);
+      // codex / pi: view-only watcher that resolves its own path. Starting it BEFORE the read
+      // means an append racing the read shows up in both (deduped client-side by seq)
+      // rather than in neither.
+      const isHarnessTranscript = !!caps && caps.transcript && !caps.claudeTranscript;
+      // Claude (and legacy unknown sessions): getTranscriptPath() → the Claude adapter's
+      // locate, which includes the <sessionId>.jsonl fallback formerly inlined here.
+      const transcriptPath = isHarnessTranscript ? ctx.startHarnessTranscriptWatcher(id) : ctx.getTranscriptPath(id);
+      if (!transcriptPath || !adapter) {
         return reply.send([]);
       }
       try {
-        const content = await fs.readFile(transcriptPath, 'utf-8');
-        const blocks = parseTranscriptJSONL(content);
-        // Ensure watcher is running so new blocks are streamed live via SSE.
-        // startTranscriptWatcher is idempotent — safe to call even if already watching.
-        ctx.startTranscriptWatcher(id, transcriptPath);
-        const totalBlocks = blocks.length;
         const tailParam = parseInt(req.query.tail as string, 10);
-        if (tailParam > 0 && tailParam < totalBlocks) {
-          const sliced = blocks.slice(totalBlocks - tailParam);
-          reply.header('X-Total-Blocks', String(totalBlocks));
-          return reply.send(sliced);
+        let blocks: TranscriptBlock[];
+        let totalBlocks: number;
+        if (tailParam > 0) {
+          // Bounded byte window from the end of the file — never the whole file.
+          const tail = await readTranscriptTail(adapter, transcriptPath, tailParam);
+          blocks = tail.blocks.length > tailParam ? tail.blocks.slice(tail.blocks.length - tailParam) : tail.blocks;
+          // Exact when the window reached the start of the file; otherwise an estimate that
+          // is always larger than what was returned, so lazy-load keeps asking for older
+          // blocks until a request covers byte 0 and the count becomes exact.
+          totalBlocks = tail.complete ? tail.blocks.length : tail.estimatedTotal;
+        } else {
+          blocks = await readTranscriptFile(adapter, transcriptPath);
+          totalBlocks = blocks.length;
+        }
+        if (!isHarnessTranscript) {
+          // Ensure watcher is running so new blocks are streamed live via SSE.
+          // startTranscriptWatcher is idempotent — safe to call even if already watching.
+          ctx.startTranscriptWatcher(id, transcriptPath);
         }
         reply.header('X-Total-Blocks', String(totalBlocks));
         return reply.send(blocks);

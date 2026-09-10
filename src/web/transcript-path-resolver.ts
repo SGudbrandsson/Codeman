@@ -38,7 +38,7 @@ import type { TranscriptWatcher } from '../transcript-watcher.js';
  */
 export function resolveTranscriptPath(
   workingDir: string,
-  watcher: TranscriptWatcher | undefined,
+  watcher: Pick<TranscriptWatcher, 'transcriptPath'> | undefined,
   claudeResumeId: string | undefined,
   _homeDir: string = homedir()
 ): string | null {

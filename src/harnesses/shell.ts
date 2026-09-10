@@ -20,6 +20,7 @@ export const shellHarness: HarnessDefinition = {
   caps: {
     ralph: false,
     respawn: false,
+    transcript: false,
     claudeTranscript: false,
     claudeParsers: false,
     requiresMux: false,

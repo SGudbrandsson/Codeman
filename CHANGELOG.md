@@ -10,6 +10,17 @@
 
 ### Added
 
+- **Transcript view for Codex and Pi sessions.** The readable web transcript — collapsible
+  tool calls and all — now works for `codex` and `pi`, not just Claude Code. Pi's plaintext
+  reasoning appears as a new dimmed, collapsed-by-default **Thinking** block (`thinking` block
+  type). Codex reasoning is encrypted at source (`encrypted_content`), so codex transcripts
+  never show thinking — a format limitation, not a bug. A session with no transcript file yet
+  (neither harness writes one before the first submitted turn) shows "No transcript yet".
+- **`transcript` harness capability**, split out of `claudeTranscript`. `transcript` means "has
+  a viewable transcript" (claude, codex, pi) and drives the view and its toggle;
+  `claudeTranscript` keeps meaning Claude's JSONL / `--resume` / hooks / state machine, so codex
+  and pi still get no Respawn or Ralph tab. Per-harness locators and record adapters live in
+  `src/harnesses/transcripts/`.
 - **Codex and Pi are now supported session harnesses**, alongside Claude Code, OpenCode and
   plain shell. Pick one from the welcome screen, the run-mode menu, the New Session modal
   or the worktree creator. Install them with `npm i -g @openai/codex` and
@@ -28,6 +39,13 @@
   `codex resume <id>` after a restart, the same way Claude sessions restore with `--resume`.
 
 ### Changed
+
+- **Transcript blocks carry a `seq`** (line byte offset × 1000 + index within the line) and the
+  client dedups periodic recovery on it instead of on `timestamp`. Sibling Claude blocks from one
+  entry share a timestamp and could previously be dropped.
+- **`GET /api/sessions/:id/transcript?tail=N` reads a bounded window** from the end of the file
+  instead of reading and parsing the whole file. `X-Total-Blocks` is exact once the window reaches
+  the start of the file, and a larger-than-returned estimate otherwise, so lazy-load keeps working.
 
 - **Shell sessions no longer receive Claude-only subsystems, and can no longer be paused.**
   They previously got a Ralph tracker, a restorable respawn controller, the Claude transcript

@@ -1,21 +1,23 @@
 /**
- * @fileoverview Transcript Watcher - Real-time monitoring of Claude Code session transcripts
+ * @fileoverview Transcript Watcher - Real-time monitoring of session transcripts
  *
- * Watches the main session transcript JSONL file and emits structured events for:
- * - Assistant message completion
- * - Tool execution state
- * - Error conditions
- * - Plan mode prompts
+ * Watches a session transcript JSONL file and emits:
+ * - `transcript:block` for every harness with a viewable transcript (via its adapter)
+ * - Claude-only state events (completion, tool state, errors, plan mode, AskUserQuestion)
+ *   when constructed with `claudeState: true` (the default)
  *
- * The transcript path is provided by Claude Code hooks in the `transcript_path` field.
+ * For Claude the transcript path is provided by Claude Code hooks in the `transcript_path`
+ * field. Codex and pi watchers are view-only: they run with `claudeState: false`, so the
+ * Claude state machine below never sees their records.
  */
 
 import { EventEmitter } from 'node:events';
 import { watch, statSync, existsSync, FSWatcher } from 'node:fs';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { open } from 'node:fs/promises';
 import type { TranscriptBlock } from './types/index.js';
-import { parseTranscriptEntry } from './types/transcript-blocks.js';
+import { seqBaseForOffset } from './types/transcript-blocks.js';
+import type { TranscriptAdapter } from './harnesses/transcripts/types.js';
+import { claudeTranscriptAdapter } from './harnesses/transcripts/claude.js';
 
 // ========== Types ==========
 
@@ -90,6 +92,22 @@ export interface TranscriptWatcherEvents {
   'transcript:ask_user_question_resolved': () => void;
 }
 
+export interface TranscriptWatcherOptions {
+  /**
+   * Run the Claude state machine (completion, tool state, plan mode, AskUserQuestion).
+   * Only true for harnesses with `caps.claudeTranscript`. Default true.
+   */
+  claudeState?: boolean;
+  /** Converts raw records into blocks. Default: the Claude adapter. */
+  adapter?: TranscriptAdapter;
+}
+
+/** One JSON-parsed JSONL line and the file byte offset it starts at. */
+interface RawRecord {
+  record: unknown;
+  offset: number;
+}
+
 // ========== Constants ==========
 
 /** How often to check for new content when file watching fails */
@@ -113,9 +131,14 @@ export class TranscriptWatcher extends EventEmitter {
   private state: TranscriptState = this.getInitialState();
   /** Whether an AskUserQuestion is pending (waiting for user response). */
   private _pendingAskUserQuestion: boolean = false;
+  /** Whether this watcher runs the Claude state machine (false for view-only codex/pi watchers). */
+  readonly claudeState: boolean;
+  private readonly adapter: TranscriptAdapter;
 
-  constructor() {
+  constructor(opts: TranscriptWatcherOptions = {}) {
     super();
+    this.claudeState = opts.claudeState ?? true;
+    this.adapter = opts.adapter ?? claudeTranscriptAdapter;
   }
 
   /** The path to the transcript JSONL file being watched, or null if not started. */
@@ -295,13 +318,21 @@ export class TranscriptWatcher extends EventEmitter {
       }
 
       // Read new content
-      const newEntries = await this.readNewEntries();
+      const newRecords = await this.readNewRecords();
 
-      for (const entry of newEntries) {
-        this.processEntry(entry);
+      for (const { record, offset } of newRecords) {
+        // Claude state machine — never runs for codex/pi records.
+        if (this.claudeState) this.processEntry(record as TranscriptEntry);
+
+        // Emit full block content for the transcript web view. The adapter receives the
+        // raw record, not a Claude-typed entry, so any harness envelope survives intact.
+        const blocks = this.adapter.parseRecord(record, seqBaseForOffset(offset));
+        for (const block of blocks) {
+          this.emit('transcript:block', block);
+        }
       }
 
-      if (newEntries.length > 0) {
+      if (this.claudeState && newRecords.length > 0) {
         this.emit('transcript:update', this.getState());
       }
     } catch (err) {
@@ -311,53 +342,63 @@ export class TranscriptWatcher extends EventEmitter {
     }
   }
 
-  private readNewEntries(): Promise<TranscriptEntry[]> {
-    return new Promise((resolve, reject) => {
-      if (!this._transcriptPath) {
-        resolve([]);
-        return;
+  /**
+   * Read the bytes appended since `filePosition`, split them into lines while tracking each
+   * line's exact start offset (readline hides offsets, and `seq` is derived from them), and
+   * JSON-parse each line. Malformed complete lines are skipped. A trailing segment with no
+   * newline that does not parse yet is left unconsumed, so a line caught mid-write is read
+   * whole on the next change instead of being dropped.
+   */
+  private async readNewRecords(): Promise<RawRecord[]> {
+    const transcriptPath = this._transcriptPath;
+    if (!transcriptPath) return [];
+
+    const fh = await open(transcriptPath, 'r');
+    let buf: Buffer;
+    const start = this.filePosition;
+    try {
+      const { size } = await fh.stat();
+      const length = Math.max(0, size - start);
+      buf = Buffer.alloc(length);
+      let read = 0;
+      while (read < length) {
+        const { bytesRead } = await fh.read(buf, read, length - read, start + read);
+        if (bytesRead === 0) break;
+        read += bytesRead;
       }
+      buf = buf.subarray(0, read);
+    } finally {
+      await fh.close();
+    }
 
-      const entries: TranscriptEntry[] = [];
-      const transcriptPath = this._transcriptPath;
+    // The watcher may have been pointed elsewhere while we awaited the read.
+    if (this._transcriptPath !== transcriptPath) return [];
 
-      const stream = createReadStream(transcriptPath, {
-        start: this.filePosition,
-        encoding: 'utf-8',
-      });
-
-      const rl = createInterface({
-        input: stream,
-        crlfDelay: Infinity, // Handles both LF and CRLF
-      });
-
-      rl.on('line', (line) => {
-        if (!line.trim()) return;
-
+    const records: RawRecord[] = [];
+    let pos = 0;
+    let consumed = 0;
+    while (pos < buf.length) {
+      const nl = buf.indexOf(0x0a, pos);
+      const end = nl === -1 ? buf.length : nl;
+      const line = buf.toString('utf-8', pos, end);
+      if (line.trim()) {
         try {
-          const entry = JSON.parse(line) as TranscriptEntry;
-          entries.push(entry);
+          records.push({ record: JSON.parse(line) as unknown, offset: start + pos });
         } catch {
-          // Skip malformed lines
+          // Partial trailing line: stop here and re-read it once the writer finishes.
+          if (nl === -1) break;
+          // Otherwise a malformed complete line — skip it.
         }
-      });
-
-      rl.on('close', () => {
-        // Update position to current file size (accounts for any line ending style)
-        try {
-          this.filePosition = statSync(transcriptPath).size;
-        } catch {
-          // File may have been deleted between read and stat
-        }
-        resolve(entries);
-      });
-
-      rl.on('error', reject);
-      stream.on('error', reject);
-    });
+      }
+      pos = nl === -1 ? buf.length : nl + 1;
+      consumed = pos;
+    }
+    this.filePosition = start + consumed;
+    return records;
   }
 
   private processEntry(entry: TranscriptEntry): void {
+    if (!entry || typeof entry !== 'object') return;
     this.state.entryCount++;
     this.state.lastUpdateAt = entry.timestamp || new Date().toISOString();
 
@@ -387,12 +428,6 @@ export class TranscriptWatcher extends EventEmitter {
 
     // Check for plan mode patterns
     this.checkPlanMode(entry);
-
-    // Emit full block content for transcript web view
-    const blocks = parseTranscriptEntry(entry);
-    for (const block of blocks) {
-      this.emit('transcript:block', block as TranscriptBlock);
-    }
   }
 
   private handleAssistantEntry(entry: TranscriptEntry): void {
@@ -405,6 +440,7 @@ export class TranscriptWatcher extends EventEmitter {
     } else if (Array.isArray(content)) {
       // Process content blocks
       for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
         if (block.type === 'text' && block.text) {
           this.state.lastAssistantMessage = block.text.slice(0, MAX_MESSAGE_LENGTH);
         } else if (block.type === 'tool_use' && block.name) {
@@ -457,15 +493,17 @@ export class TranscriptWatcher extends EventEmitter {
     const textToCheck =
       typeof content === 'string'
         ? content
-        : content
-            .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && !!b.text)
-            .map((b) => b.text)
-            .join(' ');
+        : Array.isArray(content)
+          ? content
+              .filter((b): b is { type: 'text'; text: string } => !!b && b.type === 'text' && !!b.text)
+              .map((b) => b.text)
+              .join(' ')
+          : '';
 
     // Also check for tool_use with ExitPlanMode or AskUserQuestion
     if (Array.isArray(content)) {
       for (const block of content) {
-        if (block.type === 'tool_use' && block.name) {
+        if (block && block.type === 'tool_use' && block.name) {
           if (block.name === 'ExitPlanMode' || block.name === 'AskUserQuestion') {
             this.state.planModeDetected = true;
             this.emit('transcript:plan_mode');
