@@ -80,6 +80,40 @@ async function mockTranscript(id: string, blocks: unknown[]): Promise<void> {
   );
 }
 
+/**
+ * Like mockTranscript, with an X-Transcript-Id header. `responses` are served in order (the last
+ * one repeats); `delayMs` holds only the first response, to keep a load() in flight.
+ */
+async function mockTranscriptWithId(
+  id: string,
+  responses: Array<{ blocks: unknown[]; transcriptId?: string; total?: number }>,
+  opts: { delayMs?: number } = {}
+): Promise<{ calls: () => number }> {
+  let n = 0;
+  await page.unroute(`**/api/sessions/${id}/transcript**`);
+  await page.route(`**/api/sessions/${id}/transcript**`, async (route) => {
+    const r = responses[Math.min(n, responses.length - 1)];
+    const first = n === 0;
+    n++;
+    if (first && opts.delayMs) await new Promise((res) => setTimeout(res, opts.delayMs));
+    const headers: Record<string, string> = { 'X-Total-Blocks': String(r.total ?? r.blocks.length) };
+    if (r.transcriptId) headers['X-Transcript-Id'] = r.transcriptId;
+    await route.fulfill({ status: 200, contentType: 'application/json', headers, body: JSON.stringify(r.blocks) });
+  });
+  return { calls: () => n };
+}
+
+const tb = (seq: number, text: string, role = 'user') => ({
+  type: 'text',
+  role,
+  text,
+  timestamp: '2026-01-01T00:00:00Z',
+  seq,
+});
+
+const domText = () => page.evaluate(() => document.getElementById('transcriptView')?.textContent ?? '');
+const occurrences = (hay: string, needle: string) => hay.split(needle).length - 1;
+
 async function select(id: string): Promise<void> {
   await page.evaluate(async (sid) => {
     const app = (window as W).app;
@@ -454,4 +488,312 @@ describe('gate follow-ups: empty caps, loadHarnesses re-apply, Claude-only optio
       expect(r.ralph).toEqual(expected);
     });
   }
+});
+
+describe('transcript identity reconciliation (X-Transcript-Id / SSE transcriptId)', () => {
+  /** Wait inside the page until `cond` (a function source over TV/state) holds. */
+  const settle = (sid: string) =>
+    page.evaluate(async (id) => {
+      const TV = (window as W).TranscriptView;
+      const state = TV._getState(id);
+      for (let i = 0; i < 80 && (TV._loadFetchInProgress || state._sseBuffer); i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }, sid);
+
+  const stateOf = (sid: string) =>
+    page.evaluate((id) => {
+      const state = (window as W).TranscriptView._getState(id);
+      return {
+        transcriptId: state.transcriptId,
+        seqs: state.blocks.map((b: { seq: number }) => b.seq),
+        texts: state.blocks.map((b: { text: string }) => b.text),
+      };
+    }, sid);
+
+  it('a REST load adopts X-Transcript-Id', async () => {
+    const id = 'fake-pi-adopt';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'hello')], transcriptId: 'A' }]);
+    await select(id);
+    expect((await stateOf(id)).transcriptId).toBe('A');
+  });
+
+  it('while load() is in flight, SSE blocks are buffered with their transcriptId', async () => {
+    const id = 'fake-pi-buffer';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'x')], transcriptId: 'A' }]);
+    await select(id);
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'x')], transcriptId: 'A' }], { delayMs: 400 });
+    const buffered = await page.evaluate((sid) => {
+      const TV = (window as W).TranscriptView;
+      TV.load(sid);
+      (window as W).app._onTranscriptBlock({
+        sessionId: sid,
+        block: { seq: 5000, type: 'text', text: 'b' },
+        transcriptId: 'A',
+      });
+      return TV._getState(sid)._sseBuffer;
+    }, id);
+    expect(buffered).toEqual([{ block: { seq: 5000, type: 'text', text: 'b' }, transcriptId: 'A' }]);
+    await settle(id);
+  });
+
+  it('visible view: a block with a different transcriptId is dropped and triggers load()', async () => {
+    const id = 'fake-pi-visible-newid';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'OLD-visible')], transcriptId: 'A' }]);
+    await select(id);
+    const m = await mockTranscriptWithId(id, [{ blocks: [tb(0, 'NEW-visible')], transcriptId: 'B' }]);
+    await page.evaluate((sid) => {
+      (window as W).app._onTranscriptBlock({ sessionId: sid, block: tb2(), transcriptId: 'B' });
+      function tb2() {
+        return { type: 'text', role: 'user', text: 'SSE-visible', timestamp: '2026-01-01T00:00:00Z', seq: 9000 };
+      }
+    }, id);
+    await page.waitForTimeout(300);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(m.calls()).toBeGreaterThanOrEqual(1);
+    expect(st.transcriptId).toBe('B');
+    expect(st.texts).toEqual(['NEW-visible']);
+    const dom = await domText();
+    expect(dom).toContain('NEW-visible');
+    expect(dom).not.toContain('OLD-visible');
+    expect(dom).not.toContain('SSE-visible');
+  });
+
+  it('visible view: replaying blocks from seq 0 after a REST load renders no duplicates', async () => {
+    const id = 'fake-pi-replay-visible';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [
+      { blocks: [tb(0, 'dup-v-one'), tb(1000, 'dup-v-two', 'assistant')], transcriptId: 'A' },
+    ]);
+    await select(id);
+    await page.evaluate((sid) => {
+      const app = (window as W).app;
+      const mk = (seq: number, text: string, role: string) => ({
+        type: 'text',
+        role,
+        text,
+        timestamp: '2026-01-01T00:00:00Z',
+        seq,
+      });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'dup-v-one', 'user'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(1000, 'dup-v-two', 'assistant'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(2000, 'dup-v-three', 'user'), transcriptId: 'A' });
+    }, id);
+    await page.waitForTimeout(200);
+    const st = await stateOf(id);
+    expect(st.seqs).toEqual([0, 1000, 2000]);
+    const dom = await domText();
+    expect(occurrences(dom, 'dup-v-one')).toBe(1);
+    expect(occurrences(dom, 'dup-v-two')).toBe(1);
+    expect(occurrences(dom, 'dup-v-three')).toBe(1);
+  });
+
+  it('inactive view: replay from seq 0 adds no duplicates; a new transcriptId resets the stored blocks', async () => {
+    const r = await page.evaluate(() => {
+      const app = (window as W).app;
+      const TV = (window as W).TranscriptView;
+      const sid = 'fake-inactive-state';
+      const mk = (seq: number, text: string) => ({
+        type: 'text',
+        role: 'user',
+        text,
+        timestamp: '2026-01-01T00:00:00Z',
+        seq,
+      });
+      const state = TV._getState(sid);
+      state.blocks = [mk(0, 'a'), mk(1000, 'b')];
+      state.transcriptId = 'A';
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'a'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(1000, 'b'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(2000, 'c'), transcriptId: 'A' });
+      const afterReplay = state.blocks.map((b: { seq: number }) => b.seq);
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'new-a'), transcriptId: 'B' });
+      return {
+        afterReplay,
+        afterNewId: state.blocks.map((b: { text: string }) => b.text),
+        id: state.transcriptId,
+      };
+    });
+    expect(r.afterReplay).toEqual([0, 1000, 2000]);
+    expect(r.afterNewId).toEqual(['new-a']);
+    expect(r.id).toBe('B');
+  });
+
+  it('load() with a new transcriptId but identical count, last seq and type clears the DOM (no OLD left)', async () => {
+    const id = 'fake-pi-domreuse';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'OLD-q'), tb(1000, 'OLD-a', 'assistant')], transcriptId: 'A' }]);
+    await select(id);
+    expect(await domText()).toContain('OLD-a');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'NEW-q'), tb(1000, 'NEW-a', 'assistant')], transcriptId: 'B' }]);
+    await page.evaluate((sid) => (window as W).TranscriptView.load(sid), id);
+    await settle(id);
+    const dom = await domText();
+    expect(dom).toContain('NEW-q');
+    expect(dom).toContain('NEW-a');
+    expect(dom).not.toContain('OLD-q');
+    expect(dom).not.toContain('OLD-a');
+    expect((await stateOf(id)).transcriptId).toBe('B');
+  });
+
+  it('an in-flight load() whose stored transcriptId changes before it resolves discards its response and reloads', async () => {
+    const id = 'fake-pi-inflight';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'first-load')], transcriptId: 'A' }]);
+    await select(id);
+    const m = await mockTranscriptWithId(
+      id,
+      [
+        { blocks: [tb(0, 'STALE-inflight')], transcriptId: 'A' },
+        { blocks: [tb(0, 'FRESH-inflight')], transcriptId: 'C' },
+      ],
+      { delayMs: 400 }
+    );
+    await page.evaluate((sid) => {
+      const TV = (window as W).TranscriptView;
+      TV.load(sid);
+      // An SSE event (e.g. an inactive-path block or clear bookkeeping) changed the id meanwhile.
+      TV._getState(sid).transcriptId = 'C';
+    }, id);
+    await page.waitForTimeout(700);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(m.calls()).toBe(2);
+    expect(st.texts).toEqual(['FRESH-inflight']);
+    expect(st.transcriptId).toBe('C');
+    expect(await domText()).not.toContain('STALE-inflight');
+  });
+
+  it('load() replay, empty snapshot: skips stale-id entries and deduplicates', async () => {
+    const id = 'fake-pi-replay-empty';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [], transcriptId: 'A' }]);
+    await select(id);
+    await mockTranscriptWithId(id, [{ blocks: [], transcriptId: 'B' }], { delayMs: 300 });
+    await page.evaluate((sid) => {
+      const app = (window as W).app;
+      const TV = (window as W).TranscriptView;
+      const mk = (seq: number, text: string) => ({
+        type: 'text',
+        role: 'user',
+        text,
+        timestamp: '2026-01-01T00:00:00Z',
+        seq,
+      });
+      TV._getState(sid).transcriptId = 'B';
+      TV.load(sid);
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'stale-empty'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'fresh-empty'), transcriptId: 'B' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(0, 'fresh-empty'), transcriptId: 'B' });
+    }, id);
+    await page.waitForTimeout(500);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(st.texts).toEqual(['fresh-empty']);
+    const dom = await domText();
+    expect(occurrences(dom, 'fresh-empty')).toBe(1);
+    expect(dom).not.toContain('stale-empty');
+  });
+
+  it('load() replay, non-empty snapshot: appends only entries newer than the current tail with the adopted id', async () => {
+    const id = 'fake-pi-replay-nonempty';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'ne-0')], transcriptId: 'B' }]);
+    await select(id);
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'ne-0'), tb(1000, 'ne-1')], transcriptId: 'B' }], {
+      delayMs: 300,
+    });
+    await page.evaluate((sid) => {
+      const app = (window as W).app;
+      const TV = (window as W).TranscriptView;
+      const mk = (seq: number, text: string) => ({
+        type: 'text',
+        role: 'user',
+        text,
+        timestamp: '2026-01-01T00:00:00Z',
+        seq,
+      });
+      TV.load(sid);
+      app._onTranscriptBlock({ sessionId: sid, block: mk(1000, 'ne-1'), transcriptId: 'B' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(2000, 'ne-stale'), transcriptId: 'A' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(2000, 'ne-2'), transcriptId: 'B' });
+      app._onTranscriptBlock({ sessionId: sid, block: mk(2000, 'ne-2'), transcriptId: 'B' });
+    }, id);
+    await page.waitForTimeout(500);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(st.seqs).toEqual([0, 1000, 2000]);
+    const dom = await domText();
+    expect(occurrences(dom, 'ne-2')).toBe(1);
+    expect(occurrences(dom, 'ne-1')).toBe(1);
+    expect(dom).not.toContain('ne-stale');
+  });
+
+  it('periodic sync with a different X-Transcript-Id reloads instead of appending', async () => {
+    const id = 'fake-pi-sync-newid';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'OLD-sync')], transcriptId: 'A' }]);
+    await select(id);
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'NEW-sync'), tb(1000, 'NEW-sync-2')], transcriptId: 'B' }]);
+    await page.evaluate((sid) => {
+      const TV = (window as W).TranscriptView;
+      const state = TV._getState(sid);
+      state.viewMode = 'web';
+      state._sseBuffer = null;
+      TV._periodicSync();
+    }, id);
+    await page.waitForTimeout(400);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(st.transcriptId).toBe('B');
+    expect(st.texts).toEqual(['NEW-sync', 'NEW-sync-2']);
+    expect(await domText()).not.toContain('OLD-sync');
+  });
+
+  it('older-block pagination with a different X-Transcript-Id reloads instead of prepending', async () => {
+    const id = 'fake-pi-page-newid';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [
+      { blocks: [tb(3000, 'OLD-page-3'), tb(4000, 'OLD-page-4')], transcriptId: 'A', total: 5 },
+    ]);
+    await select(id);
+    const fresh = [0, 1, 2, 3, 4].map((i) => tb(i * 1000, `NEW-page-${i}`));
+    await mockTranscriptWithId(id, [{ blocks: fresh, transcriptId: 'B', total: 5 }]);
+    await page.evaluate(async (sid) => {
+      const TV = (window as W).TranscriptView;
+      TV._renderedStartIdx = 0;
+      TV._getState(sid).totalServerBlocks = 5;
+      await TV._prependBatch();
+    }, id);
+    await page.waitForTimeout(300);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(st.transcriptId).toBe('B');
+    expect(st.texts).toEqual(fresh.map((b) => b.text));
+    expect(await domText()).not.toContain('OLD-page');
+  });
+
+  it('transcript:clear adopts the event transcriptId before reloading', async () => {
+    const id = 'fake-pi-clear-adopt';
+    await addFakeSession(id, 'pi');
+    await mockTranscriptWithId(id, [{ blocks: [tb(0, 'before-clear')], transcriptId: 'A' }]);
+    await select(id);
+    const m = await mockTranscriptWithId(id, [{ blocks: [tb(0, 'after-clear')], transcriptId: 'D' }]);
+    const idAtClear = await page.evaluate((sid) => {
+      const app = (window as W).app;
+      app._onTranscriptClear({ sessionId: sid, transcriptId: 'D' });
+      return (window as W).TranscriptView._getState(sid).transcriptId;
+    }, id);
+    expect(idAtClear).toBe('D');
+    await page.waitForTimeout(300);
+    await settle(id);
+    const st = await stateOf(id);
+    expect(m.calls()).toBe(1);
+    expect(st.texts).toEqual(['after-clear']);
+    expect(st.transcriptId).toBe('D');
+  });
 });

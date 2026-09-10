@@ -3769,9 +3769,16 @@ const TranscriptView = {
       // Use ?tail to avoid fetching all blocks for long sessions (perf/OOM guard).
       const tailCount = Math.min(currentCount + this._BATCH_SIZE, currentCount * 2);
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/transcript?tail=' + tailCount)
-        .then(r => r.ok ? r.json() : null)
-        .then(blocks => {
+        .then(r => r.ok ? r.json().then(blocks => ({ blocks, fetchedId: r.headers.get('X-Transcript-Id') || undefined })) : null)
+        .then(result => {
+          const blocks = result?.blocks;
           if (!Array.isArray(blocks) || this._sessionId !== sessionId) return;
+          // The server is streaming a different transcript file than the cached one (replaced,
+          // or pi switched session files): discard this tail and reload instead of mixing files.
+          if (result.fetchedId && result.fetchedId !== state.transcriptId) {
+            TranscriptView.load(sessionId).catch(() => {});
+            return;
+          }
           // Transcript identity check. A Claude /clear switches to a NEW file whose seq restarts
           // at 0; if the transcript:clear SSE was missed, every new-file block would compare as
           // "older" than the cache and be dropped forever. When seq is available on both sides and
@@ -3814,6 +3821,25 @@ const TranscriptView = {
     // type is stable for a given block; it guards a coincidental seq match across files.
     if (typeof a?.seq === 'number' && typeof b?.seq === 'number') return a.seq === b.seq && a.type === b.type;
     return a?.timestamp === b?.timestamp;
+  },
+
+  /** The newest block we have accepted for this session, or undefined. */
+  _acceptedTail(state) {
+    return state.blocks[state.blocks.length - 1];
+  },
+
+  /**
+   * True when a block from `transcriptId` may be appended after the accepted tail.
+   * A block from a different transcript file (both ids known) never is. Seq-carrying blocks
+   * must be newer than the CURRENT tail, so a watcher replaying its file from offset 0 renders
+   * nothing twice. Blocks without seq keep today's rule: compared by timestamp against
+   * `snapshotLast` when given, otherwise appended.
+   */
+  _shouldAppend(state, block, transcriptId, snapshotLast) {
+    if (transcriptId && state.transcriptId && transcriptId !== state.transcriptId) return false;
+    const tail = this._acceptedTail(state);
+    if (typeof block?.seq === 'number' && typeof tail?.seq === 'number') return block.seq > tail.seq;
+    return snapshotLast === undefined || this._isNewerBlock(block, snapshotLast);
   },
 
   _getState(sessionId) {
@@ -3873,6 +3899,8 @@ const TranscriptView = {
       this._container.style.opacity = '';
     }
 
+    // Transcript identity this request is made under. SSE events may change it mid-flight.
+    const requestedId = state.transcriptId;
     this._loadFetchInProgress = true;
     try {
       const tailCount = this._BATCH_SIZE * 2;
@@ -3883,6 +3911,16 @@ const TranscriptView = {
       const blocks = await res.json();
       // Abort if a newer load() was started (user switched sessions mid-fetch)
       if (myGen !== this._loadGen) { this._loadFetchInProgress = false; return; }
+      // The stored transcript identity changed while the request was in flight: this snapshot
+      // may describe the previous file. Discard it and fetch again.
+      if (state.transcriptId !== requestedId) {
+        this._loadFetchInProgress = false;
+        return this.load(sessionId, opts);
+      }
+      const fetchedId = res.headers.get('X-Transcript-Id') || undefined;
+      // The cached/rendered blocks describe the same file only when the ids match.
+      const sameTranscript = fetchedId === requestedId;
+      state.transcriptId = fetchedId;
 
       const prevCount = state.blocks.length;
       // Defensive: detect if cached blocks belong to a different session's content.
@@ -3895,7 +3933,9 @@ const TranscriptView = {
       const cacheMatchesFetch = !cachedLast || !fetchedLast || this._isSameBlock(cachedLast, fetchedLast);
       state.blocks = [...blocks];  // update cache with authoritative server data
 
-      if (prevCount > 0 && blocks.length >= prevCount && cacheMatchesFetch) {
+      // A different transcriptId never reuses the DOM: a replacement file can match the cache's
+      // block count, last seq and type while its messages differ.
+      if (prevCount > 0 && blocks.length >= prevCount && cacheMatchesFetch && sameTranscript) {
         // Incremental update — cache was rendered, just append anything new.
         // No DOM clear, no scroll — avoids any flash or jump.
         const newBlocks = blocks.slice(prevCount);
@@ -3932,9 +3972,12 @@ const TranscriptView = {
           // Replay any SSE blocks that arrived during the HTTP fetch.
           // The non-empty path does this too (seq replay loop below), but
           // that path isn't reached when blocks.length === 0, so we do it here.
-          for (const b of (state._sseBuffer ?? [])) {
-            state.blocks.push(b);
-            this._appendBlock(b, false);
+          // Entries are { block, transcriptId }: skip other files' blocks and duplicates.
+          for (const entry of (state._sseBuffer ?? [])) {
+            if (!state.transcriptId && entry.transcriptId) state.transcriptId = entry.transcriptId;
+            if (!this._shouldAppend(state, entry.block, entry.transcriptId)) continue;
+            state.blocks.push(entry.block);
+            this._appendBlock(entry.block, false);
           }
           state._sseBuffer = null;
           this._loadFetchInProgress = false;
@@ -3950,11 +3993,12 @@ const TranscriptView = {
       // Replay any SSE blocks that arrived after the HTTP snapshot was taken
       const httpLast = blocks[blocks.length - 1];
       const allBlocks = [...blocks];
-      for (const b of (state._sseBuffer ?? [])) {
-        if (this._isNewerBlock(b, httpLast)) {
-          state.blocks.push(b);
-          allBlocks.push(b);
-          this._appendBlock(b, false);
+      for (const entry of (state._sseBuffer ?? [])) {
+        if (!state.transcriptId && entry.transcriptId) state.transcriptId = entry.transcriptId;
+        if (this._shouldAppend(state, entry.block, entry.transcriptId, httpLast)) {
+          state.blocks.push(entry.block);
+          allBlocks.push(entry.block);
+          this._appendBlock(entry.block, false);
         }
       }
       state._sseBuffer = null;
@@ -4238,7 +4282,10 @@ const TranscriptView = {
 
   append(block) {
     if (!this._container || !this._sessionId) return;
-    this._getState(this._sessionId).blocks.push(block);
+    const state = this._getState(this._sessionId);
+    // A replay (watcher re-reading its file from 0) must not render a block twice.
+    if (!this._shouldAppend(state, block)) return;
+    state.blocks.push(block);
     const placeholder = this._container.querySelector('.tv-placeholder');
     if (placeholder) placeholder.remove();
     // Remove matching optimistic bubble when the real SSE block arrives
@@ -4479,9 +4526,17 @@ const TranscriptView = {
         const need = Math.min(this._BATCH_SIZE, state.totalServerBlocks - state.blocks.length);
         // Fetch a range that includes what we have plus the next batch
         const fetchCount = state.blocks.length + need;
-        const res = await fetch('/api/sessions/' + encodeURIComponent(this._sessionId) + '/transcript?tail=' + fetchCount);
+        const fetchSessionId = this._sessionId;
+        const res = await fetch('/api/sessions/' + encodeURIComponent(fetchSessionId) + '/transcript?tail=' + fetchCount);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const allBlocks = await res.json();
+        const fetchedId = res.headers.get('X-Transcript-Id') || undefined;
+        if (fetchedId && fetchedId !== state.transcriptId) {
+          // Older blocks from a different transcript file must not be prepended to this one.
+          this._removeSentinel();
+          if (this._sessionId === fetchSessionId) TranscriptView.load(fetchSessionId).catch(() => {});
+          return;
+        }
         const totalFromHeader = parseInt(res.headers.get('X-Total-Blocks') || '0', 10);
         if (totalFromHeader) state.totalServerBlocks = totalFromHeader;
         // The new blocks are at the beginning of allBlocks (before what we already have)
@@ -13641,26 +13696,37 @@ class CodemanApp {
   }
 
   _onTranscriptBlock(data) {
-    const { sessionId, block } = data;
+    const { sessionId, block, transcriptId } = data;
 
     const state = app._transcriptState?.[sessionId];
     let handledByView = false;
     if (TranscriptView._sessionId === sessionId) {
       const transcriptEl = document.getElementById('transcriptView');
       if (transcriptEl?.style.display !== 'none') {
-        // If load() is in progress, buffer the block; it will be replayed after HTTP snapshot
         if (state && state._sseBuffer !== null && state._sseBuffer !== undefined) {
-          state._sseBuffer.push(block);
-          handledByView = true;
+          // load() is in progress: buffer the block WITH its transcript identity; it is
+          // replayed after the HTTP snapshot.
+          state._sseBuffer.push({ block, transcriptId });
+        } else if (transcriptId && state?.transcriptId && transcriptId !== state.transcriptId) {
+          // A block from a different transcript file than the rendered one: drop it and resync.
+          TranscriptView.load(sessionId).catch(() => {});
         } else {
+          if (state && transcriptId && !state.transcriptId) state.transcriptId = transcriptId;
           TranscriptView.append(block);
-          handledByView = true;
         }
+        handledByView = true;
       }
     }
     // Only push to state.blocks when not handled above — append() already does it,
     // and _sseBuffer blocks are added to state.blocks after the load() fetch completes.
-    if (state && !handledByView) state.blocks.push(block);
+    if (state && !handledByView) {
+      if (transcriptId && transcriptId !== state.transcriptId) {
+        // Inactive view: a new file replaces the stored blocks.
+        if (state.transcriptId) state.blocks = [];
+        state.transcriptId = transcriptId;
+      }
+      if (TranscriptView._shouldAppend(state, block)) state.blocks.push(block);
+    }
   }
 
   // Transcript watcher attached to a real file for the first time. If the client fetched
@@ -13679,9 +13745,14 @@ class CodemanApp {
   }
 
   _onTranscriptClear(data) {
-    const { sessionId } = data;
-    if (app._transcriptState?.[sessionId]) {
-      app._transcriptState[sessionId].blocks = [];
+    const { sessionId, transcriptId } = data;
+    // Adopt the new file's identity BEFORE clear() → load() captures it for its in-flight check.
+    const state = TranscriptView._sessionId === sessionId
+      ? TranscriptView._getState(sessionId)
+      : app._transcriptState?.[sessionId];
+    if (state) {
+      state.blocks = [];
+      state.transcriptId = transcriptId;
     }
     if (TranscriptView._sessionId === sessionId) {
       TranscriptView.clear();
