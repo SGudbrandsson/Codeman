@@ -362,8 +362,22 @@ export class TranscriptWatcher extends EventEmitter {
     if (existsSync(this._transcriptPath)) {
       this.setupFileWatcher();
     } else {
+      // Deleted: whatever appears at this path later is a new file, even if the filesystem
+      // reuses the inode, so drop the old offset and identity now. Once per disappearance.
+      if (!this.pollInterval) {
+        this._inode = null;
+        this._resetIdentity();
+      }
       this.startPolling();
     }
+  }
+
+  /** New file identity: read from 0 with fresh parse state and a new transcriptId, and tell clients. */
+  private _resetIdentity(): void {
+    this.filePosition = 0;
+    this.state = this.getInitialState();
+    this._transcriptId = randomUUID();
+    this.emit('transcript:clear');
   }
 
   /** Periodic stat while watching: catches replacement, truncation and missed change events. */
@@ -383,6 +397,7 @@ export class TranscriptWatcher extends EventEmitter {
     if (!this._transcriptPath || !this._isRunning) return;
     if (this._isProcessing) return; // Guard against concurrent calls
     this._isProcessing = true;
+    let missing = false;
 
     try {
       const stat = statSync(this._transcriptPath);
@@ -391,10 +406,7 @@ export class TranscriptWatcher extends EventEmitter {
       if (replaced || stat.size < this.filePosition) {
         // File was replaced (new inode, any size) or truncated — new identity; tell the
         // frontend to clear its view, then re-read from start
-        this.filePosition = 0;
-        this.state = this.getInitialState();
-        this._transcriptId = randomUUID();
-        this.emit('transcript:clear');
+        this._resetIdentity();
       } else if (stat.size === this.filePosition) {
         return; // No new content
       }
@@ -418,10 +430,14 @@ export class TranscriptWatcher extends EventEmitter {
         this.emit('transcript:update', this.getState());
       }
     } catch (err) {
-      this.emit('transcript:error', err as Error);
+      // Deleted between the change event and the stat/read: not an error, the path is just gone.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') missing = true;
+      else this.emit('transcript:error', err as Error);
     } finally {
       this._isProcessing = false;
     }
+    // After _isProcessing is released, so a re-armed watcher's initial read is not skipped.
+    if (missing) this.rearmFileWatcher();
   }
 
   /**

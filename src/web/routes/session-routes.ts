@@ -1551,9 +1551,14 @@ ${contextLines.join('\n')}`;
       if (!transcriptPath || !adapter) {
         return reply.send([]);
       }
+      if (!isHarnessTranscript) {
+        // Ensure the Claude watcher runs so new blocks stream live via SSE (idempotent). Started
+        // before the id is read: it may retarget the watcher to this path, which changes the id.
+        ctx.startTranscriptWatcher(id, transcriptPath);
+      }
       // Identity of the file being served, captured BEFORE the read: if the file is replaced
       // during the read, the client still holds the old id and reloads on transcript:clear.
-      let transcriptId = ctx.getTranscriptId(id);
+      const transcriptId = ctx.getTranscriptId(id);
       if (transcriptId) reply.header('X-Transcript-Id', transcriptId);
       try {
         const tailParam = parseInt(req.query.tail as string, 10);
@@ -1570,16 +1575,6 @@ ${contextLines.join('\n')}`;
         } else {
           blocks = await readTranscriptFile(adapter, transcriptPath);
           totalBlocks = blocks.length;
-        }
-        if (!isHarnessTranscript) {
-          // Ensure watcher is running so new blocks are streamed live via SSE.
-          // startTranscriptWatcher is idempotent — safe to call even if already watching.
-          ctx.startTranscriptWatcher(id, transcriptPath);
-          // A Claude watcher started just now has an id only after the call above.
-          if (!transcriptId) {
-            transcriptId = ctx.getTranscriptId(id);
-            if (transcriptId) reply.header('X-Transcript-Id', transcriptId);
-          }
         }
         reply.header('X-Total-Blocks', String(totalBlocks));
         return reply.send(blocks);

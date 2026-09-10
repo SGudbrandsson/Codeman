@@ -119,6 +119,7 @@ export class HookActivityMonitor extends EventEmitter implements ActivityMonitor
       this._state = 'idle';
       this.emit('idle', { reason: 'stale' } satisfies IdleInfo);
     }, this._staleMs);
+    this._staleTimer.unref?.();
   }
 
   private _clearStaleTimer(): void {
