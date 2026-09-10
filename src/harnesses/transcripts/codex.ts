@@ -13,6 +13,9 @@
  *   response_item / function_call(_output)       → tool_use / tool_result (older builds)
  *   event_msg / task_complete                    → result
  *
+ * Activity (classifyActivity): event_msg/task_started → working; event_msg/task_complete and
+ * event_msg/turn_aborted → idle. See src/codex-transcript-activity-monitor.ts.
+ *
  * Filtered: response_item/message role developer (system prompt) and role user (it carries
  * injected <environment_context>/AGENTS.md text; the clean user text is the event above),
  * event_msg/agent_message (a duplicate of response_item/message assistant in <= 0.144),
@@ -205,5 +208,14 @@ export const codexTranscriptAdapter = defineTranscriptAdapter({
     }
 
     return stampSeq(blocks, seqBase);
+  },
+
+  classifyActivity(record) {
+    const rec = obj(record);
+    if (!rec || rec.type !== 'event_msg') return null;
+    const t = obj(rec.payload)?.type;
+    if (t === 'task_started') return 'working';
+    if (t === 'task_complete' || t === 'turn_aborted') return 'idle';
+    return null;
   },
 });

@@ -27,6 +27,9 @@ export interface TranscriptLocateCtx {
   homeDir?: string;
 }
 
+/** An activity boundary carried by one transcript record (activity-detection spec §6). */
+export type ActivitySignal = 'working' | 'idle' | null;
+
 export interface TranscriptAdapter {
   readonly mode: SessionMode;
   /** Absolute path to this session's transcript file, or null if not (yet) written. */
@@ -39,6 +42,12 @@ export interface TranscriptAdapter {
   parseRecord(record: unknown, seqBase: number): TranscriptBlock[];
   /** Convert one raw JSONL line into zero or more blocks. MUST NOT throw. */
   parseLine(raw: string, seqBase: number): TranscriptBlock[];
+  /**
+   * Optional: classify one already-JSON-parsed record as a turn boundary — 'working' (a turn
+   * began), 'idle' (a turn ended) or null. Pure; never throws. Used by transcript-driven
+   * activity monitors.
+   */
+  classifyActivity?(record: unknown): ActivitySignal;
 }
 
 /** Build an adapter whose parse functions can never throw. */
@@ -46,6 +55,7 @@ export function defineTranscriptAdapter(def: {
   mode: SessionMode;
   locate(ctx: TranscriptLocateCtx): string | null;
   parseRecord(record: unknown, seqBase: number): TranscriptBlock[];
+  classifyActivity?(record: unknown): ActivitySignal;
 }): TranscriptAdapter {
   const parseRecord = (record: unknown, seqBase: number): TranscriptBlock[] => {
     if (!record || typeof record !== 'object' || Array.isArray(record)) return [];
@@ -55,7 +65,17 @@ export function defineTranscriptAdapter(def: {
       return [];
     }
   };
+  const classify = def.classifyActivity;
   return {
+    ...(classify && {
+      classifyActivity(record: unknown): ActivitySignal {
+        try {
+          return classify(record) ?? null;
+        } catch {
+          return null;
+        }
+      },
+    }),
     mode: def.mode,
     locate(ctx) {
       try {
