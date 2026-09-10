@@ -290,3 +290,114 @@ describe('GET /api/sessions/:id/state — archived codex locate, archived pi per
     expect(harness.ctx.getTranscriptPath).toHaveBeenCalledWith(LIVE_ID);
   });
 });
+
+describe('transcript identity and the authoritative pi path', () => {
+  let harness: Harness;
+  let dir: string;
+  const ID = 'tid-session';
+
+  beforeAll(async () => {
+    harness = await createRouteTestHarness(registerSessionRoutes, { sessionId: ID });
+    dir = mkdtempSync(join(tmpdir(), 'tv-routes-tid-'));
+  });
+  afterAll(async () => {
+    await harness.app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const live = () => harness.ctx.sessions.get(ID) as unknown as { mode: string; harnessTranscriptPath?: string };
+
+  beforeEach(() => {
+    vi.mocked(harness.ctx.startTranscriptWatcher).mockClear();
+    harness.ctx.getTranscriptPath = vi.fn(() => null);
+    live().harnessTranscriptPath = undefined;
+  });
+
+  it('pi /transcript sends X-Transcript-Id from the watcher it reads', async () => {
+    live().mode = 'pi';
+    const file = join(dir, 'pi.jsonl');
+    copyFileSync(join(FIXTURES, 'pi.jsonl'), file);
+    harness.ctx.startHarnessTranscriptWatcher = vi.fn(() => file);
+    harness.ctx.getTranscriptId = vi.fn(() => 'tid-pi-1');
+
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/transcript?tail=100` });
+    expect(JSON.parse(res.body)).toHaveLength(6);
+    expect(res.headers['x-transcript-id']).toBe('tid-pi-1');
+    expect(harness.ctx.getTranscriptId).toHaveBeenCalledWith(ID);
+  });
+
+  it('pi /transcript for a not-yet-created session file returns [] and still sends the id', async () => {
+    live().mode = 'pi';
+    harness.ctx.startHarnessTranscriptWatcher = vi.fn(() => join(dir, 'not-created.jsonl'));
+    harness.ctx.getTranscriptId = vi.fn(() => 'tid-pi-empty');
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/transcript` });
+    expect(JSON.parse(res.body)).toEqual([]);
+    expect(res.headers['x-transcript-id']).toBe('tid-pi-empty');
+  });
+
+  it('claude /transcript sends X-Transcript-Id too', async () => {
+    live().mode = 'claude';
+    const file = join(dir, 'claude.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'hi' } }) +
+        '\n'
+    );
+    harness.ctx.getTranscriptPath = vi.fn(() => file);
+    harness.ctx.getTranscriptId = vi.fn(() => 'tid-claude');
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/transcript` });
+    expect(JSON.parse(res.body)).toHaveLength(1);
+    expect(res.headers['x-transcript-id']).toBe('tid-claude');
+  });
+
+  it('no header when there is no watcher id', async () => {
+    live().mode = 'pi';
+    const file = join(dir, 'pi2.jsonl');
+    copyFileSync(join(FIXTURES, 'pi.jsonl'), file);
+    harness.ctx.startHarnessTranscriptWatcher = vi.fn(() => file);
+    harness.ctx.getTranscriptId = vi.fn(() => undefined);
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/transcript` });
+    expect(res.headers['x-transcript-id']).toBeUndefined();
+  });
+
+  it('live pi /state reads harnessTranscriptPath, not getTranscriptPath()', async () => {
+    live().mode = 'pi';
+    const file = join(dir, 'accepted-pi.jsonl');
+    copyFileSync(join(FIXTURES, 'pi.jsonl'), file);
+    live().harnessTranscriptPath = file;
+    harness.ctx.getTranscriptPath = vi.fn(() => '/wrong/located.jsonl');
+
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/state` });
+    const body = JSON.parse(res.body);
+    expect(body.transcript.map((b: { type: string }) => b.type)).toEqual([
+      'text',
+      'thinking',
+      'tool_use',
+      'tool_result',
+      'text',
+      'result',
+    ]);
+    expect(harness.ctx.getTranscriptPath).not.toHaveBeenCalled();
+  });
+
+  it('live pi /state with no accepted path falls back to getTranscriptPath() (pre-extension sessions)', async () => {
+    live().mode = 'pi';
+    const file = join(dir, 'located-pi.jsonl');
+    copyFileSync(join(FIXTURES, 'pi.jsonl'), file);
+    harness.ctx.getTranscriptPath = vi.fn(() => file);
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/state` });
+    expect(JSON.parse(res.body).transcript).toHaveLength(6);
+    expect(harness.ctx.getTranscriptPath).toHaveBeenCalledWith(ID);
+  });
+
+  it('a non-hook session ignores a stray harnessTranscriptPath in /state', async () => {
+    live().mode = 'codex';
+    const file = join(dir, 'stray-codex.jsonl');
+    copyFileSync(join(FIXTURES, 'codex.jsonl'), file);
+    live().harnessTranscriptPath = join(dir, 'does-not-matter.jsonl');
+    harness.ctx.getTranscriptPath = vi.fn(() => file);
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/state` });
+    expect(JSON.parse(res.body).transcript).toHaveLength(5);
+    expect(harness.ctx.getTranscriptPath).toHaveBeenCalledWith(ID);
+  });
+});

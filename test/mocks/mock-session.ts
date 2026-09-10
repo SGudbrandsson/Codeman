@@ -174,6 +174,9 @@ export class MockSession extends EventEmitter {
   /** Per-process activity token ('hook' harnesses) */
   activityToken: string | undefined = undefined;
 
+  /** Authoritative transcript path accepted from harness_activity reports ('hook' harnesses) */
+  harnessTranscriptPath: string | undefined = undefined;
+
   /** Stub for Session.applyHookActivity (harness_activity reports) */
   applyHookActivity = vi.fn((_report: unknown): 'accepted' | 'rejected' => 'accepted');
 
@@ -219,6 +222,7 @@ export class MockSession extends EventEmitter {
       mode: this.mode,
       muxName: this._muxName,
       lastActivityAt: this.lastActivityAt,
+      ...(this.harnessTranscriptPath !== undefined && { harnessTranscriptPath: this.harnessTranscriptPath }),
     };
   }
 

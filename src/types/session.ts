@@ -241,6 +241,12 @@ export interface SessionState {
    * process that survived a Codeman restart.
    */
   activityToken?: string;
+  /**
+   * Transcript file named by the last accepted harness_activity report ('hook' harnesses: pi),
+   * canonicalised and contained under pi's sessions root. The authoritative transcript path
+   * for that session; absent until the pi extension reports one.
+   */
+  harnessTranscriptPath?: string;
   /** Codex-specific configuration (only for mode === 'codex') */
   codexConfig?: HarnessModelConfig;
   /** Pi-specific configuration (only for mode === 'pi') */

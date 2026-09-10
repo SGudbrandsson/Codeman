@@ -448,6 +448,10 @@ export class Session extends EventEmitter {
   // attach to a surviving pane, whose process still reports with it. Restored from state.json.
   activityToken?: string;
 
+  // Authoritative transcript path accepted from harness_activity reports ('hook' harnesses: pi).
+  // Set by the server (acceptHarnessTranscriptPath); persisted and restored from state.json.
+  harnessTranscriptPath?: string;
+
   // In-memory ordering state for harness_activity reports (highest accepted seq and gen).
   // Reset whenever activityToken rotates: a new pi process restarts both counters at 1.
   private _hookOwner: HookOwnerState = {};
@@ -1130,6 +1134,7 @@ export class Session extends EventEmitter {
       ...(this._piConfig !== undefined && { piConfig: this._piConfig }),
       ...(this.harnessSessionId !== undefined && { harnessSessionId: this.harnessSessionId }),
       ...(this.activityToken !== undefined && { activityToken: this.activityToken }),
+      ...(this.harnessTranscriptPath !== undefined && { harnessTranscriptPath: this.harnessTranscriptPath }),
       draft: this.draft,
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),

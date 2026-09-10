@@ -20,7 +20,8 @@
  */
 
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { stampSeq, type UnsequencedBlock } from '../../types/transcript-blocks.js';
 import { assertUnderRoot, newestMatchingFile } from './paths.js';
 import { defineTranscriptAdapter, obj, str, type TranscriptLocateCtx } from './types.js';
@@ -34,6 +35,33 @@ const MAX_TEXT = 64_000;
 /** pi's agent directory: $PI_CODING_AGENT_DIR, else ~/.pi/agent. */
 export function piAgentDir(ctx?: Pick<TranscriptLocateCtx, 'homeDir'>): string {
   return process.env.PI_CODING_AGENT_DIR || join(ctx?.homeDir ?? homedir(), '.pi', 'agent');
+}
+
+/**
+ * Validates a session-file path reported by the Codeman pi extension (harness_activity
+ * `sessionFile`). pi reports the path before it creates the file but creates its directory
+ * eagerly, so containment is checked on the resolved PARENT directory: it must lie strictly
+ * inside `<agentDir>/sessions`, where agentDir is `PI_CODING_AGENT_DIR` or `~/.pi/agent`.
+ * An existing file must itself resolve inside the root (no symlinked escape).
+ *
+ * @returns the canonical path (real parent + basename), or null when the path is relative,
+ *   not a .jsonl file, its parent is missing, or it lies outside the root.
+ */
+export function isUnderPiSessionsRoot(
+  candidate: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir()
+): string | null {
+  if (typeof candidate !== 'string' || !isAbsolute(candidate) || candidate.includes('\0')) return null;
+  const resolved = resolve(candidate);
+  const name = basename(resolved);
+  if (!name.endsWith('.jsonl')) return null;
+  const root = join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'sessions');
+  const parent = assertUnderRoot(dirname(resolved), root);
+  if (!parent) return null;
+  const canonical = join(parent, name);
+  if (existsSync(canonical) && assertUnderRoot(canonical, root) === null) return null;
+  return canonical;
 }
 
 /** pi's per-cwd session directory name (getDefaultSessionDirPath in pi 0.85.1). */

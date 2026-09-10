@@ -7,11 +7,20 @@
  * Run: npx vitest run test/transcript-adapter-pi.test.ts
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  realpathSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getTranscriptAdapter, piTranscriptAdapter, parseJsonlBuffer } from '../src/harnesses/transcripts/index.js';
-import { piSessionDirName } from '../src/harnesses/transcripts/pi.js';
+import { isUnderPiSessionsRoot, piSessionDirName } from '../src/harnesses/transcripts/pi.js';
 
 const FIXTURE = readFileSync(join(__dirname, 'fixtures', 'transcripts', 'pi.jsonl'), 'utf-8');
 const line = (o: unknown) => JSON.stringify(o);
@@ -165,5 +174,72 @@ describe('pi transcript adapter — locate', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('isUnderPiSessionsRoot', () => {
+  let root: string;
+  let home: string;
+  let agentDir: string;
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'pi-root-')));
+    home = join(root, 'home');
+    agentDir = join(root, 'custom-agent');
+    mkdirSync(join(home, '.pi', 'agent', 'sessions', '--proj--'), { recursive: true });
+    mkdirSync(join(agentDir, 'sessions', '--proj--'), { recursive: true });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('accepts a not-yet-created file whose parent is under ~/.pi/agent/sessions', () => {
+    const p = join(home, '.pi', 'agent', 'sessions', '--proj--', 'a_1.jsonl');
+    expect(isUnderPiSessionsRoot(p, {}, home)).toBe(p);
+  });
+
+  it('honours PI_CODING_AGENT_DIR', () => {
+    const inCustom = join(agentDir, 'sessions', '--proj--', 'a_1.jsonl');
+    const inDefault = join(home, '.pi', 'agent', 'sessions', '--proj--', 'a_1.jsonl');
+    const env = { PI_CODING_AGENT_DIR: agentDir };
+    expect(isUnderPiSessionsRoot(inCustom, env, home)).toBe(inCustom);
+    expect(isUnderPiSessionsRoot(inDefault, env, home)).toBeNull();
+  });
+
+  it('returns the canonical path for a non-normalised candidate', () => {
+    const messy = join(home, '.pi', 'agent', 'sessions', '--proj--', '.', 'a_1.jsonl');
+    expect(isUnderPiSessionsRoot(messy, {}, home)).toBe(
+      join(home, '.pi', 'agent', 'sessions', '--proj--', 'a_1.jsonl')
+    );
+  });
+
+  it('rejects .. traversal out of the sessions root', () => {
+    const p = join(home, '.pi', 'agent', 'sessions', '--proj--', '..', '..', 'escape.jsonl');
+    expect(isUnderPiSessionsRoot(p, {}, home)).toBeNull();
+    expect(isUnderPiSessionsRoot('/etc/passwd', {}, home)).toBeNull();
+  });
+
+  it('rejects a symlinked parent directory that escapes the root', () => {
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, join(home, '.pi', 'agent', 'sessions', '--link--'));
+    expect(isUnderPiSessionsRoot(join(home, '.pi', 'agent', 'sessions', '--link--', 'a.jsonl'), {}, home)).toBeNull();
+  });
+
+  it('rejects an existing file that is a symlink escaping the root', () => {
+    const outside = join(root, 'secret.jsonl');
+    writeFileSync(outside, '{}\n');
+    const link = join(home, '.pi', 'agent', 'sessions', '--proj--', 'link.jsonl');
+    symlinkSync(outside, link);
+    expect(isUnderPiSessionsRoot(link, {}, home)).toBeNull();
+  });
+
+  it('returns null when the parent directory is missing', () => {
+    const p = join(home, '.pi', 'agent', 'sessions', '--not-created--', 'a_1.jsonl');
+    expect(isUnderPiSessionsRoot(p, {}, home)).toBeNull();
+  });
+
+  it('rejects relative paths and non-jsonl names', () => {
+    expect(isUnderPiSessionsRoot('sessions/--proj--/a.jsonl', {}, home)).toBeNull();
+    expect(isUnderPiSessionsRoot(join(home, '.pi', 'agent', 'sessions', '--proj--', 'a.txt'), {}, home)).toBeNull();
+    expect(isUnderPiSessionsRoot(join(home, '.pi', 'agent', 'sessions', '--proj--', '..'), {}, home)).toBeNull();
   });
 });

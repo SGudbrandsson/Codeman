@@ -134,6 +134,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     resolveSessionTranscript: vi.fn(() => '/home/user/.claude/projects/-home-user-proj/conv-abc-123.jsonl'),
     stopTranscriptWatcher: vi.fn(),
     getTranscriptPath: vi.fn((_id: string): string | null => null),
+    getTranscriptId: vi.fn((_id: string): string | undefined => undefined),
 
     // -- InfraPort --
     mux: {

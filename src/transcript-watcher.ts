@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { watch, statSync, existsSync, FSWatcher } from 'node:fs';
 import { open } from 'node:fs/promises';
 import type { TranscriptBlock } from './types/index.js';
@@ -92,6 +93,15 @@ export interface TranscriptWatcherEvents {
   'transcript:ask_user_question_resolved': () => void;
 }
 
+/** Options for start() / updatePath(). */
+export interface TranscriptStartOptions {
+  /**
+   * Byte offset to start reading an EXISTING file from. Default: its current size (only new
+   * entries). A file that does not exist yet is always read from 0 once it appears.
+   */
+  fromOffset?: number;
+}
+
 export interface TranscriptWatcherOptions {
   /**
    * Run the Claude state machine (completion, tool state, plan mode, AskUserQuestion).
@@ -113,6 +123,13 @@ interface RawRecord {
 /** How often to check for new content when file watching fails */
 const POLL_INTERVAL_MS = 1000;
 
+/**
+ * While a file watcher is armed, stat the file this often as well. fs.watch follows the
+ * inode, so a rename-over replacement (even at equal size) or a missed change event would
+ * otherwise go unnoticed.
+ */
+const STAT_POLL_INTERVAL_MS = 2000;
+
 /** Max characters to keep for lastAssistantMessage */
 const MAX_MESSAGE_LENGTH = 500;
 
@@ -125,7 +142,12 @@ export class TranscriptWatcher extends EventEmitter {
   private _transcriptPath: string | null = null;
   private fileWatcher: FSWatcher | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
+  /** Inode/shrink check while watching (separate from pollInterval, which only waits for the file to exist). */
+  private statPollInterval: NodeJS.Timeout | null = null;
   private filePosition: number = 0;
+  /** Inode of the file the current filePosition refers to; null until first stat. */
+  private _inode: number | null = null;
+  private _transcriptId: string = randomUUID();
   private _isRunning: boolean = false;
   private _isProcessing: boolean = false;
   private state: TranscriptState = this.getInitialState();
@@ -139,6 +161,15 @@ export class TranscriptWatcher extends EventEmitter {
     super();
     this.claudeState = opts.claudeState ?? true;
     this.adapter = opts.adapter ?? claudeTranscriptAdapter;
+  }
+
+  /**
+   * Identity of the file content being streamed. Regenerated whenever the watcher starts on a
+   * file, changes path, or detects that the file was replaced or truncated. Clients use it to
+   * tell blocks from two files apart (seq restarts in every file).
+   */
+  get transcriptId(): string {
+    return this._transcriptId;
   }
 
   /** The path to the transcript JSONL file being watched, or null if not started. */
@@ -165,15 +196,21 @@ export class TranscriptWatcher extends EventEmitter {
   /**
    * Start watching a transcript file
    * @param transcriptPath - Path to the JSONL transcript file
+   * @param opts.fromOffset - where to start reading an existing file (default: EOF)
    */
-  start(transcriptPath: string): void {
+  start(transcriptPath: string, opts?: TranscriptStartOptions): void {
     if (this._isRunning && this._transcriptPath === transcriptPath) {
       return; // Already watching this file
     }
+    this._begin(transcriptPath, opts, false);
+  }
 
-    // Stop any existing watcher without emitting transcript:clear — updatePath() already
-    // emitted it before calling start(). Calling stop() here would fire a redundant second
-    // clear, causing an extra load() round-trip on the frontend.
+  /**
+   * (Re)start on a path. `emitClear` is updatePath()'s transcript:clear, emitted after the new
+   * transcriptId is set so the event carries the id of the file that follows it.
+   */
+  private _begin(transcriptPath: string, opts: TranscriptStartOptions | undefined, emitClear: boolean): void {
+    // Tear down any existing watcher without emitting transcript:clear (stop() would).
     this._cleanup();
 
     this._transcriptPath = transcriptPath;
@@ -181,6 +218,9 @@ export class TranscriptWatcher extends EventEmitter {
     this.state = this.getInitialState();
     this._pendingAskUserQuestion = false;
     this.filePosition = 0;
+    this._inode = null;
+    this._transcriptId = randomUUID();
+    if (emitClear) this.emit('transcript:clear');
 
     // Check if file exists
     if (!existsSync(transcriptPath)) {
@@ -192,8 +232,9 @@ export class TranscriptWatcher extends EventEmitter {
     // Get initial file size
     try {
       const stat = statSync(transcriptPath);
-      // Start from the end to only process new entries
-      this.filePosition = stat.size;
+      // Default: start from the end to only process new entries
+      this.filePosition = Math.min(opts?.fromOffset ?? stat.size, stat.size);
+      this._inode = stat.ino;
     } catch {
       this.filePosition = 0;
     }
@@ -226,7 +267,13 @@ export class TranscriptWatcher extends EventEmitter {
       this.pollInterval = null;
     }
 
+    if (this.statPollInterval) {
+      clearInterval(this.statPollInterval);
+      this.statPollInterval = null;
+    }
+
     this._transcriptPath = null;
+    this._inode = null;
     this.state = this.getInitialState();
   }
 
@@ -247,10 +294,9 @@ export class TranscriptWatcher extends EventEmitter {
   /**
    * Update the transcript path (e.g., from a new hook event)
    */
-  updatePath(transcriptPath: string): void {
+  updatePath(transcriptPath: string, opts?: TranscriptStartOptions): void {
     if (this._transcriptPath !== transcriptPath) {
-      this.emit('transcript:clear');
-      this.start(transcriptPath);
+      this._begin(transcriptPath, opts, true);
     }
   }
 
@@ -278,6 +324,9 @@ export class TranscriptWatcher extends EventEmitter {
       this.fileWatcher = watch(this._transcriptPath, (eventType) => {
         if (eventType === 'change') {
           this.processNewContent();
+        } else if (eventType === 'rename') {
+          // Renamed over, moved away or deleted: the watch is bound to the old inode.
+          this.rearmFileWatcher();
         }
       });
 
@@ -292,6 +341,8 @@ export class TranscriptWatcher extends EventEmitter {
         }
       });
 
+      this.startStatPoll();
+
       // Initial read
       this.processNewContent();
     } catch (err) {
@@ -301,6 +352,33 @@ export class TranscriptWatcher extends EventEmitter {
     }
   }
 
+  /** Close the file watcher and watch the path again (or wait for it to reappear). */
+  private rearmFileWatcher(): void {
+    if (this.fileWatcher) {
+      this.fileWatcher.close();
+      this.fileWatcher = null;
+    }
+    if (!this._transcriptPath || !this._isRunning) return;
+    if (existsSync(this._transcriptPath)) {
+      this.setupFileWatcher();
+    } else {
+      this.startPolling();
+    }
+  }
+
+  /** Periodic stat while watching: catches replacement, truncation and missed change events. */
+  private startStatPoll(): void {
+    if (this.statPollInterval) return;
+    this.statPollInterval = setInterval(() => {
+      if (!this._transcriptPath || !this._isRunning) return;
+      if (!existsSync(this._transcriptPath)) {
+        if (this.fileWatcher) this.rearmFileWatcher();
+        return;
+      }
+      void this.processNewContent();
+    }, STAT_POLL_INTERVAL_MS);
+  }
+
   private async processNewContent(): Promise<void> {
     if (!this._transcriptPath || !this._isRunning) return;
     if (this._isProcessing) return; // Guard against concurrent calls
@@ -308,10 +386,14 @@ export class TranscriptWatcher extends EventEmitter {
 
     try {
       const stat = statSync(this._transcriptPath);
-      if (stat.size < this.filePosition) {
-        // File was truncated/replaced — tell the frontend to clear its view, then re-read from start
+      const replaced = this._inode !== null && stat.ino !== this._inode;
+      this._inode = stat.ino;
+      if (replaced || stat.size < this.filePosition) {
+        // File was replaced (new inode, any size) or truncated — new identity; tell the
+        // frontend to clear its view, then re-read from start
         this.filePosition = 0;
         this.state = this.getInitialState();
+        this._transcriptId = randomUUID();
         this.emit('transcript:clear');
       } else if (stat.size === this.filePosition) {
         return; // No new content

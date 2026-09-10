@@ -99,6 +99,7 @@ import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.j
 import { SseEvent, type SessionClearedPayload } from './sse-events.js';
 import { resolveTranscriptPath } from './transcript-path-resolver.js';
 import { getTranscriptAdapter } from '../harnesses/transcripts/index.js';
+import { isUnderPiSessionsRoot } from '../harnesses/transcripts/pi.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders } from './middleware/auth.js';
 import {
@@ -632,8 +633,8 @@ export class WebServer extends EventEmitter {
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       startHarnessTranscriptWatcher: this.startHarnessTranscriptWatcher.bind(this),
-      // No-op until pi transcript retargeting lands (plan Task 7).
-      acceptHarnessTranscriptPath: () => {},
+      acceptHarnessTranscriptPath: this.acceptHarnessTranscriptPath.bind(this),
+      getTranscriptId: this.getTranscriptId.bind(this),
       resolveSessionTranscript: (workingDir: string, claudeResumeId: string | undefined) =>
         resolveTranscriptPath(workingDir, undefined, claudeResumeId),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
@@ -927,7 +928,8 @@ export class WebServer extends EventEmitter {
     let watcher = this.transcriptWatchers.get(sessionId);
 
     if (!watcher) {
-      watcher = new TranscriptWatcher();
+      const w = new TranscriptWatcher();
+      watcher = w;
 
       // Wire up transcript events to the respawn controller
       watcher.on('transcript:complete', () => {
@@ -960,11 +962,11 @@ export class WebServer extends EventEmitter {
       });
 
       watcher.on('transcript:block', (block: TranscriptBlock) => {
-        this.broadcast(SseEvent.TranscriptBlock, { sessionId, block });
+        this.broadcast(SseEvent.TranscriptBlock, { sessionId, block, transcriptId: w.transcriptId });
       });
 
       watcher.on('transcript:clear', () => {
-        this.broadcast(SseEvent.TranscriptClear, { sessionId });
+        this.broadcast(SseEvent.TranscriptClear, { sessionId, transcriptId: w.transcriptId });
       });
 
       watcher.on('transcript:ask_user_question', (questions: AskUserQuestionData[]) => {
@@ -1001,7 +1003,7 @@ export class WebServer extends EventEmitter {
     // Start or update the watcher with the transcript path
     watcher.updatePath(transcriptPath);
     if (wasUnwatched) {
-      this.broadcast(SseEvent.TranscriptReady, { sessionId });
+      this.broadcast(SseEvent.TranscriptReady, { sessionId, transcriptId: watcher.transcriptId });
     }
   }
 
@@ -1017,50 +1019,105 @@ export class WebServer extends EventEmitter {
    *    AskUserQuestion detection never runs on codex or pi records;
    *  - never touches claudeResumeId or harnessSessionId.
    *
+   * For an `activity: 'hook'` harness (pi) the path accepted from the extension's reports
+   * (session.harnessTranscriptPath) wins over the adapter's locate(). locate() is only the
+   * fallback while no report has named a file, so pi sessions started without the extension
+   * (before this deploy, until restarted) keep their transcript view.
+   *
    * @returns the watched transcript path, or null when the harness does not qualify or its
    *   file has not been written yet (neither harness writes one before the first turn).
    */
   private startHarnessTranscriptWatcher(sessionId: string): string | null {
     const session = this.sessions.get(sessionId);
     if (!session?.workingDir) return null;
-    let caps;
+    let harness;
     try {
-      caps = getHarness(session.mode).caps;
+      harness = getHarness(session.mode);
     } catch {
       return null;
     }
-    if (!caps.transcript || caps.claudeTranscript) return null;
+    if (!harness.caps.transcript || harness.caps.claudeTranscript) return null;
     const adapter = getTranscriptAdapter(session.mode);
     if (!adapter) return null;
 
-    const transcriptPath = adapter.locate({
-      workingDir: session.workingDir,
-      sessionId,
-      harnessSessionId: session.harnessSessionId,
-    });
+    const transcriptPath =
+      (harness.activity === 'hook' ? session.harnessTranscriptPath : undefined) ??
+      adapter.locate({
+        workingDir: session.workingDir,
+        sessionId,
+        harnessSessionId: session.harnessSessionId,
+      });
     if (!transcriptPath) return null;
 
-    let watcher = this.transcriptWatchers.get(sessionId);
-    if (!watcher) {
-      watcher = new TranscriptWatcher({ claudeState: false, adapter });
-      watcher.on('transcript:block', (block: TranscriptBlock) => {
-        this.broadcast(SseEvent.TranscriptBlock, { sessionId, block });
-      });
-      watcher.on('transcript:clear', () => {
-        this.broadcast(SseEvent.TranscriptClear, { sessionId });
-      });
-      watcher.on('transcript:error', (error: Error) => {
-        console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
-      });
-      this.transcriptWatchers.set(sessionId, watcher);
-    }
-
+    const watcher = this.ensureHarnessTranscriptWatcher(sessionId, adapter);
     const wasUnwatched = !watcher.transcriptPath;
     watcher.updatePath(transcriptPath);
     if (wasUnwatched) {
-      this.broadcast(SseEvent.TranscriptReady, { sessionId });
+      this.broadcast(SseEvent.TranscriptReady, { sessionId, transcriptId: watcher.transcriptId });
     }
     return transcriptPath;
+  }
+
+  /** The session's view-only (claudeState: false) watcher, created and wired on first use. */
+  private ensureHarnessTranscriptWatcher(
+    sessionId: string,
+    adapter: NonNullable<ReturnType<typeof getTranscriptAdapter>>
+  ): TranscriptWatcher {
+    const existing = this.transcriptWatchers.get(sessionId);
+    if (existing) return existing;
+    const watcher = new TranscriptWatcher({ claudeState: false, adapter });
+    watcher.on('transcript:block', (block: TranscriptBlock) => {
+      this.broadcast(SseEvent.TranscriptBlock, { sessionId, block, transcriptId: watcher.transcriptId });
+    });
+    watcher.on('transcript:clear', () => {
+      this.broadcast(SseEvent.TranscriptClear, { sessionId, transcriptId: watcher.transcriptId });
+    });
+    watcher.on('transcript:error', (error: Error) => {
+      console.error(`[Transcript] Error for session ${sessionId}:`, error.message);
+    });
+    this.transcriptWatchers.set(sessionId, watcher);
+    return watcher;
+  }
+
+  /**
+   * The session file named by an accepted harness_activity report ('hook' harnesses: pi).
+   * Canonicalised and contained under pi's sessions root (isUnderPiSessionsRoot); anything else
+   * is ignored and the next report retries. A new path is persisted as harnessTranscriptPath,
+   * and the watcher follows it from offset 0 — pi reports the path before it creates the file,
+   * so the first turn streams live, and after /new or /resume the whole new file is replayed.
+   */
+  private acceptHarnessTranscriptPath(sessionId: string, sessionFile: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    let activity;
+    try {
+      activity = getHarness(session.mode).activity;
+    } catch {
+      return;
+    }
+    if (activity !== 'hook') return;
+    const adapter = getTranscriptAdapter(session.mode);
+    if (!adapter) return;
+    const path = isUnderPiSessionsRoot(sessionFile);
+    if (!path) return;
+
+    if (session.harnessTranscriptPath !== path) {
+      session.harnessTranscriptPath = path;
+      this.persistSessionState(session);
+    }
+    const watcher = this.ensureHarnessTranscriptWatcher(sessionId, adapter);
+    if (watcher.transcriptPath === path) return;
+    const wasUnwatched = !watcher.transcriptPath;
+    watcher.updatePath(path, { fromOffset: 0 });
+    if (wasUnwatched) {
+      this.broadcast(SseEvent.TranscriptReady, { sessionId, transcriptId: watcher.transcriptId });
+    }
+  }
+
+  /** Identity of the file the session's transcript watcher is streaming (X-Transcript-Id). */
+  private getTranscriptId(sessionId: string): string | undefined {
+    const watcher = this.transcriptWatchers.get(sessionId);
+    return watcher?.transcriptPath ? watcher.transcriptId : undefined;
   }
 
   /**
@@ -3633,6 +3690,9 @@ export class WebServer extends EventEmitter {
     // that process keeps reporting with it.
     if (savedState.activityToken !== undefined) {
       session.activityToken = savedState.activityToken;
+    }
+    if (savedState.harnessTranscriptPath !== undefined) {
+      session.harnessTranscriptPath = savedState.harnessTranscriptPath;
     }
     if (savedState.safeMode) {
       session.setSafeMode(true);

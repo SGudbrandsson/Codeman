@@ -38,6 +38,9 @@ interface ServerInternals {
   broadcast(event: string, data: unknown): void;
   startTranscriptWatcher(id: string, path: string): void;
   startHarnessTranscriptWatcher(id: string): string | null;
+  acceptHarnessTranscriptPath(id: string, sessionFile: string): void;
+  getTranscriptId(id: string): string | undefined;
+  _restoreSessionConfig(session: Session, state: unknown): void;
   stopTranscriptWatcher(id: string): void;
   getTranscriptPath(id: string): string | null;
   getTranscriptState(id: string): unknown;
@@ -55,7 +58,8 @@ let SessionCtor: typeof import('../src/session.js').Session;
 let piSessionDirName: (cwd: string) => string;
 let clearCodexLocateCache: () => void;
 const created: Session[] = [];
-let events: Array<{ event: string; sessionId?: string }> = [];
+let events: Array<{ event: string; sessionId?: string; data?: Record<string, unknown> }> = [];
+let realStartTranscriptWatcher: (id: string, path: string) => void;
 let claudeWatcherCalls: string[] = [];
 
 const codexId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -111,8 +115,10 @@ beforeAll(async () => {
   if (!srv.store.filePath.startsWith(tmpHome + '/')) throw new Error(`state store not isolated: ${srv.store.filePath}`);
 
   srv.broadcast = (event: string, data: unknown) => {
-    events.push({ event, sessionId: (data as { sessionId?: string } | undefined)?.sessionId });
+    const d = data as Record<string, unknown> | undefined;
+    events.push({ event, sessionId: d?.sessionId as string | undefined, data: d });
   };
+  realStartTranscriptWatcher = (Object.getPrototypeOf(srv) as ServerInternals).startTranscriptWatcher.bind(srv);
   // The Claude watcher must never be reached from these paths; record instead of scanning ~/.claude.
   srv.startTranscriptWatcher = (id: string) => {
     claudeWatcherCalls.push(id);
@@ -335,4 +341,136 @@ describe('archive-time transcriptPath fallback', () => {
       expect(archived?.transcriptPath).toBe(file);
     });
   }
+});
+
+describe('pi authoritative transcript path (acceptHarnessTranscriptPath)', () => {
+  const waitFor = async (cond: () => boolean, ms = 5000) => {
+    for (let t = 0; t < ms && !cond(); t += 25) await new Promise((r) => setTimeout(r, 25));
+  };
+  const piDir = () => join(process.env.PI_CODING_AGENT_DIR!, 'sessions', piSessionDirName(workDir));
+  const blocksFor = (id: string) => events.filter((e) => e.event === 'transcript:block' && e.sessionId === id);
+
+  it('a first sessionFile for a missing file starts a polling watcher, persists the path, then streams from 0', async () => {
+    const id = '00000000-0000-4000-8000-000000000061';
+    const s = await addSession(id, 'pi');
+    mkdirSync(piDir(), { recursive: true });
+    const file = join(realpathSync(piDir()), `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+
+    srv.acceptHarnessTranscriptPath(id, file);
+
+    const watcher = srv.transcriptWatchers.get(id)!;
+    expect(watcher).toBeDefined();
+    expect(watcher.claudeState).toBe(false);
+    expect(watcher.transcriptPath).toBe(file);
+    expect(s.harnessTranscriptPath).toBe(file);
+    expect(s.toState().harnessTranscriptPath).toBe(file);
+    expect(readyCount(id)).toBe(1);
+    expect(events.find((e) => e.event === 'transcript:ready' && e.sessionId === id)?.data?.transcriptId).toBe(
+      watcher.transcriptId
+    );
+    expect(srv.getTranscriptId(id)).toBe(watcher.transcriptId);
+
+    writeFileSync(file, readFileSync(join(FIXTURES, 'pi.jsonl')));
+    await waitFor(() => blocksFor(id).length >= 6);
+    expect(blocksFor(id)).toHaveLength(6);
+    for (const e of blocksFor(id)) expect(e.data?.transcriptId).toBe(watcher.transcriptId);
+
+    // The same path again changes nothing.
+    events = [];
+    srv.acceptHarnessTranscriptPath(id, file);
+    expect(srv.transcriptWatchers.get(id)).toBe(watcher);
+    expect(events).toEqual([]);
+  });
+
+  it('a changed sessionFile (pi /new) retargets from offset 0 with a new transcriptId', async () => {
+    const id = '00000000-0000-4000-8000-000000000062';
+    const s = await addSession(id, 'pi');
+    mkdirSync(piDir(), { recursive: true });
+    const first = join(realpathSync(piDir()), `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+    const second = join(realpathSync(piDir()), `2026-01-02T00-00-00-000Z_other.jsonl`);
+    writeFileSync(first, readFileSync(join(FIXTURES, 'pi.jsonl')));
+    writeFileSync(second, readFileSync(join(FIXTURES, 'pi.jsonl')));
+
+    srv.acceptHarnessTranscriptPath(id, first);
+    await waitFor(() => blocksFor(id).length >= 6);
+    const watcher = srv.transcriptWatchers.get(id)!;
+    const firstId = watcher.transcriptId;
+    events = [];
+
+    srv.acceptHarnessTranscriptPath(id, second);
+
+    expect(srv.transcriptWatchers.get(id)).toBe(watcher);
+    expect(watcher.transcriptPath).toBe(second);
+    expect(watcher.transcriptId).not.toBe(firstId);
+    expect(s.harnessTranscriptPath).toBe(second);
+    const clears = events.filter((e) => e.event === 'transcript:clear' && e.sessionId === id);
+    expect(clears).toHaveLength(1);
+    expect(clears[0].data?.transcriptId).toBe(watcher.transcriptId);
+    expect(readyCount(id)).toBe(0);
+    // The file already existed: fromOffset 0 replays all of it.
+    await waitFor(() => blocksFor(id).length >= 6);
+    expect(blocksFor(id)).toHaveLength(6);
+    for (const e of blocksFor(id)) expect(e.data?.transcriptId).toBe(watcher.transcriptId);
+  });
+
+  it('ignores a path outside the pi sessions root, a missing parent, and non-hook harnesses', async () => {
+    const id = '00000000-0000-4000-8000-000000000063';
+    const s = await addSession(id, 'pi');
+    srv.acceptHarnessTranscriptPath(id, join(workDir, 'evil.jsonl'));
+    srv.acceptHarnessTranscriptPath(id, join(piDir(), '..', '..', '..', 'escape.jsonl'));
+    srv.acceptHarnessTranscriptPath(id, join(process.env.PI_CODING_AGENT_DIR!, 'sessions', '--missing--', 'a.jsonl'));
+    expect(srv.transcriptWatchers.has(id)).toBe(false);
+    expect(s.harnessTranscriptPath).toBeUndefined();
+
+    const codex = await addSession('sess-codex-accept', 'codex');
+    mkdirSync(piDir(), { recursive: true });
+    srv.acceptHarnessTranscriptPath(codex.id, join(piDir(), 'x.jsonl'));
+    expect(srv.transcriptWatchers.has(codex.id)).toBe(false);
+    expect(codex.harnessTranscriptPath).toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it('startHarnessTranscriptWatcher prefers the accepted path over locate() for pi', async () => {
+    const id = '00000000-0000-4000-8000-000000000064';
+    const s = await addSession(id, 'pi');
+    writePiSession(id); // what locate() would find
+    const accepted = join(realpathSync(piDir()), 'accepted.jsonl');
+    s.harnessTranscriptPath = accepted;
+    expect(srv.startHarnessTranscriptWatcher(id)).toBe(accepted);
+    expect(srv.transcriptWatchers.get(id)?.transcriptPath).toBe(accepted);
+  });
+
+  it('getTranscriptId is undefined without a watcher', async () => {
+    const s = await addSession('sess-no-watcher-id', 'pi');
+    expect(srv.getTranscriptId(s.id)).toBeUndefined();
+  });
+
+  it('the Claude watcher includes transcriptId in block, clear and ready broadcasts', async () => {
+    const s = await addSession('sess-claude-tid', 'claude');
+    const file = join(tmpRoot, 'claude-tid.jsonl');
+    writeFileSync(file, '');
+    realStartTranscriptWatcher(s.id, file);
+    const watcher = srv.transcriptWatchers.get(s.id)!;
+    const ready = events.filter((e) => e.event === 'transcript:ready' && e.sessionId === s.id);
+    expect(ready).toHaveLength(1);
+    expect(ready[0].data?.transcriptId).toBe(watcher.transcriptId);
+    await new Promise((r) => setTimeout(r, 100));
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'hi' } }) +
+        '\n'
+    );
+    await waitFor(() => blocksFor(s.id).length >= 1);
+    expect(blocksFor(s.id)[0].data?.transcriptId).toBe(watcher.transcriptId);
+    const clears = events.filter((e) => e.event === 'transcript:clear' && e.sessionId === s.id);
+    for (const c of clears) expect(c.data?.transcriptId).toBe(watcher.transcriptId);
+    srv.stopTranscriptWatcher(s.id);
+  });
+
+  it('_restoreSessionConfig restores harnessTranscriptPath', async () => {
+    const s = await addSession('sess-restore-htp', 'pi');
+    const saved = { ...s.toState(), harnessTranscriptPath: '/restored/path.jsonl' };
+    srv._restoreSessionConfig(s, saved);
+    expect(s.harnessTranscriptPath).toBe('/restored/path.jsonl');
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TranscriptWatcher, TranscriptState } from '../src/transcript-watcher.js';
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, appendFileSync } from 'fs';
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, appendFileSync, mkdtempSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -88,11 +88,15 @@ describe('TranscriptWatcher', () => {
       watcher.start(testFile);
 
       // Add user entry
-      const userEntry = { type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: 'test' } };
+      const userEntry = {
+        type: 'user',
+        timestamp: new Date().toISOString(),
+        message: { role: 'user', content: 'test' },
+      };
       appendFileSync(testFile, JSON.stringify(userEntry) + '\n');
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const state = watcher.getState();
       expect(state.entryCount).toBeGreaterThanOrEqual(1);
@@ -110,7 +114,7 @@ describe('TranscriptWatcher', () => {
       appendFileSync(testFile, JSON.stringify(resultEntry) + '\n');
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(completeHandler).toHaveBeenCalled();
       const state = watcher.getState();
@@ -130,15 +134,13 @@ describe('TranscriptWatcher', () => {
         timestamp: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', name: 'Read', input: { file_path: '/test.txt' } }
-          ]
-        }
+          content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/test.txt' } }],
+        },
       };
       appendFileSync(testFile, JSON.stringify(assistantEntry) + '\n');
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(toolStartHandler).toHaveBeenCalledWith('Read');
       const state = watcher.getState();
@@ -159,15 +161,13 @@ describe('TranscriptWatcher', () => {
         timestamp: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', name: 'AskUserQuestion', input: { question: 'test?' } }
-          ]
-        }
+          content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { question: 'test?' } }],
+        },
       };
       appendFileSync(testFile, JSON.stringify(assistantEntry) + '\n');
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(planModeHandler).toHaveBeenCalled();
       const state = watcher.getState();
@@ -182,12 +182,12 @@ describe('TranscriptWatcher', () => {
       const resultEntry = {
         type: 'result',
         timestamp: new Date().toISOString(),
-        error: { type: 'api_error', message: 'Rate limited' }
+        error: { type: 'api_error', message: 'Rate limited' },
       };
       appendFileSync(testFile, JSON.stringify(resultEntry) + '\n');
 
       // Wait for processing
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       const state = watcher.getState();
       expect(state.hasError).toBe(true);
@@ -210,5 +210,125 @@ describe('TranscriptWatcher', () => {
       const state = watcher.getState();
       expect(state.entryCount).toBe(0);
     });
+  });
+});
+
+describe('TranscriptWatcher — fromOffset, transcriptId and replacement', () => {
+  let watcher: TranscriptWatcher;
+  let dir: string;
+  let file: string;
+
+  const userLine = (text: string) =>
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: text } }) +
+    '\n';
+  const texts = (blocks: Array<{ text?: string }>) => blocks.map((b) => b.text);
+  const waitFor = async (cond: () => boolean, ms = 4000) => {
+    for (let t = 0; t < ms && !cond(); t += 25) await new Promise((r) => setTimeout(r, 25));
+  };
+
+  beforeEach(() => {
+    watcher = new TranscriptWatcher();
+    dir = mkdtempSync(join(tmpdir(), 'tw-replace-'));
+    file = join(dir, 't.jsonl');
+  });
+
+  afterEach(() => {
+    watcher.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('start(existing, { fromOffset: 0 }) emits the existing blocks', async () => {
+    writeFileSync(file, userLine('one') + userLine('two'));
+    const blocks: Array<{ text?: string }> = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.start(file, { fromOffset: 0 });
+    await waitFor(() => blocks.length >= 2);
+    expect(texts(blocks)).toEqual(['one', 'two']);
+  });
+
+  it('start(existing) still starts at EOF by default', async () => {
+    writeFileSync(file, userLine('old'));
+    const blocks: Array<{ text?: string }> = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.start(file);
+    await new Promise((r) => setTimeout(r, 150));
+    appendFileSync(file, userLine('new'));
+    await waitFor(() => blocks.length >= 1);
+    expect(texts(blocks)).toEqual(['new']);
+  });
+
+  it('a new transcriptId on start and on updatePath to a different path; none for the same path', () => {
+    writeFileSync(file, '');
+    const other = join(dir, 'other.jsonl');
+    writeFileSync(other, '');
+    watcher.start(file);
+    const first = watcher.transcriptId;
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    watcher.updatePath(file);
+    expect(watcher.transcriptId).toBe(first);
+    watcher.updatePath(other);
+    expect(watcher.transcriptId).not.toBe(first);
+  });
+
+  it('updatePath emits transcript:clear carrying the NEW transcriptId', () => {
+    writeFileSync(file, '');
+    const other = join(dir, 'other.jsonl');
+    watcher.start(file);
+    const ids: string[] = [];
+    watcher.on('transcript:clear', () => ids.push(watcher.transcriptId));
+    watcher.updatePath(other, { fromOffset: 0 });
+    expect(ids).toEqual([watcher.transcriptId]);
+    expect(watcher.transcriptPath).toBe(other);
+  });
+
+  it('equal-size replacement (rename over) emits transcript:clear with a new id and re-reads from 0', async () => {
+    writeFileSync(file, userLine('AAAA'));
+    const blocks: Array<{ text?: string }> = [];
+    const clears: string[] = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.on('transcript:clear', () => clears.push(watcher.transcriptId));
+    watcher.start(file, { fromOffset: 0 });
+    await waitFor(() => blocks.length >= 1);
+    const before = watcher.transcriptId;
+
+    const tmp = join(dir, 'replacement.tmp');
+    writeFileSync(tmp, userLine('BBBB'));
+    renameSync(tmp, file);
+
+    await waitFor(() => blocks.length >= 2);
+    expect(texts(blocks)).toEqual(['AAAA', 'BBBB']);
+    expect(clears).toHaveLength(1);
+    expect(clears[0]).not.toBe(before);
+    expect(watcher.transcriptId).toBe(clears[0]);
+
+    // The watcher follows the replacement file: later appends still arrive.
+    appendFileSync(file, userLine('CCCC'));
+    await waitFor(() => blocks.length >= 3);
+    expect(texts(blocks)).toEqual(['AAAA', 'BBBB', 'CCCC']);
+  });
+
+  it('truncation emits transcript:clear with a new id', async () => {
+    writeFileSync(file, userLine('long line one') + userLine('long line two'));
+    const clears: string[] = [];
+    const blocks: Array<{ text?: string }> = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.on('transcript:clear', () => clears.push(watcher.transcriptId));
+    watcher.start(file, { fromOffset: 0 });
+    await waitFor(() => blocks.length >= 2);
+    const before = watcher.transcriptId;
+    writeFileSync(file, userLine('x'));
+    await waitFor(() => blocks.length >= 3);
+    expect(clears).toHaveLength(1);
+    expect(clears[0]).not.toBe(before);
+    expect(texts(blocks).at(-1)).toBe('x');
+  });
+
+  it('a missing file is picked up from offset 0 once created', async () => {
+    const blocks: Array<{ text?: string }> = [];
+    watcher.on('transcript:block', (b) => blocks.push(b));
+    watcher.start(file, { fromOffset: 0 });
+    writeFileSync(file, userLine('first turn'));
+    await waitFor(() => blocks.length >= 1);
+    expect(texts(blocks)).toEqual(['first turn']);
   });
 });

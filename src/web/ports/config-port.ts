@@ -29,6 +29,8 @@ export interface ConfigPort {
    * The authoritative transcript path for that session.
    */
   acceptHarnessTranscriptPath(sessionId: string, sessionFile: string): void;
+  /** Identity of the file the session's transcript watcher is streaming, or undefined with no watcher. */
+  getTranscriptId(sessionId: string): string | undefined;
   /** Resolves the on-disk transcript for a conversation, or null when it no longer exists. */
   resolveSessionTranscript(workingDir: string, claudeResumeId: string | undefined): string | null;
   stopTranscriptWatcher(sessionId: string): void;

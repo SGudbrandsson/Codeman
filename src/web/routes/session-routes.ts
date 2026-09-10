@@ -403,9 +403,20 @@ ${contextLines.join('\n')}`;
     // honoured as-is; active sessions use getTranscriptPath(). An archived session with no
     // persisted path (e.g. a codex/pi session whose transcript was never viewed) is located
     // from its own persisted workingDir and harness id.
+    // A live 'hook' harness (pi) reads the path accepted from its extension's reports; with none
+    // accepted yet (a session started without the extension) it falls back to getTranscriptPath().
     let transcript: TranscriptBlock[] = [];
     const adapter = getTranscriptAdapter(sessionState.mode);
-    let transcriptPath = sessionState.transcriptPath ?? ctx.getTranscriptPath(id);
+    let isHookHarness = false;
+    try {
+      isHookHarness = sessionState.mode !== undefined && getHarness(sessionState.mode).activity === 'hook';
+    } catch {
+      isHookHarness = false;
+    }
+    let transcriptPath =
+      sessionState.transcriptPath ??
+      (isHookHarness ? sessionState.harnessTranscriptPath : undefined) ??
+      ctx.getTranscriptPath(id);
     if (!transcriptPath && adapter && sessionState.workingDir && !ctx.sessions.has(id)) {
       transcriptPath = adapter.locate({
         workingDir: sessionState.workingDir,
@@ -1523,6 +1534,10 @@ ${contextLines.join('\n')}`;
       if (!transcriptPath || !adapter) {
         return reply.send([]);
       }
+      // Identity of the file being served, captured BEFORE the read: if the file is replaced
+      // during the read, the client still holds the old id and reloads on transcript:clear.
+      let transcriptId = ctx.getTranscriptId(id);
+      if (transcriptId) reply.header('X-Transcript-Id', transcriptId);
       try {
         const tailParam = parseInt(req.query.tail as string, 10);
         let blocks: TranscriptBlock[];
@@ -1543,6 +1558,11 @@ ${contextLines.join('\n')}`;
           // Ensure watcher is running so new blocks are streamed live via SSE.
           // startTranscriptWatcher is idempotent — safe to call even if already watching.
           ctx.startTranscriptWatcher(id, transcriptPath);
+          // A Claude watcher started just now has an id only after the call above.
+          if (!transcriptId) {
+            transcriptId = ctx.getTranscriptId(id);
+            if (transcriptId) reply.header('X-Transcript-Id', transcriptId);
+          }
         }
         reply.header('X-Total-Blocks', String(totalBlocks));
         return reply.send(blocks);
