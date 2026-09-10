@@ -128,6 +128,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     }),
     startTranscriptWatcher: vi.fn(),
     startHarnessTranscriptWatcher: vi.fn((_id: string): string | null => null),
+    acceptHarnessTranscriptPath: vi.fn((_id: string, _sessionFile: string): void => {}),
     // Default: the transcript still exists. Tests that exercise the "transcript pruned"
     // path override this with a null-returning stub.
     resolveSessionTranscript: vi.fn(() => '/home/user/.claude/projects/-home-user-proj/conv-abc-123.jsonl'),

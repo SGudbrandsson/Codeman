@@ -84,6 +84,12 @@ import { SessionTaskCache } from './session-task-cache.js';
 import { createActivityMonitor, type ActivityMonitor } from './activity-monitor.js';
 import { normalizeIdleReason, type IdleInfo } from './types/activity.js';
 import { newActivityToken } from './activity-token.js';
+import {
+  HookActivityMonitor,
+  acceptActivityReport,
+  type HarnessActivityReport,
+  type HookOwnerState,
+} from './hook-activity-monitor.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -444,7 +450,7 @@ export class Session extends EventEmitter {
 
   // In-memory ordering state for harness_activity reports (highest accepted seq and gen).
   // Reset whenever activityToken rotates: a new pi process restarts both counters at 1.
-  private _hookOwner: { lastSeq?: number; ownerGen?: number } = {};
+  private _hookOwner: HookOwnerState = {};
 
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
@@ -2752,6 +2758,22 @@ export class Session extends EventEmitter {
       if (reason === 'completed') this._maybeRefreshContextAfterCompact();
     });
     monitor.start().catch((err) => console.error(`[Session] activity monitor failed to start for ${this.id}:`, err));
+  }
+
+  /**
+   * Applies a validated harness_activity report (from the Codeman pi extension). Accepted only
+   * for a 'hook' harness, from the process holding the current activity token, and newer than
+   * the last accepted report (see acceptActivityReport). An accepted state goes to the attached
+   * HookActivityMonitor, which emits working/idle like any activity monitor; with none attached
+   * (not started, or detached) only the ordering state advances.
+   */
+  applyHookActivity(report: HarnessActivityReport): 'accepted' | 'rejected' {
+    if (getHarness(this.mode).activity !== 'hook') return 'rejected';
+    if (!acceptActivityReport(this._hookOwner, this.activityToken, report)) return 'rejected';
+    if (this._activityMonitor instanceof HookActivityMonitor) {
+      this._activityMonitor.report(report.state);
+    }
+    return 'accepted';
   }
 
   /**

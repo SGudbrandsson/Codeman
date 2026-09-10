@@ -13,6 +13,7 @@ import type { EventEmitter } from 'node:events';
 import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
 import { CodexTranscriptActivityMonitor } from './codex-transcript-activity-monitor.js';
 import { codexTranscriptAdapter } from './harnesses/transcripts/codex.js';
+import { HookActivityMonitor } from './hook-activity-monitor.js';
 import type { ActivitySource } from './types/activity.js';
 
 export type ActivityState = 'working' | 'idle' | 'unknown';
@@ -40,7 +41,8 @@ export type ActivityMonitorFactory = (host: ActivityMonitorHost) => ActivityMoni
  */
 export const activityMonitorFactories: Record<ActivitySource, ActivityMonitorFactory | null> = {
   claudeTranscript: (host) => new ClaudeActivityMonitor(host.id, host.workingDir),
-  hook: null,
+  // pi: reports arrive through Session.applyHookActivity(), which forwards to this monitor.
+  hook: () => new HookActivityMonitor(),
   // codex is the only 'transcript' harness. ActivityMonitorHost exposes `id`, not `sessionId`.
   transcript: (host) =>
     new CodexTranscriptActivityMonitor(codexTranscriptAdapter, {

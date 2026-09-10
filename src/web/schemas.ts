@@ -252,9 +252,22 @@ export const HookEventSchema = z.object({
     'stop',
     'teammate_idle',
     'task_completed',
+    'harness_activity',
   ]),
   sessionId: z.string().min(1),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+/**
+ * `data` of a harness_activity event, posted by the Codeman pi extension
+ * (src/harnesses/pi/codeman-activity-extension.ts). See the activity-detection spec, §4.
+ */
+export const HarnessActivityDataSchema = z.object({
+  state: z.enum(['working', 'idle']),
+  token: z.string().regex(/^[0-9a-f]{32}$/),
+  gen: z.number().int().positive(),
+  seq: z.number().int().positive(),
+  sessionFile: z.string().max(4096).optional(),
 });
 
 // ========== Configuration ==========

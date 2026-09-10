@@ -171,6 +171,12 @@ export class MockSession extends EventEmitter {
   /** CLI mode */
   mode: string = 'claude';
 
+  /** Per-process activity token ('hook' harnesses) */
+  activityToken: string | undefined = undefined;
+
+  /** Stub for Session.applyHookActivity (harness_activity reports) */
+  applyHookActivity = vi.fn((_report: unknown): 'accepted' | 'rejected' => 'accepted');
+
   /** Text output buffer (stripped of ANSI) */
   textOutput: string = '';
 

@@ -632,6 +632,8 @@ export class WebServer extends EventEmitter {
       getLightSessionsState: this.getLightSessionsState.bind(this),
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       startHarnessTranscriptWatcher: this.startHarnessTranscriptWatcher.bind(this),
+      // No-op until pi transcript retargeting lands (plan Task 7).
+      acceptHarnessTranscriptPath: () => {},
       resolveSessionTranscript: (workingDir: string, claudeResumeId: string | undefined) =>
         resolveTranscriptPath(workingDir, undefined, claudeResumeId),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),

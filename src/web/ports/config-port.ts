@@ -24,6 +24,11 @@ export interface ConfigPort {
    * Resolves the path itself via the harness adapter; returns it, or null if none yet.
    */
   startHarnessTranscriptWatcher(sessionId: string): string | null;
+  /**
+   * The session file named by an accepted harness_activity report ('hook' harnesses: pi).
+   * The authoritative transcript path for that session.
+   */
+  acceptHarnessTranscriptPath(sessionId: string, sessionFile: string): void;
   /** Resolves the on-disk transcript for a conversation, or null when it no longer exists. */
   resolveSessionTranscript(workingDir: string, claudeResumeId: string | undefined): string | null;
   stopTranscriptWatcher(sessionId: string): void;

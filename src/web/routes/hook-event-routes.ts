@@ -7,7 +7,8 @@
 
 import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
-import { HookEventSchema, isValidWorkingDir } from '../schemas.js';
+import { HarnessActivityDataSchema, HookEventSchema, isValidWorkingDir } from '../schemas.js';
+import { getHarness } from '../../harnesses/registry.js';
 import { sanitizeHookData } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { capture, consolidate, CONSOLIDATION_THRESHOLD } from '../../vault/index.js';
@@ -16,7 +17,7 @@ export function registerHookEventRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & RespawnPort & ConfigPort & InfraPort
 ): void {
-  app.post('/api/hook-event', async (req) => {
+  app.post('/api/hook-event', async (req, reply) => {
     const result = HookEventSchema.safeParse(req.body);
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
@@ -28,6 +29,25 @@ export function registerHookEventRoutes(
 
     // A parked session must not have in-flight hook events drive its respawn controller
     if (ctx.sessions.get(sessionId)?.paused) {
+      return { success: true };
+    }
+
+    // Activity reports from the Codeman pi extension. Handled before everything below, so they
+    // never start a watcher via transcript_path, broadcast hook:*, notify, record a hook event,
+    // capture to the vault or reach the orchestrator. The session's own working/idle events
+    // still run the usual session listener.
+    if (event === 'harness_activity') {
+      const session = ctx.sessions.get(sessionId);
+      if (!session || getHarness(session.mode).activity !== 'hook') return { success: true };
+      const parsed = HarnessActivityDataSchema.safeParse(data);
+      if (!parsed.success) {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid harness_activity payload');
+      }
+      const outcome = session.applyHookActivity(parsed.data);
+      if (outcome === 'accepted' && parsed.data.sessionFile) {
+        ctx.acceptHarnessTranscriptPath(sessionId, parsed.data.sessionFile);
+      }
       return { success: true };
     }
 
