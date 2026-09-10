@@ -18,18 +18,49 @@ both:
 
 Codex and pi need (1) but must not get (2), so both were set `false` and lost the view.
 
-Three consumers read it: `src/web/server.ts:268`, `src/web/public/app.js:10729`, and
-`src/web/public/keyboard-accessory.js:390` (which hides the toggle button entirely).
+### The consumer inventory (corrected)
+
+There are **six** `caps.claudeTranscript` consumers, and **five of them must not change**:
+
+| site | verdict |
+|---|---|
+| `server.ts:268` (`harnessAllowsClaudeTranscript`) | **stays Claude-only** — protects claudeResumeId + Claude state |
+| `session.ts:1280` | **stays** — excludes Claude from preassigning `harnessSessionId` |
+| `session.ts:1310`, `:1353`, `:1488` | **stays** — injects Claude MCP args |
+| `app.js:13029` | **stays** — hides the Respawn and Ralph tabs (`index.html:718,720`) |
+
+**The trap:** a blanket rename of `claudeTranscript` → `transcript` hands codex and pi the
+Respawn and Ralph tabs back, undoing exactly what the harness registry fixed. Only the two
+view gates below change.
+
+The two actual view gates do **not** read the capability at all — they hard-code the mode:
+
+- `app.js:10729` — `const _tvIsClaude = !_tvSession?.mode || _tvSession.mode === 'claude'`
+- `keyboard-accessory.js:390` — `const isClaude = !mode || mode === 'claude'`
+
+Both switch to a `caps.transcript` check.
+
+**Metadata-load race:** `harnessMeta()` returns `caps: {}` until `/api/harnesses` resolves
+(`app.js:11777-11808`). A naive `meta.caps.transcript` check therefore hides the view for
+*Claude* during startup. The gate must treat unknown metadata as "claude-like": fall back to
+the existing `mode === 'claude'` test when `caps` is empty.
 
 ## Why this is an adapter problem, not a rearchitecture
 
 The view does not consume Claude JSONL. It consumes `TranscriptBlock[]` — a harness-neutral
 union of `text` / `tool_use` / `tool_result` / `result` (`src/types/transcript-blocks.ts`).
-Both feed paths funnel through one Claude-shaped parser:
+There are **three** parser paths, not two:
 
 - `GET /api/sessions/:id/transcript` (`session-routes.ts:1493`) → `parseTranscriptJSONL`
+- `GET /api/sessions/:id/state` (`session-routes.ts:400-413`) → `parseTranscriptJSONL`.
+  This one also honours an **archived** session's persisted `sessionState.transcriptPath`,
+  so the adapter must accept a caller-supplied path as well as locating one.
 - `TranscriptWatcher` tailing the file (`transcript-watcher.ts:392`) → `parseTranscriptEntry`
-  → `transcript:block` SSE → `app.js` renderer (`app.js:4738-4800`)
+  → `transcript:block` SSE (`server.ts:957`) → `app.js` renderer (`app.js:4738-4800`)
+
+SSE is not a fourth parser — it is the watcher's output. Subagent transcripts
+(`system-routes.ts:679`, `subagent-watcher.ts:845`) are a separate Claude-specific system and
+are explicitly **out of scope**.
 
 Give each harness a **locator** (where is the file) and an **adapter** (raw line →
 `TranscriptBlock[]`) and the whole view works unchanged.
@@ -137,28 +168,60 @@ export interface ThinkingBlock {
 }
 ```
 
-Added to the `TranscriptBlock` union, rendered in `app.js` beside the existing branches as a
-dimmed, collapsed-by-default section. Only pi emits it today; Claude and codex never will, so
-this is additive and cannot regress Claude rendering.
+Added to the `TranscriptBlock` union and **exported from the `src/types/index.ts` barrel**
+(`:68`) alongside the other block types, or consumers of the public barrel cannot import it.
+
+There is no exhaustive `TranscriptBlock` switch in TypeScript, so adding the member compiles
+silently — the risk is the opposite one: without a new branch at `app.js:4735-4815` a
+thinking block renders as **nothing at all**. The renderer branch is mandatory, not optional.
+
+Rendered as a dimmed, collapsed-by-default section. Only pi emits it today; Claude and codex
+never will, so this is additive and cannot regress Claude rendering.
 
 ### 4. Separate the block feed from the Claude state machine
 
 **This is the load-bearing decision.** `TranscriptWatcher` (490 lines) does far more than
-emit blocks: completion detection, plan-mode detection, AskUserQuestion resolution, and it
-feeds idle detection. Those are Claude semantics driven by Claude's `type: user|assistant|
-system|result` envelope.
+emit blocks, and all of it is driven by Claude's `type: user|assistant|system|result`
+envelope. Running it against codex or pi would recreate exactly the bug class the harness
+registry just removed.
 
-Running them against codex or pi would recreate exactly the bug class the harness registry
-just removed — Claude-only machinery firing on a harness that does not speak it.
+The watcher takes a `claudeState: boolean` construction flag. Everything below runs **only**
+when it is true:
 
-So `TranscriptWatcher` gains a mode:
+| lines | behaviour |
+|---|---|
+| `transcript-watcher.ts:360-386` | type dispatch + state mutation for `assistant`/`result`/`user`, incl. AskUserQuestion resolution |
+| `:391-395` | the Claude parser invocation itself |
+| `:398-436` | `handleAssistantEntry` — tool start/end, errors, AskUserQuestion |
+| `:438-450` | `handleResultEntry` — completion |
+| `:452-485` | `checkPlanMode` |
 
-- **always:** tail the file, run the harness's `parseLine`, emit `transcript:block`.
-- **only when `caps.claudeTranscript`:** `handleAssistantEntry` / `handleResultEntry`,
-  `checkPlanMode`, AskUserQuestion tracking, completion detection.
+**Structural change the first draft missed:** the watcher parses each line into a
+Claude-typed `TranscriptEntry` *before* processing (`:314-343`). An adapter API of
+`parseLine(raw)` therefore requires retaining and passing the **raw line** through, not
+merely swapping the call at `:392`. The read loop must hand the adapter the raw string and
+only build a `TranscriptEntry` on the Claude path.
 
-Concretely: the Claude state-machine call sites in `handleEntry` become conditional on the
-harness, while the `parseLine` → `emit('transcript:block')` tail stays unconditional.
+**What depends on the gated events, verified:** only respawn consumes `transcript:complete`
+and `transcript:plan_mode` (`server.ts:927-941` → `respawn-controller.ts:2513-2540`). Idle
+detection and compact-continue come from `Session`'s activity monitor and `session:idle`
+(`session.ts:1363-1384`, `server.ts:1839-1851`), **not** from watcher events. Ralph is gated
+separately (`server.ts:1650`). The tool SSE events have no consumer beyond their broadcast
+declaration. So gating is safe, and codex/pi (both `respawn: false`) lose nothing.
+
+### 4a. Stable block identity
+
+The client's periodic recovery appends only blocks with `b.timestamp > lastTs`
+(`app.js:3767-3781`), and its cache identity compares only the final timestamp
+(`app.js:3856-3872`).
+
+This is already fragile for Claude — `parseTranscriptEntry` stamps every block from one entry
+with that entry's single timestamp, so sibling blocks tie. Codex and pi amplify it: a single
+codex record can yield a tool_use and its output at the same millisecond.
+
+Each block therefore gains a monotonic `seq` (source line index, then block index within the
+line), and the client dedups on `seq` rather than `timestamp >`. Claude blocks get `seq` too,
+which fixes the pre-existing sibling-drop as a side effect.
 
 ### 5. Generalise path resolution
 
@@ -166,6 +229,22 @@ harness, while the `parseLine` → `emit('transcript:block')` tail stays uncondi
 endpoint (`session-routes.ts:1500-1508`) both become
 `getTranscriptAdapter(session.mode)?.locate(...)`. The Claude adapter keeps today's exact
 lookup order, including the session-id fallback, so Claude behaviour is unchanged.
+
+`getTranscriptPath` serves both `/state` (`:403`) and `/transcript` (`:1496`), and archive
+records the watcher's current path into session state (`server.ts:1368-1445`) — all three
+must go through the adapter.
+
+**`startTranscriptWatcher`'s Claude-specific callers must NOT be generalised.** These stay
+gated on `claudeTranscript`, because they are about Claude's hooks and resume id, not about
+viewing a transcript:
+
+- hook events (`hook-event-routes.ts:49-54`)
+- `conversationId` handling (`server.ts:2015-2033`)
+- restore/recovery (`server.ts:3750-3806`, `:3978-3983`)
+- resume (`session-routes.ts:847-855`)
+
+Only the `/transcript` endpoint's own call (`session-routes.ts:1513-1516`) starts a watcher
+for a codex/pi session, and it constructs it with `claudeState: false`.
 
 ### 6. Empty state
 
@@ -192,10 +271,29 @@ and the harness's `transcript` capability is true.
 2. **Adapter drift.** Both formats are versioned by tools we do not control (pi's records
    carry `"version":3`). An unrecognised record must yield `[]`, never throw — a malformed
    or future record shape must not break the whole view.
-3. **Large transcripts.** The endpoint reads the whole file; codex rollouts embed
-   base64 `encrypted_content` and pi embeds base64 images, so files are bigger than Claude's.
-   The existing `?tail=` parameter already covers this; the adapters must skip image and
-   encrypted payload data rather than passing it through to the client.
+3. **Large transcripts — `?tail=` does NOT bound the server.** The endpoint reads the entire
+   file and parses every line before slicing blocks (`session-routes.ts:1512-1524`,
+   `transcript-blocks.ts:123-133`); the watcher likewise parses every appended line
+   (`transcript-watcher.ts:324-343`). Codex rollouts embed base64 `encrypted_content` and pi
+   embeds base64 images, so these files are far larger than Claude's.
+
+   Two requirements: adapters must **drop** image data and encrypted payloads rather than
+   forwarding them (protects the client), and `?tail=` must read a bounded **byte** window
+   from the end of the file rather than the whole thing (protects the server's memory and
+   CPU). Dropping base64 alone leaves the full-file read, JSON.parse and allocation in place.
+
+4. **Path safety.** Locators build paths from persisted or discovered session fields. Each
+   locator must validate its harness id against the expected UUID shape, never interpolate a
+   raw value into a glob, resolve symlinks, and assert the final canonical path stays under
+   that harness's transcript root (`~/.claude/projects`, `$CODEX_HOME/sessions`,
+   `~/.pi/agent/sessions`). A path failing containment yields null, not a read.
+
+   Noted while reviewing, **pre-existing and out of scope**: `hook-event-routes.ts:49-54`
+   accepts any absolute `transcript_path` that passes `isValidWorkingDir`, which checks
+   syntax and `..` only, not root containment (`schemas.ts:17-39`). That is a local file-read
+   exposure on the unauthenticated localhost hook route today. This spec does not widen it —
+   the new adapters do containment checks the hook route does not — but it should be filed
+   separately.
 
 ## Testing
 
@@ -207,6 +305,13 @@ and the harness's `transcript` capability is true.
 - **Watcher isolation:** given codex and pi lines, `transcript:block` fires and the Claude
   state-machine handlers do not.
 - **Locator tests:** pi finds `*_<id>.jsonl` in the escaped-cwd dir; codex finds its rollout;
-  both return null when the file does not exist yet.
+  both return null when the file does not exist yet; both return null for a traversal or
+  out-of-root path.
+- **Consumer-inventory regression:** the five `claudeTranscript` sites that must not change
+  still read `claudeTranscript`, and codex/pi still get no Respawn or Ralph tab.
+- **Metadata-race test:** with `caps` empty (pre-`/api/harnesses`), a claude session still
+  shows the transcript toggle.
+- **Block identity test:** two blocks sharing a timestamp both survive the client's recovery
+  dedup.
 - **Live verification:** a real codex session and a real pi session in the deployed app, each
   showing a populated transcript view. This is the acceptance criterion.
