@@ -3627,6 +3627,11 @@ export class WebServer extends EventEmitter {
     if (savedState.harnessSessionId !== undefined) {
       session.harnessSessionId = savedState.harnessSessionId;
     }
+    // Must precede startInteractive(): attaching to a surviving pi pane keeps this token, and
+    // that process keeps reporting with it.
+    if (savedState.activityToken !== undefined) {
+      session.activityToken = savedState.activityToken;
+    }
     if (savedState.safeMode) {
       session.setSafeMode(true);
     }

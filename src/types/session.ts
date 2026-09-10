@@ -235,6 +235,12 @@ export interface SessionState {
    * session id. codex discovers it after start. opencode and shell leave it unset.
    */
   harnessSessionId?: string;
+  /**
+   * Per-process activity token of the running 'hook' harness process (pi), exported as
+   * CODEMAN_ACTIVITY_TOKEN. Persisted so a restored session keeps accepting reports from the
+   * process that survived a Codeman restart.
+   */
+  activityToken?: string;
   /** Codex-specific configuration (only for mode === 'codex') */
   codexConfig?: HarnessModelConfig;
   /** Pi-specific configuration (only for mode === 'pi') */

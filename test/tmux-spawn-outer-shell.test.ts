@@ -47,7 +47,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function spawnWithStub(kind: 'create' | 'respawn'): Promise<string[][]> {
+async function spawnWithStub(kind: 'create' | 'respawn', extra: { activityToken?: string } = {}): Promise<string[][]> {
   const { dir, log } = makeStubDir();
   const prev = { PATH: process.env.PATH, HOME: process.env.HOME, VITEST: process.env.VITEST };
   restore.push(() => {
@@ -72,6 +72,7 @@ async function spawnWithStub(kind: 'create' | 'respawn'): Promise<string[][]> {
     workingDir: dir,
     mode: 'claude' as const,
     extraArgs: [EVIL_NOTE],
+    ...extra,
   };
   if (kind === 'create') {
     await mgr.createSession({ ...opts, name: 'stub' });
@@ -99,5 +100,25 @@ describe.each(['create', 'respawn'] as const)('tmux spawn boundary (%s)', (kind)
     // And nothing may have been executed on the way: `id -u` is the uid,
     // `whoami` the username.
     expect(cmd).not.toContain(`note ${process.getuid?.()} and`);
+  });
+
+  it('exports CODEMAN_ACTIVITY_TOKEN when a valid token is passed', async () => {
+    const token = '0123456789abcdef0123456789abcdef';
+    const calls = await spawnWithStub(kind, { activityToken: token });
+    const respawn = calls.find((c) => c[0] === 'respawn-pane');
+    expect(respawn, `no respawn-pane call recorded (calls: ${JSON.stringify(calls)})`).toBeDefined();
+    expect(respawn![respawn!.length - 1]).toContain(`export CODEMAN_ACTIVITY_TOKEN=${token} &&`);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['injected', '$(id -u)'],
+    ['uppercase', '0123456789ABCDEF0123456789ABCDEF'],
+  ])('never exports CODEMAN_ACTIVITY_TOKEN for an %s token', async (_label, activityToken) => {
+    const calls = await spawnWithStub(kind, { activityToken });
+    const respawn = calls.find((c) => c[0] === 'respawn-pane');
+    expect(respawn).toBeDefined();
+    const cmd = respawn![respawn!.length - 1];
+    expect(cmd).not.toContain('CODEMAN_ACTIVITY_TOKEN');
   });
 });

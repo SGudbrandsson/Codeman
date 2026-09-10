@@ -45,6 +45,7 @@ import type {
 
 // Per-harness binary resolution, spawn command and tmux env setup
 import { getHarness, resolveHarnessDir } from './harnesses/registry.js';
+import { ACTIVITY_TOKEN_PATTERN } from './activity-token.js';
 import type { HarnessSpawnContext } from './harnesses/types.js';
 
 // ============================================================================
@@ -83,6 +84,16 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
  * - Read/write ~/.codeman/mux-sessions.json
  */
 const IS_TEST_MODE = !!process.env.VITEST;
+
+/**
+ * Exports the per-process activity token (spec §2) for harnesses that report activity through
+ * hook events. Validated, never interpolated otherwise: the prefix runs under `bash -c`.
+ */
+function pushActivityTokenExport(envExports: string[], activityToken: string | undefined): void {
+  if (activityToken && ACTIVITY_TOKEN_PATTERN.test(activityToken)) {
+    envExports.push(`export CODEMAN_ACTIVITY_TOKEN=${activityToken}`);
+  }
+}
 
 /** Path to persisted mux session metadata */
 const MUX_SESSIONS_FILE = join(homedir(), '.codeman', 'mux-sessions.json');
@@ -250,6 +261,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       harnessSessionId,
       extraArgs,
+      activityToken,
     } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
@@ -305,6 +317,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // flag-dropping re-exec from happening at all.
       envExports.push('export DISABLE_AUTOUPDATER=1', 'export DISABLE_UPDATES=1');
     }
+    pushActivityTokenExport(envExports, activityToken);
     const envExportsStr = envExports.join(' && ');
 
     const spawnContext: HarnessSpawnContext = {
@@ -506,6 +519,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       harnessSessionId,
       extraArgs,
+      activityToken,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -538,6 +552,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // CLI flags (which re-enables the AskUserQuestion picker).
       envExports.push('export DISABLE_AUTOUPDATER=1', 'export DISABLE_UPDATES=1');
     }
+    pushActivityTokenExport(envExports, activityToken);
     const envExportsStr = envExports.join(' && ');
 
     const spawnContext: HarnessSpawnContext = {

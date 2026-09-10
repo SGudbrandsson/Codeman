@@ -83,6 +83,7 @@ import { SessionCompactContinue } from './session-compact-continue.js';
 import { SessionTaskCache } from './session-task-cache.js';
 import { createActivityMonitor, type ActivityMonitor } from './activity-monitor.js';
 import { normalizeIdleReason, type IdleInfo } from './types/activity.js';
+import { newActivityToken } from './activity-token.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -435,6 +436,15 @@ export class Session extends EventEmitter {
   // Harness-native session id used to resume this session, for any harness.
   // Claude mirrors claudeResumeId into it via setClaudeResumeId().
   harnessSessionId?: string;
+
+  // Per-process activity token for 'hook' harnesses (pi), exported as CODEMAN_ACTIVITY_TOKEN.
+  // Rotated only when Codeman launches a process (create-session, dead-pane respawn); kept on
+  // attach to a surviving pane, whose process still reports with it. Restored from state.json.
+  activityToken?: string;
+
+  // In-memory ordering state for harness_activity reports (highest accepted seq and gen).
+  // Reset whenever activityToken rotates: a new pi process restarts both counters at 1.
+  private _hookOwner: { lastSeq?: number; ownerGen?: number } = {};
 
   // Store handler references for cleanup (prevents memory leaks)
   private _taskTrackerHandlers: {
@@ -1113,6 +1123,7 @@ export class Session extends EventEmitter {
       ...(this._codexConfig !== undefined && { codexConfig: this._codexConfig }),
       ...(this._piConfig !== undefined && { piConfig: this._piConfig }),
       ...(this.harnessSessionId !== undefined && { harnessSessionId: this.harnessSessionId }),
+      ...(this.activityToken !== undefined && { activityToken: this.activityToken }),
       draft: this.draft,
       ...(this.mcpServers !== undefined && { mcpServers: this.mcpServers }),
       ...(this.claudeResumeId !== undefined && { claudeResumeId: this.claudeResumeId }),
@@ -1299,6 +1310,7 @@ export class Session extends EventEmitter {
         let needsNewSession = false;
         if (this._muxSession && (await this._mux.isPaneDead(this._muxSession.muxName))) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+          const respawnToken = this._rotateActivityTokenForSpawn();
           const newPid = await this._mux.respawnPane({
             sessionId: this.id,
             workingDir: this.workingDir,
@@ -1314,6 +1326,7 @@ export class Session extends EventEmitter {
             extraArgs: getHarness(this.mode).caps.claudeTranscript
               ? buildMcpArgs(this.id, this.mcpServers, this.claudeResumeId, this._safeMode)
               : [],
+            activityToken: respawnToken,
           });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
@@ -1340,6 +1353,7 @@ export class Session extends EventEmitter {
           // Create a new mux session
           const initialPromptArgs = this.worktreeNotes && !this._initialPromptSent ? [this.worktreeNotes] : [];
           if (initialPromptArgs.length) this._initialPromptSent = true;
+          const createToken = this._rotateActivityTokenForSpawn();
           this._muxSession = await this._mux.createSession({
             sessionId: this.id,
             workingDir: this.workingDir,
@@ -1359,6 +1373,7 @@ export class Session extends EventEmitter {
                 : []),
               ...initialPromptArgs,
             ],
+            activityToken: createToken,
           });
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness
@@ -2737,6 +2752,21 @@ export class Session extends EventEmitter {
       if (reason === 'completed') this._maybeRefreshContextAfterCompact();
     });
     monitor.start().catch((err) => console.error(`[Session] activity monitor failed to start for ${this.id}:`, err));
+  }
+
+  /**
+   * Called only where Codeman launches a new harness process (tmux create-session, dead-pane
+   * respawn). For a 'hook' harness, generates a fresh activity token and resets the hook ordering
+   * state, since the new process restarts its seq/gen counters at 1. Returns the token to export,
+   * or undefined for other harnesses. Never called on attach to a surviving pane (spec §2).
+   */
+  private _rotateActivityTokenForSpawn(): string | undefined {
+    if (getHarness(this.mode).activity !== 'hook') return undefined;
+    this.activityToken = newActivityToken();
+    // Cleared in place: acceptActivityReport() (hook-activity-monitor) mutates this object.
+    delete this._hookOwner.lastSeq;
+    delete this._hookOwner.ownerGen;
+    return this.activityToken;
   }
 
   /** The single detach path. Idempotent; late callbacks from the old monitor are ignored. */

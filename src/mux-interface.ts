@@ -68,6 +68,8 @@ export interface CreateSessionOptions {
   harnessSessionId?: string;
   /** Extra CLI arguments appended after the base command (e.g. initial prompt) */
   extraArgs?: string[];
+  /** Per-process activity token exported as CODEMAN_ACTIVITY_TOKEN (32 lowercase hex; 'hook' harnesses). */
+  activityToken?: string;
 }
 
 /** Options for respawning a dead pane. */
@@ -86,6 +88,8 @@ export interface RespawnPaneOptions {
   harnessSessionId?: string;
   /** Extra CLI arguments appended after the base command (e.g. --mcp-config, --resume) */
   extraArgs?: string[];
+  /** Per-process activity token exported as CODEMAN_ACTIVITY_TOKEN (32 lowercase hex; 'hook' harnesses). */
+  activityToken?: string;
 }
 
 /**
