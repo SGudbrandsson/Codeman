@@ -355,6 +355,13 @@ describe('TranscriptWatcher — fromOffset, transcriptId and replacement', () =>
     watcher.on('transcript:block', (b) => blocks.push(b));
     watcher.start(file, { fromOffset: 0 });
     await waitFor(() => blocks.length >= 1);
+    const before = watcher.transcriptId;
+    // Registered after start() so only clears caused by the deletion are counted.
+    const clears: string[] = [];
+    const errors: Error[] = [];
+    watcher.on('transcript:clear', () => clears.push(watcher.transcriptId));
+    // Also covers the ENOENT branch: fs.watch fires `change` on unlink and the stat then fails.
+    watcher.on('transcript:error', (e) => errors.push(e));
 
     unlinkSync(file);
     const pollInterval = () => (watcher as unknown as { pollInterval: NodeJS.Timeout | null }).pollInterval;
@@ -366,10 +373,17 @@ describe('TranscriptWatcher — fromOffset, transcriptId and replacement', () =>
     writeFileSync(file, userLine('after recreate, a longer first line'));
     await waitFor(() => blocks.length >= 2);
     expect(texts(blocks)).toEqual(['before delete', 'after recreate, a longer first line']);
+    // Exactly one clear for the deletion, carrying a new id that the recreated file keeps.
+    expect(clears).toHaveLength(1);
+    expect(clears[0]).not.toBe(before);
+    expect(watcher.transcriptId).toBe(clears[0]);
 
     // Watching resumes on the new file.
     appendFileSync(file, userLine('appended'));
     await waitFor(() => blocks.length >= 3);
     expect(texts(blocks)).toEqual(['before delete', 'after recreate, a longer first line', 'appended']);
+    expect(clears).toHaveLength(1);
+    expect(watcher.transcriptId).toBe(clears[0]);
+    expect(errors).toEqual([]);
   });
 });

@@ -350,6 +350,31 @@ describe('transcript identity and the authoritative pi path', () => {
     expect(res.headers['x-transcript-id']).toBe('tid-claude');
   });
 
+  it('claude /transcript reads the id AFTER starting the watcher, which may retarget it', async () => {
+    live().mode = 'claude';
+    const file = join(dir, 'claude-retarget.jsonl');
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'hi' } }) +
+        '\n'
+    );
+    harness.ctx.getTranscriptPath = vi.fn(() => file);
+    // The watcher's id changes once startTranscriptWatcher has (re)targeted it.
+    let watcherStarted = false;
+    harness.ctx.startTranscriptWatcher = vi.fn(() => {
+      watcherStarted = true;
+    });
+    harness.ctx.getTranscriptId = vi.fn(() => (watcherStarted ? 'tid-new' : 'tid-old'));
+
+    const res = await harness.app.inject({ method: 'GET', url: `/api/sessions/${ID}/transcript` });
+    expect(JSON.parse(res.body)).toHaveLength(1);
+    expect(res.headers['x-transcript-id']).toBe('tid-new');
+    expect(harness.ctx.startTranscriptWatcher).toHaveBeenCalledWith(ID, file);
+    expect(vi.mocked(harness.ctx.startTranscriptWatcher).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(harness.ctx.getTranscriptId).mock.invocationCallOrder[0]
+    );
+  });
+
   it('no header when there is no watcher id', async () => {
     live().mode = 'pi';
     const file = join(dir, 'pi2.jsonl');
