@@ -4,8 +4,10 @@
  * @module harnesses/pi
  */
 
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { shellQuote } from './types.js';
 import type { HarnessDefinition, HarnessSpawnContext } from './types.js';
 import { MODEL_PATTERN } from './claude.js';
@@ -15,6 +17,22 @@ import { MODEL_PATTERN } from './claude.js';
  * Bounded to the same length as codex.ts's SESSION_ID_PATTERN.
  */
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
+
+// The Codeman activity extension (spec §3) sits beside this module: compiled .js under dist,
+// .ts when running from source (pi loads either through jiti).
+const EXTENSION_DIR = join(dirname(fileURLToPath(import.meta.url)), 'pi');
+const EXTENSION_CANDIDATES = [
+  join(EXTENSION_DIR, 'codeman-activity-extension.js'),
+  join(EXTENSION_DIR, 'codeman-activity-extension.ts'),
+];
+
+/** Absolute path of the pi activity extension, or null when neither build of it exists. */
+export function resolvePiActivityExtension(exists: (path: string) => boolean = existsSync): string | null {
+  return EXTENSION_CANDIDATES.find((p) => exists(p)) ?? null;
+}
+
+const piActivityExtension = resolvePiActivityExtension();
+let warnedMissingExtension = false;
 
 export const piHarness: HarnessDefinition = {
   id: 'pi',
@@ -58,6 +76,16 @@ export const piHarness: HarnessDefinition = {
     }
     const model = ctx.piConfig?.model;
     if (model && MODEL_PATTERN.test(model)) parts.push('--model', shellQuote(model));
+    // Busy/idle for pi comes from this extension. Without it the session still spawns, but has
+    // no activity tracking (status stays idle; never a false busy).
+    if (piActivityExtension) {
+      parts.push('-e', shellQuote(piActivityExtension));
+    } else if (!warnedMissingExtension) {
+      warnedMissingExtension = true;
+      console.warn(
+        `[pi] Codeman activity extension not found (${EXTENSION_CANDIDATES.join(', ')}); pi sessions will have no busy/idle tracking`
+      );
+    }
     return parts.join(' ');
   },
 };

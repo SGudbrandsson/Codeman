@@ -6,8 +6,10 @@
  * than the bare `-m gpt-5.2` the plan drafted. See TASK.md, Task 4 deviations.
  */
 
-import { describe, it, expect } from 'vitest';
+import { existsSync } from 'node:fs';
+import { describe, it, expect, vi } from 'vitest';
 import { getHarness, listHarnesses } from '../src/harnesses/registry.js';
+import { resolvePiActivityExtension } from '../src/harnesses/pi.js';
 
 describe('codex harness', () => {
   const h = () => getHarness('codex');
@@ -87,6 +89,49 @@ describe('pi harness', () => {
 
   it('searches ~/.npm-global/bin, which is not on /bin/sh PATH', () => {
     expect(h().searchDirs.some((d) => d.endsWith('.npm-global/bin'))).toBe(true);
+  });
+});
+
+describe('pi activity extension flag', () => {
+  it('buildCommand loads the Codeman activity extension with a quoted -e path', () => {
+    const cmd = getHarness('pi').buildCommand({ sessionId: 's', mode: 'pi' });
+    const match = cmd.match(/ -e '([^']+)'$/);
+    expect(match, cmd).not.toBeNull();
+    // Run from source this is the .ts file; under dist the compiled .js.
+    expect(match![1]).toMatch(/\/harnesses\/pi\/codeman-activity-extension\.(js|ts)$/);
+    expect(existsSync(match![1])).toBe(true);
+  });
+
+  it('resolvePiActivityExtension prefers the compiled .js, falls back to .ts, else null', () => {
+    expect(resolvePiActivityExtension(() => true)).toMatch(/codeman-activity-extension\.js$/);
+    expect(resolvePiActivityExtension((p) => p.endsWith('.ts'))).toMatch(/codeman-activity-extension\.ts$/);
+    expect(resolvePiActivityExtension(() => false)).toBeNull();
+  });
+
+  it('spawns without -e and warns once when the extension file is missing', async () => {
+    vi.resetModules();
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return {
+        ...actual,
+        existsSync: (p: Parameters<typeof actual.existsSync>[0]) =>
+          String(p).includes('codeman-activity-extension') ? false : actual.existsSync(p),
+      };
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { piHarness } = await import('../src/harnesses/pi.js');
+      const first = piHarness.buildCommand({ sessionId: 's', mode: 'pi' });
+      const second = piHarness.buildCommand({ sessionId: 's', mode: 'pi' });
+      expect(first).not.toContain(' -e ');
+      expect(second).not.toContain(' -e ');
+      expect(first).toContain("--session-id 's'");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
   });
 });
 
