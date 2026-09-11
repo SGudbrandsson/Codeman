@@ -51,12 +51,15 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/worktree \
   -d '{
     "branch": "feat/<slug>",
     "isNew": true,
+    "mode": "claude",
     "notes": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
     "autoStart": false,
     "taskMd": "<TASK.md content as a JSON string — see Step 4a>",
     "claudeMd": "You are working autonomously in a Codeman worktree.\nBefore doing ANYTHING else, re-read `TASK.md` in this directory\nand resume from the phase in `status`.\nDo not rely on conversation history.\nThen invoke the codeman-task-runner skill.\n"
   }'
 ```
+
+**Always send `"mode": "claude"`.** If omitted, the worktree inherits the parent session's mode, and Codeman's own main sessions are often `shell`. The result is a plain fish shell: `/interactive` still returns `{success:true}` and the kickoff prompt runs as a shell command ("Command 'Read' not found"). Only use another mode if the user explicitly asks for a different harness.
 
 The server writes `TASK.md` and `CLAUDE.md` to the worktree directory before returning. **Do NOT write these files separately** — use the `taskMd`/`claudeMd` fields to avoid race conditions.
 
@@ -166,13 +169,34 @@ curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/interactive
 
 Use the session ID from Step 4 response (`session.id`).
 
+## Step 5b — Send the kickoff prompt (REQUIRED)
+
+`/interactive` only spawns Claude — it sends NO prompt. CLAUDE.md is only read once a
+prompt is submitted, so without this step the session sits idle forever at an empty prompt.
+
+Wait ~3 seconds for Claude to initialize. **Before sending anything, confirm Claude is actually running:** `GET /api/sessions/SESSION_ID` must show `mode: "claude"`, and `GET /api/sessions/SESSION_ID/terminal` should show the Claude Code banner, not a shell prompt. If it is a shell session, do NOT send input — see the `mode` row in Common Mistakes for recovery. Then send the kickoff prompt via `/input`:
+
+```bash
+sleep 3
+curl -s -X POST http://localhost:3001/api/sessions/SESSION_ID/input \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Read TASK.md in this directory, then invoke the codeman-task-runner skill.",
+    "submit": true
+  }'
+```
+
+**Verify delivery:** wait ~5 seconds, then `curl -s http://localhost:3001/api/sessions/SESSION_ID`
+and check `isWorking: true` (or `status: busy`). If still idle, re-send the `/input` call once.
+Do not report success until the session is confirmed working.
+
 ## Step 6 — Report
 
 Summarize what was created:
 - Branch: `feat/<slug>`
 - Worktree: `<worktreePath>`
 - Session: link or name from API response
-- Status: session started, running autonomously
+- Status: session started, kickoff prompt confirmed delivered (Step 5b), running autonomously
 - Work item: `<WORK_ITEM_ID>` (or "none — work item tracking skipped")
   Board: http://localhost:3001 → Board → find item "<title>"
 
@@ -189,4 +213,6 @@ Summarize what was created:
 | Wrong port | Codeman runs on **3001**, not 3000 |
 | Branch name with spaces | Use hyphens only, max 37 chars |
 | Forgetting to call `/interactive` | Always POST to `/api/sessions/:id/interactive` after worktree creation to start Claude |
-| Sending input without `useMux: true` | `POST /api/sessions/:id/input` without `useMux: true` writes text but never sends Enter — Claude never receives the message. Always include `"useMux": true` |
+| Sending input without `useMux: true` | `POST /api/sessions/:id/input` without `useMux: true` writes text but never sends Enter — Claude never receives the message. Always include `"useMux": true` (or `"submit": true`, which implies mux + Enter) |
+| **Stopping after `/interactive`** | `/interactive` spawns Claude but sends NO prompt — the session sits idle forever. Always follow with Step 5b: POST `/api/sessions/:id/input` with `{"input": "...", "submit": true}` and verify `isWorking: true` |
+| Omitting `mode` in the worktree request | The worktree inherits the parent's mode (often `shell`), so Claude never starts. Always pass `"mode": "claude"`. **Recovery** if it already happened: `POST /api/sessions` with `mode: "claude"`, `workingDir`, and the old session's `worktreeBranch`/`worktreePath`/`worktreeOriginId`/`worktreeNotes`/`assignedPort`; then `DELETE /api/sessions/<old-id>` (plain delete keeps the worktree dir — do NOT use `DELETE /api/sessions/<id>/worktree`, which removes it); then run Steps 5–5b on the new session |
