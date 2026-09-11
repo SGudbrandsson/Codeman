@@ -1038,11 +1038,17 @@ export class Session extends EventEmitter {
     this.ptyProcess = null;
   }
 
-  /** kill() → 300 ms → SIGKILL. Does not touch session state. */
+  /**
+   * SIGKILL → 300 ms → SIGKILL by pid. Does not touch session state.
+   *
+   * Never SIGHUP/SIGTERM an attach client: on tmux 3.4 a client that detaches gracefully from a
+   * dead codex pane crashes the whole server, while an abrupt SIGKILL is safe. The client holds no
+   * state worth a graceful exit.
+   */
   private static async _killPtyProcess(proc: pty.IPty): Promise<void> {
     const pid = proc.pid;
     try {
-      proc.kill();
+      proc.kill('SIGKILL');
     } catch {
       /* already gone */
     }
@@ -1052,6 +1058,28 @@ export class Session extends EventEmitter {
     } catch {
       /* already gone */
     }
+  }
+
+  /**
+   * Retires the mux attach client with SIGKILL, leaving the tmux session and all session state
+   * untouched (the harness lives on in tmux). Non-mux sessions are left alone: their PTY is the
+   * harness itself.
+   *
+   * Called before Codeman exits. Otherwise the client dies when node exits and its PTY master
+   * closes (SIGHUP). On tmux 3.4 a graceful detach from a dead codex pane crashes the whole
+   * server, taking every session with it; SIGKILL is safe. The generation bump makes the client's
+   * late onExit a no-op.
+   */
+  killAttachClientForShutdown(): void {
+    if (!this._useMux || !this.ptyProcess) return;
+    const pid = this.ptyProcess.pid;
+    this._ptyGeneration++;
+    try {
+      if (pid) process.kill(pid, 'SIGKILL');
+    } catch {
+      /* already gone */
+    }
+    this.ptyProcess = null;
   }
 
   /**
@@ -3327,6 +3355,7 @@ export class Session extends EventEmitter {
       } else {
         // Server shutdown: just detach — the process lives on inside tmux
         console.log('[Session] Detaching from PTY (server shutdown) — mux session preserved');
+        this.killAttachClientForShutdown();
       }
 
       this.ptyProcess = null;

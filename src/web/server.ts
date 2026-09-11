@@ -4323,6 +4323,9 @@ export class WebServer extends EventEmitter {
     for (const [sessionId, session] of this.sessions) {
       // Persist final state so recovery has up-to-date tokens, ralph state, etc.
       this._persistSessionStateNow(session);
+      // SIGKILL the tmux attach client now rather than letting node's exit SIGHUP it: a graceful
+      // detach from a dead codex pane crashes the tmux 3.4 server (all sessions).
+      session.killAttachClientForShutdown();
       // Remove listeners to avoid spurious events during teardown
       const listeners = this.sessionListenerRefs.get(sessionId);
       if (listeners) {

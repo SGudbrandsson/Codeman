@@ -300,6 +300,8 @@ describe('start guard: startInteractive()/startShell() with a live attach client
     // tmux 3.4 exits (killing every session) when a client leaves a dead pane whose TUI was
     // killed by a signal, so the pane must be respawned while the old client is still attached.
     expect(mux.respawnPane.mock.invocationCallOrder[0]).toBeLessThan(oldClient.kill.mock.invocationCallOrder[0]);
+    // Never node-pty's default SIGHUP: a graceful detach from a dead codex pane crashes tmux 3.4.
+    expect(oldClient.kill).toHaveBeenCalledWith('SIGKILL');
     expect(mux.setAttached).toHaveBeenCalledWith(session.id, false);
     expect(mux.respawnPane).toHaveBeenCalledTimes(1);
     expect(ptyMocks.spawned).toHaveLength(2);
@@ -409,6 +411,8 @@ describe('start guard: startInteractive()/startShell() with a live attach client
 
     expect(oldClient.kill).toHaveBeenCalledTimes(1);
     expect(mux.respawnPane.mock.invocationCallOrder[0]).toBeLessThan(oldClient.kill.mock.invocationCallOrder[0]);
+    // Never node-pty's default SIGHUP: a graceful detach from a dead codex pane crashes tmux 3.4.
+    expect(oldClient.kill).toHaveBeenCalledWith('SIGKILL');
     expect(mux.setAttached).toHaveBeenCalledWith(session.id, false);
     expect(mux.respawnPane).toHaveBeenCalledWith(expect.objectContaining({ mode: 'shell' }));
     expect(ptyMocks.spawned).toHaveLength(2);
@@ -557,6 +561,68 @@ describe('server-shutdown detach (stop(false)) of a dead pane keeps the tmux ses
       expect(session.pid).toBeNull();
     }
   );
+});
+
+describe('killAttachClientForShutdown()', () => {
+  // Codeman shutdown must not leave the attach client to be SIGHUPed by node's exit: a graceful
+  // detach from a dead codex pane crashes the tmux 3.4 server. SIGKILL is safe.
+  const captureProcessKill = (act: () => void | Promise<void>) => async () => {
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      await act();
+      return [...processKill.mock.calls];
+    } finally {
+      processKill.mockRestore();
+    }
+  };
+
+  it('SIGKILLs the mux attach client, keeps the tmux session and ignores its late exit', async () => {
+    installFake('claudeTranscript', 'idle');
+    const { session, mux, events } = makeSession('claude');
+    await session.startInteractive();
+    const client = lastPty();
+    const clientPid = session.pid as number;
+    session.markPaneDead(0);
+
+    const calls = await captureProcessKill(() => session.killAttachClientForShutdown())();
+
+    expect(calls).toEqual([[clientPid, 'SIGKILL']]);
+    expect(client.kill).not.toHaveBeenCalled();
+    expect(mux.killSession).not.toHaveBeenCalled();
+    expect(ptyOf(session)).toBeNull();
+    // The killed client's exit arrives later and must not touch state or emit exit.
+    client.onExit!({ exitCode: 0 });
+    expect(count(events, 'exit')).toBe(0);
+    expect(session.status).toBe('stopped');
+    expect(session.paneDead).toBe(true);
+  });
+
+  it('is a no-op for a session not using mux (its PTY is the harness itself)', async () => {
+    installFake('claudeTranscript', 'idle');
+    const { session } = makeSession('claude', { useMux: false });
+    await session.startInteractive();
+    const client = lastPty();
+
+    const calls = await captureProcessKill(() => session.killAttachClientForShutdown())();
+
+    expect(calls).toEqual([]);
+    expect(client.kill).not.toHaveBeenCalled();
+    expect(ptyOf(session)).not.toBeNull();
+  });
+
+  it('stop(false) on a mux session SIGKILLs the attach client and ignores its late exit', async () => {
+    installFake('claudeTranscript', 'idle');
+    const { session, events } = makeSession('claude');
+    await session.startInteractive();
+    const client = lastPty();
+    const clientPid = session.pid as number;
+
+    const calls = await captureProcessKill(() => session.stop(false))();
+
+    expect(calls).toContainEqual([clientPid, 'SIGKILL']);
+    client.onExit!({ exitCode: 0 });
+    expect(count(events, 'exit')).toBe(0);
+  });
 });
 
 describe('dead state preservation and clearing', () => {
