@@ -21312,6 +21312,16 @@ class CodemanApp {
 
   filesState = null;
 
+  // GRID spreadsheet view limits (csv/tsv/xlsx/xls/ods). Anything larger falls
+  // back to the plain text view (csv/tsv) or the Download card (binary sheets)
+  // so a huge file can never freeze the UI.
+  _filesGridCsvMaxBytes = 2 * 1024 * 1024;
+  _filesGridMaxCells = 250000;
+  _filesGridSheetMaxBytes = 10 * 1024 * 1024;
+  // Largest file PUT /file-content accepts — mirrors MAX_WRITE_SIZE in
+  // src/web/routes/file-routes.ts. Spreadsheets above it open read-only.
+  _filesMaxWriteBytes = 5 * 1024 * 1024;
+
   // Opens the sheet chrome without deciding what it shows. Split out of
   // openFilesSheet() so openFileInEditor() can land straight on a file while
   // still producing the same files-sheet → files-file back stack.
@@ -21399,6 +21409,44 @@ class CodemanApp {
       document.head.appendChild(s);
     });
     return this._filesVendorPromise;
+  }
+
+  // Inline replica of tabularFormatOf() in scripts/vendor/grid-tabular.mjs, so a
+  // file can be routed before the GRID bundle has loaded. Keep the two in sync.
+  _tabularFormatOf(path) {
+    const m = /\.([A-Za-z]+)$/.exec(String(path || ''));
+    const ext = m ? m[1].toLowerCase() : '';
+    return ['csv', 'tsv', 'xlsx', 'xls', 'ods'].includes(ext) ? ext : null;
+  }
+
+  // Loads vendor/grid.min.js + grid.min.css (React + GRID spreadsheet viewer/
+  // editor + SheetJS) on demand, exposing window.CodemanGrid. Only ever called
+  // when a tabular file is opened — never from boot or _filesOpenSheetShell().
+  // The bundle is optional (GRID packages are evaluation-licensed devDependencies
+  // and not shipped in the npm package): a 404 resolves false and every caller
+  // falls back to the text view / Download card. Cached promise, never rejects.
+  _filesEnsureGrid() {
+    if (this._filesGridPromise) return this._filesGridPromise;
+    this._filesGridPromise = new Promise((resolve) => {
+      const done = (ok) => { if (!ok) this._filesGridFailed = true; resolve(ok); };
+      const whenReady = () => {
+        const grid = window.CodemanGrid;
+        if (!grid || !grid.ready) { done(false); return; }
+        Promise.resolve(grid.ready).then(() => done(true), () => done(false));
+      };
+      if (window.CodemanGrid) { whenReady(); return; }
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'vendor/grid.min.css';
+      document.head.appendChild(link);
+      const s = document.createElement('script');
+      s.src = 'vendor/grid.min.js';
+      s.async = true;
+      s.onload = whenReady;
+      s.onerror = () => done(false);
+      document.head.appendChild(s);
+    });
+    return this._filesGridPromise;
   }
 
   // DOM-only teardown for the whole sheet (no confirm, no history). Mirrors the
@@ -21697,6 +21745,7 @@ class CodemanApp {
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
     content.classList.remove('is-frame');
+    content.classList.remove('is-grid');
     content.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
     meta.textContent = '';
     actions.innerHTML = '';
@@ -21711,6 +21760,10 @@ class CodemanApp {
       const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.success) throw new Error(result.error || 'Failed to load file');
       const data = result.data;
+      if (data.type === 'spreadsheet') {
+        this._filesRenderSpreadsheet({ ...data, path });
+        return;
+      }
       if (data.type === 'image' || data.type === 'video' || data.type === 'binary') {
         this._filesRenderBinary(data);
         return;
@@ -21724,6 +21777,8 @@ class CodemanApp {
         truncated: !!data.truncated,
         totalLines: data.totalLines,
         size: data.size,
+        // csv/tsv open in the GRID spreadsheet view (Text tab = raw fallback).
+        tabular: ['csv', 'tsv'].includes(this._tabularFormatOf(path)) ? this._tabularFormatOf(path) : null,
       };
       this.filesState.pendingContent = null;
       this._filesRenderView();
@@ -21740,11 +21795,18 @@ class CodemanApp {
       try { this.filesState.editor.destroy(); } catch (e) { /* ignore */ }
       this.filesState.editor = null;
     }
+    // GRID spreadsheet mount (React root). Bumping the sequence also cancels any
+    // in-flight _filesMountGrid() so it cannot mount into a replaced view.
+    this._filesGridSeq = (this._filesGridSeq || 0) + 1;
+    if (this.filesState && this.filesState.grid) {
+      try { this.filesState.grid.destroy(); } catch (e) { /* ignore */ }
+      this.filesState.grid = null;
+    }
   }
 
   // Renders a real preview for image/video/binary files instead of the old
   // "Cannot edit …" dead end. Reuses the existing file-raw endpoint (data.url).
-  _filesRenderBinary(data) {
+  _filesRenderBinary(data, notice) {
     const content = this.$('filesSheetViewContent');
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
@@ -21753,6 +21815,8 @@ class CodemanApp {
     // Binaries are not editable — clear any editing state so save/edit can't fire.
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
     content.classList.remove('is-frame');
+    content.classList.remove('is-grid');
+    const noticeHtml = notice ? `<div class="files-sheet-notice">${escapeHtml(notice)}</div>` : '';
     const ext = data.extension || (data.path ? data.path.split('.').pop() : '');
     const name = (data.path || '').split('/').pop();
     const rawUrl = data.url || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(data.path)}`;
@@ -21763,7 +21827,7 @@ class CodemanApp {
     } else if (data.type === 'video') {
       content.innerHTML = `<div class="files-media-wrap"><video class="files-video" controls playsinline src="${escapeHtml(rawUrl)}"></video></div>`;
     } else {
-      content.innerHTML = `<div class="files-binary-card">
+      content.innerHTML = noticeHtml + `<div class="files-binary-card">
         <div class="files-binary-icon">${this.getFileIcon(ext)}</div>
         <div class="files-binary-name">${escapeHtml(name)}</div>
         <div class="files-binary-meta">${this.formatFileSize(data.size)}${ext ? ' • ' + escapeHtml(ext) : ''}</div>
@@ -21785,6 +21849,7 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
     this._filesDestroyEditor();
+    if (cur.kind === 'spreadsheet') { this._filesRenderGridView(cur); return; }
     const content = this.$('filesSheetViewContent');
     // Reassigning content.innerHTML below clamps scrollTop to 0. Re-rendering
     // the SAME document in Preview (Preview-tab re-entry, note highlights) must
@@ -21805,6 +21870,13 @@ class CodemanApp {
     if (cur.truncated) {
       noticeHtml = `<div class="files-sheet-notice">File is truncated; editing is disabled to avoid data loss.</div>`;
     }
+    // csv/tsv: GRID spreadsheet view unless the Text tab is picked, the file is
+    // over the grid limits, or the bundle/parse failed (text view fallback).
+    if (cur.tabular && this._filesGridTooLarge(cur)) {
+      noticeHtml += `<div class="files-sheet-notice">Too large for spreadsheet view — showing text.</div>`;
+    }
+    if (this._filesWantsGrid(cur)) { this._filesRenderGridView(cur); return; }
+    content.classList.remove('is-grid');
     content.classList.toggle('is-frame', htmlPreview);
     let rendered = null;
     if (!htmlPreview && isMd && window.CodemanMarkdown) {
@@ -21848,7 +21920,9 @@ class CodemanApp {
       actions.innerHTML = `<button class="files-sheet-tool is-active" onclick="app._filesRenderView()">Preview</button><button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button><button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${this._filesDownloadHtml(cur.path)}`;
     } else {
       const editBtn = cur.truncated ? '' : `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>`;
-      actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}${this._filesDownloadHtml(cur.path)}`;
+      // csv/tsv in the Text tab keep the Grid ⇄ Text pair (Edit here = raw text editor).
+      const tabs = this._filesGridAvailable(cur) ? this._filesTabularTabsHtml('text') : '';
+      actions.innerHTML = `${tabs}<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>${editBtn}${this._filesDownloadHtml(cur.path)}`;
     }
     // Markdown-Preview-only extras: review notes + read-aloud. Never on the
     // sandboxed HTML frame, the binary previews or the editor surface.
@@ -21869,9 +21943,230 @@ class CodemanApp {
     if (keepScroll) content.scrollTop = keepScroll;
   }
 
+  // ==========================================================================
+  // GRID spreadsheet view / editor (csv, tsv, xlsx, xls, ods)
+  // --------------------------------------------------------------------------
+  // csv/tsv: text from file-content, parsed in the bundle, saved back as text.
+  // xlsx: bytes from file-raw, saved back as base64 (PUT encoding:'base64').
+  // xls/ods: converted for viewing only — read-only. Every mount shows the
+  // "Powered by GRID" attribution required by the GRID licence (§2.3).
+  // ==========================================================================
+
+  // Binary spreadsheet (file-content type 'spreadsheet'): size guard, then the
+  // grid view; without the bundle (or on a load error) the Download card.
+  _filesRenderSpreadsheet(data) {
+    const format = this._tabularFormatOf(data.path);
+    if (!format || !(data.size <= this._filesGridSheetMaxBytes)) {
+      this._filesRenderBinary(data, format ? 'Spreadsheet too large to preview' : '');
+      return;
+    }
+    this.filesState.current = {
+      path: data.path,
+      mtime: data.mtime,
+      size: data.size,
+      content: null,
+      kind: 'spreadsheet',
+      format,
+      dirty: false,
+      editing: false,
+      rawData: data,
+      gridDoc: null,
+    };
+    this.filesState.pendingContent = null;
+    this._filesRenderView();
+    this._filesPersistState();
+  }
+
+  // csv/tsv over the grid limits (the parsed-cell limit sets gridTooLarge).
+  _filesGridTooLarge(cur) {
+    return !!(cur.truncated || !(cur.size <= this._filesGridCsvMaxBytes) || cur.gridTooLarge);
+  }
+
+  // csv/tsv that can use the grid at all (drives the Grid ⇄ Text tabs).
+  _filesGridAvailable(cur) {
+    return !!(cur && cur.tabular && !this._filesGridFailed && !cur.gridUnavailable && !this._filesGridTooLarge(cur));
+  }
+
+  _filesWantsGrid(cur) {
+    return this._filesGridAvailable(cur) && (this.filesState.tabularMode || 'grid') !== 'text';
+  }
+
+  _filesGridCanEdit(cur) {
+    return !this._filesGridReadOnlyReason(cur);
+  }
+
+  // Why a grid file can't be edited (null when it can): .xls/.ods have no
+  // in-place writer, and an xlsx over the save limit could never be saved.
+  _filesGridReadOnlyReason(cur) {
+    if (cur.kind !== 'spreadsheet') return cur.tabular ? null : 'not a spreadsheet';
+    if (cur.format !== 'xlsx') return `.${cur.format} can't be saved in place`;
+    if (cur.size > this._filesMaxWriteBytes) return `too large to save (over ${this.formatFileSize(this._filesMaxWriteBytes)})`;
+    return null;
+  }
+
+  _filesTabularTabsHtml(active) {
+    const tab = (mode, label) => `<button class="files-sheet-tool${active === mode ? ' is-active' : ''}" onclick="app.filesSetTabularMode('${mode}')">${label}</button>`;
+    return tab('grid', 'Grid') + tab('text', 'Text');
+  }
+
+  filesSetTabularMode(mode) {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur || cur.editing) return;
+    this.filesState.tabularMode = mode === 'text' ? 'text' : 'grid';
+    this._filesRenderView();
+  }
+
+  // Grid host: the mount (GRID needs an explicit height, see .files-grid-mount)
+  // plus the mandatory attribution bar directly under the spreadsheet.
+  _filesGridHostHtml() {
+    return `<div class="files-grid-host"><div class="files-grid-mount"><div class="files-sheet-empty">Loading spreadsheet…</div></div>`
+      + `<div class="files-grid-attrib"><a href="https://grid.is" target="_blank" rel="noopener">Powered by GRID</a></div></div>`;
+  }
+
+  _filesRenderGridView(cur) {
+    const content = this.$('filesSheetViewContent');
+    const meta = this.$('filesSheetViewMeta');
+    const actions = this.$('filesSheetViewActions');
+    if (!content) return;
+    const isSheet = cur.kind === 'spreadsheet';
+    const format = isSheet ? cur.format : cur.tabular;
+    const readOnly = this._filesGridReadOnlyReason(cur);
+    const canEdit = !readOnly;
+    content.classList.remove('is-frame');
+    content.classList.add('is-grid');
+    content.innerHTML = this._filesGridHostHtml();
+    meta.textContent = `${this.formatFileSize(cur.size)} • ${format}${readOnly ? ` • read-only: ${readOnly}` : ''}`;
+    const editBtn = canEdit ? `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>` : '';
+    // Binary spreadsheets have no text to copy; csv/tsv keep Copy (raw text).
+    const copyBtn = isSheet ? '' : `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>`;
+    const tabs = isSheet ? '' : this._filesTabularTabsHtml('grid');
+    actions.innerHTML = `${tabs}${editBtn}${copyBtn}${this._filesDownloadHtml(cur.path)}`;
+    cur.editing = false;
+    cur.gridHandle = null;
+    this._filesTeardownNotesUi();
+    this._filesRenderedPath = cur.path;
+    this._filesMountGrid(cur, 'view');
+  }
+
+  async filesStartGridEdit() {
+    const cur = this.filesState && this.filesState.current;
+    if (!cur) return;
+    const readOnly = this._filesGridReadOnlyReason(cur);
+    if (readOnly) { this.showToast(`Read-only: ${readOnly}`, 'error'); return; }
+    FilesTTS.stop();
+    this._filesTeardownNotesUi();
+    this._filesDestroyEditor();
+    cur.editing = true;
+    cur.gridHandle = null;
+    const content = this.$('filesSheetViewContent');
+    const actions = this.$('filesSheetViewActions');
+    content.classList.remove('is-frame');
+    content.classList.add('is-grid');
+    const notice = cur.tabular
+      ? `<div class="files-sheet-notice files-grid-notice">${cur.tabular.toUpperCase()} stores values only — formulas save as results; formatting and extra sheets are not saved.</div>`
+      : '';
+    content.innerHTML = notice + this._filesGridHostHtml();
+    actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCancelEdit()">Cancel</button><button class="files-sheet-tool" onclick="app.filesSave()">Save</button>`;
+    await this._filesMountGrid(cur, 'edit');
+  }
+
+  async _filesGridLoadDoc(cur) {
+    const filename = String(cur.path).split('/').pop();
+    if (cur.kind === 'spreadsheet') {
+      const url = (cur.rawData && cur.rawData.url) || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(cur.path)}`;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const bytes = await res.arrayBuffer();
+      return window.CodemanGrid.load({ format: cur.format, bytes, filename });
+    }
+    return window.CodemanGrid.load({ format: cur.tabular, text: cur.content, filename, maxCells: this._filesGridMaxCells });
+  }
+
+  // Loads (once per opened file) and mounts the viewer or editor into the grid
+  // host rendered by _filesRenderGridView() / filesStartGridEdit().
+  async _filesMountGrid(cur, mode) {
+    const seq = this._filesGridSeq;
+    const stale = () => seq !== this._filesGridSeq || !this.filesState || this.filesState.current !== cur;
+    const ok = await this._filesEnsureGrid();
+    if (stale()) return;
+    if (!ok) { this._filesGridFallback(cur, null); return; }
+    try {
+      if (!cur.gridDoc) {
+        const doc = await this._filesGridLoadDoc(cur);
+        if (stale()) return;
+        if (doc && doc.tooLarge) { cur.gridTooLarge = true; this._filesGridFallback(cur, null); return; }
+        cur.gridDoc = doc;
+      }
+      const content = this.$('filesSheetViewContent');
+      const el = content && content.querySelector('.files-grid-mount');
+      if (!el) return;
+      this.filesState.grid = window.CodemanGrid.mount(el, cur.gridDoc, {
+        mode,
+        onDirty: () => { if (cur.editing) cur.dirty = true; },
+      });
+      if (mode === 'edit') cur.gridHandle = cur.gridDoc;
+    } catch (err) {
+      if (stale()) return;
+      this._filesGridFallback(cur, err);
+    }
+  }
+
+  // Never a blank view: csv/tsv drop to the text view (or raw text editor when
+  // editing), binary spreadsheets to the Download card.
+  _filesGridFallback(cur, err) {
+    if (err) this.showToast('Spreadsheet view failed: ' + (err.message || err), 'error');
+    this._filesDestroyEditor();
+    if (cur.kind === 'spreadsheet') { this._filesRenderBinary(cur.rawData); return; }
+    if (!cur.gridTooLarge) cur.gridUnavailable = true;
+    const wasEditing = cur.editing;
+    cur.editing = false;
+    cur.gridHandle = null;
+    if (wasEditing) this.filesStartEdit();
+    else this._filesRenderView();
+  }
+
+  async _filesSaveGrid(cur, sessionId) {
+    if (cur.kind === 'spreadsheet') {
+      if (!this.filesState.gridSaveConfirmed) this.filesState.gridSaveConfirmed = new Set();
+      if (!this.filesState.gridSaveConfirmed.has(cur.path)) {
+        if (!confirm("Saving rewrites the workbook with the GRID engine; features it doesn't support (e.g. macros, some charts/pivots) may be lost. Save anyway?")) return;
+        this.filesState.gridSaveConfirmed.add(cur.path);
+      }
+    }
+    try {
+      const payload = await window.CodemanGrid.serialize(cur.gridHandle);
+      // The save route rejects bodies over MAX_WRITE_SIZE (decoded bytes), and
+      // a re-serialized workbook can outgrow the original — say so up front.
+      const bytes = payload.encoding === 'base64'
+        ? Math.floor(payload.content.length * 3 / 4) - (payload.content.endsWith('==') ? 2 : payload.content.endsWith('=') ? 1 : 0)
+        : new Blob([payload.content]).size;
+      if (bytes > this._filesMaxWriteBytes) {
+        this.showToast(`Not saved — file too large to save (${this.formatFileSize(bytes)}; limit ${this.formatFileSize(this._filesMaxWriteBytes)})`, 'error');
+        return;
+      }
+      const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: cur.path, content: payload.content, encoding: payload.encoding, expectedMtime: cur.mtime }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (res.status === 409) { this._filesShowConflict(payload); return; }
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to save');
+      if (payload.encoding === 'utf-8') cur.content = payload.content;
+      cur.mtime = result.data.mtime;
+      cur.size = result.data.size;
+      cur.dirty = false;
+      this.showToast('Saved', 'success');
+    } catch (err) {
+      this.showToast('Save failed: ' + err.message, 'error');
+    }
+  }
+
   filesStartEdit() {
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
+    // Binary spreadsheets and csv/tsv in the Grid tab edit in the GRID editor.
+    if (cur.kind === 'spreadsheet' || this._filesWantsGrid(cur)) { this.filesStartGridEdit(); return; }
     if (cur.truncated) { this.showToast('File too large to edit safely', 'error'); return; }
     FilesTTS.stop();
     this._filesTeardownNotesUi();
@@ -21880,6 +22175,8 @@ class CodemanApp {
     const actions = this.$('filesSheetViewActions');
     this._filesDestroyEditor();
     content.classList.remove('is-frame');
+    content.classList.remove('is-grid');
+    cur.gridHandle = null;
     // Prefer the CodeMirror surface; fall back to a plain <textarea> if the
     // vendor bundle never loaded. Both expose the same adapter so filesSave()
     // has a single code path.
@@ -21918,6 +22215,10 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     if (!cur) return;
     if (cur.dirty && !confirm('Discard unsaved changes?')) return;
+    // The GRID editor mutates the live model in place: drop a modified model so
+    // the view reloads from cur.content (csv/tsv) or re-fetches the bytes (xlsx).
+    if (cur.gridHandle && cur.dirty) cur.gridDoc = null;
+    cur.gridHandle = null;
     cur.dirty = false;
     cur.editing = false;
     this.filesState.pendingContent = null;
@@ -21927,7 +22228,7 @@ class CodemanApp {
 
   filesCopyCurrent() {
     const cur = this.filesState && this.filesState.current;
-    if (!cur) return;
+    if (!cur || cur.content == null) return; // binary spreadsheets have no text
     navigator.clipboard.writeText(cur.content)
       .then(() => this.showToast('Copied to clipboard', 'success'))
       .catch(() => this.showToast('Failed to copy', 'error'));
@@ -21937,6 +22238,13 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     const editor = this.filesState && this.filesState.editor;
     const sessionId = this.activeSessionId;
+    if (cur && cur.editing && cur.gridHandle && sessionId) { await this._filesSaveGrid(cur, sessionId); return; }
+    // Grid edit started but the editor has not mounted yet (bundle/model still
+    // loading): nothing to save, and the file state is fine.
+    if (cur && cur.editing && !cur.gridHandle && !editor && (cur.kind === 'spreadsheet' || cur.tabular)) {
+      this.showToast('Spreadsheet editor is still loading — try again in a moment.', 'info');
+      return;
+    }
     if (!cur || !editor || !sessionId) {
       this.showToast('Cannot save — file state was lost. Reopen the file.', 'error');
       return;
@@ -21961,6 +22269,7 @@ class CodemanApp {
     }
   }
 
+  // pendingContent: string (text editor) or { content, encoding } (GRID editor).
   _filesShowConflict(pendingContent) {
     const content = this.$('filesSheetViewContent');
     if (!content || !this.filesState) return;
@@ -21988,22 +22297,27 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     const sessionId = this.activeSessionId;
     if (!cur || !this.filesState || this.filesState.pendingContent == null || !sessionId) return;
-    const newContent = this.filesState.pendingContent;
+    // A string from the text editor, or { content, encoding } from the GRID editor.
+    const pending = this.filesState.pendingContent;
+    const isGrid = typeof pending === 'object';
+    const newContent = isGrid ? pending.content : pending;
+    const encoding = isGrid ? pending.encoding : 'utf-8';
     try {
       const res = await fetch(`/api/sessions/${sessionId}/file-content`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: cur.path, content: newContent }), // no expectedMtime = force overwrite
+        body: JSON.stringify({ path: cur.path, content: newContent, encoding }), // no expectedMtime = force overwrite
       });
       const result = await res.json().catch(() => ({}));
       if (!res.ok || !result.success) throw new Error(result.error || 'Failed to save');
-      cur.content = newContent;
+      if (encoding === 'utf-8') cur.content = newContent;
       cur.mtime = result.data.mtime;
       cur.size = result.data.size;
       cur.dirty = false;
       this.filesState.pendingContent = null;
       this.showToast('Saved (overwritten)', 'success');
-      this.filesStartEdit();
+      if (isGrid) this.filesStartGridEdit();
+      else this.filesStartEdit();
     } catch (err) {
       this.showToast('Save failed: ' + err.message, 'error');
     }

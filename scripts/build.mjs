@@ -13,7 +13,7 @@
  */
 
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, rmSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
@@ -47,6 +47,39 @@ run('xterm-addon-search', 'npx esbuild node_modules/@xterm/addon-search/lib/addo
 // from an entry file (many npm packages) into one IIFE. Lazy-loaded by app.js
 // on first files-sheet open; exposes window.CodemanEditor + window.CodemanMarkdown.
 run('file-editor bundle', 'npx esbuild scripts/vendor/editor-entry.mjs --bundle --minify --format=iife --legal-comments=none --outfile=dist/web/public/vendor/editor.min.js');
+
+// GRID spreadsheet vendor bundle (csv/tsv/xlsx/xls/ods view + edit). React +
+// @grid-is/* + SheetJS in one IIFE (+ grid.min.css), lazy-loaded by app.js only
+// when a tabular file is opened; exposes window.CodemanGrid. The GRID packages
+// are devDependencies under GRID's evaluation licence, so the bundle is built
+// only when they are installed and is excluded from the npm tarball
+// (package.json "files"). Without it app.js falls back to the text view.
+// --legal-comments=eof keeps GRID / third-party notices (licence §2.2(e));
+// --external:node:* drops the Node-only telemetry imports (dead in browsers).
+{
+  const gridPkgs = [
+    '@grid-is/spreadsheet-engine',
+    '@grid-is/spreadsheet-viewer',
+    '@grid-is/spreadsheet-editor',
+    'react',
+    'react-dom',
+    'xlsx',
+  ];
+  const missing = gridPkgs.filter((p) => !existsSync(join(ROOT, 'node_modules', p, 'package.json')));
+  if (missing.length === 0) {
+    run(
+      'grid spreadsheet bundle',
+      `npx esbuild scripts/vendor/grid-entry.mjs --bundle --minify --format=iife --legal-comments=eof --external:'node:*' --define:process.env.NODE_ENV='"production"' --outfile=dist/web/public/vendor/grid.min.js`
+    );
+  } else {
+    console.warn(`\n[build] GRID packages not installed (${missing.join(', ')}) — spreadsheet viewer disabled`);
+    // A stale bundle copied from src/web/public/vendor (or left from an older
+    // build) must not linger — its .br/.gz would keep serving it.
+    for (const name of readdirSync(join(ROOT, 'dist/web/public/vendor'))) {
+      if (name.startsWith('grid.min.')) rmSync(join(ROOT, 'dist/web/public/vendor', name), { force: true });
+    }
+  }
+}
 
 // 4. Minify frontend assets
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');

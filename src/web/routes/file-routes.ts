@@ -349,7 +349,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         'woff2',
         'ttf',
         'eot',
+        // Spreadsheets are binary: the files sheet loads them via file-raw into
+        // the GRID viewer instead of decoding them as UTF-8 text.
+        'xlsx',
+        'xls',
+        'ods',
       ]);
+      const spreadsheetExts = new Set(['xlsx', 'xls', 'ods']);
       const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
       const videoExts = new Set(['mp4', 'webm', 'mov', 'avi']);
 
@@ -360,9 +366,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
           data: {
             path: filePath,
             size: stat.size,
-            type: imageExts.has(ext) ? 'image' : videoExts.has(ext) ? 'video' : 'binary',
+            type: imageExts.has(ext)
+              ? 'image'
+              : videoExts.has(ext)
+                ? 'video'
+                : spreadsheetExts.has(ext)
+                  ? 'spreadsheet'
+                  : 'binary',
             extension: ext,
             url: `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`,
+            // Staleness guard for binary saves (PUT file-content expectedMtime).
+            mtime: stat.mtimeMs,
           },
         };
       }
@@ -461,6 +475,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         ogg: 'audio/ogg',
         pdf: 'application/pdf',
         json: 'application/json',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        xls: 'application/vnd.ms-excel',
+        ods: 'application/vnd.oasis.opendocument.spreadsheet',
+        csv: 'text/csv',
+        tsv: 'text/tab-separated-values',
       };
 
       const content = await fs.readFile(resolvedPath);
@@ -827,13 +846,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
   // ---------------------------------------------------------------------------
 
   /** Max size for a single write (bytes). Reads allow 10MB; writes are capped tighter. */
-  const MAX_WRITE_SIZE = 5 * 1024 * 1024; // 5MB
+  const MAX_WRITE_SIZE = 5 * 1024 * 1024; // 5MB — mirrored by _filesMaxWriteBytes in public/app.js
 
   // Save (overwrite) an existing file's content, with best-effort staleness guard.
   app.put('/api/sessions/:id/file-content', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
-    const body = (req.body ?? {}) as { path?: string; content?: string; expectedMtime?: number };
+    const body = (req.body ?? {}) as {
+      path?: string;
+      content?: string;
+      expectedMtime?: number;
+      encoding?: unknown;
+    };
     const filePath = body.path;
     const content = body.content;
 
@@ -845,7 +869,28 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing content parameter'));
       return;
     }
-    const byteLength = Buffer.byteLength(content, 'utf-8');
+    // encoding: 'utf-8' (default, text files) or 'base64' (binary files such as
+    // .xlsx saved from the GRID spreadsheet editor).
+    const encoding = body.encoding === undefined ? 'utf-8' : body.encoding;
+    if (encoding !== 'utf-8' && encoding !== 'base64') {
+      reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid encoding (expected "utf-8" or "base64")'));
+      return;
+    }
+    let byteLength: number;
+    if (encoding === 'base64') {
+      if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid base64 content'));
+        return;
+      }
+      // Exact decoded size, computed before decoding so an oversize body is
+      // rejected without allocating the buffer.
+      const padding = content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0;
+      byteLength = (content.length / 4) * 3 - padding;
+    } else {
+      byteLength = Buffer.byteLength(content, 'utf-8');
+    }
     if (byteLength > MAX_WRITE_SIZE) {
       reply
         .code(400)
@@ -886,7 +931,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         return;
       }
 
-      await fs.writeFile(resolvedPath, content, 'utf-8');
+      if (encoding === 'base64') {
+        await fs.writeFile(resolvedPath, Buffer.from(content, 'base64'));
+      } else {
+        await fs.writeFile(resolvedPath, content, 'utf-8');
+      }
       const newStat = await fs.stat(resolvedPath);
       return { success: true, data: { path: relativePath, size: newStat.size, mtime: newStat.mtimeMs } };
     } catch (err) {
