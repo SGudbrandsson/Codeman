@@ -13287,6 +13287,40 @@ a.files-sheet-tool { text-decoration: none; }
    No dark-theme CSS is injected into the frame. The outer wrapper owns the
    scrolling because iOS Safari expands iframes to content height. */
 .files-sheet-view-content.is-frame { overflow: hidden; display: flex; }
+
+/* GRID spreadsheet view (csv/tsv/xlsx/xls/ods). GRID needs an explicit height:
+   the pane becomes a flex column and the mount fills the space above the
+   "Powered by GRID" attribution bar (mandatory under the GRID licence — keep it
+   visible, directly adjacent to the sheet, at least the 12px meta size). */
+.files-sheet-view-content.is-grid { overflow: hidden; display: flex; flex-direction: column; }
+.files-sheet-view-content.is-grid > .files-sheet-notice { flex-shrink: 0; }
+.files-grid-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #0d1117;
+}
+.files-grid-mount {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+.files-grid-mount > * { height: 100%; }
+.files-grid-attrib {
+  flex-shrink: 0;
+  padding: 5px 12px calc(5px + var(--safe-area-bottom, 0px));
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: #0d1117;
+  color: #8b949e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.files-grid-attrib a { color: #8b949e; text-decoration: none; }
+.files-grid-attrib a:hover { color: #58a6ff; text-decoration: underline; }
 .files-html-preview {
   flex: 1 1 auto;
   min-height: 0;

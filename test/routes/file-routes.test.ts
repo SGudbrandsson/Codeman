@@ -567,6 +567,62 @@ describe('file-routes', () => {
       expect(body.data.url).toContain('file-raw');
     });
 
+    it.each([
+      ['book.xlsx', 'xlsx'],
+      ['legacy/OLD.XLS', 'xls'],
+      ['calc.ods', 'ods'],
+    ])('returns spreadsheet metadata for %s without decoding it as text', async (path, ext) => {
+      mockedStat.mockResolvedValue({ size: 2048, mtimeMs: 1717000000123 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=${encodeURIComponent(path)}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      // Exact shape: no `content` key, and mtime is present for the save staleness guard.
+      expect(body.data).toEqual({
+        path,
+        size: 2048,
+        type: 'spreadsheet',
+        extension: ext,
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=${encodeURIComponent(path)}`,
+        mtime: 1717000000123,
+      });
+      expect(mockedReadFile).not.toHaveBeenCalled();
+    });
+
+    it('includes mtime in binary metadata for non-spreadsheet binaries too', async () => {
+      mockedStat.mockResolvedValue({ size: 1024, mtimeMs: 4242 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=logo.png`,
+      });
+      const body = JSON.parse(res.body);
+      expect(body.data.type).toBe('image');
+      expect(body.data.mtime).toBe(4242);
+    });
+
+    it.each(['data.csv', 'Data.TSV'])('keeps %s on the utf-8 text path', async (path) => {
+      const text = 'a,b\n1,2\n';
+      mockedReadFile.mockResolvedValue(text as never);
+      mockedStat.mockResolvedValue({ size: text.length, mtimeMs: 99 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=${path}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.content).toBe(text);
+      expect(body.data.type).toBeUndefined();
+      expect(body.data.mtime).toBe(99);
+      expect(mockedReadFile).toHaveBeenCalledWith(`/tmp/test-workdir/${path}`, 'utf-8');
+    });
+
     it('rejects path traversal attempts', async () => {
       // realpathSync resolves the symlink to a path outside workingDir
       mockedRealpathSync.mockReturnValue('/etc/passwd' as never);
@@ -655,6 +711,26 @@ describe('file-routes', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toBe('image/png');
+    });
+
+    it.each([
+      ['book.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['OLD.XLS', 'application/vnd.ms-excel'],
+      ['calc.ods', 'application/vnd.oasis.opendocument.spreadsheet'],
+      ['data.csv', 'text/csv'],
+      ['data.tsv', 'text/tab-separated-values'],
+    ])('serves %s as %s with the bytes unchanged', async (path, mime) => {
+      const content = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00, 0x80]);
+      mockedReadFile.mockResolvedValue(content as never);
+      mockedStat.mockResolvedValue({ size: content.length } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=${path}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe(mime);
+      expect(res.rawPayload.equals(content)).toBe(true);
     });
 
     it('rejects path traversal in raw file serving', async () => {
@@ -1100,6 +1176,153 @@ describe('file-routes', () => {
       expect(body.data.content).toBeUndefined();
       // writeFile called with utf-8 encoding.
       expect(mockedWriteFile).toHaveBeenCalledWith('/tmp/test-workdir/notes.txt', 'hello world', 'utf-8');
+    });
+
+    it("writes text with 'utf-8' when encoding is explicitly 'utf-8'", async () => {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+        payload: { path: 'data.csv', content: 'a,b\n', encoding: 'utf-8' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(mockedWriteFile).toHaveBeenCalledWith('/tmp/test-workdir/data.csv', 'a,b\n', 'utf-8');
+    });
+
+    it.each([['hex'], ['BASE64'], [123], [null]])(
+      'rejects encoding %j with 400 INVALID_INPUT before writeFile',
+      async (encoding) => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content: 'UEsDBA==', encoding },
+        });
+        expect(res.statusCode).toBe(400);
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(false);
+        expect(body.errorCode).toBe('INVALID_INPUT');
+        expect(body.error).toContain('Invalid encoding');
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+      }
+    );
+
+    describe("encoding: 'base64' (binary saves from the spreadsheet editor)", () => {
+      // Zip magic plus bytes that are not valid UTF-8 — a utf-8 write would corrupt them.
+      const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x80, 0x0a]);
+
+      it('writes the decoded bytes as a Buffer with no utf-8 encoding argument', async () => {
+        mockedStat.mockResolvedValue({
+          size: bytes.length,
+          isFile: () => true,
+          isDirectory: () => false,
+          mtimeMs: 4242,
+        } as never);
+
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content: bytes.toString('base64'), encoding: 'base64', expectedMtime: 4242 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.data).toEqual({ path: 'book.xlsx', size: bytes.length, mtime: 4242 });
+        expect(mockedWriteFile).toHaveBeenCalledTimes(1);
+        const args = mockedWriteFile.mock.calls[0];
+        expect(args).toHaveLength(2);
+        expect(args[0]).toBe('/tmp/test-workdir/book.xlsx');
+        expect(Buffer.isBuffer(args[1])).toBe(true);
+        expect((args[1] as Buffer).equals(bytes)).toBe(true);
+      });
+
+      it('writes an empty Buffer for an empty base64 body', async () => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content: '', encoding: 'base64' },
+        });
+        expect(res.statusCode).toBe(200);
+        const args = mockedWriteFile.mock.calls[0];
+        expect(args).toHaveLength(2);
+        expect(Buffer.isBuffer(args[1])).toBe(true);
+        expect((args[1] as Buffer).length).toBe(0);
+      });
+
+      it.each([
+        ['characters outside the base64 alphabet', 'ab!d'],
+        ['the base64url alphabet', 'ab-_'],
+        ['a length that is not a multiple of 4', 'UEsDB'],
+        ['padding in the middle', 'ab=d'],
+      ])('rejects %s with 400 "Invalid base64 content"', async (_label, content) => {
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content, encoding: 'base64' },
+        });
+        expect(res.statusCode).toBe(400);
+        const body = JSON.parse(res.body);
+        expect(body.errorCode).toBe('INVALID_INPUT');
+        expect(body.error).toContain('Invalid base64 content');
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+      });
+
+      it('rejects a decoded size just over 5MB before writeFile', async () => {
+        // 6,990,508 base64 chars with no padding decode to 5MB + 1 byte.
+        const content = 'A'.repeat(6990508);
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content, encoding: 'base64' },
+        });
+        expect(res.statusCode).toBe(400);
+        const body = JSON.parse(res.body);
+        expect(body.error).toContain('too large');
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+      });
+
+      it('accepts a decoded size of exactly 5MB even though the base64 text is longer', async () => {
+        // One '=' of padding: 6,990,508 chars decode to exactly 5 * 1024 * 1024 bytes.
+        const content = 'A'.repeat(6990507) + '=';
+        expect(content.length).toBeGreaterThan(5 * 1024 * 1024);
+
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content, encoding: 'base64' },
+        });
+        expect(res.statusCode).toBe(200);
+        const args = mockedWriteFile.mock.calls[0];
+        expect((args[1] as Buffer).length).toBe(5 * 1024 * 1024);
+      });
+
+      it('returns 409 CONFLICT for a stale expectedMtime without writing', async () => {
+        mockedStat.mockResolvedValue({
+          size: 10,
+          isFile: () => true,
+          isDirectory: () => false,
+          mtimeMs: 2000,
+        } as never);
+
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: 'book.xlsx', content: bytes.toString('base64'), encoding: 'base64', expectedMtime: 1000 },
+        });
+        expect(res.statusCode).toBe(409);
+        expect(JSON.parse(res.body).errorCode).toBe('CONFLICT');
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+      });
+
+      it('applies the working-directory sandbox', async () => {
+        mockedRealpathSync.mockReturnValue('/etc/passwd' as never);
+
+        const res = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content`,
+          payload: { path: '../../etc/passwd', content: bytes.toString('base64'), encoding: 'base64' },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).error).toContain('within working directory');
+        expect(mockedWriteFile).not.toHaveBeenCalled();
+      });
     });
   });
 
