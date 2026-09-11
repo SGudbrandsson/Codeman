@@ -152,6 +152,7 @@ import {
   STATS_COLLECTION_INTERVAL_MS,
   INACTIVITY_TIMEOUT_MS,
   DEAD_PANE_CHECK_INTERVAL_MS,
+  PANE_DEATH_CHECK_INTERVAL_MS,
 } from '../config/server-timing.js';
 
 // DEC mode 2026 - Synchronized Output
@@ -1244,6 +1245,7 @@ export class WebServer extends EventEmitter {
   private _recoveringSessionIds: Set<string> = new Set();
   /** In-flight guard: skip dead-pane sweeps while a previous sweep is still running */
   private _deadPaneCheckInFlight = false;
+  private _paneDeathCheckInFlight = false;
 
   private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
@@ -2791,7 +2793,12 @@ export class WebServer extends EventEmitter {
     // Probe phase: check all candidate panes concurrently (guarded by _deadPaneCheckInFlight)
     const probeResults = await Promise.allSettled(
       candidates.map(async (session) => {
-        // Compute the mux session name — matches TmuxManager.createSession pattern
+        // NOTE: tmux names sessions `codeman-${id.slice(0, 8)}`, so this full-id name never resolves
+        // and this auto-recovery is dormant in production. Dead panes (busy worktree sessions
+        // included) are reported by checkPaneDeaths() instead. Do not switch to session.muxName
+        // without first making prepareForRestart() bump the PTY generation: its attach-client kill
+        // otherwise emits 'exit' → SessionExit (frontend auto-close on code 0), and it kills the
+        // tmux session (scrollback lost) and can loop on a harness that exits immediately.
         const isDead = await this.mux.isPaneDead(`codeman-${session.id}`);
         return { session, isDead };
       })
@@ -2844,6 +2851,57 @@ export class WebServer extends EventEmitter {
     // Fire recoveries without awaiting them — a hung recovery must not block future sweeps.
     // Failures are handled individually above; allSettled never rejects.
     void Promise.allSettled(recoveryTasks);
+  }
+
+  /**
+   * Detects harnesses that exited inside their tmux pane. remain-on-exit keeps the tmux session
+   * and Codeman's attach client alive, so no PTY exit fires and the session would keep reporting
+   * idle forever. One async `tmux list-panes -a` per tick covers every session.
+   *
+   * Marks the session exited (`status: 'stopped'` + `paneDead`) and broadcasts SessionUpdated.
+   * Never SessionExit: the frontend auto-closes a session on a clean (code 0) exit. Busy worktree
+   * sessions are included: once marked they are no longer busy, so `checkAndRecoverDeadPanes()`
+   * skips them and the user restarts them explicitly (scrollback kept).
+   */
+  private async checkPaneDeaths(): Promise<void> {
+    if (this._paneDeathCheckInFlight) return;
+    this._paneDeathCheckInFlight = true;
+    try {
+      // Snapshot before the probe: a session restarted while it ran must not be marked dead
+      // from a pane state read before its respawn.
+      const generations = new Map<string, number>();
+      for (const session of this.sessions.values()) generations.set(session.id, session.ptyGeneration);
+
+      const states = await this.mux.listPaneDeathStates();
+      if (states.size === 0) return;
+
+      for (const session of this.sessions.values()) {
+        if (session.paused || session.paneDead) continue;
+        if (this.cleaningUp.has(session.id) || this._recoveringSessionIds.has(session.id)) continue;
+        // Busy worktree sessions are marked too: a harness that dies mid-turn never reports idle,
+        // so skipping them would leave the session busy and refusing /interactive forever.
+        if (generations.get(session.id) !== session.ptyGeneration) continue;
+        const muxName = session.muxName;
+        const state = muxName ? states.get(muxName) : undefined;
+        if (!state?.dead) continue;
+        if (!session.markPaneDead(state.exitStatus)) continue;
+
+        console.log(
+          `[Server] Pane died for session ${session.id} (${session.name}), status ${state.exitStatus ?? 'unknown'}`
+        );
+        getLifecycleLog().log({
+          event: 'pane_died',
+          sessionId: session.id,
+          name: session.name,
+          mode: session.mode,
+          exitCode: state.exitStatus,
+        });
+        this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
+        this.persistSessionState(session);
+      }
+    } finally {
+      this._paneDeathCheckInFlight = false;
+    }
   }
 
   // Clean up old completed scheduled runs
@@ -3459,6 +3517,17 @@ export class WebServer extends EventEmitter {
       { description: 'dead pane auto-recovery check' }
     );
 
+    // Pane-death detection for all mux sessions (single async tmux call per tick)
+    this.cleanup.setInterval(
+      () => {
+        this.checkPaneDeaths().catch((err) => {
+          console.error('[Server] Pane-death check error:', err);
+        });
+      },
+      PANE_DEATH_CHECK_INTERVAL_MS,
+      { description: 'pane death detection' }
+    );
+
     // Memory decay for work items (run once at startup, then daily)
     workItemDecay();
     this.cleanup.setInterval(
@@ -3975,6 +4044,14 @@ export class WebServer extends EventEmitter {
                   console.error(`[Server] Failed to auto-reconnect session ${session.id}:`, err);
                 });
                 console.log(`[Server] Auto-reconnecting session ${session.id} to mux ${muxSession.muxName}`);
+              } else {
+                // The harness exited while Codeman was down: report it as exited rather than the
+                // constructor-default 'idle'. POST /interactive respawns the dead pane.
+                const deathState = (await this.mux.listPaneDeathStates()).get(muxSession.muxName);
+                if (session.markPaneDead(deathState?.exitStatus ?? null)) {
+                  console.log(`[Server] Session ${session.id} has a dead pane — marked exited`);
+                  this.persistSessionState(session);
+                }
               }
 
               // Mark it as restored (not started yet - user needs to attach)

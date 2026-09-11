@@ -81,6 +81,10 @@ export const ERROR_RESET_MS = 60_000;
 /** Dead-pane health check interval — check for crashed Claude processes (ms) */
 export const DEAD_PANE_CHECK_INTERVAL_MS = 30 * 1000;
 
+/** Pane-death detection interval — one async `tmux list-panes -a` for all sessions, so a
+ * harness that exits in its pane stops being reported as idle within a few seconds (ms) */
+export const PANE_DEATH_CHECK_INTERVAL_MS = 4 * 1000;
+
 // ============================================================================
 // Common Cleanup Intervals
 // ============================================================================

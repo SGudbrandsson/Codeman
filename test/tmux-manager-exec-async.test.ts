@@ -13,6 +13,8 @@
  *   amplifier).
  * - Happy path: batched pgrep/ps output is aggregated into per-session stats.
  * - Async isPaneDead semantics: pane_dead=1 → true, exec error → false.
+ * - listPaneDeathStates parsing: one `tmux list-panes -a` (execFile) keyed by session name,
+ *   lowest pane_index wins, malformed lines skipped, exec failure → empty map.
  *
  * SAFETY: node:child_process (exec/execSync/spawn) and node:fs / node:fs/promises
  * are fully mocked, so no real tmux commands run and no files are written even
@@ -53,9 +55,24 @@ const mocks = vi.hoisted(() => {
     }
   );
 
+  /** Controllable impl for promisified execFile (argv form): return { stdout } or throw to reject. */
+  const execFileImpl = vi.fn((_file: string, _args: readonly string[]): { stdout: string } => ({ stdout: '' }));
+  const execFile = Object.assign(vi.fn(), {
+    [Symbol.for('nodejs.util.promisify.custom')]: (file: string, args: readonly string[], _opts?: unknown) => {
+      try {
+        const { stdout } = execFileImpl(file, args);
+        return Promise.resolve({ stdout, stderr: '' });
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    },
+  });
+
   return {
     execImpl,
     exec,
+    execFileImpl,
+    execFile,
     execSync: vi.fn((cmd: string) => {
       if (typeof cmd === 'string' && cmd.includes('which')) return '/usr/bin/tmux\n';
       return '';
@@ -66,7 +83,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual('node:child_process');
-  return { ...actual, exec: mocks.exec, execSync: mocks.execSync, spawn: mocks.spawn };
+  return { ...actual, exec: mocks.exec, execFile: mocks.execFile, execSync: mocks.execSync, spawn: mocks.spawn };
 });
 
 // Mock fs so the non-test-mode load/save paths (loadSessions, saveSessions,
@@ -111,6 +128,7 @@ describe('TmuxManager async exec internals (VITEST test-mode bypassed)', () => {
     vi.clearAllMocks();
     // Restore the default (empty stdout) impl in case a prior test overrode it.
     mocks.execImpl.mockImplementation(() => ({ stdout: '' }));
+    mocks.execFileImpl.mockImplementation(() => ({ stdout: '' }));
     // IS_TEST_MODE = !!process.env.VITEST → false for the freshly imported module
     vi.stubEnv('VITEST', '');
     vi.resetModules();
@@ -196,6 +214,83 @@ describe('TmuxManager async exec internals (VITEST test-mode bypassed)', () => {
         throw new Error('no such session');
       });
       await expect(manager.isPaneDead('codeman-abc12345')).resolves.toBe(false);
+    });
+  });
+
+  describe('listPaneDeathStates (async)', () => {
+    const paneLine = (name: string, index: string, dead: string, status: string) =>
+      `${name}\t${index}\t${dead}\t${status}`;
+
+    it('makes one list-panes call and maps dead/alive panes by session name', async () => {
+      mocks.execFileImpl.mockImplementation(() => ({
+        stdout:
+          [
+            paneLine('codeman-dead0001', '0', '1', '3'),
+            paneLine('codeman-live0001', '0', '0', ''),
+            paneLine('codeman-nost0001', '0', '1', ''),
+          ].join('\n') + '\n',
+      }));
+
+      const states = await manager.listPaneDeathStates();
+
+      expect(mocks.execFileImpl).toHaveBeenCalledTimes(1);
+      const [file, args] = mocks.execFileImpl.mock.calls[0];
+      expect(file).toBe('tmux');
+      expect(args.slice(0, 2)).toEqual(['list-panes', '-a']);
+      expect(states).toEqual(
+        new Map([
+          ['codeman-dead0001', { dead: true, exitStatus: 3 }],
+          ['codeman-live0001', { dead: false, exitStatus: null }],
+          // Dead with no reported status → exit status unknown
+          ['codeman-nost0001', { dead: true, exitStatus: null }],
+        ])
+      );
+    });
+
+    it('uses the lowest pane_index per session regardless of listing order', async () => {
+      mocks.execFileImpl.mockImplementation(() => ({
+        stdout: [
+          // Split pane (index 1) is dead but listed first; the harness pane (index 0) is alive
+          paneLine('codeman-aaaa0001', '1', '1', '9'),
+          paneLine('codeman-aaaa0001', '0', '0', ''),
+          // Harness pane dead, a later split alive
+          paneLine('codeman-bbbb0001', '0', '1', '5'),
+          paneLine('codeman-bbbb0001', '2', '0', ''),
+        ].join('\n'),
+      }));
+
+      const states = await manager.listPaneDeathStates();
+
+      expect(states.get('codeman-aaaa0001')).toEqual({ dead: false, exitStatus: null });
+      expect(states.get('codeman-bbbb0001')).toEqual({ dead: true, exitStatus: 5 });
+      expect(states.size).toBe(2);
+    });
+
+    it('skips blank and malformed lines', async () => {
+      mocks.execFileImpl.mockImplementation(() => ({
+        stdout: [
+          '',
+          'no-tabs-at-all',
+          paneLine('codeman-badindex', 'abc', '1', '2'),
+          paneLine('', '0', '1', '2'),
+          paneLine('codeman-good0001', '0', '1', '0'),
+          '',
+        ].join('\n'),
+      }));
+
+      const states = await manager.listPaneDeathStates();
+
+      expect(states).toEqual(new Map([['codeman-good0001', { dead: true, exitStatus: 0 }]]));
+    });
+
+    it('resolves an empty map when the tmux call fails', async () => {
+      mocks.execFileImpl.mockImplementation(() => {
+        throw new Error('no server running');
+      });
+
+      const states = await manager.listPaneDeathStates();
+
+      expect(states.size).toBe(0);
     });
   });
 });

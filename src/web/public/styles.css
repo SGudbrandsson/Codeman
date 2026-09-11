@@ -180,6 +180,7 @@ body {
 }
 .sib-status-dot.idle  { background: #4ade80; }
 .sib-status-dot.busy  { background: #fbbf24; animation: sib-pulse 1.2s ease-in-out infinite; }
+.sib-status-dot.stopped { background: #64748b; }
 
 @keyframes sib-pulse {
   0%, 100% { opacity: 1; }
@@ -346,6 +347,11 @@ body {
   will-change: opacity;
 }
 .session-tab .tab-status.error { background: var(--red); }
+/* Stopped — the harness exited (or the session was stopped); un-animated like paused. */
+.session-tab .tab-status.stopped {
+  background: var(--red);
+  opacity: 0.7;
+}
 /* Paused (parked) session — deliberately un-animated: the absence of the busy
    pulse is the strongest at-a-glance "this session is not running" signal. */
 .session-tab .tab-status.paused {

@@ -262,6 +262,13 @@ export interface SessionState {
    * The session stays parked, but nothing was actually freed and a retry is warranted.
    */
   pauseFailed?: boolean;
+  /**
+   * True when the harness command exited in its tmux pane (the pane is dead but kept by
+   * remain-on-exit). Reported with `status: 'stopped'`; restart via /interactive respawns it.
+   */
+  paneDead?: boolean;
+  /** Exit status of the dead pane's command, when known. Only meaningful with `paneDead`. */
+  paneExitStatus?: number | null;
   /** Auto-compact-and-continue enabled: detects compaction request and sends /compact then continue */
   autoCompactAndContinue?: boolean;
   /** ID of the session that was cleared to create this one (archive chain) */

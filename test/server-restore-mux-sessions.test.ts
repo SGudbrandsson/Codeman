@@ -221,6 +221,12 @@ vi.mock('../src/session.js', async () => {
     markStopped = vi.fn(function (this: MockSession) {
       this.status = 'stopped';
     });
+    paneDead: boolean = false;
+    markPaneDead = vi.fn(function (this: MockSession) {
+      this.paneDead = true;
+      this.status = 'stopped';
+      return true;
+    });
     paused: boolean = false;
     pausedAt: number | null = null;
     markPaused = vi.fn(function (this: MockSession, pausedAt?: number) {
@@ -257,6 +263,7 @@ vi.mock('../src/mux-factory.js', async () => {
     reconcileSessions = vi.fn(async () => mocks.reconcileResult);
     getSessions = vi.fn(() => mocks.muxSessions);
     isPaneDead = vi.fn(async (muxName: string) => mocks.isPaneDeadImpl(muxName));
+    listPaneDeathStates = vi.fn(async () => new Map());
     getSession = vi.fn();
     remapSessionId = vi.fn((oldId: string, newId: string) => {
       // Simulate real remapSessionId: find session in mocks.muxSessions and update it
@@ -517,6 +524,103 @@ describe('WebServer.restoreMuxSessions() — auto-reconnect on restart', () => {
 
     // Both sessions had startInteractive() attempted
     expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restore of a mux session whose pane is already dead → marked exited
+// ---------------------------------------------------------------------------
+
+describe('WebServer.restoreMuxSessions() — already-dead pane is marked exited', () => {
+  let server: WebServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionConstructorCalls.length = 0;
+
+    mocks.startInteractiveImpl.mockResolvedValue(undefined);
+    mocks.isPaneDeadImpl.mockReturnValue(true); // every pane in this block is dead
+    mocks.muxSessions = [];
+    mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
+    (getStore() as any).getSession.mockReturnValue(null);
+    (getStore() as any).cleanupStaleSessions.mockReturnValue({ removed: [] });
+
+    server = new WebServer(0, false, true);
+
+    (server as any).setupSessionListeners = vi.fn().mockResolvedValue(undefined);
+    (server as any).persistSessionState = vi.fn();
+    (server as any).getClaudeModeConfig = vi.fn().mockResolvedValue({});
+    (server as any).cleanupStaleSessions = vi.fn();
+    (server as any)._runStartupOrphanCleanup = vi.fn().mockResolvedValue(undefined);
+    (server as any)._persistSessionStateNow = vi.fn();
+  });
+
+  afterEach(() => {
+    (getStore() as any).getSession.mockReturnValue(null);
+    try {
+      (server as any).mux?.destroy();
+    } catch {
+      // ignore
+    }
+  });
+
+  function restoreOne(sessionId: string, muxName: string) {
+    mocks.muxSessions = [makeMuxSession({ sessionId, muxName })];
+    mocks.reconcileResult = { alive: [sessionId], dead: [], discovered: [] };
+  }
+
+  it('calls markPaneDead() with the exit status from listPaneDeathStates() and persists', async () => {
+    restoreOne('sess-dead3', 'codeman-dead3333');
+    (server as any).mux.listPaneDeathStates.mockResolvedValueOnce(
+      new Map([['codeman-dead3333', { dead: true, exitStatus: 3 }]])
+    );
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-dead3');
+    expect(session.markPaneDead).toHaveBeenCalledWith(3);
+    expect(session.status).toBe('stopped');
+    // Every restored session is persisted once on registration; the dead-pane branch persists
+    // again AFTER marking, so the stopped/paneDead state reaches state.json.
+    const persist = (server as any).persistSessionState as ReturnType<typeof vi.fn>;
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenLastCalledWith(session);
+    expect(persist.mock.invocationCallOrder[1]).toBeGreaterThan(session.markPaneDead.mock.invocationCallOrder[0]);
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('calls markPaneDead(null) when the pane has no death-state entry', async () => {
+    restoreOne('sess-dead-nostate', 'codeman-deadnost');
+    (server as any).mux.listPaneDeathStates.mockResolvedValueOnce(new Map());
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-dead-nostate');
+    expect(session.markPaneDead).toHaveBeenCalledWith(null);
+  });
+
+  it('does not mark a paused session exited', async () => {
+    restoreOne('sess-dead-paused', 'codeman-deadpaus');
+    (getStore() as any).getSession.mockReturnValue({ status: 'stopped', paused: true, pausedAt: 1_700_000_000_000 });
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-dead-paused');
+    expect(session.markPaneDead).not.toHaveBeenCalled();
+    expect(session.paneDead).toBe(false);
+    expect(mocks.startInteractiveImpl).not.toHaveBeenCalled();
+  });
+
+  it('does not mark a session whose pane is alive', async () => {
+    restoreOne('sess-alive-nomark', 'codeman-alivenom');
+    mocks.isPaneDeadImpl.mockReturnValue(false);
+
+    await (server as any).restoreMuxSessions();
+
+    const session = (server as any).sessions.get('sess-alive-nomark');
+    expect(session.markPaneDead).not.toHaveBeenCalled();
+    expect((server as any).persistSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.startInteractiveImpl).toHaveBeenCalledTimes(1);
   });
 });
 

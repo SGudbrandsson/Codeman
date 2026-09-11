@@ -25,6 +25,7 @@ export type LifecycleEventType =
   | 'recovered' // Session restored from tmux on server restart
   | 'stale_cleaned' // Removed from state.json by cleanupStaleSessions()
   | 'mux_died' // tmux session died (detected by reconciliation)
+  | 'pane_died' // Harness command exited in its pane (tmux session kept by remain-on-exit)
   | 'server_started' // Server started (marker for restart detection)
   | 'server_stopped' // Server shutting down
   | 'qr_auth'; // Device authenticated via QR code scan

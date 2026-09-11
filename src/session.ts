@@ -184,6 +184,11 @@ export interface SessionEvents {
   error: (data: string) => void;
   /** Session process exited */
   exit: (code: number | null) => void;
+  /**
+   * The harness command exited in its mux pane (pane dead, tmux session + attach client kept
+   * by remain-on-exit). Deliberately NOT 'exit': nothing is torn down and nothing auto-closes.
+   */
+  paneDied: (info: { exitStatus: number | null }) => void;
   /** One-shot prompt completed with result and cost */
   completion: (result: string, cost: number) => void;
   /** Raw terminal data (includes ANSI codes) */
@@ -382,6 +387,14 @@ export class Session extends EventEmitter {
    * resumed `ptyProcess` and emit `exit`, whose handler strips the new terminal/SSE listeners.
    */
   private _ptyGeneration: number = 0;
+  /**
+   * The harness in this session's mux pane exited (set by `markPaneDead()` from the server's
+   * pane-death sweep). `ptyProcess` may still be the live `tmux attach-session` client.
+   */
+  private _paneDead: boolean = false;
+  private _paneExitStatus: number | null = null;
+  /** Set synchronously for the whole of startInteractive()/startShell() (re-entry guard). */
+  private _startInFlight: boolean = false;
 
   // Background /context refresh state
   private _awaitingContext = false;
@@ -947,6 +960,169 @@ export class Session extends EventEmitter {
     return this._pauseFailed;
   }
 
+  /** True when the harness command exited in its mux pane (see `markPaneDead`). */
+  get paneDead(): boolean {
+    return this._paneDead;
+  }
+
+  /** Exit status of the dead pane's command, or null when alive/unknown. */
+  get paneExitStatus(): number | null {
+    return this._paneDead ? this._paneExitStatus : null;
+  }
+
+  /** Name of the bound mux session, or null when not attached to one. */
+  get muxName(): string | null {
+    return this._muxSession?.muxName ?? null;
+  }
+
+  /**
+   * Changes whenever the attach/harness PTY is replaced (start, restart, rebind). Lets an async
+   * probe detect that the session was restarted while it was running.
+   */
+  get ptyGeneration(): number {
+    return this._ptyGeneration;
+  }
+
+  /**
+   * Records that the harness command in this session's mux pane has exited. Under mux
+   * `ptyProcess` is only the `tmux attach-session` client, which remain-on-exit keeps alive, so
+   * nothing else notices. Reports `status: 'stopped'` with `paneDead`, detaches the activity
+   * monitor and resets busy/idle fields WITHOUT emitting idle/completion/exit. The attach
+   * client is left alone; `startInteractive()`/`startShell()` release it and respawn the pane.
+   *
+   * No-op (returns false) when already marked, paused, stopped, not using mux, or while a
+   * start is in flight (the pane is about to be respawned).
+   */
+  markPaneDead(exitStatus: number | null): boolean {
+    if (this._paneDead || this._paused || this._isStopped || this._startInFlight) return false;
+    if (!this._useMux || !this._muxSession) return false;
+    this._paneDead = true;
+    this._paneExitStatus = exitStatus;
+    this._detachActivityMonitor();
+    this._isWorking = false;
+    this._awaitingIdleConfirmation = false;
+    if (this.activityTimeout) {
+      clearTimeout(this.activityTimeout);
+      this.activityTimeout = null;
+    }
+    if (this._promptCheckInterval) {
+      clearInterval(this._promptCheckInterval);
+      this._promptCheckInterval = null;
+    }
+    if (this._promptCheckTimeout) {
+      clearTimeout(this._promptCheckTimeout);
+      this._promptCheckTimeout = null;
+    }
+    if (this._shellIdleTimer) {
+      clearTimeout(this._shellIdleTimer);
+      this._shellIdleTimer = null;
+    }
+    this._status = 'stopped';
+    this._pid = null;
+    this.emit('paneDied', { exitStatus });
+    return true;
+  }
+
+  private _clearPaneDead(): void {
+    this._paneDead = false;
+    this._paneExitStatus = null;
+  }
+
+  /**
+   * Kills the current PTY (under mux: the `tmux attach-session` viewer, never the tmux session)
+   * and waits for it. Callers bump `_ptyGeneration` BEFORE calling so the late onExit is ignored.
+   */
+  private async _releaseAttachClient(): Promise<void> {
+    if (!this.ptyProcess) return;
+    await Session._killPtyProcess(this.ptyProcess);
+    this.ptyProcess = null;
+  }
+
+  /** kill() → 300 ms → SIGKILL. Does not touch session state. */
+  private static async _killPtyProcess(proc: pty.IPty): Promise<void> {
+    const pid = proc.pid;
+    try {
+      proc.kill();
+    } catch {
+      /* already gone */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      if (pid) process.kill(pid, 'SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /**
+   * Entry guard for starting a process while `ptyProcess` is set. A live process refuses (no
+   * second harness). When the pane behind a mux attach client is dead, the client is retired:
+   * detached from this session (generation bumped, so its data/exit callbacks are ignored)
+   * but NOT killed. The caller kills it with `_killRetiredAttachClient()` only after the pane
+   * has been respawned.
+   *
+   * Ordering rule (tmux 3.4): a client leaving a dead pane whose TUI was killed by a signal
+   * without restoring its terminal modes (e.g. codex on SIGTERM) makes the whole tmux server
+   * exit, taking every other session with it. Respawning the pane first resets that state, so
+   * the old client can then be killed safely.
+   */
+  private async _retireAttachClientOfDeadPane(): Promise<pty.IPty> {
+    const mux = this._useMux ? this._mux : null;
+    const muxName = this._muxSession?.muxName;
+    const dead = !!mux && !!muxName && (this._paneDead || (await mux.isPaneDead(muxName)));
+    const client = this.ptyProcess;
+    if (!dead || !mux || !client) {
+      throw new Error('Session already has a running process');
+    }
+    console.log('[Session] Pane is dead, retiring attach client until the pane is respawned:', muxName);
+    // Bump first: from here on the old client's data/exit callbacks count as superseded.
+    this._ptyGeneration++;
+    this.ptyProcess = null;
+    this._pid = null;
+    mux.setAttached(this.id, false);
+    return client;
+  }
+
+  /**
+   * Kills an attach client retired by `_retireAttachClientOfDeadPane()`, but only when its
+   * pane is no longer dead (respawned, or the tmux session is gone). If the respawn failed the
+   * client is left attached: killing it on the still-dead pane can crash the tmux server, and
+   * it exits on its own when the tmux session is killed.
+   */
+  private async _killRetiredAttachClient(client: pty.IPty | null, paneStillDead: boolean): Promise<void> {
+    if (!client) return;
+    if (paneStillDead) {
+      console.warn('[Session] Pane respawn failed; leaving the retired attach client attached to the dead pane');
+      return;
+    }
+    await Session._killPtyProcess(client);
+  }
+
+  /**
+   * Before a teardown kills the attach client: if the pane is dead, kill the tmux session
+   * first. Killing a client attached to a dead pane whose TUI was killed by a signal crashes
+   * the tmux 3.4 server (see `_retireAttachClientOfDeadPane`); killing the session first is
+   * safe, the client then exits on its own. Best effort; a later `killSession()` is a no-op.
+   */
+  private async _killMuxSessionFirstIfPaneDead(): Promise<void> {
+    if (!this.ptyProcess || !this._useMux || !this._mux || !this._muxSession) return;
+    let dead = this._paneDead;
+    if (!dead) {
+      try {
+        dead = await this._mux.isPaneDead(this._muxSession.muxName);
+      } catch {
+        dead = false;
+      }
+    }
+    if (!dead) return;
+    console.log('[Session] Pane is dead, killing mux session before its attach client:', this._muxSession.muxName);
+    try {
+      await this._mux.killSession(this.id);
+    } catch {
+      /* best effort */
+    }
+  }
+
   /**
    * Best-effort snapshot of the mux binding to verify against after `stop()`.
    *
@@ -1091,6 +1267,8 @@ export class Session extends EventEmitter {
       id: this.id,
       pid: this.pid,
       status: this._status,
+      paneDead: this._paneDead || undefined,
+      paneExitStatus: this._paneDead ? this._paneExitStatus : undefined,
       workingDir: this.workingDir,
       worktreePath: this.worktreePath,
       worktreeBranch: this.worktreeBranch,
@@ -1276,9 +1454,24 @@ export class Session extends EventEmitter {
    * ```
    */
   async startInteractive(): Promise<void> {
-    if (this.ptyProcess) {
+    // Synchronous re-entry guard: the dead-pane probe awaits before `_status` turns 'busy', so
+    // two concurrent calls could otherwise both release the attach client and respawn the pane.
+    if (this._startInFlight) {
       throw new Error('Session already has a running process');
     }
+    this._startInFlight = true;
+    try {
+      await this._startInteractive();
+    } finally {
+      this._startInFlight = false;
+    }
+  }
+
+  private async _startInteractive(): Promise<void> {
+    // Kept attached until the dead pane is respawned (see _retireAttachClientOfDeadPane).
+    const retiredClient = this.ptyProcess ? await this._retireAttachClientOfDeadPane() : null;
+    // Cleared up front: if the start fails, the pane-death sweep re-evaluates the pane.
+    this._clearPaneDead();
 
     this._status = 'busy';
     this._terminalBuffer.clear();
@@ -1347,6 +1540,8 @@ export class Session extends EventEmitter {
             await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
           }
         }
+        // Only now that the pane is respawned is it safe to kill the retired attach client.
+        await this._killRetiredAttachClient(retiredClient, needsNewSession);
 
         // Check if we already have a mux session (restored session)
         const isRestoredSession = this._muxSession !== null && !needsNewSession;
@@ -1647,8 +1842,9 @@ export class Session extends EventEmitter {
       // has already set it, and every dead-session guard keys off `status === 'stopped'`.
       // Under mux this is only the attach client exiting, not proof the harness stopped.
       // Activity is not tracked while detached; the next startInteractive() re-attaches.
+      // A dead pane stays 'stopped' too: the harness exited, only the viewer is gone now.
       this._detachActivityMonitor();
-      if (!this._paused) {
+      if (!this._paused && !this._paneDead) {
         this._status = 'idle';
       }
       if (getHarness(this.mode).activity !== 'pty') this._isWorking = false;
@@ -1842,9 +2038,21 @@ export class Session extends EventEmitter {
    * ```
    */
   async startShell(): Promise<void> {
-    if (this.ptyProcess) {
+    if (this._startInFlight) {
       throw new Error('Session already has a running process');
     }
+    this._startInFlight = true;
+    try {
+      await this._startShell();
+    } finally {
+      this._startInFlight = false;
+    }
+  }
+
+  private async _startShell(): Promise<void> {
+    // Kept attached until the dead pane is respawned (see _retireAttachClientOfDeadPane).
+    const retiredClient = this.ptyProcess ? await this._retireAttachClientOfDeadPane() : null;
+    this._clearPaneDead();
 
     this._status = 'busy';
     this._terminalBuffer.clear();
@@ -1887,6 +2095,7 @@ export class Session extends EventEmitter {
             await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
           }
         }
+        await this._killRetiredAttachClient(retiredClient, needsNewSession);
 
         // Check if we already have a mux session (restored session)
         const isRestoredSession = this._muxSession !== null && !needsNewSession;
@@ -1988,7 +2197,7 @@ export class Session extends EventEmitter {
       console.log('[Session] Shell PTY exited with code:', exitCode);
       this.ptyProcess = null;
       this._pid = null;
-      this._status = 'idle';
+      if (!this._paneDead) this._status = 'idle';
       // Clear timers to prevent memory leaks
       if (this._shellIdleTimer) {
         clearTimeout(this._shellIdleTimer);
@@ -2724,6 +2933,8 @@ export class Session extends EventEmitter {
    * TUIs would produce false activity (e.g. a codex session detached by rebindMuxSession).
    */
   private _ptyHeuristicsEnabled(): boolean {
+    // A dead pane's redraws (e.g. on resize) must not flip the exited session back to busy/idle.
+    if (this._paneDead) return false;
     const activity = getHarness(this.mode).activity;
     return activity === 'pty' || (activity === 'claudeTranscript' && !this._activityMonitor);
   }
@@ -3078,6 +3289,9 @@ export class Session extends EventEmitter {
       this.cleanupTrackerListeners();
     }
 
+    if (killMux) {
+      await this._killMuxSessionFirstIfPaneDead();
+    }
     if (this.ptyProcess) {
       if (killMux) {
         // Full kill: SIGTERM → wait → SIGKILL the PTY and its children
@@ -3118,6 +3332,7 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
     }
     this._pid = null;
+    this._clearPaneDead();
     this._status = killMux ? 'stopped' : 'idle';
     this._currentTaskId = null;
 
@@ -3151,6 +3366,7 @@ export class Session extends EventEmitter {
   async prepareForRestart(): Promise<void> {
     // Clean up the previous MCP temp config file before writing a new one on restart
     cleanupMcpConfig(this.id);
+    await this._killMuxSessionFirstIfPaneDead();
     if (this.ptyProcess) {
       const pid = this.ptyProcess.pid;
       try {
@@ -3169,6 +3385,7 @@ export class Session extends EventEmitter {
     this._pid = null;
     this._detachActivityMonitor();
     this._setActivityFieldsIdleSilently();
+    this._clearPaneDead();
     this._currentTaskId = null;
     this._terminalBuffer.clear();
     this._textOutput.clear();
@@ -3200,6 +3417,8 @@ export class Session extends EventEmitter {
     if (!this._useMux || !mux) {
       throw new Error('Session is not using mux — cannot rebind');
     }
+    // The target is a different pane; the pane-death sweep re-evaluates it.
+    this._clearPaneDead();
 
     console.log(`[Session] Rebinding mux session: ${this._muxSession?.muxName ?? 'none'} → ${newMuxName}`);
 
@@ -3217,21 +3436,7 @@ export class Session extends EventEmitter {
     }
 
     // Step 1: Kill the current PTY process (the attach viewer, not the tmux session)
-    if (this.ptyProcess) {
-      const pid = this.ptyProcess.pid;
-      try {
-        this.ptyProcess.kill();
-      } catch {
-        /* already gone */
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      try {
-        if (pid) process.kill(pid, 'SIGKILL');
-      } catch {
-        /* already gone */
-      }
-      this.ptyProcess = null;
-    }
+    await this._releaseAttachClient();
 
     // Clear timers that reference the old PTY
     if (this.activityTimeout) {
@@ -3403,7 +3608,7 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
       this._pid = null;
       this._detachActivityMonitor();
-      this._status = 'idle';
+      if (!this._paused && !this._paneDead) this._status = 'idle';
       if (getHarness(this.mode).activity !== 'pty') this._isWorking = false;
       this._awaitingIdleConfirmation = false;
       if (this.activityTimeout) {

@@ -11,7 +11,9 @@
  * 7. Dead pane error path: startInteractive rejects → SessionError broadcast; _recoveringSessionIds cleared
  * 8. Concurrent recovery guard (two-phase inner async check)
  * 9. Multiple sessions isolation (Promise.allSettled)
- * 10. Mux name formula: isPaneDead called with `codeman-${session.id}`
+ * 10. Mux name formula: isPaneDead called with `codeman-${session.id}` (documents the sweep's
+ *     derived name, which does NOT match real tmux names `codeman-${id.slice(0, 8)}`; the sweep is
+ *     dormant in production and dead panes are reported by checkPaneDeaths(), tested below)
  *
  * SAFETY: Server is constructed in testMode=true.
  * No real tmux commands are executed (TmuxManager is in VITEST test mode).
@@ -27,6 +29,7 @@ import { EventEmitter } from 'node:events';
 // ---------------------------------------------------------------------------
 const mocks = vi.hoisted(() => ({
   isPaneDeadImpl: vi.fn<[string], boolean | Promise<boolean>>().mockReturnValue(false),
+  paneDeathStates: new Map<string, { dead: boolean; exitStatus: number | null }>(),
   muxSessions: [] as Array<{
     sessionId: string;
     muxName: string;
@@ -236,6 +239,7 @@ vi.mock('../src/mux-factory.js', async () => {
     reconcileSessions = vi.fn(async () => mocks.reconcileResult);
     getSessions = vi.fn(() => mocks.muxSessions);
     isPaneDead = vi.fn(async (muxName: string) => mocks.isPaneDeadImpl(muxName));
+    listPaneDeathStates = vi.fn(async () => mocks.paneDeathStates);
     getSession = vi.fn();
     registerSession = vi.fn();
     killSession = vi.fn().mockResolvedValue(true);
@@ -400,6 +404,7 @@ describe('WebServer.checkAndRecoverDeadPanes()', () => {
 
     // Reset shared mock state
     mocks.isPaneDeadImpl.mockReturnValue(false);
+    mocks.paneDeathStates = new Map();
     mocks.muxSessions = [];
     mocks.reconcileResult = { alive: [], dead: [], discovered: [] };
 
@@ -652,6 +657,7 @@ describe('WebServer.checkAndRecoverDeadPanes()', () => {
   // -------------------------------------------------------------------------
   // Gap 10: Mux name formula
   // -------------------------------------------------------------------------
+  // Pins the sweep's current (non-matching) derived name — see the NOTE in sweepDeadPanes().
   it('calls isPaneDead with the mux name "codeman-<sessionId>"', async () => {
     const sessionId = 'mux-name-check';
     injectSession(server, {
@@ -799,6 +805,176 @@ describe('WebServer.checkAndRecoverDeadPanes()', () => {
 
       // No stale guard entries left behind
       expect((server as any)._recoveringSessionIds.size).toBe(0);
+    });
+  });
+  // -------------------------------------------------------------------------
+  // checkPaneDeaths(): busy worktree session with a real 8-char tmux name
+  // -------------------------------------------------------------------------
+  describe('checkPaneDeaths() with real tmux mux names', () => {
+    const fullId = 'a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+    const realMuxName = `codeman-${fullId.slice(0, 8)}`;
+
+    function injectMuxSession(opts: { busy: boolean; worktreePath?: string }): any {
+      const session = injectSession(server, { id: fullId, busy: opts.busy, worktreePath: opts.worktreePath });
+      Object.assign(session, {
+        mode: 'claude',
+        paused: false,
+        paneDead: false,
+        muxName: realMuxName,
+        ptyGeneration: 1,
+        markPaneDead: vi.fn(function (exitStatus: number | null) {
+          session.paneDead = true;
+          session.paneExitStatus = exitStatus;
+          session.isBusy.mockReturnValue(false);
+          return true;
+        }),
+      });
+      return session;
+    }
+
+    it('marks a BUSY worktree session exited when its pane (codeman-<8 chars>) is dead', async () => {
+      const session = injectMuxSession({ busy: true, worktreePath: '/some/worktree' });
+      mocks.paneDeathStates = new Map([[realMuxName, { dead: true, exitStatus: 0 }]]);
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).toHaveBeenCalledWith(0);
+      const broadcast = (server as any).broadcast as ReturnType<typeof vi.fn>;
+      const eventNames: string[] = broadcast.mock.calls.map((c: unknown[]) => c[0]);
+      expect(eventNames).toContain('session:updated');
+      // Pane death must never look like a session exit (frontend auto-closes on code 0)
+      expect(eventNames.some((n) => n.includes('exit'))).toBe(false);
+      expect((server as any).persistSessionState).toHaveBeenCalledWith(session);
+
+      // The auto-recovery sweep must not then fight it: the session is no longer busy
+      mocks.isPaneDeadImpl.mockReturnValue(true);
+      await (server as any).checkAndRecoverDeadPanes();
+      await flushAsync();
+      expect(session.prepareForRestart).not.toHaveBeenCalled();
+      expect(session.startInteractive).not.toHaveBeenCalled();
+    });
+
+    it('matches pane states by the session muxName, not a name derived from the full id', async () => {
+      const session = injectMuxSession({ busy: true, worktreePath: '/some/worktree' });
+      mocks.paneDeathStates = new Map([
+        [`codeman-${fullId}`, { dead: true, exitStatus: 1 }],
+        [realMuxName, { dead: false, exitStatus: null }],
+      ]);
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // checkPaneDeaths(): remaining branches (common case, skips, race and in-flight guards)
+  // -------------------------------------------------------------------------
+  describe('checkPaneDeaths() branches', () => {
+    /** A mux-bound session (idle, no worktree) whose muxName is `codeman-<first 8 chars>`. */
+    function injectPaneSession(id: string, overrides: Record<string, unknown> = {}): any {
+      const session = injectSession(server, { id });
+      Object.assign(session, {
+        mode: 'shell',
+        paused: false,
+        paneDead: false,
+        muxName: `codeman-${id.slice(0, 8)}`,
+        ptyGeneration: 1,
+        markPaneDead: vi.fn().mockReturnValue(true),
+        ...overrides,
+      });
+      return session;
+    }
+
+    const broadcast = () => (server as any).broadcast as ReturnType<typeof vi.fn>;
+    const persist = () => (server as any).persistSessionState as ReturnType<typeof vi.fn>;
+    const listPaneDeathStates = () => (server as any).mux.listPaneDeathStates as ReturnType<typeof vi.fn>;
+
+    it('marks a plain idle non-worktree session exited, broadcasts SessionUpdated and persists', async () => {
+      const session = injectPaneSession('plain001-idle');
+      mocks.paneDeathStates = new Map([['codeman-plain001', { dead: true, exitStatus: 7 }]]);
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).toHaveBeenCalledWith(7);
+      const names: string[] = broadcast().mock.calls.map((c: unknown[]) => c[0] as string);
+      expect(names).toEqual(['session:updated']);
+      expect(persist()).toHaveBeenCalledWith(session);
+    });
+
+    it.each([
+      ['paused', (_srv: any, s: any) => (s.paused = true)],
+      ['already marked paneDead', (_srv: any, s: any) => (s.paneDead = true)],
+      ['being cleaned up', (srv: any, s: any) => srv.cleaningUp.add(s.id)],
+      ['being auto-recovered', (srv: any, s: any) => srv._recoveringSessionIds.add(s.id)],
+    ])('skips a session that is %s', async (_label, setup) => {
+      const session = injectPaneSession('skip0001-sess');
+      setup(server, session);
+      mocks.paneDeathStates = new Map([['codeman-skip0001', { dead: true, exitStatus: 0 }]]);
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).not.toHaveBeenCalled();
+      expect(broadcast()).not.toHaveBeenCalled();
+      expect(persist()).not.toHaveBeenCalled();
+    });
+
+    it('skips a session restarted (ptyGeneration changed) while the probe was pending', async () => {
+      const session = injectPaneSession('race0001-sess');
+      let resolveProbe!: (m: Map<string, { dead: boolean; exitStatus: number | null }>) => void;
+      listPaneDeathStates().mockImplementationOnce(() => new Promise((r) => (resolveProbe = r)));
+
+      const check = (server as any).checkPaneDeaths() as Promise<void>;
+      session.ptyGeneration = 2; // restart completed during the probe
+      resolveProbe(new Map([['codeman-race0001', { dead: true, exitStatus: 0 }]]));
+      await check;
+
+      expect(session.markPaneDead).not.toHaveBeenCalled();
+      expect(broadcast()).not.toHaveBeenCalled();
+    });
+
+    it('does not broadcast or persist when markPaneDead() declines', async () => {
+      const session = injectPaneSession('decl0001-sess', { markPaneDead: vi.fn().mockReturnValue(false) });
+      mocks.paneDeathStates = new Map([['codeman-decl0001', { dead: true, exitStatus: 1 }]]);
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).toHaveBeenCalledWith(1);
+      expect(broadcast()).not.toHaveBeenCalled();
+      expect(persist()).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['its pane is alive', new Map([['codeman-live0001', { dead: false, exitStatus: null }]])],
+      ['its pane has no entry', new Map([['codeman-someone', { dead: true, exitStatus: 0 }]])],
+      ['the probe returns an empty map', new Map()],
+    ])('does not mark a session when %s', async (_label, states) => {
+      const session = injectPaneSession('live0001-sess');
+      mocks.paneDeathStates = states as Map<string, { dead: boolean; exitStatus: number | null }>;
+
+      await (server as any).checkPaneDeaths();
+
+      expect(session.markPaneDead).not.toHaveBeenCalled();
+      expect(broadcast()).not.toHaveBeenCalled();
+    });
+
+    it('does not probe again while a check is in flight, and resets the guard afterwards', async () => {
+      injectPaneSession('flight01-sess');
+      let resolveProbe!: (m: Map<string, { dead: boolean; exitStatus: number | null }>) => void;
+      listPaneDeathStates().mockImplementationOnce(() => new Promise((r) => (resolveProbe = r)));
+
+      const first = (server as any).checkPaneDeaths() as Promise<void>;
+      expect(listPaneDeathStates()).toHaveBeenCalledTimes(1);
+
+      await (server as any).checkPaneDeaths();
+      expect(listPaneDeathStates()).toHaveBeenCalledTimes(1);
+
+      resolveProbe(new Map());
+      await first;
+      expect((server as any)._paneDeathCheckInFlight).toBe(false);
+
+      await (server as any).checkPaneDeaths();
+      expect(listPaneDeathStates()).toHaveBeenCalledTimes(2);
     });
   });
 });

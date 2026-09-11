@@ -1824,7 +1824,8 @@ const SessionIndicatorBar = {
     const status = session.displayStatus ?? session.status ?? 'idle';
     if (this._dot) {
       this._dot.classList.toggle('busy', status === 'busy');
-      this._dot.classList.toggle('idle', status !== 'busy');
+      this._dot.classList.toggle('stopped', status === 'stopped');
+      this._dot.classList.toggle('idle', status !== 'busy' && status !== 'stopped');
     }
 
     this._bar.style.display = 'flex';
@@ -8065,10 +8066,20 @@ class CodemanApp {
     // RC-1 fix: if a show-timer is pending, force 'busy' so the in-flight debounce is not lost.
     // If a hide-timer is pending and old displayStatus was 'busy', preserve 'busy' to prevent
     // premature idle stamp while the 4s hide-delay is still counting down.
-    if (this._tabStatusTimers.has(session.id)) {
+    // A server-side 'stopped' (harness exited in its pane, or parked) must reach the tab dot, and
+    // so must the restart that follows it — neither arrives as a working/idle event.
+    if (session.status === 'stopped') {
+      const showT = this._tabStatusTimers.get(session.id);
+      if (showT) { clearTimeout(showT); this._tabStatusTimers.delete(session.id); }
+      const hideT = this._tabStatusHideTimers.get(session.id);
+      if (hideT) { clearTimeout(hideT); this._tabStatusHideTimers.delete(session.id); }
+      session.displayStatus = 'stopped';
+    } else if (this._tabStatusTimers.has(session.id)) {
       session.displayStatus = 'busy';
     } else if (this._tabStatusHideTimers.has(session.id) && oldSession?.displayStatus === 'busy') {
       session.displayStatus = 'busy';
+    } else if (oldSession?.displayStatus === 'stopped') {
+      session.displayStatus = session.status ?? 'idle';
     } else {
       session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
     }
@@ -10354,6 +10365,8 @@ class CodemanApp {
         if (statusEl && !statusEl.classList.contains(statusClass)) {
           statusEl.className = `tab-status ${statusClass}`;
         }
+        const tabTitle = this._getSessionTooltip(session);
+        if (tab.title !== tabTitle) tab.title = tabTitle;
 
         // Update name if changed
         const nameEl = tab.querySelector('.tab-name');
@@ -10754,10 +10767,13 @@ class CodemanApp {
 
   /** Build tooltip text for a session tab */
   _getSessionTooltip(session) {
+    const exited = session.paneDead
+      ? `Exited${session.paneExitStatus != null ? ` (status ${session.paneExitStatus})` : ''} \u2014 Restart from the session menu\n`
+      : '';
     if (session.worktreeBranch && session.workingDir) {
-      return `Branch: ${session.worktreeBranch}\n${session.workingDir}`;
+      return `${exited}Branch: ${session.worktreeBranch}\n${session.workingDir}`;
     }
-    return session.workingDir || '';
+    return exited + (session.workingDir || '');
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -13029,8 +13045,8 @@ class CodemanApp {
       menu.appendChild(parkSep);
     }
 
-    // Restart item (not for shell sessions; meaningless while paused)
-    if (!isShell && !isPaused) {
+    // Restart item (not for shell sessions unless their pane exited; meaningless while paused)
+    if ((!isShell || session.paneDead) && !isPaused) {
       const restartItem = document.createElement('div');
       restartItem.className = 'session-ctx-item';
       restartItem.setAttribute('role', 'menuitem');
@@ -13174,7 +13190,10 @@ class CodemanApp {
 
     this._restartingSessionId = sessionId;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/restart`, { method: 'POST' });
+      // A dead pane is respawned in place (scrollback kept) by the start routes; /restart would
+      // kill the tmux session and refuses shell sessions.
+      const action = !session.paneDead ? 'restart' : session.mode === 'shell' ? 'shell' : 'interactive';
+      const res = await fetch(`/api/sessions/${sessionId}/${action}`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         this.showToast(`Restarted session "${this.getSessionName(session)}"`, 'info');

@@ -41,6 +41,7 @@ import type {
   MuxSessionWithStats,
   CreateSessionOptions,
   RespawnPaneOptions,
+  PaneDeathState,
 } from './mux-interface.js';
 
 // Per-harness binary resolution, spawn command and tmux env setup
@@ -499,6 +500,41 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Pane-death state of every tmux session in ONE async `list-panes -a` call, so a periodic
+   * sweep costs a single exec regardless of session count. Keyed by tmux session name; each
+   * entry is the session's lowest-index pane (the harness pane — agent-team splits add panes).
+   * Empty map in test mode or when tmux is unavailable / has no server.
+   */
+  async listPaneDeathStates(): Promise<Map<string, PaneDeathState>> {
+    const states = new Map<string, PaneDeathState>();
+    if (IS_TEST_MODE) return states;
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync(
+        'tmux',
+        ['list-panes', '-a', '-F', '#{session_name}\t#{pane_index}\t#{pane_dead}\t#{pane_dead_status}'],
+        { timeout: EXEC_TIMEOUT_MS, encoding: 'utf8' }
+      ));
+    } catch {
+      return states;
+    }
+    const lowestIndex = new Map<string, number>();
+    for (const line of stdout.split('\n')) {
+      const [name, indexStr, deadStr, statusStr] = line.split('\t');
+      if (!name || indexStr === undefined) continue;
+      const index = Number(indexStr);
+      if (!Number.isFinite(index)) continue;
+      const seen = lowestIndex.get(name);
+      if (seen !== undefined && seen <= index) continue;
+      lowestIndex.set(name, index);
+      const dead = deadStr === '1';
+      const exitStatus = dead && statusStr ? Number(statusStr) : NaN;
+      states.set(name, { dead, exitStatus: Number.isFinite(exitStatus) ? exitStatus : null });
+    }
+    return states;
   }
 
   /**

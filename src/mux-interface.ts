@@ -103,6 +103,14 @@ export interface RespawnPaneOptions {
  * - `sessionDied` (data: { sessionId: string }) - Session died unexpectedly
  * - `statsUpdated` (sessions: MuxSessionWithStats[]) - Stats refreshed
  */
+/** Death state of a mux session's primary pane (see `listPaneDeathStates`). */
+export interface PaneDeathState {
+  /** True when the pane's command exited (remain-on-exit keeps the pane). */
+  dead: boolean;
+  /** Exit status of the exited command, or null when alive/unknown. */
+  exitStatus: number | null;
+}
+
 export interface TerminalMultiplexer extends EventEmitter {
   /** Which backend this instance uses */
   readonly backend: 'tmux';
@@ -220,6 +228,13 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /** Check if the pane in a session is dead (command exited but remain-on-exit keeps it alive) */
   isPaneDead(muxName: string): Promise<boolean>;
+
+  /**
+   * Batch pane-death probe for every mux session in one async call. Keyed by mux session
+   * name; each entry describes the session's primary (lowest-index) pane. Returns an empty
+   * map on failure.
+   */
+  listPaneDeathStates(): Promise<Map<string, PaneDeathState>>;
 
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
   respawnPane(options: RespawnPaneOptions): Promise<number | null>;
