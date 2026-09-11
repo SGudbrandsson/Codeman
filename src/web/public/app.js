@@ -599,6 +599,85 @@ function _checkFilePathExists(sessionId, path) {
 }
 
 /**
+ * Join the soft-wrapped terminal line containing buffer row `y1` (1-based, as xterm
+ * passes it to link providers) into one string. Returns `{ text, cells }` where
+ * `cells[i] = { row0, x0, width }` is the buffer cell behind UTF-16 unit `i` of
+ * `text`, so string offsets map back to cells even with wide (CJK/emoji) chars.
+ * Returns null when the row does not exist. Capped at 8 rows / 2048 chars.
+ */
+function _terminalLogicalLine(buffer, y1, cols) {
+  var row = y1 - 1;
+  var line = buffer.getLine(row);
+  if (!line) return null;
+  var up = 0;
+  while (line.isWrapped && row > 0 && up < 7) {
+    var prev = buffer.getLine(row - 1);
+    if (!prev) break;
+    row--;
+    up++;
+    line = prev;
+  }
+  var text = '';
+  var cells = [];
+  var reuse = buffer.getNullCell ? buffer.getNullCell() : undefined;
+  for (var n = 0; n < 8 && line && text.length < 2048; n++) {
+    var width = Math.min(cols || line.length, line.length);
+    for (var x = 0; x < width; x++) {
+      var cell = line.getCell(x, reuse);
+      if (!cell) continue;
+      var w = cell.getWidth();
+      if (w === 0) continue; // trailing half of a wide char
+      var chars = cell.getChars() || ' ';
+      for (var k = 0; k < chars.length; k++) cells.push({ row0: row, x0: x, width: w });
+      text += chars;
+    }
+    var next = buffer.getLine(row + 1);
+    if (!next || !next.isWrapped) break;
+    row++;
+    line = next;
+  }
+  return { text: text, cells: cells };
+}
+
+/**
+ * Find file-reference tokens (`src/a.tsx:12`, `/abs/b.ts:3:4`, `file:///x`) in a line
+ * of terminal text. Returns `[{ start, end, path, line, col }]` with string offsets
+ * (end exclusive, covering the `:line` suffix). Classification is delegated to
+ * parseMarkdownFileLinkTarget so terminal and transcript links agree. URLs are skipped.
+ */
+function extractTerminalFileLinkCandidates(text) {
+  var out = [];
+  if (!text || (text.indexOf('/') === -1 && text.indexOf('.') === -1)) return out;
+  var re = /[^\s"'`<>()\[\]{}|;,]+/g;
+  var m;
+  while ((m = re.exec(text)) !== null && out.length < 20) {
+    var token = m[0].replace(/[.,:;!?]+$/, ''); // sentence punctuation, `path:12:`
+    if (!token) continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) && !/^file:\/\//i.test(token)) continue;
+    var parsed = parseMarkdownFileLinkTarget(token);
+    if (!parsed) continue;
+    out.push({ start: m.index, end: m.index + token.length, path: parsed.path, line: parsed.line, col: parsed.col });
+  }
+  return out;
+}
+
+/**
+ * Map a terminal file reference to the path the sandboxed file endpoints accept:
+ * absolute paths inside `workingDir` become relative (so review notes / restore keys
+ * match tree-opened files), other absolute paths return null (not openable, no
+ * request), relative paths pass through with a leading `./` dropped.
+ */
+function _terminalLinkPath(path, workingDir) {
+  if (!path || !workingDir) return null;
+  if (path.charAt(0) === '/') {
+    if (path.indexOf(workingDir + '/') !== 0) return null;
+    path = path.slice(workingDir.length + 1);
+  }
+  while (path.indexOf('./') === 0) path = path.slice(2);
+  return path || null;
+}
+
+/**
  * Scan a rendered DOM subtree for inline-code spans that look like project-relative
  * file paths, verify each unique path exists server-side, and turn the existing ones
  * into clickable links that open the file in the file-editor v2 surface (the files
@@ -7032,96 +7111,71 @@ class CodemanApp {
 
   /**
    * Register a custom link provider for xterm.js that detects file paths
-   * in terminal output and makes them clickable.
-   * When clicked, opens a floating log viewer window with live streaming.
+   * (absolute or working-dir relative, optional :line[:col]) in terminal output.
+   * Only paths that exist inside the session working dir are underlined; clicking
+   * opens them in the file editor, jumping to the line when one is given.
    */
   registerFilePathLinkProvider() {
     const self = this;
-
-    // Debug: Track if provider is being invoked
-    let lastInvokedLine = -1;
+    // Negative existence results are re-checked after 30s so a file created after the
+    // first hover becomes linkable; positive results stay in the shared cache.
+    const missingSince = new Map();
+    const checkExists = (sessionId, path) => {
+      const key = sessionId + '::' + path;
+      const since = missingSince.get(key);
+      if (since !== undefined && Date.now() - since > 30000) {
+        missingSince.delete(key);
+        _filePathExistsCache.delete(key);
+      }
+      return _checkFilePathExists(sessionId, path).then((exists) => {
+        if (!exists && !missingSince.has(key)) missingSince.set(key, Date.now());
+        return exists;
+      });
+    };
 
     this.terminal.registerLinkProvider({
-      provideLinks(bufferLineNumber, callback) {
-        // Debug logging - only log if line changed to avoid spam
-        if (bufferLineNumber !== lastInvokedLine) {
-          lastInvokedLine = bufferLineNumber;
-          console.debug('[LinkProvider] Checking line:', bufferLineNumber);
+      provideLinks(y, callback) {
+        const sessionId = self.activeSessionId;
+        const session = sessionId && self.sessions ? self.sessions.get(sessionId) : null;
+        const workingDir = session && session.workingDir ? String(session.workingDir).replace(/\/+$/, '') : '';
+        if (!workingDir) { callback(undefined); return; }
+
+        // y is 1-based; a soft-wrapped path is joined so every row yields the same link.
+        const logical = _terminalLogicalLine(self.terminal.buffer.active, y, self.terminal.cols);
+        if (!logical) { callback(undefined); return; }
+
+        const candidates = [];
+        for (const c of extractTerminalFileLinkCandidates(logical.text)) {
+          const relPath = _terminalLinkPath(c.path, workingDir);
+          if (relPath) candidates.push({ ...c, relPath });
         }
+        if (!candidates.length) { callback(undefined); return; }
 
-        const buffer = self.terminal.buffer.active;
-        const line = buffer.getLine(bufferLineNumber);
-
-        if (!line) {
-          callback(undefined);
-          return;
-        }
-
-        // Get line text - translateToString handles wrapped lines
-        const lineText = line.translateToString(true);
-
-        if (!lineText || !lineText.includes('/')) {
-          callback(undefined);
-          return;
-        }
-
-        const links = [];
-
-        // Pattern 1: Commands with file paths (tail -f, cat, head, grep pattern, etc.)
-        // Handles: tail -f /path, grep pattern /path, cat -n /path
-        const cmdPattern = /(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]*\s+)*(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
-
-        // Pattern 2: Paths with common extensions
-        const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
-
-        // Pattern 3: Bash() tool output
-        const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
-
-        const addLink = (filePath, matchIndex) => {
-          const startCol = lineText.indexOf(filePath, matchIndex);
-          if (startCol === -1) return;
-
-          // Skip if already have link at this position
-          if (links.some(l => l.range.start.x === startCol + 1)) return;
-
-          links.push({
-            text: filePath,
-            range: {
-              start: { x: startCol + 1, y: bufferLineNumber },      // 1-based
-              end: { x: startCol + filePath.length + 1, y: bufferLineNumber }
-            },
-            decorations: {
-              pointerCursor: true,
-              underline: true
-            },
-            activate(event, text) {
-              self.openLogViewerWindow(text, self.activeSessionId);
-            }
+        Promise.all(candidates.map((c) => checkExists(sessionId, c.relPath))).then((results) => {
+          if (self.activeSessionId !== sessionId) { callback(undefined); return; }
+          const links = [];
+          candidates.forEach((c, i) => {
+            const first = logical.cells[c.start];
+            const last = logical.cells[c.end - 1];
+            if (!results[i] || !first || !last) return;
+            links.push({
+              text: logical.text.slice(c.start, c.end),
+              range: {
+                start: { x: first.x0 + 1, y: first.row0 + 1 },       // 1-based
+                end: { x: last.x0 + last.width, y: last.row0 + 1 }   // 1-based, inclusive
+              },
+              decorations: {
+                pointerCursor: true,
+                underline: true
+              },
+              activate() {
+                if (self.activeSessionId !== sessionId) return;
+                self.openFileInEditor(c.relPath, { line: c.line || undefined });
+              }
+            });
           });
-        };
-
-        // Match all patterns
-        let match;
-
-        cmdPattern.lastIndex = 0;
-        while ((match = cmdPattern.exec(lineText)) !== null) {
-          addLink(match[2], match.index);
-        }
-
-        extPattern.lastIndex = 0;
-        while ((match = extPattern.exec(lineText)) !== null) {
-          addLink(match[1], match.index);
-        }
-
-        bashPattern.lastIndex = 0;
-        while ((match = bashPattern.exec(lineText)) !== null) {
-          addLink(match[1], match.index);
-        }
-
-        if (links.length > 0) {
-          console.debug('[LinkProvider] Found links:', links.map(l => l.text));
-        }
-        callback(links.length > 0 ? links : undefined);
+          callback(links.length ? links : undefined);
+        });
       }
     });
 
@@ -21283,8 +21337,9 @@ class CodemanApp {
    * frame and images/binaries in their real previews — the old read-only <pre>
    * modal is gone. Back stack ends up as files-sheet → files-file, so Back walks
    * file → tree → closed exactly like opening from the sheet.
-   * opts.line (from transcript file links) is accepted but not applied yet: the
-   * default file views have no source-line mapping.
+   * opts.line (transcript and terminal file links) scrolls the plain code view to
+   * that line; markdown Preview, the HTML frame and binary previews have no
+   * source-line mapping and stay at the top.
    */
   async openFileInEditor(path, opts = {}) {
     if (!this.activeSessionId) { this.showToast('No active session', 'error'); return; }
@@ -21306,6 +21361,7 @@ class CodemanApp {
     await this._filesEnsureVendor();
     await this.filesOpenFile(path);
     if (opts.scrollTop) this._filesRestoreScroll(opts.scrollTop);
+    else if (opts.line > 1) this._filesScrollToLine(path, opts.line);
   }
 
   // Loads dist/web/public/vendor/editor.min.js on demand, exposing
@@ -22869,6 +22925,25 @@ class CodemanApp {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const content = this.$('filesSheetViewContent');
       if (content) content.scrollTop = top;
+    }));
+  }
+
+  // Best-effort :line jump. Only the plain <pre><code> view maps 1:1 to source
+  // lines (white-space: pre, no wrapping); any other view is left alone.
+  _filesScrollToLine(path, line) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const cur = this.filesState && this.filesState.current;
+      if (!cur || cur.path !== path || cur.editing) return;
+      const content = this.$('filesSheetViewContent');
+      const pre = content && content.querySelector(':scope > pre');
+      const code = pre && pre.querySelector(':scope > code');
+      if (!code) return;
+      const codeStyle = getComputedStyle(code);
+      let lineHeight = parseFloat(codeStyle.lineHeight);
+      if (!lineHeight) lineHeight = (parseFloat(codeStyle.fontSize) || 12.5) * 1.2; // 'normal'
+      const top = pre.getBoundingClientRect().top - content.getBoundingClientRect().top + content.scrollTop
+        + (parseFloat(getComputedStyle(pre).paddingTop) || 0);
+      content.scrollTop = Math.max(0, top + (line - 1) * lineHeight);
     }));
   }
 

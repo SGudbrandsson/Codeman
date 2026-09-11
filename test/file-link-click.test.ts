@@ -1,8 +1,11 @@
 /**
  * File Link Click Tests for Codeman Web UI
  *
- * Tests that file paths displayed in terminal output are clickable
- * and open the log viewer window correctly.
+ * Tests that file paths displayed in terminal output reach the terminal, and
+ * that the tail-file SSE endpoint (used by the Bash-tool row's live log viewer)
+ * streams. Clicking a terminal file path now opens the file editor, not the
+ * log viewer; the link provider itself is covered by
+ * test/terminal-file-link-provider.test.ts (runs the real app.js code).
  *
  * Port allocation: 3154 (see CLAUDE.md test port table)
  */
@@ -10,7 +13,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 import { WebServer } from '../src/web/server.js';
-import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -49,8 +52,10 @@ async function waitForElement(selector: string, timeout = 10000): Promise<boolea
     try {
       const count = browserJson<{ count: number }>(`get count "${selector}"`);
       if (count.count > 0) return true;
-    } catch { /* retry */ }
-    await new Promise(r => setTimeout(r, 500));
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
@@ -74,7 +79,9 @@ function isVisible(selector: string): boolean {
 function closeBrowser() {
   try {
     browser('close');
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 describe('File Link Click Tests', () => {
@@ -95,12 +102,12 @@ describe('File Link Click Tests', () => {
 
     server = new WebServer(TEST_PORT, false, true);
     await server.start();
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
 
     // Test if browser is available
     try {
       browser(`open ${baseUrl}`);
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2000));
       const title = browserJson<{ title: string }>('get title');
       browserAvailable = title.title === 'Codeman';
     } catch (e) {
@@ -114,14 +121,18 @@ describe('File Link Click Tests', () => {
     for (const sessionId of createdSessions) {
       try {
         await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: 'DELETE' });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     await server.stop();
 
     // Cleanup test directory
     try {
       rmSync(testDir, { recursive: true, force: true });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, 60000);
 
   it('should create shell session and display terminal output', async () => {
@@ -142,7 +153,7 @@ describe('File Link Click Tests', () => {
     createdSessions.push(data.session.id);
 
     // Wait for session to appear in UI
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     // Check that terminal is visible
     const terminalExists = await waitForElement('.xterm-screen', 5000);
@@ -167,7 +178,7 @@ describe('File Link Click Tests', () => {
       body: JSON.stringify({ input: command + '\r' }),
     });
 
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     // Check if xterm contains the file path
     // The xterm link provider should detect "tail -f /path/to/file" pattern
@@ -176,49 +187,6 @@ describe('File Link Click Tests', () => {
 
     // File path should be visible in terminal
     expect(terminalText).toContain(testLogFile);
-  }, 60000);
-
-  it('should open log viewer when clicking file path', async () => {
-    if (!browserAvailable || createdSessions.length === 0) {
-      console.log('Skipping: browser not available or no session');
-      return;
-    }
-
-    // Add some content to the log file for streaming
-    for (let i = 1; i <= 5; i++) {
-      appendFileSync(testLogFile, `Log entry ${i}\n`);
-    }
-
-    // Try to click on a link in the terminal
-    // The link provider registers on text matching "tail -f /path" patterns
-    // We need to find and click the link
-
-    // First, let's check if there are any registered links
-    // xterm.js links have class 'xterm-link' when hovered
-
-    // Try clicking on the terminal area where the file path should be
-    // The file path should be clickable based on the registerFilePathLinkProvider
-
-    // Get terminal dimensions to calculate where to click
-    try {
-      // Click somewhere in the terminal where the tail -f line should be
-      // This is approximate - the link detection works on hover
-      browser('click ".xterm-screen"');
-      await new Promise(r => setTimeout(r, 500));
-    } catch (e) {
-      console.log('Click failed:', e);
-    }
-
-    // Check if log viewer window appeared
-    // The log viewer has class .log-viewer-window
-    const logViewerExists = await waitForElement('.log-viewer-window', 3000);
-
-    // Note: This may fail because clicking the terminal doesn't guarantee
-    // clicking on the exact link. We need a more precise test.
-    console.log('Log viewer exists:', logViewerExists);
-
-    // For now, just verify the infrastructure is in place
-    // Real testing would need coordinate-based clicking on the link
   }, 60000);
 
   it('should detect file link patterns in terminal output', async () => {
@@ -243,10 +211,10 @@ describe('File Link Click Tests', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input: `echo "${pattern}"\r` }),
       });
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     }
 
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
 
     // Verify patterns appear in terminal
     const terminalText = getText('.xterm-screen');
@@ -254,76 +222,6 @@ describe('File Link Click Tests', () => {
       expect(terminalText).toContain(testLogFile);
     }
   }, 60000);
-
-it('should match file paths with various command patterns', () => {
-    // Unit test for pattern matching logic - runs without browser
-    // Pattern matches: tail -f /path, grep pattern /path, cat -n /path
-    const cmdPattern = /(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]*\s+)*(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
-    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
-    const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
-
-    // Test cmdPattern
-    const cmdTestCases = [
-      { line: 'tail -f /var/log/syslog', expected: '/var/log/syslog' },
-      { line: 'cat -n /etc/passwd', expected: '/etc/passwd' },
-      { line: 'head -100 /home/user/file.txt', expected: '/home/user/file.txt' },
-      { line: 'less /tmp/debug.log', expected: '/tmp/debug.log' },
-      { line: 'grep error /var/log/app.log', expected: '/var/log/app.log' },
-      { line: 'vim /opt/script.sh', expected: '/opt/script.sh' },
-    ];
-
-    for (const tc of cmdTestCases) {
-      cmdPattern.lastIndex = 0;
-      const match = cmdPattern.exec(tc.line);
-      expect(match, `cmdPattern should match: ${tc.line}`).not.toBeNull();
-      expect(match![2]).toBe(tc.expected);
-    }
-
-    // Test extPattern
-    const extTestCases = [
-      { line: 'Opening /tmp/test.log for reading', expected: '/tmp/test.log' },
-      { line: 'File saved to /home/user/data.json', expected: '/home/user/data.json' },
-      { line: 'Reading /var/config.yaml', expected: '/var/config.yaml' },
-      { line: 'Script at /opt/tools/run.sh', expected: '/opt/tools/run.sh' },
-    ];
-
-    for (const tc of extTestCases) {
-      extPattern.lastIndex = 0;
-      const match = extPattern.exec(tc.line);
-      expect(match, `extPattern should match: ${tc.line}`).not.toBeNull();
-      expect(match![1]).toBe(tc.expected);
-    }
-
-    // Test bashPattern
-    const bashTestCases = [
-      { line: 'Bash(tail -f /var/log/app.log)', expected: '/var/log/app.log' },
-      { line: 'Bash(cat /tmp/output.txt)', expected: '/tmp/output.txt' },
-    ];
-
-    for (const tc of bashTestCases) {
-      bashPattern.lastIndex = 0;
-      const match = bashPattern.exec(tc.line);
-      expect(match, `bashPattern should match: ${tc.line}`).not.toBeNull();
-      expect(match![1]).toBe(tc.expected);
-    }
-  });
-
-  it('should NOT match invalid or unsafe paths', () => {
-    const extPattern = /(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|yaml|yml|csv|xml|sh|py|ts|js))\b/g;
-
-    const invalidCases = [
-      'This is just text without paths',
-      './relative/path.log',  // relative path
-      'C:\\Windows\\path.log',  // windows path
-      '/usr/bin/something.log',  // /usr not in allowed prefixes
-    ];
-
-    for (const line of invalidCases) {
-      extPattern.lastIndex = 0;
-      const match = extPattern.exec(line);
-      expect(match, `extPattern should NOT match: ${line}`).toBeNull();
-    }
-  });
 
   it('should stream file content to log viewer', async () => {
     // Test the tail-file API endpoint directly
@@ -337,7 +235,7 @@ it('should match file paths with various command patterns', () => {
       });
       const data = await response.json();
       expect(data.success).toBe(true);
-      sessionId = data.sessionId;  // quick-start returns sessionId directly
+      sessionId = data.sessionId; // quick-start returns sessionId directly
       createdSessions.push(sessionId);
     }
 
