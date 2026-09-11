@@ -2,6 +2,8 @@
 // Bundled to dist/web/public/vendor/grid.min.js (+ grid.min.css) as an IIFE
 // that exposes one global so app.js stays React-free:
 //   window.CodemanGrid = { ready, load, mount, serialize, formatInfo, tabularFormatOf }
+// A csv/tsv handle also carries the detected delimiter (delimiterName for the
+// meta line); serialize() writes back with that same delimiter.
 //
 // Lazy-loaded by app.js (_filesEnsureGrid) only when a csv/tsv/xlsx/xls/ods file
 // is opened. Built only when the GRID packages are installed (they are
@@ -22,13 +24,16 @@ import { read as xlsxRead, write as xlsxWrite } from 'xlsx';
 import {
   tabularFormatOf,
   formatInfo,
-  delimiterOf,
+  detectDelimiter,
+  delimiterName,
   parseDelimited,
   rowsToJsf,
   serializeDelimited,
   sheetNameFor,
   isCanonicalNumber,
   formatCellValue,
+  computeColumnWidths,
+  sampleRowIndexes,
 } from './grid-tabular.mjs';
 
 // Dark chrome matching the files sheet (#0d1117 / #e6edf3, accent #58a6ff).
@@ -81,6 +86,69 @@ const STRUCTURAL_EVENTS = new Set([
   'move-columns',
   'move-cells',
 ]);
+
+// Column/row sizes a csv/tsv cannot store: resizing is not an unsaved change.
+const SIZE_EVENTS = new Set(['resize-column', 'resize-row']);
+
+// Auto-fit measures text with the font GRID's own editor auto-fit uses.
+let measureCtx;
+function textMeasure() {
+  if (measureCtx === undefined) {
+    measureCtx = null;
+    try {
+      const ctx = document.createElement('canvas').getContext('2d');
+      if (ctx) {
+        ctx.font = '14px calibri, sans-serif';
+        measureCtx = ctx;
+      }
+    } catch {
+      /* no canvas: computeColumnWidths falls back to its estimate */
+    }
+  }
+  return measureCtx ? (s) => measureCtx.measureText(s).width : undefined;
+}
+
+// Sampled rows × columns above which xls/ods auto-fit is skipped.
+const FIT_MAX_CELLS = 250000;
+
+/**
+ * xls/ods only (read-only, never saved): fit columns the workbook gives no
+ * width. xlsx is never fitted — its model is the one saved by toXLSX(), and
+ * viewing must not alter the file. Any failure keeps GRID's defaults.
+ */
+function fitUnsizedColumns(model) {
+  const workbook = model.getWorkbooks()[0];
+  if (!workbook) return;
+  const measure = textMeasure();
+  for (const sheet of workbook.getSheets()) {
+    try {
+      let hasCell = false;
+      for (const _cell of sheet.getCells()) {
+        hasCell = true;
+        break;
+      }
+      if (!hasCell) continue;
+      const b = sheet.getBounds();
+      const indexes = sampleRowIndexes(b.bottom + 1);
+      if (indexes.length * (b.right + 1) > FIT_MAX_CELLS) continue;
+      const rows = new Array(b.bottom + 1);
+      for (const r of indexes) {
+        const row = [];
+        for (let c = 0; c <= b.right; c++) {
+          const cell = sheet.getCellByRange({ top: r, left: c });
+          row.push(cell ? formatCellValue(cell.v) : '');
+        }
+        rows[r] = row;
+      }
+      const sized = (col) => (sheet.columns || []).some((g) => g && g.size != null && g.start <= col && col <= g.end);
+      computeColumnWidths(rows, { measure }).forEach((w, c) => {
+        if (w > 0 && !sized(c + 1)) workbook.setColumnWidth(sheet.name, c, Math.round(w));
+      });
+    } catch {
+      /* keep defaults */
+    }
+  }
+}
 
 /**
  * csv/tsv only: store a typed value the way the csv loader would store that
@@ -146,16 +214,29 @@ async function load({ format, text, bytes, filename, maxCells }) {
     .split('/')
     .pop();
   if (format === 'csv' || format === 'tsv') {
-    const delimiter = delimiterOf(format);
+    // Same delimiter for parse and save; a "sep=" line is kept in meta.sepLine.
+    const { delimiter, source } = detectDelimiter(text, format);
     const { rows, meta } = parseDelimited(text, delimiter);
     let cols = 0;
     for (const r of rows) if (r.length > cols) cols = r.length;
     const cells = rows.length * cols;
     if (maxCells && cells > maxCells) return { format, tooLarge: true, cells };
-    const model = Model.fromJSF(rowsToJsf(rows, sheetNameFor(name), name));
-    return { format, filename: name, model, meta, delimiter, rows: rows.length, cols };
+    const columnWidths = computeColumnWidths(rows, { measure: textMeasure() });
+    const model = Model.fromJSF(rowsToJsf(rows, sheetNameFor(name), name, { columnWidths }));
+    return {
+      format,
+      filename: name,
+      model,
+      meta,
+      delimiter,
+      delimiterName: delimiterName(delimiter),
+      delimiterSource: source,
+      rows: rows.length,
+      cols,
+    };
   }
   if (format === 'xlsx') {
+    // No auto-fit: this model is saved by toXLSX(), so viewing must not change it.
     const model = await Model.fromXLSX(bytes, name);
     return { format, filename: name, model };
   }
@@ -163,6 +244,7 @@ async function load({ format, text, bytes, filename, maxCells }) {
     const wb = xlsxRead(new Uint8Array(bytes), { type: 'array', cellFormula: true, cellStyles: false });
     const out = xlsxWrite(wb, { bookType: 'xlsx', type: 'array' });
     const model = await Model.fromXLSX(out, name.replace(/\.(xls|ods)$/i, '.xlsx'));
+    fitUnsizedColumns(model);
     return { format, filename: name, model };
   }
   throw new Error(`Unsupported spreadsheet format: ${format}`);
@@ -186,6 +268,7 @@ function mount(host, handle, { mode = 'view', onDirty } = {}) {
         onChange: (event) => {
           const type = event && event.type;
           if (!type || type === 'selection-change' || type === 'sheet-change') return;
+          if (SIZE_EVENTS.has(type) && (handle.format === 'csv' || handle.format === 'tsv')) return;
           if (STRUCTURAL_EVENTS.has(type)) handle.structureChanged = true;
           if (type === 'write-cell') {
             try {

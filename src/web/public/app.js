@@ -7754,9 +7754,10 @@ class CodemanApp {
   setupEventListeners() {
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
-      // Escape - close panels and modals
+      // Escape - close panels and modals (a maximised spreadsheet restores
+      // first; the key still reaches GRID so it can cancel a cell edit)
       if (e.key === 'Escape') {
-        this.closeAllPanels();
+        if (!this._filesGridHandleEscape(e)) this.closeAllPanels();
       }
 
       // Ctrl/Cmd + ? - help
@@ -21452,6 +21453,7 @@ class CodemanApp {
   // DOM-only teardown for the whole sheet (no confirm, no history). Mirrors the
   // _closeInternal pattern other OverlayHistory overlays use.
   _doCloseFilesSheet() {
+    this._filesGridSetMaximised(false);
     FilesTTS.stop();
     this._filesTeardownNotesUi();
     this._filesCloseNoteDialog();
@@ -21466,6 +21468,7 @@ class CodemanApp {
 
   // DOM-only return from a file view back to the tree (no confirm, no history).
   _doFilesBackToTree() {
+    this._filesGridSetMaximised(false);
     FilesTTS.stop();
     this._filesTeardownNotesUi();
     this._filesCloseNoteDialog();
@@ -21735,6 +21738,7 @@ class CodemanApp {
     this._filesClearSelSnapshot();
     this._filesTtsStartEl = null;
     this._filesDestroyEditor();
+    this._filesGridSetMaximised(false);
     this._filesShowView();
     this.$('filesSheetTitle').textContent = path.split('/').pop();
     this.$('filesSheetBackBtn').style.display = '';
@@ -21812,6 +21816,7 @@ class CodemanApp {
     const actions = this.$('filesSheetViewActions');
     if (!content) return;
     this._filesDestroyEditor();
+    this._filesGridSetMaximised(false);
     // Binaries are not editable — clear any editing state so save/edit can't fire.
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
     content.classList.remove('is-frame');
@@ -22013,6 +22018,7 @@ class CodemanApp {
     const cur = this.filesState && this.filesState.current;
     if (!cur || cur.editing) return;
     this.filesState.tabularMode = mode === 'text' ? 'text' : 'grid';
+    if (this.filesState.tabularMode === 'text') this._filesGridSetMaximised(false);
     this._filesRenderView();
   }
 
@@ -22023,24 +22029,92 @@ class CodemanApp {
       + `<div class="files-grid-attrib"><a href="https://grid.is" target="_blank" rel="noopener">Powered by GRID</a></div></div>`;
   }
 
+  // Meta line: size, format, the detected csv/tsv delimiter once the document
+  // has loaded, and why the file is read-only.
+  _filesGridMetaText(cur) {
+    const format = cur.kind === 'spreadsheet' ? cur.format : cur.tabular;
+    const readOnly = this._filesGridReadOnlyReason(cur);
+    const doc = cur.gridDoc;
+    const delimiter = cur.tabular && doc && doc.delimiterName ? ` • ${doc.delimiterName}-delimited` : '';
+    return `${this.formatFileSize(cur.size)} • ${format}${delimiter}${readOnly ? ` • read-only: ${readOnly}` : ''}`;
+  }
+
+  // ── Maximise ──────────────────────────────────────────────────────────────
+  // A CSS class on #filesSheet (is-grid-max) makes the sheet fill the viewport
+  // and hides its header; the toolbar (Restore, Cancel/Save) and the "Powered
+  // by GRID" bar stay. Nothing is remounted, so the model, selection and
+  // unsaved edits survive, and GRID's own ResizeObservers re-measure the
+  // canvas. Back (OverlayHistory 'files-grid-max') and Esc restore first.
+
+  _filesGridMaxIcon(on) {
+    const paths = on
+      ? '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>'
+      : '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>';
+    return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  }
+
+  // First toolbar action in grid view and edit, so it is never the one clipped
+  // on a narrow phone toolbar.
+  _filesGridMaxBtnHtml() {
+    const on = !!(this.filesState && this.filesState.gridMaximised);
+    const label = on ? 'Restore' : 'Maximise';
+    return `<button class="files-sheet-tool files-grid-max-btn" onclick="app.filesToggleGridMaximise()" title="${label}" aria-label="${label} spreadsheet" aria-pressed="${on}">${this._filesGridMaxIcon(on)}</button>`;
+  }
+
+  filesToggleGridMaximise() {
+    if (!this.filesState) return;
+    this._filesGridSetMaximised(!this.filesState.gridMaximised);
+  }
+
+  // Safe from any context: a no-op when unchanged. fromHistory = the browser
+  // already popped the entry (Back), so only the DOM is restored.
+  _filesGridSetMaximised(on, { fromHistory = false } = {}) {
+    if (!this.filesState) return;
+    on = !!on;
+    if (!!this.filesState.gridMaximised === on) return;
+    this.filesState.gridMaximised = on;
+    const sheet = this.$('filesSheet');
+    if (sheet) sheet.classList.toggle('is-grid-max', on);
+    const actions = this.$('filesSheetViewActions');
+    const btn = actions && actions.querySelector('.files-grid-max-btn');
+    if (btn) {
+      const label = on ? 'Restore' : 'Maximise';
+      btn.title = label;
+      btn.setAttribute('aria-label', `${label} spreadsheet`);
+      btn.setAttribute('aria-pressed', String(on));
+      btn.innerHTML = this._filesGridMaxIcon(on);
+    }
+    if (on) {
+      OverlayHistory.push('files-grid-max', () => this._filesGridSetMaximised(false, { fromHistory: true }));
+    } else if (!fromHistory && OverlayHistory.has('files-grid-max')) {
+      OverlayHistory.pop('files-grid-max');
+    }
+  }
+
+  // Called from the global capture-phase Escape handler before closeAllPanels().
+  // Deliberately no preventDefault/stopPropagation: GRID still gets the key.
+  _filesGridHandleEscape(e) {
+    if (!this.filesState || !this.filesState.gridMaximised) return false;
+    this._filesGridSetMaximised(false);
+    return true;
+  }
+
   _filesRenderGridView(cur) {
     const content = this.$('filesSheetViewContent');
     const meta = this.$('filesSheetViewMeta');
     const actions = this.$('filesSheetViewActions');
     if (!content) return;
     const isSheet = cur.kind === 'spreadsheet';
-    const format = isSheet ? cur.format : cur.tabular;
-    const readOnly = this._filesGridReadOnlyReason(cur);
-    const canEdit = !readOnly;
+    const canEdit = !this._filesGridReadOnlyReason(cur);
     content.classList.remove('is-frame');
     content.classList.add('is-grid');
     content.innerHTML = this._filesGridHostHtml();
-    meta.textContent = `${this.formatFileSize(cur.size)} • ${format}${readOnly ? ` • read-only: ${readOnly}` : ''}`;
+    meta.textContent = this._filesGridMetaText(cur);
     const editBtn = canEdit ? `<button class="files-sheet-tool" onclick="app.filesStartEdit()">Edit</button>` : '';
     // Binary spreadsheets have no text to copy; csv/tsv keep Copy (raw text).
     const copyBtn = isSheet ? '' : `<button class="files-sheet-tool" onclick="app.filesCopyCurrent()">Copy</button>`;
     const tabs = isSheet ? '' : this._filesTabularTabsHtml('grid');
-    actions.innerHTML = `${tabs}${editBtn}${copyBtn}${this._filesDownloadHtml(cur.path)}`;
+    actions.innerHTML = `${this._filesGridMaxBtnHtml()}${tabs}${editBtn}${copyBtn}${this._filesDownloadHtml(cur.path)}`;
     cur.editing = false;
     cur.gridHandle = null;
     this._filesTeardownNotesUi();
@@ -22066,7 +22140,7 @@ class CodemanApp {
       ? `<div class="files-sheet-notice files-grid-notice">${cur.tabular.toUpperCase()} stores values only — formulas save as results; formatting and extra sheets are not saved.</div>`
       : '';
     content.innerHTML = notice + this._filesGridHostHtml();
-    actions.innerHTML = `<button class="files-sheet-tool" onclick="app.filesCancelEdit()">Cancel</button><button class="files-sheet-tool" onclick="app.filesSave()">Save</button>`;
+    actions.innerHTML = `${this._filesGridMaxBtnHtml()}<button class="files-sheet-tool" onclick="app.filesCancelEdit()">Cancel</button><button class="files-sheet-tool" onclick="app.filesSave()">Save</button>`;
     await this._filesMountGrid(cur, 'edit');
   }
 
@@ -22096,6 +22170,9 @@ class CodemanApp {
         if (stale()) return;
         if (doc && doc.tooLarge) { cur.gridTooLarge = true; this._filesGridFallback(cur, null); return; }
         cur.gridDoc = doc;
+        // The detected delimiter is only known now.
+        const metaEl = this.$('filesSheetViewMeta');
+        if (metaEl) metaEl.textContent = this._filesGridMetaText(cur);
       }
       const content = this.$('filesSheetViewContent');
       const el = content && content.querySelector('.files-grid-mount');
@@ -22116,6 +22193,7 @@ class CodemanApp {
   _filesGridFallback(cur, err) {
     if (err) this.showToast('Spreadsheet view failed: ' + (err.message || err), 'error');
     this._filesDestroyEditor();
+    this._filesGridSetMaximised(false);
     if (cur.kind === 'spreadsheet') { this._filesRenderBinary(cur.rawData); return; }
     if (!cur.gridTooLarge) cur.gridUnavailable = true;
     const wasEditing = cur.editing;
@@ -22168,6 +22246,7 @@ class CodemanApp {
     // Binary spreadsheets and csv/tsv in the Grid tab edit in the GRID editor.
     if (cur.kind === 'spreadsheet' || this._filesWantsGrid(cur)) { this.filesStartGridEdit(); return; }
     if (cur.truncated) { this.showToast('File too large to edit safely', 'error'); return; }
+    this._filesGridSetMaximised(false);
     FilesTTS.stop();
     this._filesTeardownNotesUi();
     cur.editing = true;

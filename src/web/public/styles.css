@@ -13321,6 +13321,31 @@ a.files-sheet-tool { text-decoration: none; }
 }
 .files-grid-attrib a { color: #8b949e; text-decoration: none; }
 .files-grid-attrib a:hover { color: #58a6ff; text-decoration: underline; }
+/* Maximised spreadsheet (toolbar toggle, view and edit): the sheet fills the
+   viewport on phones and desktop. Three classes beat both the phone sheet and
+   the desktop modal rule. The header (title/Back/Close) is hidden; the toolbar
+   keeps Restore and Cancel/Save, and the "Powered by GRID" bar stays under the
+   grid, already padded for the bottom safe area. */
+.files-sheet.open.is-grid-max {
+  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+  padding: var(--safe-area-top, 0px) var(--safe-area-right, 0px) 0 var(--safe-area-left, 0px);
+}
+.files-sheet.is-grid-max .files-sheet-header { display: none; }
+.files-grid-max-btn { padding: 7px 8px; }
+.files-grid-max-btn svg { display: block; }
 .files-html-preview {
   flex: 1 1 auto;
   min-height: 0;

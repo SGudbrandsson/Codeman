@@ -3,7 +3,9 @@
 // imported directly by unit tests (test/grid-tabular.test.ts).
 //
 // Format matrix (see TASK.md §3):
-//   csv / tsv -> parsed client-side to JSF, edited in GRID, saved back as text
+//   csv / tsv -> delimiter detected (detectDelimiter), parsed client-side to
+//                JSF with auto-fit column widths, edited in GRID, saved back as
+//                text with the same delimiter
 //   xlsx      -> engine reads and writes natively, saved back as base64 bytes
 //   xls / ods -> converted to xlsx with SheetJS for viewing only (read-only)
 //
@@ -40,6 +42,172 @@ export function delimiterOf(format) {
   return format === 'tsv' ? '\t' : ',';
 }
 
+// Excel's "sep=X" hint: the first line (after an optional BOM) is exactly
+// "sep=" plus one character, then an EOL or the end of the file.
+const SEP_LINE_RE = /^sep=([^\r\n"])(\r\n|\n|$)/i;
+
+const DELIMITER_CANDIDATES = [',', ';', '\t', '|'];
+// Tie-break order among non-comma candidates (earlier wins).
+const DELIMITER_PREFERENCE = ['\t', ';', '|'];
+const DETECT_MAX_RECORDS = 50;
+const DETECT_MAX_CHARS = 64 * 1024;
+// A European decimal number: 1,50 / -3,5 / 1.234,56.
+const DECIMAL_COMMA_RE = /^[-+]?(\d{1,3}(\.\d{3})+|\d+),\d+$/;
+
+/**
+ * Quote-aware record scan with the same state machine as parseDelimited(),
+ * used by detectDelimiter() to score one candidate. Collects per non-blank
+ * record field counts, whether the scan looked like the wrong delimiter
+ * (a '"' in the middle of a field, or anything but the delimiter/EOL right
+ * after a closing quote), and decimal-comma evidence among the fields.
+ */
+function scanRecords(s, delimiter, { maxRecords = DETECT_MAX_RECORDS, truncated = false } = {}) {
+  const counts = [];
+  let dirty = false;
+  let decimalFields = 0;
+  let otherCommaFields = 0;
+  let fields = 0;
+  let field = '';
+  let fieldQuoted = false;
+  let inQuotes = false;
+  let afterQuote = false;
+  const n = s.length;
+  let i = 0;
+
+  const endField = () => {
+    if (DECIMAL_COMMA_RE.test(field)) decimalFields++;
+    else if (!fieldQuoted && field.includes(',')) otherCommaFields++;
+    fields++;
+    field = '';
+    fieldQuoted = false;
+    afterQuote = false;
+  };
+  const endRecord = () => {
+    const blank = fields === 0 && field === '' && !fieldQuoted;
+    endField();
+    if (!blank) counts.push(fields);
+    fields = 0;
+  };
+
+  while (i < n && counts.length < maxRecords) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        afterQuote = true;
+        i++;
+        continue;
+      }
+      field += c;
+      i++;
+      continue;
+    }
+    if (c === '"' && field === '' && !fieldQuoted) {
+      inQuotes = true;
+      fieldQuoted = true;
+      i++;
+      continue;
+    }
+    if (c === delimiter) {
+      endField();
+      i++;
+      continue;
+    }
+    if (c === '\r' && s[i + 1] === '\n') {
+      endRecord();
+      i += 2;
+      continue;
+    }
+    if (c === '\n') {
+      endRecord();
+      i++;
+      continue;
+    }
+    if (c === '"' || afterQuote) dirty = true;
+    afterQuote = false;
+    field += c;
+    i++;
+  }
+  // The final record is complete only if the text was not cut short.
+  if (counts.length < maxRecords && !truncated && (fields > 0 || field !== '' || fieldQuoted)) endRecord();
+  return { counts, dirty, decimalComma: decimalFields > 0 && otherCommaFields === 0 };
+}
+
+/**
+ * Delimiter of a delimited text file.
+ *   .tsv                      -> tab ('format')
+ *   "sep=X" first line        -> X ('sep')
+ *   sampled content           -> ',', ';', '\t' or '|' ('detected')
+ *   single column / ambiguous -> ',' ('default')
+ *
+ * A candidate is valid when its most common field count is at least 2 and at
+ * least 80% of the sampled non-blank records have it. Clean scans beat ones
+ * with stray quotes, then higher consistency wins. On a tie, tab > semicolon >
+ * pipe, and a non-comma candidate beats comma only with decimal-comma evidence
+ * (1,50;2,75 splits evenly on both, but is a semicolon file).
+ *
+ * @returns {{ delimiter: string, source: 'format'|'sep'|'detected'|'default' }}
+ */
+export function detectDelimiter(text, format) {
+  if (format === 'tsv') return { delimiter: '\t', source: 'format' };
+  let s = String(text == null ? '' : text);
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+  const sep = SEP_LINE_RE.exec(s);
+  if (sep) return { delimiter: sep[1], source: 'sep' };
+
+  const truncated = s.length > DETECT_MAX_CHARS;
+  const sample = truncated ? s.slice(0, DETECT_MAX_CHARS) : s;
+  const valid = [];
+  for (const delimiter of DELIMITER_CANDIDATES) {
+    const { counts, dirty, decimalComma } = scanRecords(sample, delimiter, { truncated });
+    if (counts.length === 0) continue;
+    const freq = new Map();
+    for (const w of counts) freq.set(w, (freq.get(w) || 0) + 1);
+    let modeWidth = 0;
+    let modeCount = 0;
+    for (const [w, k] of freq) {
+      if (k > modeCount || (k === modeCount && w > modeWidth)) {
+        modeWidth = w;
+        modeCount = k;
+      }
+    }
+    const consistency = modeCount / counts.length;
+    if (modeWidth >= 2 && consistency >= 0.8) valid.push({ delimiter, dirty, decimalComma, consistency });
+  }
+  const clean = valid.filter((v) => !v.dirty);
+  const pool = clean.length ? clean : valid;
+  if (!pool.length) return { delimiter: ',', source: 'default' };
+
+  const best = Math.max(...pool.map((v) => v.consistency));
+  const top = pool.filter((v) => Math.abs(v.consistency - best) < 1e-9);
+  const comma = top.find((v) => v.delimiter === ',');
+  const other = DELIMITER_PREFERENCE.map((d) => top.find((v) => v.delimiter === d)).find(Boolean);
+  if (!other) return { delimiter: ',', source: 'detected' };
+  if (comma && !other.decimalComma) return { delimiter: ',', source: 'detected' };
+  return { delimiter: other.delimiter, source: 'detected' };
+}
+
+/** Human name of a delimiter for the meta line: 'comma', 'semicolon', 'tab', 'pipe'. */
+export function delimiterName(d) {
+  switch (d) {
+    case ',':
+      return 'comma';
+    case ';':
+      return 'semicolon';
+    case '\t':
+      return 'tab';
+    case '|':
+      return 'pipe';
+    default:
+      return JSON.stringify(d);
+  }
+}
+
 /**
  * RFC 4180-style parser: quoted fields, "" escapes, embedded delimiters and
  * newlines, CRLF or LF line endings and a leading BOM.
@@ -49,12 +217,20 @@ export function delimiterOf(format) {
  * field count of every row (0 = blank line) so ragged rows and blank lines
  * survive an unmodified round-trip.
  *
- * @returns {{ rows: string[][], meta: { bom: boolean, eol: '\r\n'|'\n', trailingEol: boolean, widths: number[] } }}
+ * An Excel "sep=X" first line (after the BOM) is not data: it is removed from
+ * the rows and kept verbatim, EOL included, in meta.sepLine so it is written
+ * back on save. eol, trailingEol and widths describe the rest of the file
+ * (eol falls back to the sep line's EOL when the body has none).
+ *
+ * @returns {{ rows: string[][], meta: { bom: boolean, sepLine: string, eol: '\r\n'|'\n', trailingEol: boolean, widths: number[] } }}
  */
 export function parseDelimited(text, delimiter = ',') {
   let s = String(text == null ? '' : text);
   const bom = s.charCodeAt(0) === 0xfeff;
   if (bom) s = s.slice(1);
+  const sep = SEP_LINE_RE.exec(s);
+  const sepLine = sep ? sep[0] : '';
+  if (sep) s = s.slice(sepLine.length);
 
   const rows = [];
   let row = [];
@@ -127,7 +303,7 @@ export function parseDelimited(text, delimiter = ',') {
   }
 
   const widths = rows.map((r) => (r.length === 1 && r[0] === '' ? 0 : r.length));
-  return { rows, meta: { bom, eol: eol || '\n', trailingEol, widths } };
+  return { rows, meta: { bom, sepLine, eol: eol || (sep && sep[2]) || '\n', trailingEol, widths } };
 }
 
 /** 0 -> 'A', 25 -> 'Z', 26 -> 'AA'. */
@@ -169,8 +345,12 @@ export function sheetNameFor(filename) {
 /**
  * Rows -> JSF workbook with one sheet. Empty strings produce no cell; strings
  * starting with '=' stay literal values (never formulas).
+ *
+ * opts.columnWidths (px per 0-based column, falsy = GRID default) becomes the
+ * sheet's 1-based `columns` spans. Widths are baked into the model when it is
+ * built, so they fire no editor events and never mark the file dirty.
  */
-export function rowsToJsf(rows, sheetName, filename) {
+export function rowsToJsf(rows, sheetName, filename, { columnWidths } = {}) {
   const cells = {};
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] || [];
@@ -180,7 +360,70 @@ export function rowsToJsf(rows, sheetName, filename) {
       cells[columnName(c) + (r + 1)] = { v: isCanonicalNumber(s) ? Number(s) : String(s) };
     }
   }
-  return { name: filename || 'workbook', sheets: [{ name: sheetName || 'Sheet1', cells }] };
+  const sheet = { name: sheetName || 'Sheet1', cells };
+  const columns = [];
+  if (Array.isArray(columnWidths)) {
+    for (let c = 0; c < columnWidths.length; c++) {
+      const w = columnWidths[c];
+      if (w > 0) columns.push({ start: c + 1, end: c + 1, size: Math.round(w) });
+    }
+  }
+  if (columns.length) sheet.columns = columns;
+  return { name: filename || 'workbook', sheets: [sheet] };
+}
+
+/** Pure fallback text measure (px) when no canvas is available. */
+const approxMeasure = (s) => s.length * 7.5;
+
+/**
+ * Row indexes computeColumnWidths() looks at for a sheet of rowCount rows:
+ * all of them up to sampleRows, otherwise the first half of the budget from
+ * the top (header included) and the rest strided evenly down to the last row.
+ */
+export function sampleRowIndexes(rowCount, sampleRows = 2000) {
+  const indexes = [];
+  if (rowCount <= sampleRows) {
+    for (let r = 0; r < rowCount; r++) indexes.push(r);
+    return indexes;
+  }
+  const head = Math.floor(sampleRows / 2);
+  const tail = sampleRows - head;
+  const stride = (rowCount - head) / tail;
+  for (let r = 0; r < head; r++) indexes.push(r);
+  for (let k = 1; k <= tail; k++) indexes.push(head + Math.ceil(k * stride) - 1);
+  return indexes;
+}
+
+/**
+ * Auto-fit column widths (px) from cell text: the widest sampled cell per
+ * column (longest line of a multi-line value, first maxChars characters) plus
+ * padding, clamped to [minWidth, maxWidth]. Columns with no non-empty sampled
+ * cell get 0 (keep GRID's default). Sheets over sampleRows rows are sampled
+ * (see sampleRowIndexes); rows outside the sample may be left unset.
+ *
+ * @returns {number[]}
+ */
+export function computeColumnWidths(
+  rows,
+  { measure = approxMeasure, minWidth = 48, maxWidth = 400, padding = 16, sampleRows = 2000, maxChars = 200 } = {}
+) {
+  const list = Array.isArray(rows) ? rows : [];
+  const widths = [];
+  for (const r of sampleRowIndexes(list.length, sampleRows)) {
+    const row = list[r];
+    if (!Array.isArray(row)) continue;
+    for (let c = 0; c < row.length; c++) {
+      if (widths.length <= c) widths.push(0);
+      const v = row[c];
+      if (v == null || v === '' || widths[c] >= maxWidth) continue;
+      let line = '';
+      for (const part of String(v).split(/\r\n|\r|\n/)) if (part.length > line.length) line = part;
+      if (line.length > maxChars) line = line.slice(0, maxChars);
+      const w = Math.min(maxWidth, Math.max(minWidth, measure(line) + padding));
+      if (w > widths[c]) widths[c] = w;
+    }
+  }
+  return widths;
 }
 
 /** Cell value -> CSV text: booleans as TRUE/FALSE, errors via their string form (#DIV/0!). */
@@ -200,8 +443,8 @@ function quoteField(text, delimiter) {
 
 /**
  * Grid -> delimited text. Fields are quoted only when they contain the
- * delimiter, '"', CR or LF. The original BOM, EOL style and trailing-EOL
- * presence are kept.
+ * delimiter, '"', CR or LF. The original BOM, "sep=" line, EOL style and
+ * trailing-EOL presence are kept.
  *
  * Without structural edits, row widths follow meta.widths: a rectangular
  * source stays rectangular (padded to the widest row), a ragged source keeps
@@ -258,5 +501,5 @@ export function serializeDelimited(grid, delimiter = ',', meta = {}, opts = {}) 
 
   let text = lines.join(eol);
   if (meta.trailingEol && nRows > 0) text += eol;
-  return (meta.bom ? '\ufeff' : '') + text;
+  return (meta.bom ? '\ufeff' : '') + (meta.sepLine || '') + text;
 }

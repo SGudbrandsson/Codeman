@@ -30,6 +30,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import appSource from '../src/web/public/app.js?raw';
 // @ts-expect-error — ?raw is a Vite loader suffix, not typed by tsc.
 import fileRoutesSource from '../src/web/routes/file-routes.ts?raw';
+// @ts-expect-error — ?raw is a Vite loader suffix, not typed by tsc.
+import gridEntrySource from '../scripts/vendor/grid-entry.mjs?raw';
 // @ts-expect-error — plain ESM helper without type declarations
 import * as tabular from '../scripts/vendor/grid-tabular.mjs';
 
@@ -89,6 +91,14 @@ const METHODS = [
   'filesSave',
   '_filesShowConflict',
   'filesOverwriteCurrent',
+  '_filesGridMetaText',
+  '_filesGridMaxIcon',
+  '_filesGridMaxBtnHtml',
+  'filesToggleGridMaximise',
+  '_filesGridSetMaximised',
+  '_filesGridHandleEscape',
+  '_doFilesBackToTree',
+  '_doCloseFilesSheet',
 ];
 
 // ─── escapeHtml replica (constants.js) ──────────────────────────────────────
@@ -159,13 +169,30 @@ function makeApp() {
     `return ({\n${body}\n});`
   );
   const toasts: { msg: string; kind: string }[] = [];
-  const methods = factory(
-    escapeHtml,
-    { stop() {}, isPlaying: () => false, rebind() {} },
-    { push() {} },
-    (s: string) => s
-  );
+  // Records the OverlayHistory stack like the real one (top dedup on push).
+  const history = {
+    stack: [] as { id: string; close: (forced?: boolean) => void }[],
+    pops: [] as string[],
+    push(id: string, close: (forced?: boolean) => void) {
+      if (this.stack.at(-1)?.id === id) return;
+      this.stack.push({ id, close });
+    },
+    pop(id: string) {
+      const i = this.stack.findIndex((e) => e.id === id);
+      if (i === -1) return;
+      this.stack.splice(i, 1);
+      this.pops.push(id);
+    },
+    has(id: string) {
+      return this.stack.some((e) => e.id === id);
+    },
+    ids() {
+      return this.stack.map((e) => e.id);
+    },
+  };
+  const methods = factory(escapeHtml, { stop() {}, isPlaying: () => false, rebind() {} }, history, (s: string) => s);
   return Object.assign(methods, {
+    history,
     activeSessionId: 'sess-a',
     filesState: { current: null, pendingContent: null, editor: null, grid: null } as any,
     _filesGridCsvMaxBytes: classField('_filesGridCsvMaxBytes'),
@@ -196,6 +223,9 @@ function makeApp() {
     _filesShowView() {},
     _filesEnsureVendor: async () => true,
     _filesBackFromHistory() {},
+    _filesShowTree() {},
+    filesLoadTree() {},
+    _filesPersistClosed() {},
   });
 }
 
@@ -206,14 +236,18 @@ type App = ReturnType<typeof makeApp>;
 function mountSheet() {
   document.head.innerHTML = '';
   document.body.innerHTML = `
-    <div id="filesSheetTitle"></div>
-    <button id="filesSheetBackBtn"></button>
-    <div id="filesSheetView">
-      <div class="files-sheet-view-toolbar">
-        <div id="filesSheetViewMeta"></div>
-        <div id="filesSheetViewActions"></div>
+    <div id="filesSheet" class="files-sheet open">
+      <div class="files-sheet-header">
+        <div id="filesSheetTitle"></div>
+        <button id="filesSheetBackBtn"></button>
       </div>
-      <div class="files-sheet-view-content" id="filesSheetViewContent"></div>
+      <div id="filesSheetView">
+        <div class="files-sheet-view-toolbar">
+          <div id="filesSheetViewMeta"></div>
+          <div id="filesSheetViewActions"></div>
+        </div>
+        <div class="files-sheet-view-content" id="filesSheetViewContent"></div>
+      </div>
     </div>`;
 }
 
@@ -262,7 +296,12 @@ async function openSheet(app: App, path: string, size = 2048, rawStatus = 200) {
 const content = () => document.getElementById('filesSheetViewContent')!;
 const actions = () => document.getElementById('filesSheetViewActions')!;
 const meta = () => document.getElementById('filesSheetViewMeta')!;
-const buttonLabels = () => Array.from(actions().querySelectorAll('button')).map((b) => b.textContent);
+// The icon-only maximise toggle is asserted separately (maxBtn()).
+const buttonLabels = () =>
+  Array.from(actions().querySelectorAll('button:not(.files-grid-max-btn)')).map((b) => b.textContent);
+const maxBtn = () => actions().querySelector('button.files-grid-max-btn') as HTMLButtonElement | null;
+const sheetEl = () => document.getElementById('filesSheet')!;
+const isMaximised = () => sheetEl().classList.contains('is-grid-max');
 const activeTab = () => actions().querySelector('button.is-active')?.textContent;
 const gridScripts = () => document.head.querySelectorAll('script[src="vendor/grid.min.js"]');
 const notices = () => Array.from(content().querySelectorAll('.files-sheet-notice')).map((n) => n.textContent!.trim());
@@ -862,6 +901,172 @@ describe('files sheet — GRID spreadsheet view', () => {
       expect(app.filesState.current).toMatchObject({ editing: false, dirty: false, gridHandle: null });
     });
   });
+
+  // ── Detected delimiter in the meta line ───────────────────────────────────
+
+  describe('detected delimiter', () => {
+    it('shows the delimiter once the csv has loaded, and keeps it on re-render', async () => {
+      grid = installGrid({ loadResult: { model: 'csv', delimiter: ';', delimiterName: 'semicolon' } });
+      const text = 'a;b\n1,50;2\n';
+      await openText(app, 'eu.csv', text);
+
+      expect(meta().textContent).toBe(`${text.length} B • csv • semicolon-delimited`);
+
+      app.filesSetTabularMode('text');
+      app.filesSetTabularMode('grid');
+      expect(meta().textContent).toBe(`${text.length} B • csv • semicolon-delimited`);
+      expect(grid.load).toHaveBeenCalledTimes(1);
+    });
+
+    it('never shows a delimiter for binary spreadsheets', async () => {
+      grid = installGrid({ loadResult: { model: 'xlsx', delimiterName: 'comma' } });
+      await openSheet(app, 'book.xlsx');
+      expect(meta().textContent).toBe('2.0 KB • xlsx');
+    });
+  });
+
+  // ── Maximise ──────────────────────────────────────────────────────────────
+
+  describe('maximise', () => {
+    it('is the first action in grid view and in grid edit', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      expect(actions().firstElementChild).toBe(maxBtn());
+      expect(maxBtn()!.getAttribute('aria-pressed')).toBe('false');
+      expect(maxBtn()!.title).toBe('Maximise');
+      expect(maxBtn()!.getAttribute('aria-label')).toBe('Maximise spreadsheet');
+
+      app.filesStartEdit();
+      await flush();
+      expect(actions().firstElementChild).toBe(maxBtn());
+      expect(buttonLabels()).toEqual(['Cancel', 'Save']);
+    });
+
+    it('is offered for read-only binary spreadsheets too', async () => {
+      await openSheet(app, 'legacy.xls');
+      expect(maxBtn()).not.toBeNull();
+    });
+
+    it('toggles in place: class, history entry and button state, no remount', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      const viewer = grid.mounts[0];
+      expect(app.history.ids()).toEqual(['files-file']);
+
+      app.filesToggleGridMaximise();
+
+      expect(isMaximised()).toBe(true);
+      expect(app.filesState.gridMaximised).toBe(true);
+      expect(app.history.ids()).toEqual(['files-file', 'files-grid-max']);
+      expect(maxBtn()!.getAttribute('aria-pressed')).toBe('true');
+      expect(maxBtn()!.title).toBe('Restore');
+      expect(maxBtn()!.getAttribute('aria-label')).toBe('Restore spreadsheet');
+      expect(grid.mounts).toHaveLength(1);
+      expect(viewer.destroy).not.toHaveBeenCalled();
+      expect(content().querySelector('.files-grid-host > .files-grid-attrib > a')!.textContent).toBe('Powered by GRID');
+
+      app.filesToggleGridMaximise();
+
+      expect(isMaximised()).toBe(false);
+      expect(app.history.pops).toEqual(['files-grid-max']);
+      expect(app.history.ids()).toEqual(['files-file']);
+      expect(maxBtn()!.getAttribute('aria-pressed')).toBe('false');
+      expect(grid.mounts).toHaveLength(1);
+      expect(viewer.destroy).not.toHaveBeenCalled();
+    });
+
+    it('keeps edit mode and unsaved edits across toggles, with Save/Cancel available', async () => {
+      await openText(app, 'people.csv', 'a,b\n1,2\n');
+      app.filesStartEdit();
+      await flush();
+      const editor = grid.mounts[1];
+      editor.onDirty();
+
+      app.filesToggleGridMaximise();
+      expect(buttonLabels()).toEqual(['Cancel', 'Save']);
+      app.filesToggleGridMaximise();
+
+      expect(app.filesState.current).toMatchObject({ editing: true, dirty: true, gridHandle: editor.doc });
+      expect(grid.mounts).toHaveLength(2);
+      expect(editor.destroy).not.toHaveBeenCalled();
+    });
+
+    it('Back (the history close fn) restores without popping again', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      app.filesToggleGridMaximise();
+
+      // The browser has already popped the entry when popstate runs close().
+      const entry = app.history.stack.pop()!;
+      expect(entry.id).toBe('files-grid-max');
+      entry.close();
+
+      expect(isMaximised()).toBe(false);
+      expect(app.filesState.gridMaximised).toBe(false);
+      expect(app.history.pops).toEqual([]);
+      expect(app.filesState.current).not.toBeNull();
+    });
+
+    it('Esc restores a maximised grid and is not handled otherwise', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      const esc = new KeyboardEvent('keydown', { key: 'Escape' });
+      expect(app._filesGridHandleEscape(esc)).toBe(false);
+
+      app.filesToggleGridMaximise();
+      expect(app._filesGridHandleEscape(esc)).toBe(true);
+
+      expect(isMaximised()).toBe(false);
+      expect(app.history.pops).toEqual(['files-grid-max']);
+      expect(esc.defaultPrevented).toBe(false);
+      expect(app._filesGridHandleEscape(esc)).toBe(false);
+    });
+
+    it('Cancel from a maximised edit stays maximised in the viewer', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      app.filesStartEdit();
+      await flush();
+      app.filesToggleGridMaximise();
+
+      app.filesCancelEdit();
+      await flush();
+
+      expect(isMaximised()).toBe(true);
+      expect(grid.mounts.at(-1)!.mode).toBe('view');
+      expect(buttonLabels()).toEqual(['Grid', 'Text', 'Edit', 'Copy']);
+      expect(maxBtn()!.getAttribute('aria-pressed')).toBe('true');
+      expect(maxBtn()!.title).toBe('Restore');
+    });
+
+    it.each([
+      ['switching to the Text tab', (a: App) => a.filesSetTabularMode('text')],
+      ['a grid failure', (a: App) => a._filesGridFallback(a.filesState.current, new Error('boom'))],
+      ['opening another file', (a: App) => openText(a, 'notes.txt', 'hi')],
+      ['rendering a binary file', (a: App) => a._filesRenderBinary({ type: 'image', path: 'x.png', size: 1 })],
+      ['going back to the tree', (a: App) => a._doFilesBackToTree()],
+      ['closing the sheet', (a: App) => a._doCloseFilesSheet()],
+    ])('%s restores and pops the history entry', async (_label, leave) => {
+      await openText(app, 'people.csv', 'a,b\n');
+      app.filesToggleGridMaximise();
+      expect(isMaximised()).toBe(true);
+
+      await leave(app);
+      await flush();
+
+      expect(isMaximised()).toBe(false);
+      expect(app.filesState.gridMaximised).toBe(false);
+      expect(app.history.pops).toEqual(['files-grid-max']);
+      expect(app.history.has('files-grid-max')).toBe(false);
+    });
+
+    it('opening the raw text editor restores', async () => {
+      await openText(app, 'people.csv', 'a,b\n');
+      app.filesToggleGridMaximise();
+      app.filesState.tabularMode = 'text'; // e.g. Edit pressed while the Text tab is active
+
+      app.filesStartEdit();
+
+      expect(content().querySelector('textarea#filesSheetEditor')).not.toBeNull();
+      expect(isMaximised()).toBe(false);
+      expect(app.history.pops).toEqual(['files-grid-max']);
+    });
+  });
 });
 
 // ─── Source-text guards against the real app.js ─────────────────────────────
@@ -917,6 +1122,34 @@ describe('src/web/public/app.js — GRID source guards', () => {
     for (const p of paths) {
       expect(app._tabularFormatOf(p), p).toBe(tabularFormatOf(p));
     }
+  });
+
+  it('the global Escape handler lets a maximised grid restore before closeAllPanels()', () => {
+    expect(methodSource('setupEventListeners')).toMatch(
+      /if \(e\.key === 'Escape'\) \{\s*if \(!this\._filesGridHandleEscape\(e\)\) this\.closeAllPanels\(\);\s*\}/
+    );
+  });
+
+  it('grid-entry load() detects the csv delimiter and never fits xlsx column widths', () => {
+    const entry = gridEntrySource as string;
+    const load = entry.slice(entry.indexOf('async function load('), entry.indexOf('function mount('));
+    expect(load).toContain('detectDelimiter(text, format)');
+    expect(load).not.toContain('delimiterOf(');
+    expect(load).toContain('delimiterName: delimiterName(delimiter)');
+    const xlsx = load.slice(load.indexOf("if (format === 'xlsx')"), load.indexOf("if (format === 'xls' ||"));
+    expect(xlsx).toContain('Model.fromXLSX');
+    expect(xlsx).not.toMatch(/setColumnWidth|fitUnsizedColumns|computeColumnWidths/);
+  });
+
+  it('grid-entry mount() does not mark a csv/tsv dirty for column/row resizes', () => {
+    const entry = gridEntrySource as string;
+    expect(entry).toMatch(/const SIZE_EVENTS = new Set\(\['resize-column', 'resize-row'\]\)/);
+    const mount = entry.slice(entry.indexOf('function mount('), entry.indexOf('async function serialize('));
+    const guard = mount.indexOf(
+      "SIZE_EVENTS.has(type) && (handle.format === 'csv' || handle.format === 'tsv')) return;"
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(mount.indexOf('onDirty(type)'));
   });
 
   it('_filesMaxWriteBytes mirrors MAX_WRITE_SIZE in src/web/routes/file-routes.ts', () => {
