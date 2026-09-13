@@ -518,3 +518,60 @@ describe('rebindMuxSession', () => {
     expect(count(events, 'working') + count(events, 'idle')).toBe(0);
   });
 });
+
+describe('pending questions from monitors (codex)', () => {
+  const Q = [{ question: 'Who?', options: [{ label: 'Me' }] }];
+
+  it('question sets toState().pendingQuestion and emits pendingQuestion; resolved clears it', async () => {
+    installFake('transcript', 'idle');
+    const { session } = makeSession('codex');
+    const seen: Array<{ type: string; info: unknown }> = [];
+    session.on('pendingQuestion', (info: unknown) => seen.push({ type: 'pending', info }));
+    session.on('pendingQuestionResolved', (info: unknown) => seen.push({ type: 'resolved', info }));
+    await session.startInteractive();
+
+    instances[0].emit('question', { toolUseId: 'call_1', questions: Q, replay: true });
+    expect(session.toState().pendingQuestion).toEqual({ toolUseId: 'call_1', questions: Q });
+
+    instances[0].emit('question_resolved', { toolUseId: 'call_1' });
+    expect(session.toState().pendingQuestion).toBeUndefined();
+    expect(seen).toEqual([
+      { type: 'pending', info: { toolUseId: 'call_1', questions: Q, replay: true } },
+      { type: 'resolved', info: { toolUseId: 'call_1' } },
+    ]);
+  });
+
+  it('a resolved event without a pending question is ignored', async () => {
+    installFake('transcript', 'idle');
+    const { session } = makeSession('codex');
+    const resolved = vi.fn();
+    session.on('pendingQuestionResolved', resolved);
+    await session.startInteractive();
+    instances[0].emit('question_resolved', { toolUseId: 'call_1' });
+    expect(resolved).not.toHaveBeenCalled();
+  });
+
+  it('detaching the monitor clears the pending question and emits resolved', async () => {
+    installFake('transcript', 'idle');
+    const { session } = makeSession('codex');
+    const resolved = vi.fn();
+    session.on('pendingQuestionResolved', resolved);
+    await session.startInteractive();
+    instances[0].emit('question', { toolUseId: 'call_1', questions: Q, replay: false });
+
+    lastPty().onExit!({ exitCode: 0 });
+
+    expect(resolved).toHaveBeenCalledWith({ toolUseId: 'call_1' });
+    expect(session.toState().pendingQuestion).toBeUndefined();
+  });
+
+  it('question events from a detached (old generation) monitor are ignored', async () => {
+    installFake('transcript', 'idle');
+    const { session } = makeSession('codex');
+    await session.startInteractive();
+    const old = instances[0];
+    lastPty().onExit!({ exitCode: 0 });
+    old.emit('question', { toolUseId: 'call_1', questions: Q, replay: false });
+    expect(session.toState().pendingQuestion).toBeUndefined();
+  });
+});

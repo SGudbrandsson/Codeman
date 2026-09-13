@@ -4,7 +4,8 @@
  * Covers startHarnessTranscriptWatcher (gate, claudeState:false, ids untouched,
  * transcript:ready once, idempotent), its listener triggers (codex harnessSessionIdDiscovered,
  * pi idle, never for Claude), getTranscriptState / getTranscriptPath for view-only sessions,
- * and the archive-time transcriptPath fallback in clearSession.
+ * the archive-time transcriptPath fallback in clearSession, and the codex pending-question wiring
+ * (SSE broadcast, push only when live, resolve on kill/clear, push body).
  *
  * HOME ISOLATION: a real WebServer is constructed (no start()). HOME, TMUX_TMPDIR, CODEX_HOME
  * and PI_CODING_AGENT_DIR point at temp dirs and TMUX is unset BEFORE any server module is
@@ -47,6 +48,9 @@ interface ServerInternals {
   setupSessionListeners(s: Session): Promise<void>;
   getModelConfig(): Promise<unknown>;
   clearSession(id: string, force: boolean): Promise<unknown>;
+  cleanupSession(id: string, killMux?: boolean, reason?: string): Promise<void>;
+  sendPushNotifications(event: string, data: Record<string, unknown>): void;
+  pushStore: unknown;
 }
 
 let tmpRoot = '';
@@ -489,5 +493,140 @@ describe('pi authoritative transcript path (acceptHarnessTranscriptPath)', () =>
     const saved = { ...s.toState(), harnessTranscriptPath: '/restored/path.jsonl' };
     srv._restoreSessionConfig(s, saved);
     expect(s.harnessTranscriptPath).toBe('/restored/path.jsonl');
+  });
+});
+
+describe('codex pending question wiring', () => {
+  const Q = [{ question: 'Who should it serve?', options: [{ label: 'Me' }, { label: 'You' }] }];
+  const asked = (id: string) => events.filter((e) => e.event === 'transcript:ask_user_question' && e.sessionId === id);
+  const resolved = (id: string) =>
+    events.filter((e) => e.event === 'transcript:ask_user_question_resolved' && e.sessionId === id);
+  const setPending = (s: Session, toolUseId: string) => {
+    (s as unknown as { _pendingQuestion: unknown })._pendingQuestion = { toolUseId, questions: Q, raisedAt: 0 };
+  };
+
+  it('a live pendingQuestion broadcasts TranscriptAskUserQuestion and sends a push', async () => {
+    const s = await addSession('sess-q-live', 'codex', { listeners: true });
+    const push = vi.spyOn(srv, 'sendPushNotifications').mockImplementation(() => {});
+    try {
+      s.emit('pendingQuestion', { toolUseId: 'call_1', questions: Q, replay: false });
+
+      expect(asked(s.id)).toHaveLength(1);
+      expect(asked(s.id)[0].data).toMatchObject({
+        sessionId: s.id,
+        toolUseId: 'call_1',
+        questions: Q,
+        harness: 'codex',
+        replay: false,
+      });
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(push).toHaveBeenCalledWith('transcript:ask_user_question', {
+        sessionId: s.id,
+        sessionName: s.name,
+        questions: Q,
+      });
+    } finally {
+      push.mockRestore();
+    }
+  });
+
+  it('a replayed pendingQuestion broadcasts with replay:true but sends no push', async () => {
+    const s = await addSession('sess-q-replay', 'codex', { listeners: true });
+    const push = vi.spyOn(srv, 'sendPushNotifications').mockImplementation(() => {});
+    try {
+      s.emit('pendingQuestion', { toolUseId: 'call_1', questions: Q, replay: true });
+
+      expect(asked(s.id)).toHaveLength(1);
+      expect(asked(s.id)[0].data?.replay).toBe(true);
+      expect(push).not.toHaveBeenCalled();
+    } finally {
+      push.mockRestore();
+    }
+  });
+
+  it('pendingQuestionResolved broadcasts TranscriptAskUserQuestionResolved with the toolUseId', async () => {
+    const s = await addSession('sess-q-resolved', 'codex', { listeners: true });
+
+    s.emit('pendingQuestionResolved', { toolUseId: 'call_1' });
+
+    expect(resolved(s.id)).toHaveLength(1);
+    expect(resolved(s.id)[0].data).toMatchObject({ sessionId: s.id, toolUseId: 'call_1' });
+  });
+
+  it('killing a session with a pending question broadcasts Resolved once and removes the listeners', async () => {
+    const s = await addSession('sess-q-kill', 'codex', { listeners: true });
+    setPending(s, 'call_kill');
+
+    // killMux=false: no subagent kill, no mux kill, state kept.
+    await srv.cleanupSession(s.id, false, 'test');
+
+    expect(resolved(s.id)).toHaveLength(1);
+    expect(resolved(s.id)[0].data?.toolUseId).toBe('call_kill');
+
+    events = [];
+    s.emit('pendingQuestion', { toolUseId: 'call_late', questions: Q, replay: false });
+    s.emit('pendingQuestionResolved', { toolUseId: 'call_late' });
+    expect(asked(s.id)).toEqual([]);
+    expect(resolved(s.id)).toEqual([]);
+  });
+
+  it('killing a session without a pending question broadcasts no Resolved', async () => {
+    const s = await addSession('sess-q-kill-none', 'codex', { listeners: true });
+
+    await srv.cleanupSession(s.id, false, 'test');
+
+    expect(resolved(s.id)).toEqual([]);
+  });
+
+  it('clearing a session with a pending question broadcasts Resolved once', async () => {
+    const s = await addSession('sess-q-clear', 'codex', { listeners: true });
+    setPending(s, 'call_clear');
+    srv.store.setSession(s.id, s.toState());
+    // Abort at the child-session step so no harness process is spawned.
+    srv.getModelConfig = async () => {
+      throw new Error('stop-before-child-spawn');
+    };
+    try {
+      await expect(srv.clearSession(s.id, true)).rejects.toThrow('stop-before-child-spawn');
+    } finally {
+      delete (srv as unknown as Record<string, unknown>).getModelConfig;
+    }
+
+    expect(resolved(s.id)).toHaveLength(1);
+    expect(resolved(s.id)[0].data?.toolUseId).toBe('call_clear');
+  });
+
+  it('the push for a question is titled "Question Asked" with the first question clipped to 200 chars', async () => {
+    const webpush = (await import('web-push')).default;
+    const send = vi.spyOn(webpush, 'sendNotification').mockResolvedValue(undefined as never);
+    const vapid = vi.spyOn(webpush, 'setVapidDetails').mockImplementation(() => {});
+    const realStore = srv.pushStore;
+    srv.pushStore = {
+      getAll: () => [{ endpoint: 'https://push.invalid/1', keys: { p256dh: 'k', auth: 'a' }, pushPreferences: {} }],
+      getVapidKeys: () => ({ publicKey: 'pub', privateKey: 'priv' }),
+      removeByEndpoint: () => {},
+    };
+    try {
+      const long = 'q'.repeat(300);
+      srv.sendPushNotifications('transcript:ask_user_question', {
+        sessionId: 'sess-q-push',
+        sessionName: 'Codex',
+        questions: [
+          { question: long, options: [] },
+          { question: 'second', options: [] },
+        ],
+      });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(send.mock.calls[0][1] as string);
+      expect(payload.title).toBe('Question Asked');
+      expect(payload.urgency).toBe('critical');
+      expect(payload.body).toBe(`[Codex] ${'q'.repeat(200)}`);
+      expect(payload.sessionId).toBe('sess-q-push');
+    } finally {
+      srv.pushStore = realStore;
+      send.mockRestore();
+      vapid.mockRestore();
+    }
   });
 });

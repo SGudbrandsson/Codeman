@@ -3918,6 +3918,9 @@ const TranscriptView = {
   // hook. Used to dedup the later JSONL tool_use block and suppress its orphan
   // tool_result (the live widget is removed on answer). Cleared on load().
   _auqHandledIds: new Set(),
+  // tool_use ids of codex request_user_input_async calls; their immediate {"accepted":true}
+  // tool_result must never remove the widget (only the Resolved event does).
+  _codexQuestionIds: new Set(),
   _loadGen: 0,       // incremented each load(); SSE blocks check this to avoid races
   _compactingEl: null,   // DOM ref to the animated compacting spinner pill
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
@@ -4086,6 +4089,7 @@ const TranscriptView = {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
     this._auqHandledIds = new Set();
+    this._codexQuestionIds = new Set();
     this._lastSkillLaunch = null;
     clearTimeout(this._workingDebounce);
     this._workingDebounce = null;
@@ -4169,6 +4173,7 @@ const TranscriptView = {
         this._container.textContent = '';
         this._pendingToolUses = {};
         this._auqHandledIds = new Set();
+    this._codexQuestionIds = new Set();
         this._lastSkillLaunch = null;
         // If a /clear is in progress (_clearPending), the backend may still be serving
         // the old conversation's blocks — the new conversation UUID hasn't been registered
@@ -4315,7 +4320,8 @@ const TranscriptView = {
    * - Wizard navigation: if questions array has multiple items, a "Back" button appears on
    *   questions after the first, and previously selected answers are pre-filled on return.
    */
-  _renderAskUserQuestionBlock(block) {
+  _renderAskUserQuestionBlock(block, opts = {}) {
+    if (opts.readOnly || opts.answered) return this._renderReadOnlyQuestionBlock(block, opts);
     const questions = block.input.questions;
     const sessionId = this._sessionId;
 
@@ -4460,6 +4466,109 @@ const TranscriptView = {
 
     renderQuestion(0);
     return el;
+  },
+
+  /**
+   * Non-interactive question widget (codex request_user_input_async). Codex answers through its
+   * own TUI picker, so options are listed as text. `readOnly` = still pending: a note plus a
+   * button to switch to the terminal. `answered` = history row (tv-auq-static, no note).
+   */
+  _renderReadOnlyQuestionBlock(block, opts) {
+    const questions = block.input.questions;
+    const el = document.createElement('div');
+    el.className = 'tv-auq-block tv-auq-readonly' + (opts.answered ? ' tv-auq-static' : '');
+    el._auqBlock = block;
+    questions.forEach((q) => {
+      if (q.header) {
+        const hdr = document.createElement('div');
+        hdr.className = 'tv-auq-header';
+        hdr.textContent = q.header;
+        el.appendChild(hdr);
+      }
+      const qtxt = document.createElement('div');
+      qtxt.className = 'tv-auq-question';
+      qtxt.textContent = q.question || '';
+      el.appendChild(qtxt);
+      if (Array.isArray(q.options) && q.options.length > 0) {
+        const optsEl = document.createElement('div');
+        optsEl.className = 'tv-auq-options';
+        q.options.forEach((opt, i) => {
+          const row = document.createElement('div');
+          row.className = 'tv-auq-option';
+          const lbl = document.createElement('span');
+          lbl.className = 'tv-auq-option-label';
+          lbl.textContent = (i + 1) + '. ' + (opt.label || '');
+          row.appendChild(lbl);
+          if (opt.description) {
+            const desc = document.createElement('span');
+            desc.className = 'tv-auq-option-desc';
+            desc.textContent = opt.description;
+            row.appendChild(desc);
+          }
+          optsEl.appendChild(row);
+        });
+        el.appendChild(optsEl);
+      }
+    });
+    const note = document.createElement('div');
+    note.className = 'tv-auq-note';
+    const noteText = document.createElement('span');
+    noteText.textContent = opts.answered ? 'Answered' : 'Answer in the Codex terminal';
+    note.appendChild(noteText);
+    if (!opts.answered) {
+      const btn = document.createElement('button');
+      btn.className = 'tv-auq-custom-send tv-auq-to-terminal';
+      btn.textContent = 'Switch to terminal';
+      btn.addEventListener('click', () => {
+        const sid = this._sessionId;
+        if (!sid) return;
+        this.setViewMode(sid, 'terminal');
+        this.hide(sid);
+        if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.updateViewModeBtn(sid);
+      });
+      note.appendChild(btn);
+    }
+    el.appendChild(note);
+    return el;
+  },
+
+  /**
+   * Show a pending codex question (SSE or session state) as the read-only widget, replacing
+   * the static row for the same tool_use id if the transcript already rendered it.
+   */
+  showPendingQuestion(sessionId, toolUseId, questions) {
+    if (!this._container || this._sessionId !== sessionId || !toolUseId) return false;
+    if (!Array.isArray(questions) || questions.length === 0) return false;
+    this._codexQuestionIds.add(toolUseId);
+    const existing = this._container.querySelector('[data-tool-id="' + CSS.escape(toolUseId) + '"]');
+    if (existing && existing.classList.contains('tv-auq-readonly') && !existing.classList.contains('tv-auq-static')) {
+      return true;
+    }
+    const block = { type: 'tool_use', name: 'request_user_input_async', id: toolUseId, input: { questions } };
+    const el = this._renderAskUserQuestionBlock(block, { readOnly: true });
+    el.dataset.toolId = toolUseId;
+    if (existing) {
+      existing.replaceWith(el);
+    } else {
+      const placeholder = this._container.querySelector('.tv-placeholder');
+      if (placeholder) placeholder.remove();
+      this._container.appendChild(el);
+      this._scrollToBottom(false);
+    }
+    return true;
+  },
+
+  /** Turn a resolved codex question widget into its answered (static) form. */
+  resolvePendingQuestion(sessionId, toolUseId) {
+    if (!this._container || this._sessionId !== sessionId) return;
+    const blocks = this._container.querySelectorAll('.tv-auq-block.tv-auq-readonly:not(.tv-auq-static)');
+    for (const b of blocks) {
+      if (toolUseId && b.dataset.toolId !== toolUseId) continue;
+      if (!b._auqBlock) { b.remove(); continue; }
+      const el = this._renderAskUserQuestionBlock(b._auqBlock, { answered: true });
+      el.dataset.toolId = b.dataset.toolId;
+      b.replaceWith(el);
+    }
   },
 
   /** True if an AskUserQuestion widget with this tool_use id is currently in the DOM. */
@@ -5051,6 +5160,18 @@ const TranscriptView = {
     if (block.type === 'text') {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
+      if (block.name === 'request_user_input_async' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
+        // Codex question: read-only widget while pending, static summary once answered.
+        if (block.id) this._codexQuestionIds.add(block.id);
+        if (block.id && this._auqElExists(block.id)) return;
+        const pending = typeof app !== 'undefined' ? app._pendingQuestions?.get(this._sessionId) : null;
+        const live = !!pending && !!block.id && pending.toolUseId === block.id;
+        el = this._renderAskUserQuestionBlock(block, live ? { readOnly: true } : { answered: true });
+        el.dataset.toolId = block.id;
+        this._container.appendChild(el);
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
       if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
         // Already surfaced live from a PreToolUse hook (and possibly already
         // answered/removed) — don't render a duplicate when the JSONL catches up.
@@ -5065,6 +5186,9 @@ const TranscriptView = {
       el = this._renderToolWrapper(block, null);
       el.dataset.toolId = block.id;
     } else if (block.type === 'tool_result') {
+      // Codex request_user_input_async returns {"accepted":true} at once; the question stays
+      // open until a user message resolves it. Swallow the result (no removal, no orphan row).
+      if (block.toolUseId && this._codexQuestionIds.has(block.toolUseId)) return;
       const pendingEl = block.toolUseId
         ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
         : null;
@@ -6168,6 +6292,8 @@ class CodemanApp {
     // Pending hooks per session: Map<sessionId, Set<hookType>>
     // Tracks pending hook events that need resolution (permission_prompt, elicitation_dialog, idle_prompt)
     this.pendingHooks = new Map();
+    // Harness pending questions (codex request_user_input_async): sessionId -> { toolUseId, questions }
+    this._pendingQuestions = new Map();
 
     // Elicitation quick-reply state: { sessionId, question, options: [{val,label}] } | null
     this.pendingElicitation = null;
@@ -8116,6 +8242,7 @@ class CodemanApp {
       session.displayStatus = oldSession?.displayStatus ?? session.status ?? 'idle';
     }
     this.sessions.set(session.id, session);
+    this._syncPendingQuestionFromState(session);
     this.renderSessionTabs();
     if (SessionDrawer.isOpen()) SessionDrawer._renderDebounced();
     this.updateCost();
@@ -9324,6 +9451,11 @@ class CodemanApp {
 
   _onTranscriptAskUserQuestion(data) {
     if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) return;
+    // Harness pending question (codex): carries a toolUseId. Replays skip the notification.
+    if (data.toolUseId && data.sessionId) {
+      this._raisePendingQuestion(data.sessionId, data.toolUseId, data.questions, !data.replay);
+      return;
+    }
     const q = data.questions[0];
     const session = this.sessions.get(data.sessionId);
     this.notificationManager?.notify({
@@ -9337,9 +9469,50 @@ class CodemanApp {
     // The inline tv-auq-block in TranscriptView handles all rendering — no panel needed.
   }
 
-  _onTranscriptAskUserQuestionResolved(_data) {
-    // The tv-auq-block removes itself when the tool_result arrives via _appendBlock.
-    // Nothing to do here for the panel (it no longer exists).
+  _onTranscriptAskUserQuestionResolved(data) {
+    // Claude: the tv-auq-block removes itself when the tool_result arrives via _appendBlock.
+    // Harness pending question (codex): carries a toolUseId; clear alert, attention item, widget.
+    if (data?.toolUseId && data.sessionId) this._resolvePendingQuestion(data.sessionId, data.toolUseId);
+  }
+
+  /** Raise a harness pending question: tab alert, QUESTION attention item, widget, notification. */
+  _raisePendingQuestion(sessionId, toolUseId, questions, notify) {
+    const q = questions[0] || {};
+    this._pendingQuestions.set(sessionId, { toolUseId, questions });
+    this.setPendingHook(sessionId, 'ask_user_question');
+    this.addAttentionItem(sessionId, 'ask_user_question', q.question || q.header || 'Question');
+    if (notify) {
+      const session = this.sessions.get(sessionId);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'hook-ask-user-question',
+        sessionId,
+        sessionName: session?.name || sessionId,
+        title: q.header || 'Question',
+        message: q.question || 'Codex is asking a question',
+      });
+    }
+    TranscriptView.showPendingQuestion(sessionId, toolUseId, questions);
+  }
+
+  _resolvePendingQuestion(sessionId, toolUseId) {
+    const pending = this._pendingQuestions.get(sessionId);
+    if (pending && toolUseId && pending.toolUseId !== toolUseId) return; // stale: a newer question replaced it
+    this._pendingQuestions.delete(sessionId);
+    this.clearPendingHooks(sessionId, 'ask_user_question');
+    TranscriptView.resolvePendingQuestion(sessionId, toolUseId);
+  }
+
+  /** Rebuild/clear a harness pending question from session state (init, reload, updates). Silent. */
+  _syncPendingQuestionFromState(session) {
+    if (!session?.id) return;
+    const pq = session.pendingQuestion;
+    const cur = this._pendingQuestions.get(session.id);
+    if (pq && pq.toolUseId && Array.isArray(pq.questions) && pq.questions.length > 0) {
+      if (!cur || cur.toolUseId !== pq.toolUseId) this._raisePendingQuestion(session.id, pq.toolUseId, pq.questions, false);
+    } else if (cur) {
+      this._resolvePendingQuestion(session.id, cur.toolUseId);
+    }
   }
 
   _onHookAskUserQuestion(data) {
@@ -10052,6 +10225,7 @@ class CodemanApp {
     this._loadBufferQueue = null;
     // Clear pending hooks
     this.pendingHooks.clear();
+    this._pendingQuestions.clear();
     // Clear parent name cache (prevents stale session name entries accumulating)
     if (this._parentNameCache) this._parentNameCache.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -10108,6 +10282,7 @@ class CodemanApp {
     data.sessions.forEach(s => {
       s.displayStatus = s.status || 'idle';
       this.sessions.set(s.id, s);
+      this._syncPendingQuestionFromState(s);
       // Load ralph state from session data (only if not explicitly closed by user)
       if ((s.ralphLoop || s.ralphTodos) && !this.ralphClosedSessions.has(s.id)) {
         this.ralphStates.set(s.id, {
@@ -11375,6 +11550,7 @@ class CodemanApp {
     this.ralphClosedSessions.delete(sessionId);
     this.projectInsights.delete(sessionId);
     this.pendingHooks.delete(sessionId);
+    this._pendingQuestions.delete(sessionId);
     this.tabAlerts.delete(sessionId);
     this.removeAttentionItemsForSession(sessionId);
     this.clearCountdownTimers(sessionId);

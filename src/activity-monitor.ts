@@ -12,9 +12,10 @@
 import type { EventEmitter } from 'node:events';
 import { ClaudeActivityMonitor } from './claude-activity-monitor.js';
 import { CodexTranscriptActivityMonitor } from './codex-transcript-activity-monitor.js';
-import { codexTranscriptAdapter } from './harnesses/transcripts/codex.js';
+import { classifyCodexQuestion, codexTranscriptAdapter } from './harnesses/transcripts/codex.js';
 import { HookActivityMonitor } from './hook-activity-monitor.js';
 import type { ActivitySource } from './types/activity.js';
+import type { AskUserQuestionData } from './types/transcript-blocks.js';
 
 export type ActivityState = 'working' | 'idle' | 'unknown';
 
@@ -24,6 +25,11 @@ export interface ActivityMonitor extends EventEmitter {
   stop(): void;
   /** Called when the session learns its harness-native id (e.g. codex rollout discovery). */
   setHarnessSessionId?(id: string): void;
+  /**
+   * Optional (codex): the unanswered question. Such monitors also emit
+   * `question({ toolUseId, questions, replay })` and `question_resolved({ toolUseId })`.
+   */
+  readonly pendingQuestion?: { toolUseId: string; questions: AskUserQuestionData[] } | null;
 }
 
 /** The subset of `Session` a monitor factory may read. */
@@ -45,11 +51,15 @@ export const activityMonitorFactories: Record<ActivitySource, ActivityMonitorFac
   hook: () => new HookActivityMonitor(),
   // codex is the only 'transcript' harness. ActivityMonitorHost exposes `id`, not `sessionId`.
   transcript: (host) =>
-    new CodexTranscriptActivityMonitor(codexTranscriptAdapter, {
-      workingDir: host.workingDir,
-      sessionId: host.id,
-      harnessSessionId: host.harnessSessionId,
-    }),
+    new CodexTranscriptActivityMonitor(
+      codexTranscriptAdapter,
+      {
+        workingDir: host.workingDir,
+        sessionId: host.id,
+        harnessSessionId: host.harnessSessionId,
+      },
+      { questionClassifier: classifyCodexQuestion }
+    ),
   pty: null,
 };
 

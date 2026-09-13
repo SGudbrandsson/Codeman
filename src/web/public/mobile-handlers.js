@@ -578,7 +578,7 @@ const SwipeHandler = {
     if (typeof ContextBar !== 'undefined' && ContextBar._panel?.classList.contains('open')) return true;
     if (typeof InputPanel !== 'undefined' && InputPanel._open && KeyboardHandler.keyboardVisible) return true;
     // Block swipe when an inline AskUserQuestion widget is visible in the transcript
-    if (document.querySelector('.tv-auq-block')) return true;
+    if (document.querySelector('.tv-auq-block:not(.tv-auq-static)')) return true;
     // Block swipe while text is selected in the terminal — dragging the native
     // selection handles is horizontal too, and would otherwise switch sessions.
     if (typeof TerminalCopy !== 'undefined' && TerminalCopy.hasSelection()) return true;

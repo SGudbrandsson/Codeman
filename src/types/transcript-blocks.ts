@@ -64,6 +64,14 @@ export interface ThinkingBlock {
   seq: number;
 }
 
+/** A normalised question (Claude AskUserQuestion shape; codex questions are mapped onto it). */
+export interface AskUserQuestionData {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: Array<{ label: string; description?: string }>;
+}
+
 export type TranscriptBlock = TextBlock | ToolUseBlock | ToolResultBlock | ResultBlock | ThinkingBlock;
 
 /** A block before its `seq` is stamped. Distributes over the union. */

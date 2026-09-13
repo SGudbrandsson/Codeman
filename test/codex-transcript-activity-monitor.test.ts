@@ -21,7 +21,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { codexTranscriptAdapter } from '../src/harnesses/transcripts/codex.js';
+import { classifyCodexQuestion, codexTranscriptAdapter } from '../src/harnesses/transcripts/codex.js';
 import type { TranscriptLocateCtx } from '../src/harnesses/transcripts/types.js';
 import { CodexTranscriptActivityMonitor, type CodexActivityOptions } from '../src/codex-transcript-activity-monitor.js';
 
@@ -436,5 +436,295 @@ describe('runtime', () => {
     tick(10_000);
 
     expect(events).toEqual([WORKING]);
+  });
+});
+
+describe('pending questions (request_user_input_async)', () => {
+  const ask = (callId: string, title = 'Who should it serve?') =>
+    rec('response_item', {
+      type: 'function_call',
+      name: 'request_user_input_async',
+      call_id: callId,
+      arguments: JSON.stringify({ questions: [{ title, options: ['Me', 'You'] }] }),
+    });
+  const accepted = (callId: string) =>
+    rec('response_item', { type: 'function_call_output', call_id: callId, output: '{"accepted":true}' });
+  const USER_ANSWER = rec('event_msg', {
+    type: 'item_completed',
+    item: { type: 'UserMessage', id: 'u1', content: [{ type: 'input_text', text: '> Who should it serve?\n\nMe' }] },
+  });
+  const USER_LEGACY = rec('event_msg', { type: 'user_message', message: '> Who should it serve?\n\nMe' });
+  const userText = (text: string) =>
+    rec('event_msg', {
+      type: 'item_completed',
+      item: { type: 'UserMessage', id: 'u', content: [{ type: 'input_text', text }] },
+    });
+  const USER_PLAIN = userText('Dark theme, please.');
+  const TITLE_A = 'Who is the todo app for?';
+  const TITLE_B = 'Which platform should the todo app run on?';
+  const ask2 = (callId: string) =>
+    rec('response_item', {
+      type: 'function_call',
+      name: 'request_user_input_async',
+      call_id: callId,
+      arguments: JSON.stringify({ questions: [{ title: TITLE_A, options: ['Me'] }, { title: TITLE_B }] }),
+    });
+  const Q2 = [
+    { question: TITLE_A, options: [{ label: 'Me' }] },
+    { question: TITLE_B, options: [] },
+  ];
+  const ANSWER_A = userText(`> ${TITLE_A}\n\nMe`);
+  const ANSWER_B = userText(`> ${TITLE_B}\n\nWeb`);
+  const Q1 = [{ question: 'Who should it serve?', options: [{ label: 'Me' }, { label: 'You' }] }];
+
+  function makeQuestionMonitor(opts: Partial<CodexActivityOptions> = {}) {
+    const made = makeMonitor({ questionClassifier: classifyCodexQuestion, ...opts });
+    made.monitor.on('question', (info: unknown) => made.events.push({ type: 'question', info }));
+    made.monitor.on('question_resolved', (info: unknown) => made.events.push({ type: 'question_resolved', info }));
+    return made;
+  }
+  const questionEvents = (events: Made['events']) => events.filter((e) => e.type.startsWith('question'));
+
+  it('a live ask emits question (not replay); a later user message resolves it', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+
+    appendFileSync(file, STARTED + ask('call_1') + accepted('call_1'));
+    tick();
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: false } },
+    ]);
+    expect(monitor.pendingQuestion).toEqual({ toolUseId: 'call_1', questions: Q1 });
+
+    appendFileSync(file, USER_ANSWER);
+    tick();
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: false } },
+      { type: 'question_resolved', info: { toolUseId: 'call_1' } },
+    ]);
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('task_complete and turn_aborted after an ask do not resolve it', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+
+    appendFileSync(file, STARTED + ask('call_1') + accepted('call_1') + COMPLETE + STARTED + ABORTED);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_1');
+    expect(events.filter((e) => !e.type.startsWith('question'))).toEqual([WORKING, COMPLETED, WORKING, COMPLETED]);
+  });
+
+  it('the legacy user_message shape also resolves', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, ask('call_1'));
+    tick();
+    appendFileSync(file, USER_LEGACY);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question_resolved']);
+  });
+
+  it('a second ask replaces the pending one', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, ask('call_1') + ask('call_2', 'Anything else?'));
+    tick();
+    expect(questionEvents(events).map((e) => (e.info as { toolUseId: string }).toolUseId)).toEqual([
+      'call_1',
+      'call_2',
+    ]);
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_2');
+  });
+
+  it('an ask and its answer in the same appended chunk emit question then question_resolved', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+
+    appendFileSync(file, STARTED + ask('call_1') + accepted('call_1') + USER_ANSWER + COMPLETE);
+    tick();
+
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: false } },
+      { type: 'question_resolved', info: { toolUseId: 'call_1' } },
+    ]);
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('a multi-question ask stays pending after one answer and resolves after the last', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, STARTED + ask2('call_m') + accepted('call_m') + ANSWER_A + COMPLETE);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+    expect(monitor.pendingQuestion).toEqual({ toolUseId: 'call_m', questions: Q2 });
+
+    appendFileSync(file, ANSWER_A); // a repeated answer to the same title does not count twice
+    tick();
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_m');
+
+    appendFileSync(file, STARTED + ANSWER_B + COMPLETE);
+    tick();
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_m', questions: Q2, replay: false } },
+      { type: 'question_resolved', info: { toolUseId: 'call_m' } },
+    ]);
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('answers in reverse order also resolve', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, ask2('call_m') + ANSWER_B + ANSWER_A);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question_resolved']);
+  });
+
+  it('a plain or non-matching user message does not resolve a pending question', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, ask('call_1') + USER_PLAIN + userText('> Something else entirely\n\nx'));
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_1');
+  });
+
+  it('a newer ask discards the partial answers of the one it replaces', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, ask2('call_m') + ANSWER_A + ask2('call_n') + ANSWER_B);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question']);
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_n');
+    appendFileSync(file, ANSWER_A);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question', 'question_resolved']);
+  });
+
+  it('attaching to a partially answered multi-question ask replays it; the remaining answer resolves', async () => {
+    writeFileSync(file, STARTED + ask2('call_m') + accepted('call_m') + COMPLETE + STARTED + ANSWER_A + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor({ chunkBytes: 64 });
+    await monitor.start();
+    expect(events).toEqual([{ type: 'question', info: { toolUseId: 'call_m', questions: Q2, replay: true } }]);
+
+    appendFileSync(file, ANSWER_A); // already answered before attach: still pending
+    tick();
+    expect(monitor.pendingQuestion?.toolUseId).toBe('call_m');
+    appendFileSync(file, ANSWER_B);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question_resolved']);
+  });
+
+  it('attaching to a fully answered multi-question ask emits nothing', async () => {
+    writeFileSync(file, STARTED + ask2('call_m') + ANSWER_A + COMPLETE + STARTED + USER_PLAIN + ANSWER_B + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor({ chunkBytes: 64 });
+    await monitor.start();
+    expect(events).toEqual([]);
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('attaching: a plain message after an ask keeps it pending; answers to an older ask do not count', async () => {
+    writeFileSync(file, ask2('call_old') + ANSWER_A + ask2('call_m') + ANSWER_B + USER_PLAIN + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    expect(events).toEqual([{ type: 'question', info: { toolUseId: 'call_m', questions: Q2, replay: true } }]);
+    appendFileSync(file, ANSWER_A);
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question', 'question_resolved']);
+  });
+
+  it('a user message with no pending question emits nothing', async () => {
+    writeFileSync(file, COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    appendFileSync(file, USER_ANSWER);
+    tick();
+    expect(questionEvents(events)).toEqual([]);
+  });
+
+  it('attaching to a rollout whose ask was already answered emits nothing', async () => {
+    writeFileSync(file, STARTED + ask('call_1') + accepted('call_1') + COMPLETE + USER_ANSWER + STARTED + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    expect(events).toEqual([]);
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('attaching to an unanswered ask followed by task_complete emits exactly one replay question', async () => {
+    writeFileSync(file, STARTED + ask('call_1') + accepted('call_1') + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    tick(500);
+    expect(events).toEqual([{ type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: true } }]);
+    expect(monitor.state).toBe('idle');
+  });
+
+  it('an unanswered ask older than the activity boundary is still found', async () => {
+    writeFileSync(
+      file,
+      USER_LEGACY + STARTED + ask('call_1') + accepted('call_1') + COMPLETE + STARTED + bigMessage(400) + COMPLETE
+    );
+    const { monitor, events } = makeQuestionMonitor({ chunkBytes: 64 });
+    await monitor.start();
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: true } },
+    ]);
+  });
+
+  it('an ask beyond the scan budget is never raised, but activity is still known', async () => {
+    writeFileSync(file, STARTED + ask('call_1') + COMPLETE + bigMessage(4000) + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor({ chunkBytes: 256, scanBudgetBytes: 2048 });
+    await monitor.start();
+    expect(events).toEqual([]);
+    expect(monitor.state).toBe('idle');
+    expect(monitor.pendingQuestion).toBe(null);
+  });
+
+  it('a truncation rescan does not re-emit the same question; a rescan without it resolves', async () => {
+    writeFileSync(file, ask('call_1') + COMPLETE + bigMessage(300));
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+
+    writeFileSync(file, ask('call_1') + COMPLETE); // same inode, smaller
+    tick();
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+
+    writeFileSync(file, COMPLETE);
+    tick();
+    expect(questionEvents(events)).toEqual([
+      { type: 'question', info: { toolUseId: 'call_1', questions: Q1, replay: true } },
+      { type: 'question_resolved', info: { toolUseId: 'call_1' } },
+    ]);
+  });
+
+  it('stop() drops the pending question without emitting', async () => {
+    writeFileSync(file, ask('call_1') + COMPLETE);
+    const { monitor, events } = makeQuestionMonitor();
+    await monitor.start();
+    monitor.stop();
+    expect(monitor.pendingQuestion).toBe(null);
+    expect(questionEvents(events).map((e) => e.type)).toEqual(['question']);
+  });
+
+  it('without questionClassifier no question is tracked', async () => {
+    writeFileSync(file, ask('call_1') + COMPLETE);
+    const { monitor, events } = makeMonitor();
+    monitor.on('question', () => events.push({ type: 'question' }));
+    await monitor.start();
+    appendFileSync(file, ask('call_2'));
+    tick();
+    expect(events).toEqual([]);
+    expect(monitor.pendingQuestion).toBe(null);
   });
 });

@@ -10053,6 +10053,11 @@ kbd {
 .tv-auq-custom-input:focus { border-color: rgba(59,130,246,0.5); }
 .tv-auq-custom-send { padding: 7px 14px; background: #3b82f6; border: none; border-radius: 6px; color: #fff; font-family: inherit; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
 .tv-auq-custom-send:hover { background: #2563eb; }
+/* Read-only question widget (codex request_user_input_async: answered in the codex terminal) */
+.tv-auq-block.tv-auq-readonly .tv-auq-option { cursor: default; }
+.tv-auq-block.tv-auq-readonly .tv-auq-option:hover { background: #1e293b; border-color: rgba(255,255,255,0.1); }
+.tv-auq-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; color: rgba(255,255,255,0.6); }
+.tv-auq-static { opacity: 0.75; }
 /* Multi-select selected state */
 .tv-auq-option.selected { background: #1e3a5f; border-color: rgba(59,130,246,0.7); }
 .tv-auq-option.selected:hover { background: #1e4070; }

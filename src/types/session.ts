@@ -26,6 +26,7 @@
 
 import type { RespawnConfig } from './respawn.js';
 import type { HarnessModelConfig } from '../harnesses/types.js';
+import type { AskUserQuestionData } from './transcript-blocks.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Agent types
@@ -235,6 +236,11 @@ export interface SessionState {
    * session id. codex discovers it after start. opencode and shell leave it unset.
    */
   harnessSessionId?: string;
+  /**
+   * Unanswered question raised by the harness (codex `request_user_input_async`). Runtime-only:
+   * lets a page reload rebuild the attention alert. Claude/opencode/pi never set it.
+   */
+  pendingQuestion?: { toolUseId: string; questions: AskUserQuestionData[] };
   /**
    * Per-process activity token of the running 'hook' harness process (pi), exported as
    * CODEMAN_ACTIVITY_TOKEN. Persisted so a restored session keeps accepting reports from the
