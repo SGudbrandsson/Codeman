@@ -255,7 +255,9 @@ function renderMarkdown(text) {
   }
   // Validate link href — only allow safe protocols
   function safeHref(url) {
-    const trimmed = url.trim().toLowerCase();
+    // Browsers drop ASCII whitespace/control chars inside URLs (`jav\tascript:`),
+    // so strip them before the scheme check; safe links keep the original text.
+    const trimmed = url.replace(/[\x00-\x20\x7f]/g, '').toLowerCase();
     if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('vbscript:')) {
       return '#';
     }
@@ -426,40 +428,69 @@ function inlineMarkdown(escaped, safeHref, esc) {
     return '\x00CODESNIP' + (snippets.length - 1) + '\x00';
   });
 
-  // Step 1b: Extract markdown links whose target is a file path (codex writes
-  // `[src/a.ts:12](/abs/src/a.ts:12)`) into placeholders before the URL/emphasis
-  // passes can mangle `_`/`*` in the target. They render WITHOUT an href so the
-  // browser never navigates; linkifyFilePaths() binds them to the file editor.
-  // Every other link is left untouched for Step 3.
-  const fileLinks = [];
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, target) => {
-    const raw = target.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  // Step 1b: Extract ALL markdown links into placeholders before the URL/emphasis
+  // passes can mangle `_`/`*` in the target (or in our own `target="_blank"`).
+  // Target is `<...>` (may hold spaces) or a space-free run allowing one level of
+  // balanced parens (Wikipedia `Foo_(bar)`). Open and close tags are separate
+  // placeholders so the label still gets the emphasis pass; href never does
+  // (file-link labels stay fully opaque, as before).
+  // File-path targets (codex writes `[src/a.ts:12](/abs/src/a.ts:12)`) render
+  // WITHOUT an href so the browser never navigates; linkifyFilePaths() binds them.
+  const unescape = (t) => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const linkOpens = [];
+  const urls = [];
+  s = s.replace(/\[([^\]]+)\]\((?:&lt;(.*?)&gt;|((?:[^\s()]|\([^\s()]*\))+))\)/g, (match, label, angle, plain) => {
+    const raw = unescape(angle !== undefined ? angle : plain);
     const parsed = parseMarkdownFileLinkTarget(raw);
-    if (!parsed) return match;
-    fileLinks.push('<a class="tv-md-file-link" data-file-path="' + esc(parsed.path) + '"' +
-      (parsed.line ? ' data-line="' + parsed.line + '"' : '') + '>' + label + '</a>');
-    return '\x00FILELINK' + (fileLinks.length - 1) + '\x00';
+    if (parsed) {
+      // File-link labels are file names (`__init__.py`): keep them fully opaque.
+      urls.push('<a class="tv-md-file-link" data-file-path="' + esc(parsed.path) + '"' +
+        (parsed.line ? ' data-line="' + parsed.line + '"' : '') + '>' + label + '</a>');
+      return '\x00URL' + (urls.length - 1) + '\x00';
+    }
+    linkOpens.push('<a href="' + esc(safeHref(raw)) + '" target="_blank" rel="noopener noreferrer">');
+    // A label that is itself a URL is kept verbatim (no linkify/emphasis inside).
+    if (/https?:\/\//.test(label)) {
+      urls.push(label);
+      label = '\x00URL' + (urls.length - 1) + '\x00';
+    }
+    return '\x00LINKOPEN' + (linkOpens.length - 1) + '\x00' + label + '\x00LINKCLOSE\x00';
   });
 
-  // Step 2: Linkify bare URLs (code content is now opaque — no false matches).
-  s = s.replace(/(?<!\()(https?:\/\/[^\s<>"&()*_]+)(?!\))/g, (_, url) => {
-    const cleanUrl = url.replace(/[.,!?]+$/, '');
-    return '<a href="' + safeHref(cleanUrl) + '" target="_blank" rel="noopener noreferrer">' + cleanUrl + '</a>';
+  // Step 2: Linkify bare URLs into placeholders (code and links are now opaque).
+  // `&` only appears as `&amp;` in escaped text; `&lt;`/`&gt;`/`&quot;` end a URL.
+  s = s.replace(/https?:\/\/(?:&amp;|[^\s<>"&\x00])+/g, (url) => {
+    // Single linear backward walk: drop trailing punctuation, and a trailing `)`
+    // only while unbalanced, e.g. `(see https://a.com/x)`.
+    let opens = 0;
+    let closes = 0;
+    for (let k = 0; k < url.length; k++) {
+      if (url[k] === '(') opens++;
+      else if (url[k] === ')') closes++;
+    }
+    let end = url.length;
+    while (end > 0) {
+      const ch = url[end - 1];
+      if ('.,!?;:*'.includes(ch)) end--;
+      else if (ch === ')' && closes > opens) { closes--; end--; }
+      else break;
+    }
+    const clean = url.slice(0, end);
+    urls.push('<a href="' + esc(safeHref(unescape(clean))) + '" target="_blank" rel="noopener noreferrer">' + clean + '</a>');
+    return '\x00URL' + (urls.length - 1) + '\x00' + url.slice(clean.length);
   });
 
-  // Step 3: Bold, italic, and markdown link replacements.
+  // Step 3: Bold and italic on the remaining prose (and link labels).
   s = s
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/_([^_]+)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
-      '<a href="' + esc(safeHref(url)) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
-    );
+    .replace(/_([^_]+)_/g, '<em>$1</em>');
 
-  // Step 4: Restore file-link placeholders (labels may hold code placeholders, so
+  // Step 4: Restore link placeholders (labels may hold URL/code placeholders, so
   // first), then code span placeholders to their original <code>...</code> HTML.
-  s = s.replace(/\x00FILELINK(\d+)\x00/g, (_, i) => fileLinks[+i]);
+  s = s.replace(/\x00LINKOPEN(\d+)\x00/g, (_, i) => linkOpens[+i]).replace(/\x00LINKCLOSE\x00/g, '</a>');
+  s = s.replace(/\x00URL(\d+)\x00/g, (_, i) => urls[+i]);
   s = s.replace(/\x00CODESNIP(\d+)\x00/g, (_, i) => snippets[+i]);
 
   return s;
