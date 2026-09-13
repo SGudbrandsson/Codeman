@@ -83,6 +83,7 @@ import { SessionCompactContinue } from './session-compact-continue.js';
 import { SessionTaskCache } from './session-task-cache.js';
 import { createActivityMonitor, type ActivityMonitor } from './activity-monitor.js';
 import { normalizeIdleReason, type IdleInfo } from './types/activity.js';
+import type { AskUserQuestionData } from './types/transcript-blocks.js';
 import { newActivityToken } from './activity-token.js';
 import {
   HookActivityMonitor,
@@ -318,6 +319,8 @@ export class Session extends EventEmitter {
   private _promptResolved: boolean = false; // Guard against race conditions in runPrompt
   private _isWorking: boolean = false;
   private _activityMonitor: ActivityMonitor | null = null;
+  /** Unanswered harness question (codex), forwarded from the activity monitor. */
+  private _pendingQuestion: { toolUseId: string; questions: AskUserQuestionData[]; raisedAt: number } | null = null;
   /** Bumped on every attach/detach; callbacks from an older monitor generation are ignored. */
   private _activityGeneration: number = 0;
   private _lastPromptTime: number = 0;
@@ -1339,6 +1342,9 @@ export class Session extends EventEmitter {
       ...(this._codexConfig !== undefined && { codexConfig: this._codexConfig }),
       ...(this._piConfig !== undefined && { piConfig: this._piConfig }),
       ...(this.harnessSessionId !== undefined && { harnessSessionId: this.harnessSessionId }),
+      ...(this._pendingQuestion && {
+        pendingQuestion: { toolUseId: this._pendingQuestion.toolUseId, questions: this._pendingQuestion.questions },
+      }),
       ...(this.activityToken !== undefined && { activityToken: this.activityToken }),
       ...(this.harnessTranscriptPath !== undefined && { harnessTranscriptPath: this.harnessTranscriptPath }),
       draft: this.draft,
@@ -3001,6 +3007,18 @@ export class Session extends EventEmitter {
       this.emit('idle', { reason });
       if (reason === 'completed') this._maybeRefreshContextAfterCompact();
     });
+    // Optional (codex): pending-question events. Other monitors never emit these.
+    monitor.on('question', (q: { toolUseId: string; questions: AskUserQuestionData[]; replay?: boolean }) => {
+      if (this._isStopped || gen !== this._activityGeneration) return;
+      this._pendingQuestion = { toolUseId: q.toolUseId, questions: q.questions, raisedAt: Date.now() };
+      this.emit('pendingQuestion', { toolUseId: q.toolUseId, questions: q.questions, replay: !!q.replay });
+    });
+    monitor.on('question_resolved', (r: { toolUseId: string }) => {
+      if (this._isStopped || gen !== this._activityGeneration) return;
+      if (!this._pendingQuestion) return;
+      this._pendingQuestion = null;
+      this.emit('pendingQuestionResolved', { toolUseId: r.toolUseId });
+    });
     monitor.start().catch((err) => console.error(`[Session] activity monitor failed to start for ${this.id}:`, err));
   }
 
@@ -3038,6 +3056,11 @@ export class Session extends EventEmitter {
   /** The single detach path. Idempotent; late callbacks from the old monitor are ignored. */
   private _detachActivityMonitor(): void {
     this._activityGeneration++;
+    if (this._pendingQuestion) {
+      const { toolUseId } = this._pendingQuestion;
+      this._pendingQuestion = null;
+      this.emit('pendingQuestionResolved', { toolUseId });
+    }
     if (!this._activityMonitor) return;
     this._activityMonitor.stop();
     this._activityMonitor.removeAllListeners();

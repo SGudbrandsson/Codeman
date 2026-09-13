@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { watch, statSync, existsSync, FSWatcher } from 'node:fs';
 import { open } from 'node:fs/promises';
 import type { TranscriptBlock } from './types/index.js';
-import { seqBaseForOffset } from './types/transcript-blocks.js';
+import { seqBaseForOffset, type AskUserQuestionData } from './types/transcript-blocks.js';
 import type { TranscriptAdapter } from './harnesses/transcripts/types.js';
 import { claudeTranscriptAdapter } from './harnesses/transcripts/claude.js';
 
@@ -73,12 +73,7 @@ export interface TranscriptState {
   lastUpdateAt: string | null;
 }
 
-export interface AskUserQuestionData {
-  question: string;
-  header?: string;
-  multiSelect?: boolean;
-  options: Array<{ label: string; description?: string }>;
-}
+export type { AskUserQuestionData } from './types/transcript-blocks.js';
 
 export interface TranscriptWatcherEvents {
   'transcript:update': (state: TranscriptState) => void;

@@ -234,6 +234,8 @@ interface SessionListenerRefs {
   contextUpdate: (data: { inputTokens: number; maxTokens: number; pct: number }) => void;
   conversationId: (uuid: string) => void;
   harnessSessionIdDiscovered: (id: string) => void;
+  pendingQuestion: (q: { toolUseId: string; questions: AskUserQuestionData[]; replay: boolean }) => void;
+  pendingQuestionResolved: (r: { toolUseId: string }) => void;
   compactSent: () => void;
   continueSent: () => void;
 }
@@ -1278,6 +1280,7 @@ export class WebServer extends EventEmitter {
     // Stop watching @fix_plan.md for this session
     if (session) {
       session.ralphTracker.stopWatchingFixPlan();
+      this.broadcastPendingQuestionResolved(session);
     }
 
     // Kill all subagents spawned by this session (scoped to sessionId to avoid cross-session kills)
@@ -1428,6 +1431,8 @@ export class WebServer extends EventEmitter {
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
         session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
+        session.off('pendingQuestion', listeners.pendingQuestion);
+        session.off('pendingQuestionResolved', listeners.pendingQuestionResolved);
         this.sessionListenerRefs.delete(sessionId);
       }
 
@@ -1446,6 +1451,17 @@ export class WebServer extends EventEmitter {
     }
 
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
+  }
+
+  /** Clear a session's pending harness question on the clients (kill/clear). Idempotent there. */
+  private broadcastPendingQuestionResolved(session: Session): void {
+    const pending = session.toState().pendingQuestion;
+    if (!pending) return;
+    this.broadcast(SseEvent.TranscriptAskUserQuestionResolved, {
+      sessionId: session.id,
+      toolUseId: pending.toolUseId,
+      timestamp: Date.now(),
+    });
   }
 
   /**
@@ -1511,7 +1527,9 @@ export class WebServer extends EventEmitter {
       fileStreamManager.closeSessionStreams(sessionId);
       imageWatcher.unwatchSession(sessionId);
 
-      // 5. Remove event listeners from session object
+      // 5. Remove event listeners from session object (resolve a pending question first: the
+      // session stop that would otherwise emit it happens after the listeners are gone)
+      this.broadcastPendingQuestionResolved(session);
       const listeners = this.sessionListenerRefs.get(sessionId);
       if (listeners) {
         session.off('terminal', listeners.terminal);
@@ -1544,6 +1562,8 @@ export class WebServer extends EventEmitter {
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
         session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
+        session.off('pendingQuestion', listeners.pendingQuestion);
+        session.off('pendingQuestionResolved', listeners.pendingQuestionResolved);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();
@@ -1950,6 +1970,8 @@ export class WebServer extends EventEmitter {
             session.off('contextUpdate', listenerRefs.contextUpdate);
             session.off('conversationId', listenerRefs.conversationId);
             session.off('harnessSessionIdDiscovered', listenerRefs.harnessSessionIdDiscovered);
+            session.off('pendingQuestion', listenerRefs.pendingQuestion);
+            session.off('pendingQuestionResolved', listenerRefs.pendingQuestionResolved);
             this.sessionListenerRefs.delete(session.id);
           }
         } catch (err) {
@@ -2193,6 +2215,39 @@ export class WebServer extends EventEmitter {
         // instead of on the client's next 30 s sync. No-op for Claude harnesses.
         this.startHarnessTranscriptWatcher(session.id);
       },
+
+      /**
+       * A harness question awaits the user (codex request_user_input_async). Reuses the
+       * AskUserQuestion SSE event; `replay` means it was re-seeded from disk (server restart,
+       * rescan), so no push is sent for it.
+       */
+      pendingQuestion: ({ toolUseId, questions, replay }) => {
+        this.broadcast(SseEvent.TranscriptAskUserQuestion, {
+          sessionId: session.id,
+          toolUseId,
+          questions,
+          harness: session.mode,
+          replay,
+          timestamp: Date.now(),
+        });
+        this.broadcastSessionStateDebounced(session.id);
+        if (!replay) {
+          this.sendPushNotifications(SseEvent.TranscriptAskUserQuestion, {
+            sessionId: session.id,
+            sessionName: session.name,
+            questions,
+          });
+        }
+      },
+
+      pendingQuestionResolved: ({ toolUseId }) => {
+        this.broadcast(SseEvent.TranscriptAskUserQuestionResolved, {
+          sessionId: session.id,
+          toolUseId,
+          timestamp: Date.now(),
+        });
+        this.broadcastSessionStateDebounced(session.id);
+      },
     };
 
     // Store listener refs for cleanup
@@ -2229,6 +2284,8 @@ export class WebServer extends EventEmitter {
     session.on('contextUpdate', listeners.contextUpdate);
     session.on('conversationId', listeners.conversationId);
     session.on('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
+    session.on('pendingQuestion', listeners.pendingQuestion);
+    session.on('pendingQuestionResolved', listeners.pendingQuestionResolved);
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -3292,6 +3349,7 @@ export class WebServer extends EventEmitter {
       ],
     },
     [SseEvent.HookElicitationDialog]: { title: 'Question Asked', urgency: 'critical' },
+    [SseEvent.TranscriptAskUserQuestion]: { title: 'Question Asked', urgency: 'critical' },
     [SseEvent.HookIdlePrompt]: { title: 'Waiting for Input', urgency: 'warning' },
     [SseEvent.HookStop]: { title: 'Response Complete', urgency: 'info' },
     [SseEvent.SessionError]: { title: 'Session Error', urgency: 'critical' },
@@ -3332,6 +3390,12 @@ export class WebServer extends EventEmitter {
     } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
       body += body ? ' ' : '';
       body += `Tool: ${String(data.tool_name)}`;
+    } else if (event === SseEvent.TranscriptAskUserQuestion && Array.isArray(data.questions)) {
+      const first = (data.questions as Array<{ question?: unknown }>)[0];
+      if (first && typeof first.question === 'string') {
+        body += body ? ' ' : '';
+        body += first.question.slice(0, 200);
+      }
     } else if (event === SseEvent.OrchestratorCompletion && data.workItemTitle) {
       body += body ? ' ' : '';
       body += String(data.workItemTitle);
@@ -4359,6 +4423,8 @@ export class WebServer extends EventEmitter {
         session.off('contextUpdate', listeners.contextUpdate);
         session.off('conversationId', listeners.conversationId);
         session.off('harnessSessionIdDiscovered', listeners.harnessSessionIdDiscovered);
+        session.off('pendingQuestion', listeners.pendingQuestion);
+        session.off('pendingQuestionResolved', listeners.pendingQuestionResolved);
         this.sessionListenerRefs.delete(sessionId);
       }
       session.removeAllListeners();
