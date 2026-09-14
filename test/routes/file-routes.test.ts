@@ -593,6 +593,45 @@ describe('file-routes', () => {
       expect(mockedReadFile).not.toHaveBeenCalled();
     });
 
+    it('returns document metadata for .docx without decoding it as text', async () => {
+      mockedStat.mockResolvedValue({ size: 15384, mtimeMs: 777 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=${encodeURIComponent('docs/Plan.DOCX')}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data).toEqual({
+        path: 'docs/Plan.DOCX',
+        size: 15384,
+        type: 'document',
+        extension: 'docx',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=${encodeURIComponent('docs/Plan.DOCX')}`,
+        mtime: 777,
+      });
+      expect(mockedReadFile).not.toHaveBeenCalled();
+    });
+
+    it.each(['old.doc', 'deck.pptx', 'deck.ppt', 'letter.odt', 'notes.rtf', 'archive.7z', 'archive.rar'])(
+      'returns binary metadata for %s without decoding it as text',
+      async (path) => {
+        mockedStat.mockResolvedValue({ size: 2048, mtimeMs: 5 } as never);
+
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=${path}`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.success).toBe(true);
+        expect(body.data.type).toBe('binary');
+        expect(body.data.content).toBeUndefined();
+        expect(body.data.url).toContain('file-raw');
+        expect(mockedReadFile).not.toHaveBeenCalled();
+      }
+    );
+
     it('includes mtime in binary metadata for non-spreadsheet binaries too', async () => {
       mockedStat.mockResolvedValue({ size: 1024, mtimeMs: 4242 } as never);
 
@@ -719,6 +758,11 @@ describe('file-routes', () => {
       ['calc.ods', 'application/vnd.oasis.opendocument.spreadsheet'],
       ['data.csv', 'text/csv'],
       ['data.tsv', 'text/tab-separated-values'],
+      ['report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['legacy.doc', 'application/msword'],
+      ['deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+      ['letter.odt', 'application/vnd.oasis.opendocument.text'],
+      ['bundle.zip', 'application/zip'],
     ])('serves %s as %s with the bytes unchanged', async (path, mime) => {
       const content = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00, 0x80]);
       mockedReadFile.mockResolvedValue(content as never);
@@ -730,6 +774,20 @@ describe('file-routes', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toBe(mime);
+      expect(res.rawPayload.equals(content)).toBe(true);
+    });
+
+    it('sends a docx with download=1 as an attachment named after the file', async () => {
+      const content = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+      mockedReadFile.mockResolvedValue(content as never);
+      mockedStat.mockResolvedValue({ size: content.length } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=docs/Plan.docx&download=1`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-disposition']).toBe(`attachment; filename="Plan.docx"; filename*=UTF-8''Plan.docx`);
       expect(res.rawPayload.equals(content)).toBe(true);
     });
 

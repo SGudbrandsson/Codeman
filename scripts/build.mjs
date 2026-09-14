@@ -81,6 +81,25 @@ run('file-editor bundle', 'npx esbuild scripts/vendor/editor-entry.mjs --bundle 
   }
 }
 
+// DOCX preview vendor bundle: docx-preview (Apache-2.0) + JSZip (MIT) in one IIFE,
+// lazy-loaded by app.js (_filesEnsureDocx) only when a .docx is opened; exposes
+// window.CodemanDocx. Without it app.js falls back to the Download card.
+{
+  const docxPkgs = ['docx-preview', 'jszip'];
+  const missing = docxPkgs.filter((p) => !existsSync(join(ROOT, 'node_modules', p, 'package.json')));
+  if (missing.length === 0) {
+    run(
+      'docx preview bundle',
+      'npx esbuild scripts/vendor/docx-entry.mjs --bundle --minify --format=iife --legal-comments=eof --outfile=dist/web/public/vendor/docx.min.js'
+    );
+  } else {
+    console.warn(`\n[build] docx packages not installed (${missing.join(', ')}) — docx preview disabled`);
+    for (const name of readdirSync(join(ROOT, 'dist/web/public/vendor'))) {
+      if (name.startsWith('docx.min.')) rmSync(join(ROOT, 'dist/web/public/vendor', name), { force: true });
+    }
+  }
+}
+
 // 4. Minify frontend assets
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify styles.css', 'npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite');

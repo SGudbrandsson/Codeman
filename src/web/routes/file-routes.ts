@@ -354,8 +354,20 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         'xlsx',
         'xls',
         'ods',
+        // Office / archive formats: never decode these as UTF-8 text. docx opens
+        // in the read-only docx-preview renderer (type 'document'); the rest get
+        // the binary Download card.
+        'docx',
+        'doc',
+        'pptx',
+        'ppt',
+        'odt',
+        'rtf',
+        '7z',
+        'rar',
       ]);
       const spreadsheetExts = new Set(['xlsx', 'xls', 'ods']);
+      const documentExts = new Set(['docx']);
       const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
       const videoExts = new Set(['mp4', 'webm', 'mov', 'avi']);
 
@@ -372,7 +384,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
                 ? 'video'
                 : spreadsheetExts.has(ext)
                   ? 'spreadsheet'
-                  : 'binary',
+                  : documentExts.has(ext)
+                    ? 'document'
+                    : 'binary',
             extension: ext,
             url: `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`,
             // Staleness guard for binary saves (PUT file-content expectedMtime).
@@ -422,8 +436,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     const session = findSessionOrFail(ctx, id);
 
     if (!filePath) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
     }
 
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
@@ -432,13 +445,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     try {
       resolvedPath = realpathSync(fullPath);
     } catch {
-      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
-      return;
+      return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
     }
     const relativePath = relative(session.workingDir, resolvedPath);
     if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
-      return;
+      return reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
     }
 
     try {
@@ -446,7 +459,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       const MAX_RAW_FILE_SIZE = 50 * 1024 * 1024; // 50MB for raw files
       const stat = await fs.stat(resolvedPath);
       if (stat.size > MAX_RAW_FILE_SIZE) {
-        reply
+        return reply
           .code(400)
           .send(
             createErrorResponse(
@@ -454,7 +467,6 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
               `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_FILE_SIZE / 1024 / 1024}MB limit)`
             )
           );
-        return;
       }
 
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
@@ -478,6 +490,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         xls: 'application/vnd.ms-excel',
         ods: 'application/vnd.oasis.opendocument.spreadsheet',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        doc: 'application/msword',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        odt: 'application/vnd.oasis.opendocument.text',
+        zip: 'application/zip',
         csv: 'text/csv',
         tsv: 'text/tab-separated-values',
       };
@@ -495,9 +512,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
           `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
         );
       }
-      reply.send(content);
+      // `return` is load-bearing: @fastify/compress swaps the Buffer for a brotli/
+      // gzip stream in onSend, and an async handler that resolves undefined before
+      // that stream finishes ends the reply with an empty body (0-byte downloads).
+      return reply.send(content);
     } catch (err) {
-      reply
+      return reply
         .code(500)
         .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
     }
@@ -510,8 +530,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     const session = findSessionOrFail(ctx, id);
 
     if (!filePath) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
     }
 
     // Set up SSE headers
@@ -587,15 +606,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     const { path: rawPath } = req.query as { path?: string };
 
     if (!rawPath || !isAbsolute(rawPath)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
-      return;
+      return reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
     }
 
     // Check extension before touching the filesystem
     const ext = extname(rawPath).slice(1).toLowerCase();
     if (!allowedImageExts.has(ext)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
     }
 
     // Resolve symlinks to prevent traversal
@@ -603,34 +622,30 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     try {
       resolvedPath = realpathSync(rawPath);
     } catch {
-      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
-      return;
+      return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
     }
 
     const resolvedExt = extname(resolvedPath).slice(1).toLowerCase();
     if (!allowedImageExts.has(resolvedExt)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
     }
 
     // Security allowlist: /tmp or user home directory
     const inTmp = resolvedPath.startsWith('/tmp/') || resolvedPath === '/tmp';
     const inHome = resolvedPath.startsWith(homeDir + '/') || resolvedPath === homeDir;
     if (!inTmp && !inHome) {
-      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
-      return;
+      return reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
     }
 
     try {
       const stat = await fs.stat(resolvedPath);
       if (!stat.isFile()) {
-        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
-        return;
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
       }
 
       const MAX_IMAGE_SIZE = 50 * 1024 * 1024; // 50MB
       if (stat.size > MAX_IMAGE_SIZE) {
-        reply
+        return reply
           .code(400)
           .send(
             createErrorResponse(
@@ -638,15 +653,14 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
               `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_IMAGE_SIZE / 1024 / 1024}MB limit)`
             )
           );
-        return;
       }
 
       const content = await fs.readFile(resolvedPath);
       reply.header('Content-Type', imageMimeTypes[resolvedExt] || 'application/octet-stream');
       reply.header('Cache-Control', 'private, max-age=60');
-      reply.send(content);
+      return reply.send(content);
     } catch (err) {
-      reply
+      return reply
         .code(500)
         .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
     }
@@ -660,30 +674,28 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     const { path: rawPath, width: rawWidth } = req.query as { path?: string; width?: string };
 
     if (!rawPath || !isAbsolute(rawPath)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
-      return;
+      return reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing or non-absolute path parameter'));
     }
 
     const ext = extname(rawPath).slice(1).toLowerCase();
     if (!thumbImageExts.has(ext)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
     }
 
     let resolvedPath: string;
     try {
       resolvedPath = realpathSync(rawPath);
     } catch {
-      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
-      return;
+      return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
     }
 
     // Security allowlist: /tmp or user home directory
     const inTmp = resolvedPath.startsWith('/tmp/') || resolvedPath === '/tmp';
     const inHome = resolvedPath.startsWith(homeDir + '/') || resolvedPath === homeDir;
     if (!inTmp && !inHome) {
-      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
-      return;
+      return reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path outside allowed directories'));
     }
 
     // SVGs are already tiny — serve as-is
@@ -692,13 +704,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         const content = await fs.readFile(resolvedPath);
         reply.header('Content-Type', 'image/svg+xml');
         reply.header('Cache-Control', 'private, max-age=300');
-        reply.send(content);
+        return reply.send(content);
       } catch (err) {
-        reply
+        return reply
           .code(500)
           .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
       }
-      return;
     }
 
     const width = Math.min(Math.max(parseInt(rawWidth || '240', 10) || 240, 32), 800);
@@ -706,14 +717,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     try {
       const stat = await fs.stat(resolvedPath);
       if (!stat.isFile()) {
-        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
-        return;
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
       }
 
       const MAX_THUMB_SOURCE = 50 * 1024 * 1024; // 50MB
       if (stat.size > MAX_THUMB_SOURCE) {
-        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
-        return;
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
       }
 
       // Check cache
@@ -722,8 +731,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         const cached = await fs.readFile(cacheFile);
         reply.header('Content-Type', 'image/webp');
         reply.header('Cache-Control', 'private, max-age=300');
-        reply.send(cached);
-        return;
+        return reply.send(cached);
       } catch {
         // Cache miss — generate thumbnail
       }
@@ -738,9 +746,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
 
       reply.header('Content-Type', 'image/webp');
       reply.header('Cache-Control', 'private, max-age=300');
-      reply.send(thumbnail);
+      return reply.send(thumbnail);
     } catch (err) {
-      reply
+      return reply
         .code(500)
         .send(
           createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to generate thumbnail: ${getErrorMessage(err)}`)
@@ -755,8 +763,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     const session = findSessionOrFail(ctx, id);
 
     if (!filePath) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
     }
 
     const fullPath = resolve(session.workingDir, filePath);
@@ -764,19 +771,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     try {
       resolvedPath = realpathSync(fullPath);
     } catch {
-      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
-      return;
+      return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
     }
     const relativePath = relative(session.workingDir, resolvedPath);
     if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
-      return;
+      return reply
+        .code(400)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
     }
 
     const ext = extname(resolvedPath).slice(1).toLowerCase();
     if (!thumbImageExts.has(ext)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
-      return;
+      return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an image file'));
     }
 
     // SVGs pass through
@@ -785,13 +791,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         const content = await fs.readFile(resolvedPath);
         reply.header('Content-Type', 'image/svg+xml');
         reply.header('Cache-Control', 'private, max-age=300');
-        reply.send(content);
+        return reply.send(content);
       } catch (err) {
-        reply
+        return reply
           .code(500)
           .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
       }
-      return;
     }
 
     const width = Math.min(Math.max(parseInt(rawWidth || '400', 10) || 400, 32), 800);
@@ -799,14 +804,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     try {
       const stat = await fs.stat(resolvedPath);
       if (!stat.isFile()) {
-        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
-        return;
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a regular file'));
       }
 
       const MAX_THUMB_SOURCE = 50 * 1024 * 1024;
       if (stat.size > MAX_THUMB_SOURCE) {
-        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
-        return;
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Source file too large'));
       }
 
       const cacheFile = join(THUMB_CACHE_DIR, thumbCacheKey(resolvedPath, stat.mtimeMs, width));
@@ -814,8 +817,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         const cached = await fs.readFile(cacheFile);
         reply.header('Content-Type', 'image/webp');
         reply.header('Cache-Control', 'private, max-age=300');
-        reply.send(cached);
-        return;
+        return reply.send(cached);
       } catch {
         // Cache miss
       }
@@ -829,9 +831,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
 
       reply.header('Content-Type', 'image/webp');
       reply.header('Cache-Control', 'private, max-age=300');
-      reply.send(thumbnail);
+      return reply.send(thumbnail);
     } catch (err) {
-      reply
+      return reply
         .code(500)
         .send(
           createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to generate thumbnail: ${getErrorMessage(err)}`)

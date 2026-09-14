@@ -13395,6 +13395,28 @@ a.files-sheet-tool { text-decoration: none; }
 .files-binary-meta { color: #6e7681; font-size: 13px; }
 .files-binary-dl { margin-top: 10px; }
 
+/* Read-only .docx preview (docx-preview renders pages into .docx-wrapper). */
+.files-docx-wrap {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #1c2128;
+  min-height: 0;
+}
+.files-docx-wrap .docx-wrapper {
+  background: transparent;
+  padding: 16px 12px;
+}
+.files-docx-wrap .docx-wrapper > section.docx {
+  max-width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  margin-bottom: 16px;
+}
+@media (max-width: 700px) {
+  .files-docx-wrap .docx-wrapper { padding: 8px 6px; }
+  .files-docx-wrap .docx-wrapper > section.docx { padding: 20px 16px !important; }
+}
+
 /* In-sheet create dialog (contextual file/folder creation). */
 /* ── Markdown review notes ─────────────────────────────────────────────── */
 

@@ -21657,6 +21657,25 @@ class CodemanApp {
     return this._filesGridPromise;
   }
 
+  // Loads vendor/docx.min.js (docx-preview + JSZip) on demand, exposing
+  // window.CodemanDocx. Only called when a .docx is opened — never at boot.
+  // A missing bundle (404) resolves false and the caller falls back to the
+  // Download card. Cached promise, never rejects.
+  _filesEnsureDocx() {
+    if (this._filesDocxPromise) return this._filesDocxPromise;
+    this._filesDocxPromise = new Promise((resolve) => {
+      const ready = () => resolve(!!(window.CodemanDocx && typeof window.CodemanDocx.render === 'function'));
+      if (window.CodemanDocx) { ready(); return; }
+      const s = document.createElement('script');
+      s.src = 'vendor/docx.min.js';
+      s.async = true;
+      s.onload = ready;
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+    return this._filesDocxPromise;
+  }
+
   // DOM-only teardown for the whole sheet (no confirm, no history). Mirrors the
   // _closeInternal pattern other OverlayHistory overlays use.
   _doCloseFilesSheet() {
@@ -21975,6 +21994,10 @@ class CodemanApp {
         this._filesRenderSpreadsheet({ ...data, path });
         return;
       }
+      if (data.type === 'document') {
+        this._filesRenderDocx({ ...data, path });
+        return;
+      }
       if (data.type === 'image' || data.type === 'video' || data.type === 'binary') {
         this._filesRenderBinary(data);
         return;
@@ -22009,6 +22032,8 @@ class CodemanApp {
     // GRID spreadsheet mount (React root). Bumping the sequence also cancels any
     // in-flight _filesMountGrid() so it cannot mount into a replaced view.
     this._filesGridSeq = (this._filesGridSeq || 0) + 1;
+    // Cancels an in-flight _filesRenderDocx() the same way.
+    this._filesDocxSeq = (this._filesDocxSeq || 0) + 1;
     if (this.filesState && this.filesState.grid) {
       try { this.filesState.grid.destroy(); } catch (e) { /* ignore */ }
       this.filesState.grid = null;
@@ -22046,6 +22071,120 @@ class CodemanApp {
         <a class="files-sheet-tool files-binary-dl" href="${escapeHtml(rawUrl)}" download="${escapeHtml(name)}">Download</a>
       </div>`;
     }
+  }
+
+  // Read-only .docx preview (file-content type 'document') via the lazy
+  // docx-preview bundle. Any failure — bundle missing, fetch error, corrupt
+  // document — falls back to the binary Download card with a notice.
+  async _filesRenderDocx(data) {
+    const content = this.$('filesSheetViewContent');
+    const meta = this.$('filesSheetViewMeta');
+    const actions = this.$('filesSheetViewActions');
+    if (!content) return;
+    this._filesDestroyEditor();
+    this._filesGridSetMaximised(false);
+    if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    content.classList.remove('is-frame');
+    content.classList.remove('is-grid');
+    const MAX_DOCX_PREVIEW = 20 * 1024 * 1024;
+    const fallback = 'Preview unavailable — download the file to view it.';
+    if (data.size > MAX_DOCX_PREVIEW) { this._filesRenderBinary(data, 'Document too large to preview'); return; }
+    const ext = data.extension || 'docx';
+    meta.textContent = `${this.formatFileSize(data.size)} • ${ext}`;
+    actions.innerHTML = this._filesDownloadHtml(data.path);
+    content.innerHTML = '<div class="files-sheet-empty">Loading…</div>';
+    const placeholder = content.firstElementChild;
+    const seq = this._filesDocxSeq;
+    // Stale when another file was opened/rendered meanwhile (sequence bumped by
+    // _filesDestroyEditor, or the loading placeholder was replaced).
+    const stale = () => seq !== this._filesDocxSeq || !placeholder.isConnected;
+    const rawUrl = data.url || `/api/sessions/${this.activeSessionId}/file-raw?path=${encodeURIComponent(data.path)}`;
+    const ok = await this._filesEnsureDocx();
+    if (stale()) return;
+    if (!ok) { this._filesRenderBinary(data, fallback); return; }
+    try {
+      const res = await fetch(rawUrl, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = await res.arrayBuffer();
+      if (stale()) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'files-docx-wrap';
+      await window.CodemanDocx.render(buf, wrap, {
+        inWrapper: true,
+        breakPages: true,
+        ignoreLastRenderedPageBreak: true,
+        ignoreWidth: window.innerWidth < 700,
+        // altChunks can embed raw HTML — never render them.
+        renderAltChunks: false,
+        // Images as data: URLs (allowed by CSP img-src), not blob: object URLs.
+        useBase64URL: true,
+        experimental: false,
+      });
+      if (stale()) return;
+      // SECURITY: neutralize document-supplied URLs while the wrap is still
+      // detached (nothing is clickable yet). Must run before appendChild.
+      this._filesSanitizeDocxLinks(wrap);
+      content.innerHTML = '';
+      content.appendChild(wrap);
+    } catch (err) {
+      if (stale()) return;
+      this._filesRenderBinary(data, fallback);
+    }
+  }
+
+  // docx-preview copies hyperlink relationship targets verbatim into <a href>,
+  // so an untrusted .docx can carry javascript:/data: links — and the CSP allows
+  // 'unsafe-inline'. Only http(s)/mailto links survive (opened in a new tab);
+  // in-document bookmark links scroll within the wrap without touching the app's
+  // location; images keep only data:image URLs; every other URL attribute goes.
+  _filesSanitizeDocxLinks(wrap) {
+    const XLINK = 'http://www.w3.org/1999/xlink';
+    const URL_ATTRS = ['href', 'src', 'srcset', 'action', 'formaction', 'poster', 'data'];
+    const here = new URL(location.href);
+    const samePage = (u) => u.origin === here.origin && u.pathname === here.pathname && u.search === here.search;
+    const isDataImage = (v) => /^data:image\//i.test((v || '').trim());
+    for (const el of wrap.getElementsByTagName('*')) {
+      const tag = el.localName.toLowerCase();
+      if (tag === 'a' || tag === 'area') {
+        const raw = el.getAttribute('href');
+        let url = null;
+        if (raw != null) { try { url = new URL(raw, location.href); } catch (e) { url = null; } }
+        const web = url && (url.protocol === 'http:' || url.protocol === 'https:');
+        if (web && samePage(url) && url.hash.length > 1) {
+          // Internal bookmark: docx-preview resolves "#name" against the page URL.
+          let name = url.hash.slice(1);
+          try { name = decodeURIComponent(name); } catch (e) { /* keep raw */ }
+          el.setAttribute('href', '#');
+          el.setAttribute('data-docx-anchor', name);
+          el.removeAttribute('target');
+        } else if (url && ((web && !samePage(url)) || url.protocol === 'mailto:')) {
+          el.setAttribute('href', url.href);
+          el.setAttribute('target', '_blank');
+          el.setAttribute('rel', 'noopener noreferrer');
+        } else {
+          el.removeAttribute('href');
+        }
+        for (const a of URL_ATTRS) if (a !== 'href') el.removeAttribute(a);
+        el.removeAttributeNS(XLINK, 'href');
+        continue;
+      }
+      const keepImages = tag === 'img' || tag === 'image';
+      for (const a of URL_ATTRS) {
+        if (!el.hasAttribute(a)) continue;
+        if (keepImages && (a === 'src' || a === 'href') && isDataImage(el.getAttribute(a))) continue;
+        el.removeAttribute(a);
+      }
+      const x = el.getAttributeNS(XLINK, 'href');
+      if (x != null && !(keepImages && isDataImage(x))) el.removeAttributeNS(XLINK, 'href');
+    }
+    wrap.addEventListener('click', (ev) => {
+      const a = ev.target && ev.target.closest ? ev.target.closest('a[data-docx-anchor]') : null;
+      if (!a || !wrap.contains(a)) return;
+      ev.preventDefault();
+      const name = a.getAttribute('data-docx-anchor');
+      const target = Array.from(wrap.querySelectorAll('[id]')).find((n) => n.id === name);
+      if (target) target.scrollIntoView({ block: 'start' });
+    });
   }
 
   // Download link for the file currently open in the sheet. file-raw streams
