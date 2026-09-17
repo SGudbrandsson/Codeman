@@ -168,6 +168,17 @@ const DEC_SYNC_END = '\x1b[?2026l'; // End synchronized update (flush to screen)
 // Pre-computed once at startup to avoid repeated string allocation.
 const SSE_PADDING = ':' + 'p'.repeat(SSE_PADDING_SIZE) + '\n';
 
+/** Parse a comma-separated session id list (from a query param) into a Set. */
+function parseSessionIdList(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+}
+
 /**
  * Get or generate a self-signed TLS certificate for HTTPS.
  * Certs are stored in ~/.codeman/certs/ and reused across restarts.
@@ -305,6 +316,21 @@ export class WebServer extends EventEmitter {
    * or `null` meaning "receive all events" (backwards-compatible default).
    */
   private sseClients: Map<FastifyReply, Set<string> | null> = new Map();
+  /**
+   * Per-client terminal subscriptions — which sessions a client is actually
+   * RENDERING right now. `session:terminal` carries raw PTY output and dwarfs
+   * every other event; without this, a browser with 40+ sessions receives (and
+   * JSON.parses on the main thread) output for all of them and discards all but
+   * the visible one, which is what made the UI stutter and freeze.
+   *
+   * Clients identify themselves with `?clientId=…` on `/api/events` and declare
+   * the set via `?terminal=…` and `POST /api/events/terminal-subscription`.
+   * A client that sends no `clientId` has no entry here and keeps the old
+   * receive-everything behaviour (MCP consumers, curl, older frontends).
+   */
+  private terminalSubs: Map<string, Set<string>> = new Map();
+  /** SSE reply → its clientId, for looking up `terminalSubs` during a flush. */
+  private sseClientIds: Map<FastifyReply, string> = new Map();
   /** SSE clients connecting from non-localhost (i.e. through tunnel) */
   private remoteSseClients: Set<FastifyReply> = new Set();
   /** Clients with backpressure — skip writes until 'drain' fires */
@@ -731,7 +757,7 @@ export class WebServer extends EventEmitter {
       // Parse optional session subscription filter from query parameter.
       // /api/events?sessions=id1,id2 — client only receives events for those sessions.
       // /api/events (no param) — client receives all events (backwards-compatible).
-      const query = req.query as { sessions?: string };
+      const query = req.query as { sessions?: string; clientId?: string; terminal?: string };
       let sessionFilter: Set<string> | null = null;
       if (query.sessions) {
         const ids = query.sessions
@@ -741,6 +767,16 @@ export class WebServer extends EventEmitter {
         if (ids.length > 0) {
           sessionFilter = new Set(ids);
         }
+      }
+
+      // Per-client terminal subscription. Presence of `clientId` opts the client
+      // into filtering: it then receives `session:terminal` only for the sessions
+      // named in `terminal` (empty/absent = none). The value is carried on the URL
+      // so it survives EventSource auto-reconnects without a follow-up POST.
+      const clientId = typeof query.clientId === 'string' ? query.clientId.trim() : '';
+      if (clientId) {
+        this.sseClientIds.set(reply, clientId);
+        this.terminalSubs.set(clientId, parseSessionIdList(query.terminal));
       }
 
       reply.raw.writeHead(200, {
@@ -776,7 +812,46 @@ export class WebServer extends EventEmitter {
         this.sseClients.delete(reply);
         this.remoteSseClients.delete(reply);
         this.backpressuredClients.delete(reply);
+        const goneId = this.sseClientIds.get(reply);
+        if (goneId) {
+          this.sseClientIds.delete(reply);
+          // Drop the subscription only when no other live connection uses this
+          // clientId (a reconnect can briefly overlap with the old connection).
+          let stillConnected = false;
+          for (const id of this.sseClientIds.values()) {
+            if (id === goneId) {
+              stillConnected = true;
+              break;
+            }
+          }
+          if (!stillConnected) this.terminalSubs.delete(goneId);
+        }
       });
+    });
+
+    // Update a client's terminal subscription without tearing down its SSE
+    // connection — sent when the user switches session tabs or the browser tab
+    // is hidden. Accepted even if the connection hasn't registered yet; the
+    // `terminal` query param on the next connect re-states it.
+    this.app.post('/api/events/terminal-subscription', async (req, reply) => {
+      const body = (req.body ?? {}) as { clientId?: unknown; sessionIds?: unknown };
+      const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
+      if (!clientId) {
+        return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'clientId is required'));
+      }
+      const sessionIds = Array.isArray(body.sessionIds)
+        ? body.sessionIds.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).map((s) => s.trim())
+        : [];
+      // Prune entries whose connection is gone — a POST for a clientId that never
+      // connects would otherwise linger forever.
+      if (this.terminalSubs.size > MAX_SSE_CLIENTS) {
+        const live = new Set(this.sseClientIds.values());
+        for (const id of this.terminalSubs.keys()) {
+          if (id !== clientId && !live.has(id)) this.terminalSubs.delete(id);
+        }
+      }
+      this.terminalSubs.set(clientId, new Set(sessionIds));
+      return reply.send({ ok: true, sessionIds });
     });
 
     // Global error handler for structured errors thrown by findSessionOrFail
@@ -3175,6 +3250,15 @@ export class WebServer extends EventEmitter {
     // Skip if server is stopping
     if (this._isStopping) return;
 
+    // Nobody is rendering this session's terminal — don't buffer or broadcast.
+    // The session keeps its own scrollback, so whoever opens this tab next
+    // fetches the full buffer from /api/sessions/:id/terminal and misses nothing.
+    if (!this.hasTerminalSubscriber(sessionId)) {
+      this.terminalBatches.delete(sessionId);
+      this.terminalBatchSizes.delete(sessionId);
+      return;
+    }
+
     let chunks = this.terminalBatches.get(sessionId);
     if (!chunks) {
       chunks = [];
@@ -3227,6 +3311,26 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /**
+   * Does this client want `session:terminal` frames for `sessionId`?
+   * Clients that never registered a clientId are unfiltered (legacy behaviour).
+   */
+  private wantsTerminal(client: FastifyReply, sessionId: string): boolean {
+    const clientId = this.sseClientIds.get(client);
+    if (!clientId) return true;
+    const subs = this.terminalSubs.get(clientId);
+    return subs ? subs.has(sessionId) : true;
+  }
+
+  /** True if at least one connected SSE client is rendering this session's terminal. */
+  private hasTerminalSubscriber(sessionId: string): boolean {
+    for (const [client, filter] of this.sseClients) {
+      if (filter && !filter.has(sessionId)) continue;
+      if (this.wantsTerminal(client, sessionId)) return true;
+    }
+    return false;
+  }
+
   /** Flush a single session's batched terminal data */
   private flushSessionTerminalBatch(sessionId: string): void {
     if (this._isStopping) {
@@ -3253,6 +3357,8 @@ export class WebServer extends EventEmitter {
       for (const [client, filter] of this.sseClients) {
         // Skip clients that have a session filter and aren't subscribed to this session
         if (filter && !filter.has(sessionId)) continue;
+        // Skip clients that aren't currently rendering this session's terminal
+        if (!this.wantsTerminal(client, sessionId)) continue;
         this.sendSSEPreformatted(client, message);
       }
     }

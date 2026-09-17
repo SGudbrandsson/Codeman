@@ -6205,6 +6205,16 @@ class CodemanApp {
     this.totalTokens = 0;
     this.globalStats = null; // Global token/cost stats across all sessions
     this.eventSource = null;
+    /**
+     * Identifies this browser tab to the server so it can scope the
+     * `session:terminal` firehose to the one session actually on screen.
+     * Without it the server streams raw PTY output for EVERY session and this
+     * tab JSON.parses megabytes it immediately throws away — the cause of the
+     * stutter/freeze with many busy sessions.
+     */
+    this._sseClientId = (crypto.randomUUID?.() ?? `c${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    /** Session id whose terminal we currently receive, or null for none. */
+    this._terminalSubSessionId = null;
     this.terminal = null;
     this.fitAddon = null;
     this.activeSessionId = null;
@@ -7827,6 +7837,15 @@ class CodemanApp {
   startTerminalWatchdog() {
     if (this._terminalWatchdogTimer) return;
     this._terminalWatchdogTimer = setInterval(() => {
+      // Self-heal the terminal subscription: if some path changed what's on
+      // screen without telling the server, a silent terminal would otherwise
+      // need a reload. No-op when it already matches.
+      const wantSub = document.hidden ? null : this.activeSessionId;
+      if (this._terminalSubSessionId !== wantSub) {
+        this._setTerminalSubscription(wantSub);
+        if (wantSub && this.terminal) this._onSessionNeedsRefresh();
+      }
+
       if (!this.terminal || !this.activeSessionId) return;
       if (document.hidden) return;  // rAF is paused while hidden — stalls there are expected
 
@@ -8096,7 +8115,12 @@ class CodemanApp {
       this.setConnectionStatus('reconnecting');
     }
 
-    this.eventSource = new EventSource('/api/events');
+    // The terminal subscription rides on the URL so it is re-stated on every
+    // EventSource auto-reconnect without needing a follow-up POST.
+    const _terminalParam = this._terminalSubSessionId ? encodeURIComponent(this._terminalSubSessionId) : '';
+    this.eventSource = new EventSource(
+      `/api/events?clientId=${encodeURIComponent(this._sseClientId)}&terminal=${_terminalParam}`
+    );
 
     // Store all event listeners for cleanup on reconnect
     const listeners = [];
@@ -8172,6 +8196,27 @@ class CodemanApp {
     for (const [event] of _SSE_HANDLER_MAP) {
       addListener(event, this._sseHandlerWrappers.get(event));
     }
+  }
+
+  /**
+   * Tell the server which session's terminal this tab is rendering.
+   *
+   * Pass a session id when its terminal is on screen, or null when nothing is
+   * (tab hidden, no session selected). While unsubscribed the server stops
+   * batching and writing that session's PTY output to us entirely — the session
+   * keeps its own scrollback server-side, and we reload the full buffer when we
+   * resubscribe, so nothing is lost.
+   */
+  _setTerminalSubscription(sessionId) {
+    const next = sessionId || null;
+    if (next === this._terminalSubSessionId) return;
+    this._terminalSubSessionId = next;
+    fetch('/api/events/terminal-subscription', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: this._sseClientId, sessionIds: next ? [next] : [] }),
+      keepalive: true, // survives the tab being backgrounded/unloaded
+    }).catch(() => { /* next reconnect re-states it via the URL */ });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -8276,6 +8321,7 @@ class CodemanApp {
     this._cleanupSessionData(data.id);
     if (this.activeSessionId === data.id) {
       this.activeSessionId = null;
+      this._setTerminalSubscription(null); // no terminal on screen — stop the stream
       SessionIndicatorBar.update(null);
       try { localStorage.removeItem('codeman-active-session'); } catch {}
       this.terminal.clear();
@@ -10109,7 +10155,14 @@ class CodemanApp {
 
     // Reconnect SSE when tab becomes visible (fixes frozen-tab bug)
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) this._onTabVisible();
+      if (document.hidden) {
+        // Nothing is on screen — stop the terminal firehose. A backgrounded tab
+        // has rAF throttled, so incoming PTY output just piles up in
+        // pendingWrites until it stalls the browser on return.
+        this._setTerminalSubscription(null);
+      } else {
+        this._onTabVisible();
+      }
     });
   }
 
@@ -10120,6 +10173,16 @@ class CodemanApp {
    */
   _onTabVisible() {
     if (!this.isOnline) return;
+
+    // Terminal output was not streamed to us while hidden. Resubscribe, then
+    // reload the buffer so the visible terminal catches up on what it missed.
+    // (Do this before any reconnect below — connectSSE() puts the current
+    // subscription on the EventSource URL.)
+    const wasUnsubscribed = this._terminalSubSessionId !== this.activeSessionId;
+    this._setTerminalSubscription(this.activeSessionId);
+    if (wasUnsubscribed && this.activeSessionId && this.terminal) {
+      this._onSessionNeedsRefresh();
+    }
 
     // Returning to the tab is also the moment the user notices a dead terminal.
     // If output is still gated behind a buffer load that never completed while
@@ -11228,6 +11291,10 @@ class CodemanApp {
 
     const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
+    // Move the terminal stream to this session before the buffer fetch below:
+    // output that arrives during the load is held in _loadBufferQueue and
+    // replayed after, so there is no gap. The previous session stops streaming.
+    this._setTerminalSubscription(document.hidden ? null : sessionId);
     // RC-3 fix: raise the buffer-load guard immediately after activeSessionId is updated.
     // Any OSC-133 sequences from the old session's replayed buffer that fire before the
     // guard was previously set (further down) would be attributed to the new session ID.
@@ -11582,6 +11649,7 @@ class CodemanApp {
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
+        this._setTerminalSubscription(null); // no terminal on screen — stop the stream
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         // Select another session or show welcome (use sessionOrder for consistent ordering)
         if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
@@ -11743,6 +11811,7 @@ class CodemanApp {
     FeatureTracker.track('header-go-home');
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
+    this._setTerminalSubscription(null); // no terminal on screen — stop the stream
     try { localStorage.removeItem('codeman-active-session'); } catch {}
     this.terminal.clear();
     this.showWelcome();
@@ -12913,6 +12982,7 @@ class CodemanApp {
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
       this.activeSessionId = null;
+      this._setTerminalSubscription(null); // no terminal on screen — stop the stream
       try { localStorage.removeItem('codeman-active-session'); } catch {}
       this.respawnStatus = {};
       this.respawnCountdownTimers = {};
@@ -24233,6 +24303,7 @@ class CodemanApp {
           this.sessions.clear();
           this.muxSessions = [];
           this.activeSessionId = null;
+          this._setTerminalSubscription(null); // no terminal on screen — stop the stream
           SessionIndicatorBar.update(null);
           try { localStorage.removeItem('codeman-active-session'); } catch {}
           this.renderSessionTabs();
@@ -24245,6 +24316,7 @@ class CodemanApp {
         // Just remove tabs, keep mux sessions running
         this.sessions.clear();
         this.activeSessionId = null;
+        this._setTerminalSubscription(null); // no terminal on screen — stop the stream
         SessionIndicatorBar.update(null);
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         this.renderSessionTabs();
