@@ -1943,22 +1943,41 @@ export class Session extends EventEmitter {
     // timeout: codex writes the rollout on the FIRST SUBMITTED TURN, not at spawn,
     // so a short window from here would never see it (smoke test Defect 1).
     if (this.mode === 'codex' && !this.harnessSessionId) {
-      const startedAt = Date.now();
-      this._harnessIdDiscoveryAbort?.abort();
-      const abort = new AbortController();
-      this._harnessIdDiscoveryAbort = abort;
-      void discoverCodexSessionId(this.workingDir, startedAt, { signal: abort.signal })
-        .then((id) => {
-          if (this._harnessIdDiscoveryAbort === abort) this._harnessIdDiscoveryAbort = null;
-          if (!id) {
-            if (abort.signal.aborted) return;
-            console.warn(`[Session] codex session id not discovered for ${this.id}; not resumable`);
-            return;
-          }
-          this.recordHarnessSessionId(id);
-        })
-        .catch((err) => console.error(`[Session] codex discovery failed for ${this.id}:`, err));
+      this._armCodexIdDiscovery(Date.now());
     }
+  }
+
+  /**
+   * Start a codex rollout watch that records the session id when it appears. Floor is
+   * the earliest rollout mtime that can belong to this run.
+   */
+  private _armCodexIdDiscovery(floorMs: number): void {
+    this._harnessIdDiscoveryAbort?.abort();
+    const abort = new AbortController();
+    this._harnessIdDiscoveryAbort = abort;
+    void discoverCodexSessionId(this.workingDir, floorMs, { signal: abort.signal })
+      .then((id) => {
+        if (this._harnessIdDiscoveryAbort === abort) this._harnessIdDiscoveryAbort = null;
+        if (!id) {
+          if (abort.signal.aborted) return;
+          console.warn(`[Session] codex session id not discovered for ${this.id}; not resumable`);
+          return;
+        }
+        this.recordHarnessSessionId(id);
+      })
+      .catch((err) => console.error(`[Session] codex discovery failed for ${this.id}:`, err));
+  }
+
+  /**
+   * Re-arm codex id discovery when input is submitted and no watch is running. Codex
+   * writes its rollout on the first submitted turn, which can come long after the
+   * spawn-time watch hit its cap (or after a server restart restored the session with
+   * no id) — without this the session never gets a transcript.
+   */
+  private _maybeRearmCodexIdDiscovery(data: string): void {
+    if (this.mode !== 'codex' || this.harnessSessionId || this._harnessIdDiscoveryAbort || this._isStopped) return;
+    if (!data.includes('\r')) return;
+    this._armCodexIdDiscovery(Date.now());
   }
 
   /**
@@ -2915,6 +2934,7 @@ export class Session extends EventEmitter {
    * ```
    */
   write(data: string): void {
+    this._maybeRearmCodexIdDiscovery(data);
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
     }
@@ -2944,6 +2964,7 @@ export class Session extends EventEmitter {
     if (/^\s*\/compact\b/.test(data)) {
       this._pendingCompactRefresh = true;
     }
+    this._maybeRearmCodexIdDiscovery(data);
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }
