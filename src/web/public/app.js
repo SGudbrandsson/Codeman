@@ -12259,6 +12259,7 @@ class CodemanApp {
       this.terminal.focus();
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this.showToast(`Could not start session: ${err.message}`, 'error', { duration: 6000 });
     }
   }
 
@@ -12372,6 +12373,7 @@ class CodemanApp {
       this.terminal.focus();
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this.showToast(`Could not start session: ${err.message}`, 'error', { duration: 6000 });
     }
   }
 
@@ -12488,6 +12490,7 @@ class CodemanApp {
       this.terminal.focus();
     } catch (err) {
       this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+      this.showToast(`Could not start session: ${err.message}`, 'error', { duration: 6000 });
     }
   }
 

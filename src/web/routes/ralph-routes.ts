@@ -19,7 +19,7 @@ import { generateClaudeMd } from '../../templates/claude-md.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { getHarness } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
-import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, countActiveSessions } from '../../config/map-limits.js';
 
 export function registerRalphRoutes(
   app: FastifyInstance,
@@ -305,7 +305,7 @@ export function registerRalphRoutes(
   // Start a Ralph Loop — creates a new session with autonomous cycling
   app.post('/api/ralph-loop/start', async (req): Promise<ApiResponse> => {
     // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    if (countActiveSessions(ctx.sessions.values()) >= MAX_CONCURRENT_SESSIONS) {
       return createErrorResponse(
         ApiErrorCode.SESSION_BUSY,
         `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`

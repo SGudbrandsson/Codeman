@@ -95,7 +95,7 @@ import {
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
 import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
-import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS, countActiveSessions } from '../config/map-limits.js';
 import { SseEvent, type SessionClearedPayload } from './sse-events.js';
 import { resolveTranscriptPath } from './transcript-path-resolver.js';
 import { getTranscriptAdapter } from '../harnesses/transcripts/index.js';
@@ -2755,7 +2755,7 @@ export class WebServer extends EventEmitter {
 
     while (Date.now() < run.endAt && run.status === 'running') {
       // Check session limit before creating new session
-      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+      if (countActiveSessions(this.sessions.values()) >= MAX_CONCURRENT_SESSIONS) {
         addLog(`Waiting: maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
         await new Promise((r) => setTimeout(r, SESSION_LIMIT_WAIT_MS));
         continue;

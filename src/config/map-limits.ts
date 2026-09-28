@@ -21,8 +21,16 @@
 /**
  * Maximum concurrent sessions allowed.
  * Each session consumes significant resources (PTY, buffers, watchers).
+ * Paused sessions have freed their process and do not count — see countActiveSessions().
  */
-export const MAX_CONCURRENT_SESSIONS = 50;
+export const MAX_CONCURRENT_SESSIONS = 75;
+
+/** Number of sessions that count toward MAX_CONCURRENT_SESSIONS (paused sessions excluded). */
+export function countActiveSessions(sessions: Iterable<{ paused: boolean }>): number {
+  let n = 0;
+  for (const s of sessions) if (!s.paused) n++;
+  return n;
+}
 
 // ============================================================================
 // SSE Client Limits

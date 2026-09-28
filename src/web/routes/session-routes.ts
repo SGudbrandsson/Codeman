@@ -48,7 +48,7 @@ import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { getHarness, isHarnessAvailable } from '../../harnesses/registry.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
-import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
+import { MAX_CONCURRENT_SESSIONS, countActiveSessions } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -98,10 +98,10 @@ export function registerSessionRoutes(
 
   app.post('/api/sessions', async (req) => {
     // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    if (countActiveSessions(ctx.sessions.values()) >= MAX_CONCURRENT_SESSIONS) {
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
-        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`
+        `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete or pause some sessions first.`
       );
     }
 
@@ -1284,7 +1284,7 @@ ${contextLines.join('\n')}`;
 
   app.post('/api/run', async (req) => {
     // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    if (countActiveSessions(ctx.sessions.values()) >= MAX_CONCURRENT_SESSIONS) {
       return createErrorResponse(
         ApiErrorCode.SESSION_BUSY,
         `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`
@@ -1344,7 +1344,7 @@ ${contextLines.join('\n')}`;
 
   app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
     // Prevent unbounded session creation
-    if (ctx.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+    if (countActiveSessions(ctx.sessions.values()) >= MAX_CONCURRENT_SESSIONS) {
       return createErrorResponse(
         ApiErrorCode.SESSION_BUSY,
         `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`
