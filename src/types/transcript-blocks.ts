@@ -25,6 +25,8 @@ export interface TextBlock {
   type: 'text';
   role: 'user' | 'assistant';
   text: string;
+  /** Set on the context-continuation summary Claude Code injects after compaction. */
+  compactSummary?: boolean;
   timestamp: string;
   seq: number;
 }
@@ -86,6 +88,7 @@ export function stampSeq(blocks: UnsequencedBlock[], seqBase: number): Transcrip
 export interface TranscriptEntry {
   type: 'user' | 'assistant' | 'system' | 'result';
   timestamp?: string;
+  isCompactSummary?: boolean;
   message?: {
     role: string;
     content: string | TranscriptContentBlock[];
@@ -116,13 +119,14 @@ export function parseTranscriptEntry(entry: TranscriptEntry, seqBase = 0): Trans
 
   if (entry.type === 'user' && entry.message) {
     const c = entry.message.content;
+    const compact = entry.isCompactSummary ? { compactSummary: true } : {};
     if (typeof c === 'string') {
-      if (c.trim()) blocks.push({ type: 'text', role: 'user', text: c, timestamp: ts });
+      if (c.trim()) blocks.push({ type: 'text', role: 'user', text: c, ...compact, timestamp: ts });
     } else if (Array.isArray(c)) {
       for (const b of c) {
         if (!b || typeof b !== 'object') continue;
         if (b.type === 'text' && b.text) {
-          blocks.push({ type: 'text', role: 'user', text: b.text, timestamp: ts });
+          blocks.push({ type: 'text', role: 'user', text: b.text, ...compact, timestamp: ts });
         } else if (b.type === 'tool_result') {
           const raw = b.content;
           const resultContent =

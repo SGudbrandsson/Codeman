@@ -5353,6 +5353,45 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
+      // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill.
+      // Newer Claude Code versions prepend a preamble (e.g. <artifact-content-authored-by-others/>)
+      // before the marker, so trust the server's isCompactSummary flag and match the marker near
+      // the start rather than at index 0.
+      const COMPACT_MARKER = 'This session is being continued from a previous conversation that ran out of context.';
+      const markerIdx = block.text.indexOf(COMPACT_MARKER);
+      if (block.compactSummary || (markerIdx !== -1 && markerIdx < 2000)) {
+        this.clearCompacting();
+        const wrap = document.createElement('div');
+        wrap.className = 'tv-compact-block';
+
+        const hdr = document.createElement('div');
+        hdr.className = 'tv-compact-header';
+
+        const arrow = document.createElement('span');
+        arrow.className = 'tv-compact-arrow';
+        arrow.textContent = '\u25B6';
+
+        const lbl = document.createElement('span');
+        lbl.textContent = 'Context summary (compacted)';
+
+        hdr.appendChild(arrow);
+        hdr.appendChild(lbl);
+
+        const body = document.createElement('div');
+        body.className = 'tv-compact-body tv-markdown';
+        body.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
+        linkifyFilePaths(body);
+
+        hdr.addEventListener('click', () => {
+          const open = hdr.classList.toggle('open');
+          body.classList.toggle('open', open);
+        });
+
+        wrap.appendChild(hdr);
+        wrap.appendChild(body);
+        return wrap;
+      }
+
       // Suppress skill content block injected after "Launching skill: <name>" tool_result.
       // Covers both Superpowers (path prefix) and GSD (XML content) skill patterns.
       // Check flag first — it was set when the tool_result was processed.
@@ -5407,40 +5446,6 @@ const TranscriptView = {
         return pill;
       }
 
-      // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill
-      const COMPACT_MARKER = 'This session is being continued from a previous conversation that ran out of context.';
-      if (block.text.startsWith(COMPACT_MARKER)) {
-        this.clearCompacting();
-        const wrap = document.createElement('div');
-        wrap.className = 'tv-compact-block';
-
-        const hdr = document.createElement('div');
-        hdr.className = 'tv-compact-header';
-
-        const arrow = document.createElement('span');
-        arrow.className = 'tv-compact-arrow';
-        arrow.textContent = '\u25B6';
-
-        const lbl = document.createElement('span');
-        lbl.textContent = 'Context summary (compacted)';
-
-        hdr.appendChild(arrow);
-        hdr.appendChild(lbl);
-
-        const body = document.createElement('div');
-        body.className = 'tv-compact-body tv-markdown';
-        body.innerHTML = replaceImagePaths(renderMarkdown(block.text)); // eslint-disable-line no-unsanitized/property
-        linkifyFilePaths(body);
-
-        hdr.addEventListener('click', () => {
-          const open = hdr.classList.toggle('open');
-          body.classList.toggle('open', open);
-        });
-
-        wrap.appendChild(hdr);
-        wrap.appendChild(body);
-        return wrap;
-      }
     }
     const div = document.createElement('div');
     div.className = 'tv-block tv-block--' + (block.role === 'user' ? 'user' : 'assistant');
