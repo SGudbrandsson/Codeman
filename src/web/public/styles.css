@@ -13048,6 +13048,80 @@ kbd {
   flex-shrink: 0;
   overflow-x: auto;
 }
+/* Fuzzy file search (Files sheet) */
+.files-sheet-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.files-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  color: #e6edf3;
+  padding: 8px 10px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 14px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.files-search-input:focus { border-color: rgba(56,139,253,0.6); }
+.files-search-input::placeholder { color: #6e7681; }
+.files-search-clear { flex-shrink: 0; }
+.files-search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 10px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.files-search-item:active { background: rgba(255,255,255,0.06); }
+.files-search-item.is-selected { background: rgba(56,139,253,0.15); }
+.files-search-label {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  white-space: nowrap;
+  color: #c9d1d9;
+}
+.files-search-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #6e7681;
+}
+.files-search-base {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #e6edf3;
+  font-weight: 500;
+}
+.files-search-open .files-search-label { gap: 0.35em; }
+.files-search-item mark {
+  background: transparent;
+  color: #f0b72f;
+  font-weight: 600;
+}
+.files-search-more {
+  color: #6e7681;
+  font-size: 12px;
+  text-align: center;
+  padding: 10px 12px;
+}
 .files-sheet-tool {
   display: inline-flex;
   align-items: center;

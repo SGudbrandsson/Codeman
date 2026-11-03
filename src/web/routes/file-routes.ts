@@ -14,6 +14,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.
 import { fileStreamManager } from '../../file-stream-manager.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import type { SessionPort } from '../ports/index.js';
+import { FILE_TREE_EXCLUDE_DIRS, FILE_INDEX_CAP, getFileIndex } from '../file-index.js';
 
 /** Thumbnail cache directory */
 const THUMB_CACHE_DIR = join(homedir(), '.codeman', 'cache', 'thumbnails');
@@ -74,23 +75,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
       startRelative = relativePath;
     }
 
-    // Default excludes - large/generated directories
-    const excludeDirs = new Set([
-      '.git',
-      'node_modules',
-      'dist',
-      'build',
-      '__pycache__',
-      '.cache',
-      '.next',
-      '.nuxt',
-      'coverage',
-      '.venv',
-      'venv',
-      '.tox',
-      'target',
-      'vendor',
-    ]);
+    // Default excludes - large/generated directories (shared with the file index)
+    const excludeDirs = FILE_TREE_EXCLUDE_DIRS;
 
     interface FileTreeNode {
       name: string;
@@ -292,6 +278,29 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
         truncated,
       },
     };
+  });
+
+  // Flat file index for the Files sheet fuzzy search. Lists every on-disk file
+  // (untracked and .gitignored included — no git, no .gitignore) except the
+  // shared heavy excludes. The walk never follows symlinked dirs, so it cannot
+  // leave workingDir; opening a path still goes through /file-content.
+  app.get('/api/sessions/:id/file-index', async (req) => {
+    const { id } = req.params as { id: string };
+    const { showHidden, fresh } = req.query as { showHidden?: string; fresh?: string };
+    const session = findSessionOrFail(ctx, id);
+    const workingDir = session.workingDir;
+    const includeHidden = showHidden === 'true';
+    try {
+      const { paths, truncated } = await getFileIndex(workingDir, includeHidden, {
+        fresh: fresh === '1' || fresh === 'true',
+      });
+      return {
+        success: true,
+        data: { root: workingDir, paths, count: paths.length, truncated, cap: FILE_INDEX_CAP },
+      };
+    } catch {
+      return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'Cannot read working directory');
+    }
   });
 
   // Get file content for preview (File Browser)

@@ -7938,6 +7938,11 @@ class CodemanApp {
       // Escape - close panels and modals (a maximised spreadsheet restores
       // first; the key still reaches GRID so it can cancel a cell edit)
       if (e.key === 'Escape') {
+        // Esc in the Files search box with a query only clears the query (its
+        // own keydown handler does that); the sheet stays open. A second Esc on
+        // the empty input falls through and closes panels as before.
+        const t = e.target;
+        if (t && t.id === 'filesSearchInput' && t.value) return;
         if (!this._filesGridHandleEscape(e)) this.closeAllPanels();
       }
 
@@ -11296,6 +11301,9 @@ class CodemanApp {
 
     const _prevSessionId = this.activeSessionId;
     this.activeSessionId = sessionId;
+    // Same-session restore (SSE reconnect): an index fetch that landed while
+    // activeSessionId was null left "Indexing files…" showing; re-render now.
+    if (opts.preserveFilesSheet && this.filesState?.searchQuery?.trim()) this._filesSearchUpdate();
     // Move the terminal stream to this session before the buffer fetch below:
     // output that arrives during the load is held in _loadBufferQueue and
     // replayed after, so there is no gap. The previous session stops streaming.
@@ -21613,7 +21621,7 @@ class CodemanApp {
   // still producing the same files-sheet → files-file back stack.
   _filesOpenSheetShell() {
     if (!this.activeSessionId) { this.showToast('No active session', 'error'); return false; }
-    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set() };
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set(), ...this._filesSearchInitialState() };
     const sheet = this.$('filesSheet');
     const backdrop = this.$('filesSheetBackdrop');
     // Inline display first (Android-Chrome black-screen compositing fix), then .open.
@@ -21623,6 +21631,7 @@ class CodemanApp {
     if (hid) hid.checked = this.filesState.showHidden;
     this.$('filesSheetTitle').textContent = 'Files';
     this.$('filesSheetBackBtn').style.display = 'none';
+    this._filesSearchInit();
     // Lazy-load the CodeMirror + markdown vendor bundle on first open only.
     // Fire-and-forget here: the editor/preview paths fall back gracefully if it
     // never resolves, and the app boot path never touches this.
@@ -21767,6 +21776,9 @@ class CodemanApp {
     if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
     this._filesDestroyEditor();
     if (this.filesState) { this.filesState.current = null; this.filesState.pendingContent = null; }
+    // Fresh search state (and a fresh index) on the next open.
+    this._filesSearchClear();
+    this._filesInvalidateIndex(false);
     this._filesPersistClosed();
   }
 
@@ -21822,13 +21834,18 @@ class CodemanApp {
 
   _filesShowTree() {
     const tb = this.$('filesSheetTreeToolbar'); if (tb) tb.style.display = '';
-    const body = this.$('filesSheetTreeBody'); if (body) body.style.display = '';
+    const bar = this.$('filesSheetSearchBar'); if (bar) bar.style.display = '';
     const view = this.$('filesSheetView'); if (view) view.style.display = 'none';
+    // An active search query keeps its results showing (Back from a file opened
+    // via search lands on the results, fzf-style); otherwise the tree.
+    this._filesSearchApplyBodies();
   }
 
   _filesShowView() {
     const tb = this.$('filesSheetTreeToolbar'); if (tb) tb.style.display = 'none';
+    const bar = this.$('filesSheetSearchBar'); if (bar) bar.style.display = 'none';
     const body = this.$('filesSheetTreeBody'); if (body) body.style.display = 'none';
+    const sbody = this.$('filesSheetSearchBody'); if (sbody) sbody.style.display = 'none';
     const view = this.$('filesSheetView'); if (view) view.style.display = 'flex';
   }
 
@@ -21840,11 +21857,15 @@ class CodemanApp {
     OverlayHistory.pop('files-file');
   }
 
-  filesRefresh() { this.filesLoadTree(); }
+  filesRefresh() {
+    this._filesInvalidateIndex();
+    this.filesLoadTree();
+  }
 
   filesToggleHidden() {
     const hid = this.$('filesShowHidden');
     if (this.filesState) this.filesState.showHidden = hid ? hid.checked : true;
+    this._filesInvalidateIndex();
     this.filesLoadTree();
   }
 
@@ -22031,6 +22052,368 @@ class CodemanApp {
         this.filesOpenFile(path);
       }
     };
+  }
+
+  // ==========================================================================
+  // Files sheet fuzzy search (fzf-style) + open-by-path
+  // Matching runs client-side (FuzzyFileSearch, fuzzy-file-search.js) over a
+  // flat index from GET /file-index, fetched lazily on first focus/input and
+  // reused until refresh / Hidden toggle / create / delete / close. Results
+  // live in #filesSheetSearchBody; the tree body is never touched, so clearing
+  // the query restores the tree exactly as it was (expansion, scroll, subtrees).
+  // ==========================================================================
+
+  _filesSearchInitialState() {
+    return {
+      searchQuery: '',
+      searchSel: 0,
+      searchSelMoved: false,
+      searchRows: [],
+      searchParsed: null,
+      searchPrev: null,
+      fileIndex: null,
+      fileIndexPromise: null,
+      fileIndexKey: null,
+      fileIndexSeq: 0,
+      fileIndexError: null,
+      fileIndexFresh: false,
+    };
+  }
+
+  // Bind the search input, clear button and results click delegation once.
+  _filesSearchInit() {
+    if (this._filesSearchBound) return;
+    const input = this.$('filesSearchInput');
+    const body = this.$('filesSheetSearchBody');
+    const clearBtn = this.$('filesSearchClear');
+    if (!input || !body) return;
+    this._filesSearchBound = true;
+    input.addEventListener('focus', () => this._filesEnsureIndex());
+    input.addEventListener('input', () => {
+      // rAF-coalesce: fast typing/pastes render at most once per frame.
+      if (this._filesSearchRaf) return;
+      this._filesSearchRaf = requestAnimationFrame(() => {
+        this._filesSearchRaf = null;
+        this._filesSearchUpdate();
+      });
+    });
+    input.addEventListener('keydown', (e) => this._filesSearchKeydown(e));
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        this._filesSearchClear();
+        // Desktop: keep typing; touch: don't pop the keyboard back up.
+        if (!('ontouchstart' in window)) input.focus();
+      });
+    }
+    // click (not touchstart) so scrolling the results on touch never opens a file.
+    body.addEventListener('click', (e) => {
+      const st = this.filesState;
+      if (!st) return;
+      if (e.target.closest('[data-index-retry]')) {
+        st.fileIndexError = null;
+        this._filesEnsureIndex(true);
+        this._filesSearchUpdate();
+        return;
+      }
+      const item = e.target.closest('.files-search-item');
+      if (!item) return;
+      const i = parseInt(item.dataset.idx, 10);
+      const row = st.searchRows && st.searchRows[i];
+      if (!row) return;
+      st.searchSel = i;
+      const parsed = st.searchParsed;
+      this._filesSearchOpen(row.path, parsed ? parsed.line : null);
+    });
+  }
+
+  // Run any rAF-pending update now (Enter right after a paste must see it).
+  _filesSearchFlush() {
+    if (!this._filesSearchRaf) return;
+    cancelAnimationFrame(this._filesSearchRaf);
+    this._filesSearchRaf = null;
+    this._filesSearchUpdate();
+  }
+
+  _filesSearchKeydown(e) {
+    const st = this.filesState;
+    const input = e.target;
+    if (!st || e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!input.value.trim()) return;
+      e.preventDefault();
+      this._filesSearchFlush();
+      this._filesSearchMoveSel(e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      this._filesSearchFlush();
+      this._filesSearchOpenSelected();
+    } else if (e.key === 'Escape') {
+      if (input.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        this._filesSearchClear();
+      } else {
+        input.blur();
+      }
+    }
+  }
+
+  _filesSearchMoveSel(delta) {
+    const st = this.filesState;
+    const rows = (st && st.searchRows) || [];
+    if (!rows.length) return;
+    const next = Math.max(0, Math.min(rows.length - 1, st.searchSel + delta));
+    st.searchSelMoved = true;
+    if (next === st.searchSel) return;
+    st.searchSel = next;
+    this._filesSearchPaintSel();
+  }
+
+  // Toggle .is-selected without a full re-render.
+  _filesSearchPaintSel() {
+    const st = this.filesState;
+    const body = this.$('filesSheetSearchBody');
+    const input = this.$('filesSearchInput');
+    if (!st || !body) return;
+    let selEl = null;
+    for (const el of body.querySelectorAll('.files-search-item')) {
+      const on = parseInt(el.dataset.idx, 10) === st.searchSel;
+      el.classList.toggle('is-selected', on);
+      el.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on) selEl = el;
+    }
+    if (input) {
+      if (selEl) input.setAttribute('aria-activedescendant', selEl.id);
+      else input.removeAttribute('aria-activedescendant');
+    }
+    if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Tree body vs results body, from the current query. No-op while a file view
+  // is showing (both bodies stay hidden there).
+  _filesSearchApplyBodies() {
+    const st = this.filesState;
+    const view = this.$('filesSheetView');
+    if (view && view.style.display !== 'none') return;
+    const searching = !!(st && st.searchQuery && st.searchQuery.trim());
+    const tree = this.$('filesSheetTreeBody'); if (tree) tree.style.display = searching ? 'none' : '';
+    const sbody = this.$('filesSheetSearchBody'); if (sbody) sbody.style.display = searching ? '' : 'none';
+  }
+
+  // Empty the query and return to the tree as it was.
+  _filesSearchClear() {
+    if (this._filesSearchRaf) { cancelAnimationFrame(this._filesSearchRaf); this._filesSearchRaf = null; }
+    const input = this.$('filesSearchInput');
+    if (input) { input.value = ''; input.removeAttribute('aria-activedescendant'); }
+    const st = this.filesState;
+    if (st) {
+      st.searchQuery = '';
+      st.searchSel = 0;
+      st.searchSelMoved = false;
+      st.searchRows = [];
+      st.searchParsed = null;
+      st.searchPrev = null;
+    }
+    const clearBtn = this.$('filesSearchClear'); if (clearBtn) clearBtn.style.display = 'none';
+    const sbody = this.$('filesSheetSearchBody'); if (sbody) sbody.innerHTML = '';
+    this._filesSearchApplyBodies();
+  }
+
+  _filesSearchWorkingDir() {
+    const st = this.filesState;
+    if (st && st.fileIndex && st.fileIndex.sessionId === this.activeSessionId && st.fileIndex.root) {
+      return String(st.fileIndex.root).replace(/\/+$/, '');
+    }
+    const session = this.activeSessionId && this.sessions ? this.sessions.get(this.activeSessionId) : null;
+    return session && session.workingDir ? String(session.workingDir).replace(/\/+$/, '') : '';
+  }
+
+  _filesIndexReady() {
+    const st = this.filesState;
+    const idx = st && st.fileIndex;
+    if (!idx || idx.sessionId !== this.activeSessionId || idx.showHidden !== !!st.showHidden) return null;
+    return idx;
+  }
+
+  // Fetch (once) the flat file index for the active session + Hidden setting.
+  // seq + sessionId/showHidden guards keep a late response from landing in
+  // another session or toggle state (filesState survives session switches).
+  _filesEnsureIndex(fresh = false) {
+    const st = this.filesState;
+    const sid = this.activeSessionId;
+    if (!st || !sid || typeof FuzzyFileSearch === 'undefined') return Promise.resolve(null);
+    const showHidden = !!st.showHidden;
+    const ready = this._filesIndexReady();
+    if (ready && !fresh) return Promise.resolve(ready);
+    const key = sid + '|' + showHidden;
+    if (st.fileIndexPromise && st.fileIndexKey === key && !fresh) return st.fileIndexPromise;
+    const seq = (st.fileIndexSeq || 0) + 1;
+    st.fileIndexSeq = seq;
+    st.fileIndexError = null;
+    const useFresh = fresh || st.fileIndexFresh;
+    st.fileIndexFresh = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    const p = (async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/${encodeURIComponent(sid)}/file-index?showHidden=${showHidden ? 'true' : 'false'}${useFresh ? '&fresh=1' : ''}`,
+          { cache: 'no-store', signal: controller.signal }
+        );
+        if (!res.ok) throw new Error('Failed to index files');
+        const result = await res.json();
+        if (!result.success) throw new Error(result.error || 'Failed to index files');
+        // activeSessionId is briefly null while handleInit re-selects the same
+        // session after an SSE reconnect; keep the index then (selectSession's
+        // preserveFilesSheet path re-renders the results once sid is back).
+        const cur = this.activeSessionId;
+        if (seq !== st.fileIndexSeq || this.filesState !== st || (cur != null && cur !== sid) || !!st.showHidden !== showHidden) return null;
+        const d = result.data || {};
+        st.fileIndex = {
+          sessionId: sid,
+          showHidden,
+          root: d.root || '',
+          prepared: FuzzyFileSearch.prepare(Array.isArray(d.paths) ? d.paths : []),
+          truncated: !!d.truncated,
+          count: d.count || 0,
+          cap: d.cap || 0,
+        };
+        st.searchPrev = null;
+        return st.fileIndex;
+      } catch (err) {
+        if (seq === st.fileIndexSeq) {
+          st.fileIndexError = err && err.name === 'AbortError'
+            ? 'Indexing timed out — the server may be busy.'
+            : ((err && err.message) || 'Failed to index files');
+        }
+        return null;
+      } finally {
+        clearTimeout(timer);
+        if (seq === st.fileIndexSeq) {
+          st.fileIndexPromise = null;
+          st.fileIndexKey = null;
+          if (st.searchQuery && st.searchQuery.trim()) this._filesSearchUpdate();
+        }
+      }
+    })();
+    st.fileIndexPromise = p;
+    st.fileIndexKey = key;
+    return p;
+  }
+
+  // Drop the client index (next fetch bypasses the server's short cache). With
+  // an active query the index is refetched right away and results re-rendered.
+  _filesInvalidateIndex(refetch = true) {
+    const st = this.filesState;
+    if (!st) return;
+    st.fileIndex = null;
+    st.searchPrev = null;
+    st.fileIndexPromise = null;
+    st.fileIndexKey = null;
+    st.fileIndexError = null;
+    st.fileIndexSeq = (st.fileIndexSeq || 0) + 1;
+    st.fileIndexFresh = true;
+    if (refetch && st.searchQuery && st.searchQuery.trim()) {
+      this._filesEnsureIndex();
+      this._filesSearchUpdate();
+    }
+  }
+
+  _filesSearchUpdate() {
+    const st = this.filesState;
+    const input = this.$('filesSearchInput');
+    const body = this.$('filesSheetSearchBody');
+    if (!st || !input || !body || typeof FuzzyFileSearch === 'undefined') return;
+    const q = input.value || '';
+    const changed = q !== st.searchQuery;
+    st.searchQuery = q;
+    const clearBtn = this.$('filesSearchClear'); if (clearBtn) clearBtn.style.display = q ? '' : 'none';
+    if (!q.trim()) { this._filesSearchClear(); return; }
+    this._filesSearchApplyBodies();
+
+    const parsed = FuzzyFileSearch.parsePathQuery(q, this._filesSearchWorkingDir());
+    st.searchParsed = parsed;
+    const idx = this._filesIndexReady();
+    let results = [];
+    let total = 0;
+    if (idx) {
+      const r = FuzzyFileSearch.rank(idx.prepared, parsed.term, 100, st.searchPrev);
+      st.searchPrev = r;
+      results = r.results;
+      total = r.total;
+    } else if (!st.fileIndexError) {
+      this._filesEnsureIndex();
+    }
+
+    // Open-by-path row first when the query looks like a path that isn't already
+    // the top hit: works for unindexed / excluded-dir paths too (the
+    // /file-content route enforces containment).
+    const rows = [];
+    if (parsed.isPath && parsed.path && !(results[0] && results[0].path === parsed.path)) {
+      rows.push({ open: true, path: parsed.path });
+    }
+    for (const r of results) rows.push({ open: false, path: r.path, positions: r.positions });
+    st.searchRows = rows;
+    if (changed || !st.searchSelMoved) { st.searchSel = 0; st.searchSelMoved = false; }
+    st.searchSel = Math.max(0, Math.min(st.searchSel, rows.length - 1));
+
+    const lineSuffix = parsed.line ? `:${parsed.line}${parsed.col ? ':' + parsed.col : ''}` : '';
+    const html = [];
+    if (idx && idx.truncated) {
+      html.push(`<div class="files-sheet-notice files-search-notice">Index limited to the first ${Number(idx.cap || idx.count).toLocaleString()} files — some files are not searchable</div>`);
+    }
+    rows.forEach((row, i) => {
+      const sel = i === st.searchSel;
+      const cls = `files-search-item${row.open ? ' files-search-open' : ''}${sel ? ' is-selected' : ''}`;
+      const attrs = `id="filesSearchOpt${i}" role="option" aria-selected="${sel ? 'true' : 'false'}" data-idx="${i}" data-path="${escapeHtml(row.path)}"`;
+      if (row.open) {
+        html.push(`<div class="${cls}" ${attrs}><span class="files-tree-icon">↗</span><span class="files-search-label">Open <span class="files-search-base">${escapeHtml(row.path + lineSuffix)}</span></span></div>`);
+      } else {
+        const base = row.path.slice(row.path.lastIndexOf('/') + 1);
+        const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
+        html.push(`<div class="${cls}" ${attrs}><span class="files-tree-icon">${this.getFileIcon(ext)}</span><span class="files-search-label">${FuzzyFileSearch.highlightHtml(row.path, row.positions, escapeHtml)}</span></div>`);
+      }
+    });
+    if (!idx) {
+      if (st.fileIndexError) {
+        html.push(`<div class="files-sheet-empty">${escapeHtml(st.fileIndexError)}<br><button class="files-sheet-tool" style="margin-top:10px" data-index-retry="1">Retry</button></div>`);
+      } else {
+        html.push('<div class="files-sheet-empty">Indexing files…</div>');
+      }
+    } else if (!results.length) {
+      html.push('<div class="files-sheet-empty">No matching files</div>');
+    } else if (total > results.length) {
+      html.push(`<div class="files-search-more">Showing ${results.length} of ${total.toLocaleString()} matches — keep typing to narrow</div>`);
+    }
+    body.innerHTML = html.join('');
+    const selEl = rows.length ? this.$('filesSearchOpt' + st.searchSel) : null;
+    if (selEl) input.setAttribute('aria-activedescendant', selEl.id);
+    else input.removeAttribute('aria-activedescendant');
+    if (changed) body.scrollTop = 0;
+  }
+
+  _filesSearchOpenSelected() {
+    const st = this.filesState;
+    const input = this.$('filesSearchInput');
+    if (!st || !input || !input.value.trim() || typeof FuzzyFileSearch === 'undefined') return;
+    const parsed = st.searchParsed || FuzzyFileSearch.parsePathQuery(input.value, this._filesSearchWorkingDir());
+    const row = (st.searchRows || [])[st.searchSel];
+    // A result row carries the query's :line, so `app.ts:42` + Enter on the top
+    // fuzzy hit jumps too. No rows (index not loaded yet) but a path: open it.
+    if (row) this._filesSearchOpen(row.path, parsed.line);
+    else if (parsed.isPath && parsed.path) this._filesSearchOpen(parsed.path, parsed.line);
+  }
+
+  async _filesSearchOpen(path, line) {
+    if (!path || !this.filesState) return;
+    const input = this.$('filesSearchInput');
+    if (input) input.blur(); // dismiss the iOS keyboard before the view swaps in
+    if (path.charAt(0) !== '/') {
+      const slash = path.lastIndexOf('/');
+      this.filesState.activeDir = slash > 0 ? path.slice(0, slash) : '';
+    }
+    await this.filesOpenFile(path);
+    if (line > 1) this._filesScrollToLine(path, line);
   }
 
   async filesOpenFile(path) {
@@ -23786,7 +24169,7 @@ class CodemanApp {
   async _filesRestoreState() {
     const saved = this._filesReadState();
     if (!saved || !saved.open) return;
-    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set() };
+    if (!this.filesState) this.filesState = { showHidden: true, expanded: new Set(), current: null, data: null, pendingContent: null, subtreeCache: new Map(), subtreeInflight: new Map(), loadingPaths: new Set(), ...this._filesSearchInitialState() };
     if (Array.isArray(saved.expanded)) this.filesState.expanded = new Set(saved.expanded);
     if (saved.activeDir) this.filesState.activeDir = saved.activeDir;
     if (saved.path) await this.openFileInEditor(saved.path, { scrollTop: saved.scrollTop });
@@ -23863,6 +24246,7 @@ class CodemanApp {
       this.showToast('Created ' + name, 'success');
       // Reveal the new item: expand its parent dir, reload the tree.
       if (this.filesState && dir) this.filesState.expanded.add(dir);
+      this._filesInvalidateIndex();
       await this.filesLoadTree();
       if (!isFolder) {
         await this.filesOpenFile(result.data.path);
@@ -23899,6 +24283,7 @@ class CodemanApp {
         // Consume the now-stale file-level back entry.
         if (OverlayHistory.has('files-file')) OverlayHistory.pop('files-file');
       }
+      this._filesInvalidateIndex();
       this.filesLoadTree();
     } catch (err) {
       this.showToast('Delete failed: ' + err.message, 'error');

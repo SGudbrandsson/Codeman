@@ -2395,6 +2395,15 @@
         </button>
       </div>
     </div>
+    <!-- Fuzzy file search (results replace the tree while a query is set) -->
+    <div class="files-sheet-search" id="filesSheetSearchBar">
+      <input type="text" id="filesSearchInput" class="files-search-input" placeholder="Search files or paste path:line"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go"
+             aria-label="Search files" aria-controls="filesSheetSearchBody" aria-autocomplete="list">
+      <button class="files-sheet-hbtn files-search-clear" id="filesSearchClear" title="Clear search" aria-label="Clear search" style="display:none;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
     <!-- Tree view -->
     <div class="files-sheet-toolbar" id="filesSheetTreeToolbar">
       <button class="files-sheet-tool" onclick="app.filesNewFile()" title="New file">
@@ -2414,6 +2423,7 @@
       </button>
     </div>
     <div class="files-sheet-body" id="filesSheetTreeBody"></div>
+    <div class="files-sheet-body files-search-body" id="filesSheetSearchBody" role="listbox" aria-label="File search results" style="display:none;"></div>
     <!-- File view/edit -->
     <div class="files-sheet-view" id="filesSheetView" style="display:none;">
       <div class="files-sheet-view-toolbar">
@@ -2556,6 +2566,7 @@
   <script defer src="secret-detector.js"></script>
   <script defer src="terminal-copy.js"></script>
   <script defer src="keyboard-accessory.js"></script>
+  <script defer src="fuzzy-file-search.js"></script>
   <script defer src="app.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
