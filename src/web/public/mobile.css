@@ -41,6 +41,227 @@
   display: flex;
 }
 
+/* ============================================================================
+   Accessory Bar Buttons — base styles for ALL sizes where mobile.css loads.
+   Breakpoint-specific blocks may override sizes (min-height, height, etc.).
+   ============================================================================ */
+
+.accessory-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 14px;
+  min-height: 36px;
+  background: #2a2a2a;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #e5e5e5;
+  font-size: 0.65rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.accessory-btn:active {
+  background: #3a3a3a;
+}
+
+.accessory-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.accessory-btn.confirming {
+  background: #6b4f00;
+  border-color: #b8860b;
+  color: #ffd54f;
+}
+
+.accessory-btn-arrow {
+  padding: 6px 10px;
+  background: #1e3a5f;
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #93c5fd;
+}
+
+.accessory-btn-arrow:active {
+  background: #2563eb;
+}
+
+.accessory-btn-dismiss {
+  padding: 8px 14px;
+  background: #2a2a2a;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: #e5e5e5;
+}
+
+.accessory-btn-dismiss svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 3;
+}
+
+.accessory-btn-dismiss:active {
+  background: #3a3a3a;
+}
+
+.accessory-btn-settings {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.accessory-btn-project {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  min-width: 0;
+  max-width: 110px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.accessory-project-icon { font-size: 12px; flex-shrink: 0; }
+.accessory-project-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #cbd5e1;
+}
+.accessory-project-caret { font-size: 9px; color: #64748b; flex-shrink: 0; }
+
+.accessory-btn-commands {
+  background: #1e2a3a;
+  border-color: rgba(100, 160, 255, 0.3);
+  color: #93c5fd;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+}
+.accessory-btn-commands:active { background: #2a3a5a; }
+
+.accessory-btn-new {
+  background: #1a2a1a;
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+  font-size: 1.1rem;
+  font-weight: 400;
+  padding: 4px 10px;
+  line-height: 1;
+}
+.accessory-btn-new:active { background: #223322; }
+
+/* View mode segmented toggle */
+.view-mode-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  height: 36px;
+}
+
+.view-mode-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  background: #2a2a2a;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.view-mode-seg:last-child { border-right: none; }
+.view-mode-seg:active { background: #3a3a3a; }
+.view-mode-seg.active {
+  background: rgba(6, 182, 212, 0.18);
+  color: #22d3ee;
+}
+.vmt-label { display: none; }
+.vmt-icon {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+/* Commands drawer */
+.accessory-cmd-drawer {
+  position: absolute;
+  bottom: 100%;
+  left: calc(-8px - var(--safe-area-left, 0px));
+  right: calc(-8px - var(--safe-area-right, 0px));
+  background: #1e1e1e;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: transform 0.18s ease-out, opacity 0.15s ease-out;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.accessory-cmd-drawer.open {
+  pointer-events: auto;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.accessory-cmd-search {
+  display: block;
+  width: 100%;
+  padding: 11px 16px;
+  background: #111;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e5e5e5;
+  font-size: 16px;
+  outline: none;
+  box-sizing: border-box;
+}
+.accessory-cmd-search::placeholder { color: #555; }
+.accessory-cmd-search:focus { background: #181818; }
+
+.accessory-cmd-items {
+  overflow-y: auto;
+  max-height: calc(40vh - 44px);
+}
+
+.accessory-drawer-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  text-align: left;
+  cursor: pointer;
+}
+
+.drawer-cmd-name {
+  color: #e5e5e5;
+  font-size: 0.9rem;
+  font-family: monospace;
+}
+
+.drawer-cmd-desc {
+  color: #6b7280;
+  font-size: 0.75rem;
+  margin-top: 1px;
+}
+
+.accessory-drawer-item:last-child { border-bottom: none; }
+.accessory-drawer-item:active { background: #2a2a2a; }
+
 /* Compose / Input Panel */
 .mobile-input-panel {
   position: fixed;
