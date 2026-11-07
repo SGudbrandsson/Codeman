@@ -5349,6 +5349,88 @@ const TranscriptView = {
     return known?.label || { codex: 'Codex', pi: 'Pi', opencode: 'OpenCode' }[mode] || 'Assistant';
   },
 
+  /**
+   * Parse Agent Teams peer messages out of a user block. Claude Code delivers them as
+   * "Another Claude session sent a message:\n<teammate-message teammate_id=… color=… summary=…>
+   * body</teammate-message>" (possibly several), followed by a fixed permission notice.
+   * Idle notifications carry a JSON body ({type:'idle_notification', summary?, result}).
+   * Returns null unless the block is purely teammate messages, so user-typed text that merely
+   * quotes one still renders as a normal bubble.
+   */
+  _parseTeammateMessages(text) {
+    const PREAMBLE = 'Another Claude session sent a message:';
+    if (!text || !text.startsWith(PREAMBLE)) return null;
+    const TAG_RE = /<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+    const msgs = [];
+    let m;
+    while ((m = TAG_RE.exec(text)) !== null) {
+      const attrs = {};
+      for (const a of m[1].matchAll(/(\w+)="([^"]*)"/g)) attrs[a[1]] = a[2];
+      let body = m[2].trim();
+      let summary = attrs.summary || '';
+      let idle = false;
+      if (body.startsWith('{')) {
+        try {
+          const j = JSON.parse(body);
+          if (j && typeof j === 'object') {
+            idle = j.type === 'idle_notification';
+            summary = summary || j.summary || '';
+            body = typeof j.result === 'string' ? j.result : (typeof j.message === 'string' ? j.message : body);
+          }
+        } catch { /* not JSON — show raw */ }
+      }
+      msgs.push({ from: attrs.teammate_id || 'teammate', color: attrs.color || '', summary, idle, body });
+    }
+    return msgs.length ? msgs : null;
+  },
+
+  _renderTeammateMessages(msgs) {
+    const group = document.createElement('div');
+    group.className = 'tv-teammate-group';
+    for (const msg of msgs) {
+      const wrap = document.createElement('div');
+      wrap.className = 'tv-compact-block tv-teammate-block';
+
+      const hdr = document.createElement('div');
+      hdr.className = 'tv-compact-header';
+
+      const arrow = document.createElement('span');
+      arrow.className = 'tv-compact-arrow';
+      arrow.textContent = '▶';
+
+      const from = document.createElement('span');
+      from.className = 'tv-teammate-from';
+      // Agent Teams colour names; raw CSS 'blue'/'purple' are unreadable on the dark theme.
+      const TEAM_COLORS = { red: '#f87171', orange: '#fb923c', yellow: '#facc15', green: '#4ade80', blue: '#60a5fa', purple: '#c084fc', pink: '#f472b6', cyan: '#22d3ee' };
+      if (TEAM_COLORS[msg.color]) from.style.color = TEAM_COLORS[msg.color];
+      from.textContent = msg.from + (msg.idle ? ' (idle)' : '');
+
+      const lbl = document.createElement('span');
+      lbl.className = 'tv-teammate-summary';
+      const firstLine = msg.body.split('\n').find(l => l.trim()) || '';
+      lbl.textContent = msg.summary || firstLine;
+
+      hdr.appendChild(arrow);
+      hdr.appendChild(from);
+      hdr.appendChild(lbl);
+
+      const body = document.createElement('div');
+      body.className = 'tv-compact-body tv-markdown';
+      body.innerHTML = replaceImagePaths(renderMarkdown(msg.body)); // eslint-disable-line no-unsanitized/property
+      linkifyFilePaths(body);
+
+      hdr.addEventListener('click', () => {
+        const open = hdr.classList.toggle('open');
+        body.classList.toggle('open', open);
+      });
+
+      wrap.appendChild(hdr);
+      wrap.appendChild(body);
+      group.appendChild(wrap);
+    }
+    return group;
+  },
+
   _renderTextBlock(block) {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
@@ -5391,6 +5473,11 @@ const TranscriptView = {
         wrap.appendChild(body);
         return wrap;
       }
+
+      // Agent Teams peer messages ("Another Claude session sent a message: <teammate-message ...>")
+      // — render each as a collapsed row and drop the preamble and permission boilerplate.
+      const teammateMsgs = this._parseTeammateMessages(block.text);
+      if (teammateMsgs) return this._renderTeammateMessages(teammateMsgs);
 
       // Suppress skill content block injected after "Launching skill: <name>" tool_result.
       // Covers both Superpowers (path prefix) and GSD (XML content) skill patterns.

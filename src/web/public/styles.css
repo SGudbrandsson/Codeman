@@ -13978,3 +13978,11 @@ body.touch-device .terminal-container .xterm-rows {
   .tcopy-text { font-size: 16px; }
   .tcopy-btn { padding: 10px 16px; }
 }
+
+/* Agent Teams peer messages — collapsed rows reusing the compaction pill, in a neutral tint */
+.tv-teammate-group { max-width: 860px; margin: 10px auto; display: flex; flex-direction: column; gap: 4px; }
+.tv-teammate-group .tv-teammate-block { margin: 0; border-color: rgba(148,163,184,0.25); }
+.tv-teammate-block .tv-compact-header { background: rgba(148,163,184,0.08); color: #94a3b8; }
+.tv-teammate-block .tv-compact-header:hover { background: rgba(148,163,184,0.14); }
+.tv-teammate-from { font-weight: 600; flex-shrink: 0; }
+.tv-teammate-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
