@@ -167,6 +167,32 @@ describe('teammate messages', () => {
     expect(r?.rows[0]).toMatchObject({ from: 'p3', summary: 'First real line' });
   });
 
+  it('folds cross-session messages, using from-name as the sender', async () => {
+    const r = await render(
+      'Another Claude session sent a message:\n<cross-session-message from="uds:/run/user/1000/cc-socks/1316548.sock" from-name="lava-agent-runner-23" from-mode="bypass">\nQuestions agent can now read the answers.\n\n- Instructions: details\n</cross-session-message>' +
+        NOTICE
+    );
+    expect(r?.className).toBe('tv-teammate-group');
+    expect(r?.rows).toEqual([
+      {
+        from: 'lava-agent-runner-23',
+        summary: 'Questions agent can now read the answers.',
+        bodyHidden: true,
+        body: expect.stringContaining('Instructions: details'),
+      },
+    ]);
+    expect(r?.text).not.toContain('Another Claude session');
+    expect(r?.text).not.toContain('not typed by your user');
+  });
+
+  it('falls back to the socket name when a cross-session message has no from-name', async () => {
+    const r = await render(
+      'Another Claude session sent a message:\n<cross-session-message from="uds:/run/user/1000/cc-socks/42.sock">\nhi\n</cross-session-message>' +
+        NOTICE
+    );
+    expect(r?.rows[0]).toMatchObject({ from: '42.sock', summary: 'hi' });
+  });
+
   it('leaves user-typed text that quotes a teammate message as a normal bubble', async () => {
     const r = await render('Look at this:\n' + IDLE);
     expect(r?.className).toContain('tv-block--user');

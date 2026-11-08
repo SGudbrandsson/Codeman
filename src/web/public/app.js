@@ -5351,7 +5351,7 @@ const TranscriptView = {
   },
 
   /**
-   * Parse Agent Teams peer messages out of a user block. Claude Code delivers them as
+   * Parse peer messages (Agent Teams and cross-session SendMessage) out of a user block. Claude Code delivers them as
    * "Another Claude session sent a message:\n<teammate-message teammate_id=… color=… summary=…>
    * body</teammate-message>" (possibly several), followed by a fixed permission notice.
    * Idle notifications carry a JSON body ({type:'idle_notification', summary?, result}).
@@ -5361,13 +5361,15 @@ const TranscriptView = {
   _parseTeammateMessages(text) {
     const PREAMBLE = 'Another Claude session sent a message:';
     if (!text || !text.startsWith(PREAMBLE)) return null;
-    const TAG_RE = /<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+    // <teammate-message teammate_id=… color=… summary=…> (Agent Teams) or
+    // <cross-session-message from="uds:…sock" from-name=… from-mode=…> (SendMessage between sessions).
+    const TAG_RE = /<(teammate-message|cross-session-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
     const msgs = [];
     let m;
     while ((m = TAG_RE.exec(text)) !== null) {
       const attrs = {};
-      for (const a of m[1].matchAll(/(\w+)="([^"]*)"/g)) attrs[a[1]] = a[2];
-      let body = m[2].trim();
+      for (const a of m[2].matchAll(/([\w-]+)="([^"]*)"/g)) attrs[a[1]] = a[2];
+      let body = m[3].trim();
       let summary = attrs.summary || '';
       let idle = false;
       if (body.startsWith('{')) {
@@ -5380,7 +5382,8 @@ const TranscriptView = {
           }
         } catch { /* not JSON — show raw */ }
       }
-      msgs.push({ from: attrs.teammate_id || 'teammate', color: attrs.color || '', summary, idle, body });
+      const from = attrs.teammate_id || attrs['from-name'] || (attrs.from || '').split('/').pop() || 'teammate';
+      msgs.push({ from, color: attrs.color || '', summary, idle, body });
     }
     return msgs.length ? msgs : null;
   },
