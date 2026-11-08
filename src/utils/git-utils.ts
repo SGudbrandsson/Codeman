@@ -109,6 +109,34 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
 }
 
 /**
+ * True if the worktree has any local work: staged, unstaged or untracked (non-ignored) files.
+ * Unlike isWorktreeDirty(), untracked files count and errors return true, so callers
+ * deciding whether a worktree is safe to delete fail closed.
+ */
+export async function hasUncommittedWork(worktreePath: string): Promise<boolean> {
+  try {
+    const status = await git(['status', '--porcelain'], worktreePath);
+    return status.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * True if a commit, merge, rebase etc. was ever made on the branch, per its reflog.
+ * `git branch --merged` also reports a branch created from main with no work yet as merged;
+ * its reflog holds only the "branch: Created from …" entry. No reflog → false (fail closed).
+ */
+export async function branchHasOwnHistory(repoDir: string, branch: string): Promise<boolean> {
+  try {
+    const entries = await git(['reflog', 'show', '--format=%gs', `refs/heads/${branch}`, '--'], repoDir);
+    return entries.split('\n').some((e) => e && !e.startsWith('branch: Created from'));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolves the main (non-worktree) git repo root from any path inside the repo or a worktree.
  * Uses `git rev-parse --git-common-dir` which always points to the common `.git` directory
  * in the main clone, even when called from inside a linked worktree.

@@ -33,6 +33,8 @@ import {
   deleteBranch,
   listGitWorktrees,
   pruneWorktrees,
+  hasUncommittedWork,
+  branchHasOwnHistory,
 } from '../../utils/git-utils.js';
 import { CASES_DIR } from '../route-helpers.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
@@ -119,6 +121,11 @@ export interface OrphanResult {
 /**
  * Scan git worktrees for orphans (no active session and no dormant store entry).
  * Merged orphans are removed; unmerged orphans generate warnings.
+ *
+ * Worktrees Codeman didn't create (e.g. an Agent Teams lead's per-teammate worktrees) also
+ * show up here, so removal is conservative: never with --force, never with uncommitted or
+ * untracked files, and never for a branch that has no commits of its own yet (a fresh branch
+ * off main is "merged" by `git branch --merged`, but it's new work, not finished work).
  */
 export async function runOrphanCleanup(
   gitRoot: string,
@@ -163,9 +170,23 @@ export async function runOrphanCleanup(
       continue;
     }
 
+    if (merged && !(await branchHasOwnHistory(gitRoot, wt.branch))) {
+      result.warnings.push({
+        path: wt.path,
+        branch: wt.branch,
+        reason: 'orphan worktree on a branch with no commits yet',
+      });
+      continue;
+    }
+    if (merged && (await hasUncommittedWork(wt.path))) {
+      log.warn(`[orphan-cleanup] merged orphan has uncommitted work, keeping: ${wt.path} (${wt.branch})`);
+      result.warnings.push({ path: wt.path, branch: wt.branch, reason: 'orphan worktree with uncommitted work' });
+      continue;
+    }
+
     if (merged) {
       try {
-        await removeWorktree(gitRoot, wt.path, true);
+        await removeWorktree(gitRoot, wt.path);
         await deleteBranch(gitRoot, wt.branch, false);
         await pruneWorktrees(gitRoot);
         log.info(`[orphan-cleanup] removed merged orphan: ${wt.path} (${wt.branch})`);
