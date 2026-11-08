@@ -401,8 +401,11 @@ function renderMarkdown(text) {
       continue;
     }
 
-    // Paragraph — collect consecutive non-special lines
-    const paraLines = [];
+    // Paragraph — collect consecutive non-special lines. The first line is always
+    // taken: a line no branch above claimed (e.g. a truncated `| a | b` row) would
+    // otherwise match the stop pattern and never advance `i`, hanging the tab.
+    const paraLines = [line];
+    i++;
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
@@ -411,9 +414,7 @@ function renderMarkdown(text) {
       paraLines.push(lines[i]);
       i++;
     }
-    if (paraLines.length) {
-      out.push('<p>' + inlineMarkdown(esc(paraLines.join(' ')), safeHref, esc) + '</p>');
-    }
+    out.push('<p>' + inlineMarkdown(esc(paraLines.join(' ')), safeHref, esc) + '</p>');
   }
   return out.join('\n');
 }
