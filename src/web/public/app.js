@@ -5361,9 +5361,10 @@ const TranscriptView = {
   _parseTeammateMessages(text) {
     const PREAMBLE = 'Another Claude session sent a message:';
     if (!text || !text.startsWith(PREAMBLE)) return null;
-    // <teammate-message teammate_id=… color=… summary=…> (Agent Teams) or
-    // <cross-session-message from="uds:…sock" from-name=… from-mode=…> (SendMessage between sessions).
-    const TAG_RE = /<(teammate-message|cross-session-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+    // Seen so far: <teammate-message teammate_id=… color=… summary=…> (Agent Teams),
+    // <cross-session-message from="uds:…sock" from-name=… from-mode=…> (SendMessage between
+    // sessions) and <agent-message from="ws-R">. Accept any <…-message> so new variants fold too.
+    const TAG_RE = /<([a-z][\w-]*-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
     const msgs = [];
     let m;
     while ((m = TAG_RE.exec(text)) !== null) {

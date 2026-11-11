@@ -193,6 +193,23 @@ describe('teammate messages', () => {
     expect(r?.rows[0]).toMatchObject({ from: '42.sock', summary: 'hi' });
   });
 
+  it('folds agent-message, using from as the sender', async () => {
+    const r = await render(
+      'Another Claude session sent a message:\n<agent-message from="ws-R">\nR update: you don\'t need to fix my worktree.\nMore detail.\n</agent-message>' +
+        NOTICE
+    );
+    expect(r?.className).toBe('tv-teammate-group');
+    expect(r?.rows).toEqual([
+      {
+        from: 'ws-R',
+        summary: "R update: you don't need to fix my worktree.",
+        bodyHidden: true,
+        body: expect.stringContaining('More detail.'),
+      },
+    ]);
+    expect(r?.text).not.toContain('Another Claude session');
+  });
+
   it('leaves user-typed text that quotes a teammate message as a normal bubble', async () => {
     const r = await render('Look at this:\n' + IDLE);
     expect(r?.className).toContain('tv-block--user');
