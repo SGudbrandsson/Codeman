@@ -19,6 +19,9 @@ import type { TeamConfig, TeamMember, TeamTask, InboxMessage } from './types.js'
 import { LRUMap } from './utils/lru-map.js';
 import { TEAM_POLL_INTERVAL_MS, MAX_CACHED_TEAMS, MAX_CACHED_TASKS } from './config/team-config.js';
 
+/** How long to wait before re-creating fs watchers after one failed (polling covers the gap). */
+const FS_WATCH_RETRY_MS = 5 * 60_000;
+
 // ========== TeamWatcher Class ==========
 
 export class TeamWatcher extends EventEmitter {
@@ -36,6 +39,8 @@ export class TeamWatcher extends EventEmitter {
   private sessionToTeam: Map<string, string> = new Map();
   private teamsWatcher: ChokidarWatcher | null = null;
   private tasksWatcher: ChokidarWatcher | null = null;
+  private fsWatchRetryTimer: NodeJS.Timeout | null = null;
+  private fsWatchDegraded = false;
 
   constructor(teamsDir?: string, tasksDir?: string) {
     super();
@@ -52,48 +57,79 @@ export class TeamWatcher extends EventEmitter {
   }
 
   private setupFsWatchers(): void {
-    try {
-      this.teamsWatcher = chokidarWatch(this.teamsDir, {
-        depth: 2,
-        awaitWriteFinish: { stabilityThreshold: 200 },
-        ignored: /\.lock/,
-        ignoreInitial: true,
-        persistent: false,
-      });
-
+    this.teamsWatcher = this.createWatcher('teams', this.teamsDir, 2, (w) => {
       const teamsHandler = () => this.pollAsync().catch(() => {});
-      this.teamsWatcher.on('add', teamsHandler);
-      this.teamsWatcher.on('change', teamsHandler);
-      this.teamsWatcher.on('unlink', teamsHandler);
-      this.teamsWatcher.on('unlinkDir', teamsHandler);
-      this.teamsWatcher.on('error', (err) => {
-        console.warn('[TeamWatcher] chokidar teams watcher error:', err);
-      });
-    } catch (err) {
-      console.warn('[TeamWatcher] Failed to set up teams chokidar watcher, relying on polling:', err);
-    }
+      w.on('add', teamsHandler);
+      w.on('change', teamsHandler);
+      w.on('unlink', teamsHandler);
+      w.on('unlinkDir', teamsHandler);
+    });
+    this.tasksWatcher = this.createWatcher('tasks', this.tasksDir, 1, (w) => {
+      w.on('add', () => this.pollTasks().catch(() => {}));
+      w.on('change', () => this.pollTasks().catch(() => {}));
+    });
+  }
 
+  private createWatcher(
+    label: string,
+    dir: string,
+    depth: number,
+    bind: (w: ChokidarWatcher) => void
+  ): ChokidarWatcher | null {
     try {
-      this.tasksWatcher = chokidarWatch(this.tasksDir, {
-        depth: 1,
+      const w = chokidarWatch(dir, {
+        depth,
         awaitWriteFinish: { stabilityThreshold: 200 },
         ignored: /\.lock/,
         ignoreInitial: true,
         persistent: false,
       });
-
-      this.tasksWatcher.on('add', () => this.pollTasks().catch(() => {}));
-      this.tasksWatcher.on('change', () => this.pollTasks().catch(() => {}));
-      this.tasksWatcher.on('error', (err) => {
-        console.warn('[TeamWatcher] chokidar tasks watcher error:', err);
+      bind(w);
+      w.on('ready', () => {
+        if (w !== this.teamsWatcher && w !== this.tasksWatcher) return;
+        if (this.fsWatchDegraded && this.teamsWatcher && this.tasksWatcher) {
+          this.fsWatchDegraded = false;
+          console.log('[TeamWatcher] fs watchers restored');
+        }
       });
+      w.on('error', (err) => {
+        // A closed watcher can keep emitting; it must not tear down its replacement.
+        if (w === this.teamsWatcher || w === this.tasksWatcher) this.onWatcherError(label, err);
+      });
+      return w;
     } catch (err) {
-      console.warn('[TeamWatcher] Failed to set up tasks chokidar watcher, relying on polling:', err);
+      this.onWatcherError(label, err);
+      return null;
     }
   }
 
-  stop(): void {
-    // Close chokidar watchers
+  /**
+   * A watcher error (typically EMFILE when the per-user inotify instance limit is exhausted)
+   * makes chokidar retry and re-emit endlessly — on 2026-11-11 that wrote ~15 GB of stack traces
+   * to syslog in five hours. Log once, close both watchers, rely on polling, and retry later.
+   */
+  private onWatcherError(label: string, err: unknown): void {
+    if (!this.pollTimer) return; // stopped
+    if (!this.fsWatchDegraded) {
+      this.fsWatchDegraded = true;
+      const e = err as NodeJS.ErrnoException;
+      const detail = e?.code ? `${e.code}: ${e.message}` : String((e as Error)?.message ?? err);
+      console.warn(
+        `[TeamWatcher] ${label} fs watcher failed (${detail}); falling back to polling every ` +
+          `${TEAM_POLL_INTERVAL_MS / 1000}s, retrying watchers every ${FS_WATCH_RETRY_MS / 60_000} min`
+      );
+    }
+    this.closeFsWatchers();
+    if (!this.fsWatchRetryTimer) {
+      this.fsWatchRetryTimer = setTimeout(() => {
+        this.fsWatchRetryTimer = null;
+        if (this.pollTimer) this.setupFsWatchers();
+      }, FS_WATCH_RETRY_MS);
+      this.fsWatchRetryTimer.unref?.();
+    }
+  }
+
+  private closeFsWatchers(): void {
     if (this.teamsWatcher) {
       this.teamsWatcher.close().catch(() => {});
       this.teamsWatcher = null;
@@ -102,6 +138,15 @@ export class TeamWatcher extends EventEmitter {
       this.tasksWatcher.close().catch(() => {});
       this.tasksWatcher = null;
     }
+  }
+
+  stop(): void {
+    this.closeFsWatchers();
+    if (this.fsWatchRetryTimer) {
+      clearTimeout(this.fsWatchRetryTimer);
+      this.fsWatchRetryTimer = null;
+    }
+    this.fsWatchDegraded = false;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
