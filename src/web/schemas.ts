@@ -415,6 +415,7 @@ export const SessionInputWithLimitSchema = z
     text: z.string().max(100000).optional(), // alias for input
     useMux: z.boolean().optional(),
     submit: z.boolean().optional(), // when true, auto-appends \r and forces useMux
+    verify: z.boolean().optional(), // confirm Claude recorded the message; recover or report if not
   })
   .transform((data) => {
     const input = data.input ?? data.text;
@@ -427,7 +428,7 @@ export const SessionInputWithLimitSchema = z
         },
       ]);
     }
-    return { input, useMux: data.useMux, submit: data.submit };
+    return { input, useMux: data.useMux, submit: data.submit, verify: data.verify };
   });
 
 // ========== Session Mutation Routes ==========

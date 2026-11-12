@@ -56,6 +56,8 @@ import type { TranscriptBlock } from '../../types/transcript-blocks.js';
 import { getTranscriptAdapter, readTranscriptFile, readTranscriptTail } from '../../harnesses/transcripts/index.js';
 import type { SessionState } from '../../types/session.js';
 import { injectVaultBriefing } from '../../vault/index.js';
+import { confirmDelivery, historySize, readHistorySince } from '../../input-delivery.js';
+import { captureScreen, stripAnsi } from '../../screen-analyzer.js';
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -952,7 +954,7 @@ ${contextLines.join('\n')}`;
     if (!result.success) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
     }
-    const { input, useMux, submit } = result.data;
+    const { input, useMux, submit, verify } = result.data;
     const session = ctx.sessions.get(id);
 
     if (!session) {
@@ -997,6 +999,11 @@ ${contextLines.join('\n')}`;
       // a deterministic signal that Enter has been sent, so client-side retry
       // timers can start counting from a meaningful baseline.
       let ok = false;
+      // Snapshot Claude's prompt history BEFORE typing, so the check only sees what follows.
+      const message = inputStr.replace(/\r/g, '').trim();
+      const shouldVerify =
+        verify === true && session.mode === 'claude' && inputStr.includes('\r') && !!message && !/^[/!#]/.test(message);
+      const historyOffset = shouldVerify ? await historySize() : 0;
       try {
         ok = await session.writeViaMux(inputStr);
       } catch {
@@ -1008,6 +1015,9 @@ ${contextLines.join('\n')}`;
         // Preserve trailing \r so the input is actually submitted.
         const safeStr = inputStr.replace(/\n/g, ' ');
         session.write(safeStr);
+      }
+      if (shouldVerify) {
+        verifyDelivery(session, message, inputStr, historyOffset, (event, data) => ctx.broadcast(event, data));
       }
     } else {
       session.write(inputStr);
@@ -1744,4 +1754,55 @@ ${contextLines.join('\n')}`;
 
     return reply.send({ success: true });
   });
+}
+
+/**
+ * Background check that Claude recorded a compose-bar message; presses Enter or retypes once
+ * if it didn't, and tells the UI when the message is lost so the text can be restored.
+ */
+function verifyDelivery(
+  session: Session,
+  message: string,
+  inputStr: string,
+  historyOffset: number,
+  broadcast: (event: string, data: unknown) => void
+): void {
+  const ids = new Set(
+    [session.id, session.claudeSessionId, session.harnessSessionId, session.conversationId].filter(
+      (x): x is string => !!x
+    )
+  );
+  const tag = `[InputDelivery] ${session.muxName ?? session.id}`;
+  confirmDelivery({
+    sessionIds: ids,
+    project: session.workingDir,
+    text: message,
+    historyOffset,
+    readHistorySince: (offset) => readHistorySince(offset),
+    isBusy: () => session.isWorking || session.status === 'busy',
+    captureScreen: async () => {
+      const raw = session.muxName ? await captureScreen(session.muxName) : null;
+      return raw === null ? null : stripAnsi(raw);
+    },
+    pressEnter: async () => {
+      console.warn(`${tag}: message not recorded by Claude but still in the prompt box — pressing Enter`);
+      await session.writeViaMux('\r');
+    },
+    retype: async () => {
+      console.warn(`${tag}: message not recorded by Claude and the prompt box is empty — retyping it once`);
+      await session.writeViaMux(inputStr);
+    },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: () => Date.now(),
+  })
+    .then((outcome) => {
+      if (outcome === 'delivered') return;
+      if (outcome !== 'undelivered') {
+        console.log(`${tag}: ${outcome}`);
+        return;
+      }
+      console.warn(`${tag}: message was NOT delivered to Claude (${message.length} chars); returning it to the UI`);
+      broadcast(SseEvent.SessionInputUndelivered, { id: session.id, text: message });
+    })
+    .catch((err: unknown) => console.warn(`${tag}: delivery check failed:`, err));
 }

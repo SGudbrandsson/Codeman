@@ -4302,6 +4302,22 @@ const TranscriptView = {
     }
   },
 
+  /** Flags the optimistic bubble for a message the server reports as never delivered. */
+  markUndelivered(text) {
+    if (!this._container) return;
+    const norm = (t) => (t || '').replace(/\s+/g, ' ').trim();
+    const want = norm(text);
+    const bubbles = [...this._container.querySelectorAll('[data-optimistic="true"]')].reverse();
+    const el = bubbles.find((b) => norm(b.textContent).includes(want.slice(0, 60))) || bubbles[0];
+    if (!el || el.classList.contains('tv-undelivered')) return;
+    el.classList.add('tv-undelivered');
+    const note = document.createElement('div');
+    note.className = 'tv-undelivered-note';
+    note.textContent = 'Not delivered to Claude: the text is back in the input box';
+    el.appendChild(note);
+    if (this._pendingOptimisticText && norm(this._pendingOptimisticText) === want) this._pendingOptimisticText = null;
+  },
+
   /** Removes the most recent optimistic user bubble (rollback when a send fails).
    *  Only touches DOM marked data-optimistic; leaves real (SSE-reconciled) blocks alone. */
   removeLastOptimistic() {
@@ -6108,6 +6124,7 @@ const _SSE_HANDLER_MAP = [
   // Session lifecycle
   [SSE_EVENTS.SESSION_CREATED, '_onSessionCreated'],
   [SSE_EVENTS.SESSION_UPDATED, '_onSessionUpdated'],
+  [SSE_EVENTS.SESSION_INPUT_UNDELIVERED, '_onSessionInputUndelivered'],
   [SSE_EVENTS.SESSION_DELETED, '_onSessionDeleted'],
   [SSE_EVENTS.SESSION_TERMINAL, '_onSessionTerminal'],
   [SSE_EVENTS.SESSION_NEEDS_REFRESH, '_onSessionNeedsRefresh'],
@@ -8361,6 +8378,22 @@ class CodemanApp {
     }
     // Update agent dashboard if session has an agent profile
     if (data.agentProfile) this._scheduleAgentDashboardRender();
+  }
+
+  _onSessionInputUndelivered(data) {
+    if (!data?.id || !data.text) return;
+    InputPanel.restoreUndelivered(data.id, data.text);
+    if (typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === data.id) {
+      TranscriptView.markUndelivered?.(data.text);
+    }
+    const here = data.id === this.activeSessionId;
+    const name = this.sessions.get(data.id)?.name || 'a session';
+    this.showToast(
+      here
+        ? "Your message didn't reach Claude. It's back in the input box; press send to try again."
+        : `A message to "${name}" didn't reach Claude. It's back in that session's input box.`,
+      'error'
+    );
   }
 
   _onSessionUpdated(data) {
@@ -13251,7 +13284,7 @@ class CodemanApp {
    * @param {string} [sessionId] - Target session ID (defaults to activeSessionId)
    * @returns {Promise<void>}
    */
-  async sendInput(input, sessionId) {
+  async sendInput(input, sessionId, opts = {}) {
     const sid = sessionId || this.activeSessionId;
     if (!sid) return;
     // Typing into a parked session is a clear intent to un-park it
@@ -13262,7 +13295,7 @@ class CodemanApp {
     const res = await fetch(`/api/sessions/${sid}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input, useMux: true })
+      body: JSON.stringify({ input, useMux: true, ...(opts.verify ? { verify: true } : {}) })
     });
     if (!res.ok) {
       throw new Error(`sendInput failed: ${res.status}`);
@@ -26061,6 +26094,36 @@ const InputPanel = {
     this._draftSaveTimer = setTimeout(() => this._saveDraftServer(sessionId, text, imagePaths), 2000);
   },
 
+  /**
+   * Put a message that never reached Claude back where the user can resend it: the compose box
+   * if that session is open here, otherwise its saved draft. Prepended to anything typed since,
+   * and skipped if it's already there (several open tabs all get the same event).
+   */
+  async restoreUndelivered(sessionId, text) {
+    const merge = (cur) => {
+      cur = cur || '';
+      if (cur.includes(text)) return cur;
+      return cur.trim() ? text + '\n\n' + cur : text;
+    };
+    const ta = this._getTextarea();
+    if (ta && sessionId === this._currentSessionId) {
+      ta.value = merge(ta.value);
+      this._autoGrow(ta);
+      this._saveDraftLocal(sessionId);
+      return;
+    }
+    let draft = this._drafts.get(sessionId);
+    if (!draft) {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/draft`);
+        if (res.ok) draft = await res.json();
+      } catch { /* fall through with an empty draft */ }
+    }
+    const next = { text: merge(draft?.text), imagePaths: draft?.imagePaths || [] };
+    this._drafts.set(sessionId, next);
+    this._saveDraftServer(sessionId, next.text, next.imagePaths);
+  },
+
   /** Persist draft to server for cross-device sync. */
   _saveDraftServer(sessionId, text, imagePaths) {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/draft`, {
@@ -26446,12 +26509,16 @@ const InputPanel = {
     // Fire the POST without awaiting — perceived latency is now decoupled from the
     // tmux send-keys sequence. The fallback-Enter poller runs only on success
     // (chained via .then), and rollback runs on failure (chained via .catch).
-    app.sendInput(inputString, _sendSessionId)
+    // Claude sessions: the server confirms the message reached Claude (its prompt history),
+    // presses Enter or retypes once if it didn't, and sends session:inputUndelivered if the
+    // message is still lost — so no blind client-side Enter retry for them.
+    const _isClaude = app.sessions?.get(_sendSessionId)?.mode === 'claude';
+    app.sendInput(inputString, _sendSessionId, { verify: _isClaude })
       .then(() => {
         // Shell sessions write directly to PTY — no Ink, no busy detection,
         // no need to retry Enter. Skip the polling entirely.
         const _sendSession = app.sessions?.get(_sendSessionId);
-        if (_sendSession?.mode !== 'shell') {
+        if (_sendSession?.mode !== 'shell' && _sendSession?.mode !== 'claude') {
           // Backend awaits tmux completion before responding, so we know Enter
           // has been dispatched by the time this resolves.
           // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude

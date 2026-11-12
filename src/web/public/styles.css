@@ -13986,3 +13986,7 @@ body.touch-device .terminal-container .xterm-rows {
 .tv-teammate-block .tv-compact-header:hover { background: rgba(148,163,184,0.14); }
 .tv-teammate-from { font-weight: 600; flex-shrink: 0; }
 .tv-teammate-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Message the server reports as never delivered to Claude (session:inputUndelivered) */
+.tv-undelivered { opacity: 0.75; }
+.tv-undelivered-note { margin-top: 6px; font-size: 12px; color: #f87171; }

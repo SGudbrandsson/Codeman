@@ -195,6 +195,7 @@ const SSE_EVENTS = {
   // Session lifecycle
   SESSION_CREATED: 'session:created',
   SESSION_UPDATED: 'session:updated',
+  SESSION_INPUT_UNDELIVERED: 'session:inputUndelivered',
   SESSION_DELETED: 'session:deleted',
   SESSION_TERMINAL: 'session:terminal',
   SESSION_NEEDS_REFRESH: 'session:needsRefresh',

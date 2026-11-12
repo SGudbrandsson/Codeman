@@ -49,6 +49,8 @@ export const Init = 'init' as const;
 export const SessionCreated = 'session:created' as const;
 /** Session state changed (status, config, tokens, etc.). */
 export const SessionUpdated = 'session:updated' as const;
+/** A message typed into a Claude session never reached Claude, even after a retry. */
+export const SessionInputUndelivered = 'session:inputUndelivered' as const;
 /** Session permanently removed. */
 export const SessionDeleted = 'session:deleted' as const;
 /** Raw PTY terminal output chunk. */
@@ -415,6 +417,7 @@ export const SseEvent = {
   // Session lifecycle
   SessionCreated,
   SessionUpdated,
+  SessionInputUndelivered,
   SessionDeleted,
   SessionTerminal,
   SessionNeedsRefresh,
