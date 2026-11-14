@@ -3396,3 +3396,26 @@ html.mobile-init .file-browser-panel {
 .btn-overflow {
   flex-shrink: 0;
 }
+
+/* Compose grow/shrink toggle — top-right corner of the compose box (mic and
+   send sit bottom-right, + bottom-left). Only shown when the text overflows
+   the compact cap or the tall editor is on; JS toggles [hidden]. */
+.compose-size-btn {
+  top: 4px;
+  bottom: auto;
+  right: 8px;
+  color: #94a3b8;
+  background: rgba(13, 13, 13, 0.85);
+}
+.compose-size-btn[hidden] { display: none; }
+.compose-size-btn:active { color: #e2e8f0; }
+.compose-size-btn .compose-size-shrink { display: none; }
+.compose-size-btn.tall .compose-size-grow { display: none; }
+.compose-size-btn.tall .compose-size-shrink { display: block; }
+
+/* Action sheet while it is still sliding in: options are inert so a stray
+   second tap from a double tap on + cannot pick one (JS guards too). */
+.compose-action-sheet.arming .compose-action-item,
+.compose-action-sheet.arming .compose-action-cancel {
+  pointer-events: none;
+}

@@ -3827,37 +3827,33 @@ const TranscriptTTS = {
     btn.setAttribute('aria-label', 'Read aloud');
     btn.setAttribute('title', 'Read aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
-    btn.appendChild(this._speakerSVG());
+    btn.appendChild(this._playSVG());
     if (this._currentBtn === btn) this._currentBtn = null;
   },
-  _speakerSVG() {
+
+  /** Play triangle — the idle read-aloud icon. */
+  _playSVG() {
     const svgNS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('width', '14');
-    svg.setAttribute('height', '14');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
     svg.setAttribute('stroke-width', '2');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
-    const poly = document.createElementNS(svgNS, 'polygon');
-    poly.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
-    const path1 = document.createElementNS(svgNS, 'path');
-    path1.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
-    const path2 = document.createElementNS(svgNS, 'path');
-    path2.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
-    svg.appendChild(poly);
-    svg.appendChild(path1);
-    svg.appendChild(path2);
+    const tri = document.createElementNS(svgNS, 'polygon');
+    tri.setAttribute('points', '7 4 19 12 7 20 7 4');
+    svg.appendChild(tri);
     return svg;
   },
 
   _stopSVG() {
     const svgNS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('width', '14');
-    svg.setAttribute('height', '14');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
@@ -3865,12 +3861,13 @@ const TranscriptTTS = {
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     const rect = document.createElementNS(svgNS, 'rect');
-    rect.setAttribute('x', '3');
-    rect.setAttribute('y', '3');
-    rect.setAttribute('width', '18');
-    rect.setAttribute('height', '18');
-    rect.setAttribute('rx', '2');
-    rect.setAttribute('ry', '2');
+    rect.setAttribute('x', '6');
+    rect.setAttribute('y', '6');
+    rect.setAttribute('width', '12');
+    rect.setAttribute('height', '12');
+    rect.setAttribute('rx', '1.5');
+    rect.setAttribute('ry', '1.5');
+    rect.setAttribute('fill', 'currentColor');
     svg.appendChild(rect);
     return svg;
   },
@@ -5653,25 +5650,14 @@ const TranscriptView = {
         div.appendChild(ts);
       }
       div.appendChild(this._buildBlockActions(block, content));
-      if (TranscriptTTS.supported) {
-        const ttsBtn = document.createElement('button');
-        ttsBtn.className = 'tv-tts-btn';
-        ttsBtn.setAttribute('aria-label', 'Read aloud');
-        ttsBtn.setAttribute('title', 'Read aloud');
-        ttsBtn.appendChild(TranscriptTTS._speakerSVG());
-        ttsBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          TranscriptTTS.speak(ttsBtn, content);
-        });
-        div.appendChild(ttsBtn);
-      }
     }
     return div;
   },
 
   /**
-   * Builds the per-response action row: copy the raw markdown source, or copy
-   * the rendered response as rich text (text/html) for pasting into editors.
+   * Builds the per-response action row under an assistant message: an icon
+   * button that copies the raw markdown source, and an icon button that reads
+   * the whole response aloud (tap again to stop).
    *
    * Appended as a sibling of `.tv-content` so `_typewriterReveal`, which only
    * rewrites the content node, never destroys it.
@@ -5684,66 +5670,60 @@ const TranscriptView = {
     const actions = document.createElement('div');
     actions.className = 'tv-block-actions';
 
-    const mdBtn = document.createElement('button');
-    mdBtn.type = 'button';
-    mdBtn.className = 'tv-copy-btn';
-    mdBtn.textContent = 'Copy';
-    mdBtn.title = 'Copy response as markdown';
-    mdBtn.setAttribute('aria-label', 'Copy response as markdown');
-    mdBtn.addEventListener('click', (e) => {
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'tv-action-btn tv-copy-btn';
+    copyBtn.title = 'Copy';
+    copyBtn.setAttribute('aria-label', 'Copy response as markdown');
+    copyBtn.appendChild(this._copySVG());
+    copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._copyMarkdown(mdBtn, block.text || '');
+      this._copyMarkdown(copyBtn, block.text || '');
     });
+    actions.appendChild(copyBtn);
 
-    const rtBtn = document.createElement('button');
-    rtBtn.type = 'button';
-    rtBtn.className = 'tv-copy-btn';
-    rtBtn.textContent = 'Copy rich text';
-    rtBtn.title = 'Copy response as rich text (formatted)';
-    rtBtn.setAttribute('aria-label', 'Copy response as rich text');
-    rtBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      // Safari requires ClipboardItem to be constructed synchronously inside
-      // the user-gesture handler, so build the payload before any await.
-      this._copyRichText(rtBtn, this._richHtmlFor(content), block.text || '');
-    });
-
-    actions.appendChild(mdBtn);
-    actions.appendChild(rtBtn);
+    if (TranscriptTTS.supported) {
+      const ttsBtn = document.createElement('button');
+      ttsBtn.type = 'button';
+      ttsBtn.className = 'tv-action-btn tv-tts-btn';
+      ttsBtn.setAttribute('aria-label', 'Read aloud');
+      ttsBtn.setAttribute('title', 'Read aloud');
+      ttsBtn.appendChild(TranscriptTTS._playSVG());
+      ttsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        TranscriptTTS.speak(ttsBtn, content);
+      });
+      actions.appendChild(ttsBtn);
+    }
     return actions;
   },
 
-  /**
-   * Produces clipboard-ready HTML for a rendered response: works on a clone so
-   * the live DOM is untouched, drops the per-code-block Copy buttons and the
-   * line-number span chrome, and absolutises image srcs so pasted images still
-   * resolve outside the app.
-   *
-   * @param {HTMLElement} content the rendered `.tv-content` node
-   * @returns {string} the HTML to place on the clipboard
-   */
-  _richHtmlFor(content) {
-    const clone = content.cloneNode(true);
-    clone.querySelectorAll('.tv-code-copy').forEach((b) => b.remove());
-    // `.tv-code-line` spans carry no newlines (line numbers come from CSS
-    // counters), so flatten them back to plain newline-separated code.
-    clone.querySelectorAll('.tv-code-block code, pre code, pre').forEach((codeEl) => {
-      const lines = codeEl.querySelectorAll(':scope > .tv-code-line');
-      if (lines.length) {
-        codeEl.textContent = Array.from(lines).map((l) => l.textContent).join('\n');
-      }
-    });
-    clone.querySelectorAll('img[src]').forEach((img) => {
-      try {
-        img.setAttribute('src', new URL(img.getAttribute('src'), location.origin).href);
-      } catch { /* leave unresolvable srcs alone */ }
-    });
-    clone.querySelectorAll('a[href]').forEach((a) => {
-      try {
-        a.setAttribute('href', new URL(a.getAttribute('href'), location.origin).href);
-      } catch { /* leave unresolvable hrefs alone */ }
-    });
-    return clone.innerHTML;
+  /** 16px stroke icon from a list of [tag, attrs] children. */
+  _actionIcon(children) {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    const attrs = {
+      width: '16', height: '16', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
+    };
+    for (const k in attrs) svg.setAttribute(k, attrs[k]);
+    for (const [tag, a] of children) {
+      const el = document.createElementNS(svgNS, tag);
+      for (const k in a) el.setAttribute(k, a[k]);
+      svg.appendChild(el);
+    }
+    return svg;
+  },
+
+  _copySVG() {
+    return this._actionIcon([
+      ['rect', { x: '9', y: '9', width: '13', height: '13', rx: '2', ry: '2' }],
+      ['path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }],
+    ]);
+  },
+
+  _checkSVG() {
+    return this._actionIcon([['polyline', { points: '20 6 9 17 4 12' }]]);
   },
 
   /** Copies the raw markdown source of a response. */
@@ -5758,56 +5738,6 @@ const TranscriptView = {
     } catch {
       this._copyFailed();
     }
-  },
-
-  /**
-   * Copies a response as rich text (`text/html` + a `text/plain` markdown
-   * fallback). Falls back to a hidden contenteditable + execCommand when
-   * ClipboardItem is unavailable — e.g. the plain-HTTP LAN/tailscale URLs this
-   * app is also served from, where the async clipboard API is disabled.
-   */
-  async _copyRichText(btn, html, plain) {
-    try {
-      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write) {
-        const item = new ClipboardItem({
-          'text/html': new Blob([html], { type: 'text/html' }),
-          'text/plain': new Blob([plain], { type: 'text/plain' }),
-        });
-        await navigator.clipboard.write([item]);
-      } else if (!this._execCopyHtml(html)) {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(plain);
-        } else if (!this._execCopyText(plain)) {
-          throw new Error('copy unsupported');
-        }
-      }
-      this._flashCopied(btn);
-    } catch {
-      this._copyFailed();
-    }
-  },
-
-  /** execCommand fallback for rich text: selects a detached contenteditable. */
-  _execCopyHtml(html) {
-    const holder = document.createElement('div');
-    holder.setAttribute('contenteditable', 'true');
-    holder.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;white-space:pre-wrap;';
-    holder.innerHTML = html; // eslint-disable-line no-unsanitized/property -- cloned from already-sanitised rendered markdown
-    document.body.appendChild(holder);
-    let ok = false;
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(holder);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      ok = document.execCommand('copy');
-      sel.removeAllRanges();
-    } catch {
-      ok = false;
-    }
-    holder.remove();
-    return ok;
   },
 
   /** execCommand fallback for plain text. */
@@ -5828,15 +5758,16 @@ const TranscriptView = {
     return ok;
   },
 
-  /** Swaps a copy button's label to a confirmation for ~2s. */
+  /** Swaps the copy icon for a check mark for ~2s. */
   _flashCopied(btn) {
     if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
-    if (btn._copyLabel === undefined) btn._copyLabel = btn.textContent;
-    btn.textContent = '\u2713 Copied';
+    btn.replaceChildren(this._checkSVG());
     btn.classList.add('copied');
+    btn.title = 'Copied';
     btn._copyResetTimer = setTimeout(() => {
-      btn.textContent = btn._copyLabel;
+      btn.replaceChildren(this._copySVG());
       btn.classList.remove('copied');
+      btn.title = 'Copy';
       btn._copyResetTimer = null;
     }, 2000);
   },
@@ -6914,6 +6845,9 @@ class CodemanApp {
     this._initRunMode();
     this.loadHarnesses();
     this.setupEventListeners();
+    // Learn whether the server can read aloud with ElevenLabs before the first
+    // play tap (TtsEngine.play must stay synchronous inside the gesture).
+    if (typeof TtsEngine !== 'undefined') TtsEngine.loadServerInfo();
     // Mobile: ensure button taps register even when keyboard is visible.
     // On mobile, tapping a button while the soft keyboard is up causes the
     // browser to dismiss the keyboard first (blur event), swallowing the tap.
@@ -15894,7 +15828,7 @@ class CodemanApp {
     const ttsName = TtsEngine.providerName();
     const ttsEl = document.getElementById('ttsProviderStatus');
     ttsEl.textContent = ttsName;
-    ttsEl.className = 'voice-provider-status' + (ttsName.startsWith('Deepgram') ? ' active' : '');
+    ttsEl.className = 'voice-provider-status' + (/^(Deepgram|ElevenLabs)/.test(ttsName) ? ' active' : '');
 
     // Load orchestrator configuration
     this.loadOrchestratorConfigForSettings();
@@ -26305,15 +26239,36 @@ const InputPanel = {
           VoiceInput.start();
         }
       };
-      micBtn.addEventListener('click', micHandler);
-      // On mobile, touchstart preventDefault (to keep textarea focus) suppresses the
-      // synthesized click event. Use touchend to fire the handler on touch devices.
-      micBtn.addEventListener('touchstart', (e) => {
-        e.preventDefault(); // prevent textarea blur
-      });
-      micBtn.addEventListener('touchend', (e) => {
-        e.preventDefault(); // prevent duplicate click
+      // Click only. On touch devices the #mobileInputPanel tap fix (see
+      // addKeyboardTapFix in init) already turns touchstart into btn.click()
+      // and preventDefaults it, so the textarea keeps focus. A separate
+      // touchend handler here used to fire micHandler a SECOND time ~100ms
+      // later, starting and immediately stopping the recording.
+      micBtn.addEventListener('click', () => {
+        // Belt-and-braces against any other double-dispatch path: a real
+        // start/stop toggle is never faster than this.
+        const now = performance.now();
+        if (now - (this._micLastToggle || 0) < 400) return;
+        this._micLastToggle = now;
         micHandler();
+      });
+    }
+
+    // Grow/shrink button — mobile/tablet only (hidden until text overflows)
+    const sizeBtn = document.getElementById('composeSizeBtn');
+    if (sizeBtn) sizeBtn.addEventListener('click', () => this.toggleComposeSize());
+    // The compact cap is a fraction of the visible viewport, so re-cap when the
+    // soft keyboard opens/closes or the phone rotates.
+    if (window.visualViewport) {
+      let vvPending = false;
+      window.visualViewport.addEventListener('resize', () => {
+        if (vvPending || !this._open) return;
+        vvPending = true;
+        requestAnimationFrame(() => {
+          vvPending = false;
+          const t = this._getTextarea();
+          if (t) this._autoGrow(t);
+        });
       });
     }
 
@@ -26343,14 +26298,60 @@ const InputPanel = {
     }
   },
 
-  /** Auto-grow the textarea up to the available viewport height */
+  /**
+   * Compact cap for the mobile/tablet textarea: roughly a third of the visible
+   * viewport, so a long dictated message never pushes the response off-screen.
+   * Shrinks with the soft keyboard (visualViewport), never below ~4 lines.
+   */
+  COMPOSE_COMPACT_RATIO: 0.33,
+  COMPOSE_COMPACT_MAX: 260,
+  COMPOSE_COMPACT_MIN: 88,
+
+  /** Max textarea height in px for the current device + grow/shrink state. */
+  _composeMaxHeight(isDesktop) {
+    if (isDesktop) return 200;
+    const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    if (this._composeTall) return Math.max(80, vvh - 200);
+    return Math.max(this.COMPOSE_COMPACT_MIN,
+      Math.min(this.COMPOSE_COMPACT_MAX, Math.round(vvh * this.COMPOSE_COMPACT_RATIO)));
+  },
+
+  /** Toggles the mobile textarea between the compact cap and the tall editor. */
+  toggleComposeSize() {
+    FeatureTracker.track('compose-bar-size-toggle');
+    this._composeTall = !this._composeTall;
+    const ta = this._getTextarea();
+    if (ta) {
+      this._autoGrow(ta);
+      // Keep the caret in view after the box changes height.
+      ta.scrollTop = ta.scrollHeight;
+    }
+  },
+
+  /** Shows the grow/shrink button only when it does something. */
+  _updateComposeSizeBtn(ta, maxH, isDesktop) {
+    const btn = document.getElementById('composeSizeBtn');
+    if (!btn) return;
+    const overflowing = ta.scrollHeight > maxH + 1;
+    const tall = !!this._composeTall;
+    btn.hidden = isDesktop || !(overflowing || tall);
+    btn.classList.toggle('tall', tall);
+    btn.setAttribute('aria-pressed', String(tall));
+    const label = tall ? 'Shrink editor' : 'Expand editor';
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+  },
+
+  /** Auto-grow the textarea up to a capped height, then scroll inside it */
   _autoGrow(ta) {
     ta.style.height = 'auto';
     const isDesktop = typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType() === 'desktop';
-    const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    const maxH = isDesktop ? 200 : Math.max(80, vvh - 200);
+    // Back to compact once the message is cleared (sent or deleted).
+    if (!ta.value) this._composeTall = false;
+    const maxH = this._composeMaxHeight(isDesktop);
     ta.style.maxHeight = maxH + 'px';
     ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
+    this._updateComposeSizeBtn(ta, maxH, isDesktop);
     // Update CSS var so layout containers track the actual compose bar height
     const panel = document.getElementById('mobileInputPanel');
     if (panel) {
@@ -26581,15 +26582,41 @@ const InputPanel = {
     // tree when closed — avoids black-screen compositing bug on Android Chrome.
     if (sheet) { sheet.style.display = 'flex'; sheet.classList.add('open'); }
     if (backdrop) { backdrop.style.display = 'block'; backdrop.classList.add('open'); }
+    // Arm the sheet only once its slide-up animation has finished. An
+    // accidental double tap on + otherwise lands its second tap on whatever
+    // option (or the backdrop) slid under the finger a few ms later and opens
+    // the camera / picker, or closes the sheet again.
+    this._actionSheetReadyAt = performance.now() + this.ACTION_SHEET_ARM_MS;
+    if (sheet) {
+      sheet.classList.add('arming');
+      clearTimeout(this._actionSheetArmTimer);
+      this._actionSheetArmTimer = setTimeout(() => sheet.classList.remove('arming'), this.ACTION_SHEET_ARM_MS);
+    }
     // Suppress typing indicator while drawer is open — belt-and-suspenders z-index fix
     const indicator = document.getElementById('tvTypingIndicator');
     if (indicator) indicator.style.display = 'none';
   },
 
+  /** Sheet animation is 220ms; taps before this are treated as accidental. */
+  ACTION_SHEET_ARM_MS: 350,
+
+  /** True while the action sheet is still sliding in (taps are ignored). */
+  _actionSheetArming() {
+    return performance.now() < (this._actionSheetReadyAt || 0);
+  },
+
+  /** Backdrop / Cancel tap — ignored while the sheet is still arming. */
+  _dismissActionSheet() {
+    if (this._actionSheetArming()) return;
+    this._closeActionSheet();
+  },
+
   _closeActionSheet() {
+    clearTimeout(this._actionSheetArmTimer);
+    this._actionSheetReadyAt = 0;
     const sheet = document.getElementById('composeActionSheet');
     const backdrop = document.getElementById('composeActionBackdrop');
-    if (sheet) { sheet.classList.remove('open'); sheet.style.display = 'none'; }
+    if (sheet) { sheet.classList.remove('open', 'arming'); sheet.style.display = 'none'; }
     if (backdrop) { backdrop.classList.remove('open'); backdrop.style.display = 'none'; }
     // Restore typing indicator if session is still working
     const sessionWorking = typeof app !== 'undefined' && app.activeSessionId
@@ -26600,6 +26627,7 @@ const InputPanel = {
   },
 
   _actionSheetPick(type) {
+    if (this._actionSheetArming()) return;
     this._closeActionSheet();
     const id = type === 'camera' ? 'composeFileCamera'
              : type === 'gallery' ? 'composeFileGallery'

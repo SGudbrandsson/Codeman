@@ -125,7 +125,7 @@ function setTranscript(html: string) {
   content.innerHTML = html;
   const btn = document.createElement('button');
   btn.className = 'tv-tts-btn';
-  btn.appendChild(transcriptTts._speakerSVG());
+  btn.appendChild(transcriptTts._playSVG());
   wrap.appendChild(content);
   wrap.appendChild(btn);
   view.appendChild(wrap);

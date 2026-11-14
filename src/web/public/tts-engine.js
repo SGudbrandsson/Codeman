@@ -96,15 +96,44 @@ const TtsEngine = {
     const cfg = this.config();
     if (cfg.ttsProvider === 'browser') return 'web';
     if (cfg.ttsProvider === 'server') return 'server';
+    if (cfg.ttsProvider === 'deepgram' && this.apiKey()) return 'deepgram';
+    // Auto: a server with ElevenLabs beats a per-device Deepgram key — it is
+    // the nicer voice and works on every device without local setup.
+    if (this.serverHasElevenLabs()) return 'server';
     if (this.apiKey()) return 'deepgram';
     return 'server';
+  },
+
+  // ── Server capabilities (/api/tts/info) ───────────────────────────────────
+  _serverProviders: null, // e.g. ['elevenlabs', 'edge'] once loaded
+  _serverInfoPromise: null,
+
+  /** Loads which providers the server proxy has; safe to call repeatedly. */
+  loadServerInfo() {
+    if (this._serverInfoPromise) return this._serverInfoPromise;
+    if (typeof fetch !== 'function') return Promise.resolve(null);
+    this._serverInfoPromise = fetch('/api/tts/info')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        this._serverProviders = info && Array.isArray(info.providers) ? info.providers : [];
+        return this._serverProviders;
+      })
+      .catch(() => {
+        this._serverProviders = [];
+        return this._serverProviders;
+      });
+    return this._serverInfoPromise;
+  },
+
+  serverHasElevenLabs() {
+    return Array.isArray(this._serverProviders) && this._serverProviders.includes('elevenlabs');
   },
 
   /** Human-readable name for the settings screen. */
   providerName() {
     const p = this.preferredProvider();
     if (p === 'deepgram') return 'Deepgram ' + this.voice().replace(/^aura-2?-/, '').replace(/-en$/, '');
-    if (p === 'server') return 'Edge TTS (server)';
+    if (p === 'server') return this.serverHasElevenLabs() ? 'ElevenLabs (server)' : 'Edge TTS (server)';
     return 'Browser speech';
   },
 
@@ -652,7 +681,9 @@ const TtsEngine = {
   async _synthesize(text, gen) {
     const order = this._pinned
       ? [this._pinned]
-      : (this.preferredProvider() === 'deepgram' ? ['deepgram', 'server'] : ['server']);
+      : (this.preferredProvider() === 'deepgram'
+        ? ['deepgram', 'server']
+        : (this.apiKey() ? ['server', 'deepgram'] : ['server']));
     let lastErr = null;
     for (const provider of order) {
       try {

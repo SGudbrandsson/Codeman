@@ -446,7 +446,14 @@ const VoiceInput = {
         return;
       }
     }
-    // Get mic stream for level meter (non-blocking — level meter is cosmetic)
+    // Get mic stream for level meter (non-blocking — level meter is cosmetic).
+    // Skipped in compose-bar mode: the preview (and its level bars) is never
+    // shown there, and on Android a second capture of the mic can knock
+    // SpeechRecognition off it.
+    if (this._composeBarMode) {
+      if (navigator.vibrate) navigator.vibrate(50);
+      return;
+    }
     navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
       if (this.isRecording && this._activeProvider === 'webspeech') {
         this._webSpeechStream = stream;
@@ -565,8 +572,9 @@ const VoiceInput = {
     try {
       this.recognition.start();
     } catch (_e) {
-      // If restart fails, stop gracefully
+      // If restart fails, stop — and say so, rather than the mic just going dark
       this.stop();
+      app.showToast('Voice input stopped: the microphone could not be restarted', 'warning');
     }
   },
 

@@ -135,7 +135,7 @@ function setContent(html: string, cls = 'tv-markdown'): HTMLElement {
 function ttsButton(): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className = 'tv-tts-btn';
-  btn.appendChild(transcriptTts._speakerSVG());
+  btn.appendChild(transcriptTts._playSVG());
   document.body.appendChild(btn);
   return btn;
 }
@@ -487,19 +487,19 @@ describe('TranscriptTTS', () => {
 describe('TranscriptTTS icons', () => {
   const svgNS = 'http://www.w3.org/2000/svg';
 
-  it('draws a speaker cone plus two sound arcs', () => {
-    const svg = transcriptTts._speakerSVG();
+  it('draws a single play triangle', () => {
+    const svg = transcriptTts._playSVG();
     expect(svg.namespaceURI).toBe(svgNS);
     expect(svg.getAttribute('viewBox')).toBe('0 0 24 24');
     expect(svg.getAttribute('stroke')).toBe('currentColor');
-    expect(Array.from(svg.children).map((c: any) => c.tagName)).toEqual(['polygon', 'path', 'path']);
+    expect(Array.from(svg.children).map((c: any) => c.tagName)).toEqual(['polygon']);
   });
 
   it('draws a single rounded square for stop', () => {
     const svg = transcriptTts._stopSVG();
     expect(svg.namespaceURI).toBe(svgNS);
     expect(Array.from(svg.children).map((c: any) => c.tagName)).toEqual(['rect']);
-    expect((svg.children[0] as Element).getAttribute('rx')).toBe('2');
+    expect((svg.children[0] as Element).getAttribute('rx')).toBe('1.5');
   });
 });
 

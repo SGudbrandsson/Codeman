@@ -1557,11 +1557,12 @@
               <div class="form-row" style="grid-column: 1 / -1;">
                 <label for="ttsProvider">Engine</label>
                 <select id="ttsProvider" class="form-select">
-                  <option value="auto">Auto (Deepgram if a key is set)</option>
-                  <option value="server">Edge TTS (server)</option>
+                  <option value="auto">Auto (server ElevenLabs, else Deepgram)</option>
+                  <option value="server">Server (ElevenLabs, else Edge TTS)</option>
+                  <option value="deepgram">Deepgram (key above)</option>
                   <option value="browser">Browser speech (offline)</option>
                 </select>
-                <span class="form-hint">Uses the Deepgram key above. Falls back to the server, then to the browser engine, if a request fails.</span>
+                <span class="form-hint">ElevenLabs runs on the server when ELEVENLABS_API_KEY is set, so every device gets it. Falls back to the next engine, then to the browser, if a request fails.</span>
               </div>
               <div class="form-row" style="grid-column: 1 / -1;">
                 <label for="ttsVoice">Deepgram Voice</label>
@@ -2332,6 +2333,24 @@
         </svg>
       </button>
 
+      <!-- Grow/shrink button — mobile/tablet only. The textarea is capped at a
+           compact height so the response stays readable; this toggles the
+           taller, near-full-screen editor. Hidden until the text overflows. -->
+      <button class="compose-inset-btn compose-size-btn" id="composeSizeBtn"
+              type="button" aria-label="Expand editor" aria-pressed="false"
+              title="Expand editor" hidden>
+        <svg class="compose-size-grow" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="7 9 12 4 17 9"/>
+          <polyline points="7 15 12 20 17 15"/>
+        </svg>
+        <svg class="compose-size-shrink" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="7 4 12 9 17 4"/>
+          <polyline points="7 20 12 15 17 20"/>
+        </svg>
+      </button>
+
       <!-- Mic button — voice-to-text into compose textarea -->
       <button class="compose-inset-btn compose-mic-btn" id="composeMicBtn"
               type="button" aria-label="Voice input"
@@ -2374,10 +2393,10 @@
       <button class="compose-action-item" type="button"
               onclick="InputPanel._actionSheetPick('file')">Attach File</button>
       <button class="compose-action-cancel" type="button"
-              onclick="InputPanel._closeActionSheet()">Cancel</button>
+              onclick="InputPanel._dismissActionSheet()">Cancel</button>
     </div>
     <div class="compose-action-backdrop" id="composeActionBackdrop" style="display:none;"
-         onclick="InputPanel._closeActionSheet()"></div>
+         onclick="InputPanel._dismissActionSheet()"></div>
   </div>
 
   <!-- Mobile Files bottom sheet -->

@@ -314,6 +314,40 @@ describe('TtsEngine.preferredProvider()', () => {
     expect(engine.providerName()).toBe('Browser speech');
   });
 
+  it('prefers the server when it reports ElevenLabs, even with a Deepgram key', () => {
+    engine = makeEngine({ apiKey: 'dg-key' });
+    engine._serverProviders = ['elevenlabs', 'edge'];
+    expect(engine.preferredProvider()).toBe('server');
+    expect(engine.providerName()).toBe('ElevenLabs (server)');
+  });
+
+  it('keeps Deepgram when it is chosen explicitly, even if the server has ElevenLabs', () => {
+    engine = makeEngine({ apiKey: 'dg-key', ttsProvider: 'deepgram' });
+    engine._serverProviders = ['elevenlabs', 'edge'];
+    expect(engine.preferredProvider()).toBe('deepgram');
+  });
+
+  it('labels a server without ElevenLabs as Edge TTS', () => {
+    engine = makeEngine({ ttsProvider: 'server' });
+    engine._serverProviders = ['edge'];
+    expect(engine.providerName()).toBe('Edge TTS (server)');
+  });
+
+  it('loadServerInfo() records the providers /api/tts/info reports', async () => {
+    engine = makeEngine({});
+    const fetchSpy = stubFetch(() => ({ ok: true, json: async () => ({ providers: ['elevenlabs', 'edge'] }) }));
+    await engine.loadServerInfo();
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/tts/info');
+    expect(engine.serverHasElevenLabs()).toBe(true);
+  });
+
+  it('loadServerInfo() treats a failed request as "no ElevenLabs"', async () => {
+    engine = makeEngine({});
+    stubFetch(() => Promise.reject(new Error('offline')));
+    await engine.loadServerInfo();
+    expect(engine.serverHasElevenLabs()).toBe(false);
+  });
+
   it('uses the configured Deepgram voice', () => {
     engine = makeEngine({ apiKey: 'k', ttsVoice: 'aura-2-apollo-en' });
     expect(engine.voice()).toBe('aura-2-apollo-en');
@@ -587,6 +621,18 @@ describe('TtsEngine remote playback', () => {
     await flush();
     expect(fetchSpy.mock.calls.map((c) => c[0])).toContain('/api/tts');
     expect(engine.activeProvider()).toBe('server');
+  });
+
+  it('falls back to Deepgram when the preferred ElevenLabs server fails', async () => {
+    engine = makeEngine({ apiKey: 'dg-key' });
+    engine._serverProviders = ['elevenlabs', 'edge'];
+    const fetchSpy = stubFetch((url) => (url === '/api/tts' ? { ok: false, status: 502 } : okAudio('d')));
+    engine.play({ blocks: blocks('one.') });
+    await flush();
+    const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(urls[0]).toBe('/api/tts');
+    expect(urls.some((u) => u.includes('deepgram'))).toBe(true);
+    expect(engine.activeProvider()).toBe('deepgram');
   });
 
   it('pins the working provider so a bad key costs one failed request', async () => {
