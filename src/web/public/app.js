@@ -5453,6 +5453,14 @@ const TranscriptView = {
     // Skip Claude Code internal/system messages — they contain only XML wrapper tags, no real text.
     // Handles: <command-*>, <local-command-*>, <task-notification>, etc.
     if (block.role === 'user') {
+      // <system-reminder> blocks are harness metadata Claude Code appends to user turns
+      // (e.g. <tools-used-before-summary> after a compact) — never show them.
+      if (block.text.includes('<system-reminder>')) {
+        const text = block.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+        if (!text) return null;
+        block = { ...block, text };
+      }
+
       // Context-continuation summary injected by Claude Code's /compact — render as collapsed pill.
       // Newer Claude Code versions prepend a preamble (e.g. <artifact-content-authored-by-others/>)
       // before the marker, so trust the server's isCompactSummary flag and match the marker near
